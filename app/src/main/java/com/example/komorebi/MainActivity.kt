@@ -70,12 +70,15 @@ class MainActivity : ComponentActivity() {
                 val konomiIp by repository.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
                 val konomiPort by repository.konomiPort.collectAsState(initial = "7000")
 
-                BackHandler(enabled = true) {
-                    when {
-                        isPlayerMode -> isPlayerMode = false
-                        isSettingsMode -> isSettingsMode = false
-                        else -> showExitDialog = true
-                    }
+//                BackHandler(enabled = true) {
+//                    when {
+//                        isPlayerMode -> isPlayerMode = false
+//                        isSettingsMode -> isSettingsMode = false
+//                        else -> showExitDialog = true
+//                    }
+//                }
+                BackHandler(enabled = !isPlayerMode && !isSettingsMode) {
+                    showExitDialog = true
                 }
 
                 if (totalLoading) {

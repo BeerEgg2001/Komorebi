@@ -52,12 +52,13 @@ fun EpgScreen(
     viewModel: EpgViewModel,
     topTabFocusRequester: FocusRequester,
     tabFocusRequester: FocusRequester,
-    firstCellFocusRequester: FocusRequester
+    firstCellFocusRequester: FocusRequester,
+    selectedProgram: EpgProgram?,
+    onProgramSelected: (EpgProgram?) -> Unit
 ) {
     val uiState = viewModel.uiState
     val baseTime = remember { OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0) }
     var selectedBroadcastingType by remember { mutableStateOf("GR") }
-    var selectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
     var isGridFocused by remember { mutableStateOf(false) }
 
     // 放送波切り替え時の自動フォーカス
@@ -90,13 +91,13 @@ fun EpgScreen(
         }
     }
 
-    BackHandler(enabled = selectedProgram == null) {
-        if (isGridFocused) {
-            tabFocusRequester.requestFocus()
-        } else {
-            topTabFocusRequester.requestFocus()
-        }
-    }
+//    BackHandler(enabled = selectedProgram == null) {
+//        if (isGridFocused) {
+//            tabFocusRequester.requestFocus()
+//        } else {
+//            topTabFocusRequester.requestFocus()
+//        }
+//    }
 
     // ★ 修正ポイント1: Boxで包むことでモーダルを全画面オーバーレイにする
     Box(Modifier.fillMaxSize()) {
@@ -118,7 +119,7 @@ fun EpgScreen(
                             baseTime = baseTime,
                             viewModel = viewModel,
                             tabFocusRequester = tabFocusRequester,
-                            onProgramClick = { selectedProgram = it },
+                            onProgramClick = { onProgramSelected(it) }, // ★ 親へ通知
                             firstCellFocusRequester = firstCellFocusRequester
                         )
                     }
@@ -134,15 +135,15 @@ fun EpgScreen(
 
         // ★ 修正ポイント2: Columnの外側に配置して全画面表示を確保
         if (selectedProgram != null) {
-            key(selectedProgram?.id) {
+            key(selectedProgram.id) {
                 ProgramDetailModal(
-                    program = selectedProgram!!,
+                    program = selectedProgram,
                     onPrimaryAction = {
                         val p = selectedProgram
-                        selectedProgram = null
-                        p?.let { viewModel.playChannel(it.channel_id) }
+                        onProgramSelected(null)
+                        p.let { viewModel.playChannel(it.channel_id) }
                     },
-                    onDismiss = { selectedProgram = null }
+                    onDismiss = { onProgramSelected(null) } // ★ 親へ通知
                 )
             }
         }

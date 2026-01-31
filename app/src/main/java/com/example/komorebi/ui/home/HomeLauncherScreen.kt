@@ -30,6 +30,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
 import com.example.komorebi.data.local.entity.toRecordedProgram
+import com.example.komorebi.data.model.EpgProgram
 import com.example.komorebi.data.model.KonomiHistoryProgram
 import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.ui.program.EpgScreen
@@ -79,6 +80,7 @@ fun HomeLauncherScreen(
     val epgTabFocusRequester = remember { FocusRequester() }
     val epgFirstCellFocusRequester = remember { FocusRequester() }
     val watchHistoryEntities by homeViewModel.localWatchHistory.collectAsState()
+    var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
 
 // EntityリストをProgramリストに変換してUIに渡す
     val watchHistoryPrograms = remember(watchHistoryEntities) {
@@ -102,19 +104,40 @@ fun HomeLauncherScreen(
     }
 
     BackHandler(enabled = true) {
+        val currentTab = tabs[selectedTabIndex] // 現在のタブ名を取得
+
         when {
+            // 1. 番組表のモーダルが表示されている場合は、それを閉じる（最優先）
+            epgSelectedProgram != null -> {
+                epgSelectedProgram = null
+            }
+            // 2. ビデオのプレイヤー/詳細が表示されている場合
             selectedProgram != null -> {
                 lastBackPressTime = System.currentTimeMillis()
                 selectedProgram = null
                 homeViewModel.refreshHomeData()
                 videoContentFocusRequester.requestFocus()
             }
+            // 3. 終了ダイアログ表示中
             showExitDialog -> showExitDialog = false
-            !tabRowHasFocus -> tabFocusRequesters[selectedTabIndex].requestFocus()
+
+            // 4. 【重要】番組表タブにいる時のフォーカス制御
+            currentTab == "番組表" && !tabRowHasFocus -> {
+                // 番組表のグリッドにフォーカスがあるなら、放送波タブ(GR/BS等)へ戻す
+                epgTabFocusRequester.requestFocus()
+            }
+
+            // 5. その他のコンテンツにフォーカスがある場合はタブへ戻す
+            !tabRowHasFocus -> {
+                tabFocusRequesters[selectedTabIndex].requestFocus()
+            }
+
+            // 6. ホームタブ以外ならホームへ戻る
             selectedTabIndex != 0 -> {
                 selectedTabIndex = 0
                 tabFocusRequesters[0].requestFocus()
             }
+            // 7. ホームタブにいてタブにフォーカスがあるなら終了確認
             else -> showExitDialog = true
         }
     }
@@ -254,8 +277,10 @@ fun HomeLauncherScreen(
                                         EpgScreen(
                                             viewModel = epgViewModel,
                                             topTabFocusRequester = tabFocusRequesters[2],
-                                            tabFocusRequester = epgTabFocusRequester, // 修正
-                                            firstCellFocusRequester = epgFirstCellFocusRequester
+                                            tabFocusRequester = epgTabFocusRequester,
+                                            firstCellFocusRequester = epgFirstCellFocusRequester,
+                                            selectedProgram = epgSelectedProgram,     // ★ 追加
+                                            onProgramSelected = { epgSelectedProgram = it } // ★ 追加
                                         )
                                     }
                                     "ビデオ" -> VideoTabContent(

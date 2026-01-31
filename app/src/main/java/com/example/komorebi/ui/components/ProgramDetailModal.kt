@@ -41,9 +41,9 @@ fun ProgramDetailModal(
     val scrollState = rememberScrollState()
 
     // 1. 戻るキーを確実にフックし、親の挙動をブロックする
-    BackHandler(enabled = true) {
-        onDismiss()
-    }
+//    BackHandler(enabled = true) {
+//        onDismiss()
+//    }
 
     // 2. 起動時に視聴ボタンへフォーカスを当てる
     LaunchedEffect(Unit) {
