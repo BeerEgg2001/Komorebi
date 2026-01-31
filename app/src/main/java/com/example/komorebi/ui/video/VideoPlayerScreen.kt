@@ -73,20 +73,21 @@ fun VideoPlayerScreen(
         onBackPressed()
     }
 
-//    // 2. 再生状態の監視（リスナーの登録・解除を正しく行う）
-//    DisposableEffect(exoPlayer) {
-//        val listener = object : Player.Listener {
-//            override fun onIsPlayingChanged(isPlaying: Boolean) {
-//                // 明示的に「再生中なら消す」「停止中なら出す」
-//                showControls = !isPlaying
-//            }
-//        }
-//        exoPlayer.addListener(listener)
-//        onDispose {
-//            exoPlayer.removeListener(listener)
-//            exoPlayer.release()
-//        }
-//    }
+    // 2. 再生状態の監視（リスナーの登録・解除を正しく行う）
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // 明示的に「再生中なら消す」「停止中なら出す」
+                showControls = !isPlaying
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.stop()    // 再生を止める
+            exoPlayer.release() // リソースを完全に解放する
+            android.util.Log.d("VideoPlayer", "Player released")
+        }
+    }
 
     // 2. 画面表示時にフォーカスを要求
     LaunchedEffect(Unit) {

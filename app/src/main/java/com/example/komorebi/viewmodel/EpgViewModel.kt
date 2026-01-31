@@ -17,6 +17,7 @@ import com.example.komorebi.data.SettingsRepository
 import com.example.komorebi.data.model.EpgChannel
 import kotlinx.coroutines.flow.first
 
+@RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class EpgViewModel @Inject constructor(
     private val repository: EpgRepository,
@@ -38,6 +39,8 @@ class EpgViewModel @Inject constructor(
             val port = settingsRepository.mirakurunPort.first()
             mirakurunBaseUrl = "http://$ip:$port"
             currentBaseUrl = settingsRepository.getBaseUrl().removeSuffix("/")
+            // ★ ベースURLが確定したら即座に読み込み開始
+            loadEpg()
         }
     }
 
@@ -53,7 +56,11 @@ class EpgViewModel @Inject constructor(
             val baseTime = now.minusMinutes(30)
 
             // fetchEpgData に渡す
-            val result = repository.fetchEpgData(startTime = baseTime, days = 1)
+            val result = repository.fetchEpgData(
+                startTime = baseTime,
+                channelType = null, // 明示的にnullを渡す（全取得）
+                days = 1
+            )
 
             uiState = result.fold(
                 onSuccess = { EpgUiState.Success(it) },

@@ -34,6 +34,7 @@ class EpgRepository @Inject constructor(
         @RequiresApi(Build.VERSION_CODES.O)
         suspend fun fetchEpgData(
             startTime: OffsetDateTime,
+            channelType: String? = null,
             days: Long = 1
         ): Result<List<EpgChannelWrapper>> {
             return try {
@@ -45,7 +46,7 @@ class EpgRepository @Inject constructor(
                 val response = apiService.getEpgPrograms(
                     startTime = startStr,
                     endTime = endStr,
-                    channelType = "GR"
+                    channelType = channelType
                 )
                 Result.success(response.channels)
             } catch (e: Exception) {

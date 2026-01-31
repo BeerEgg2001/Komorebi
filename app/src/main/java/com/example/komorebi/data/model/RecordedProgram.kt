@@ -1,5 +1,6 @@
 package com.example.komorebi.data.model
 
+
 import com.google.gson.annotations.SerializedName
 
 // ルートオブジェクト

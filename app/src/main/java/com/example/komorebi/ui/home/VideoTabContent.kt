@@ -22,6 +22,7 @@ import com.example.komorebi.ui.components.RecordedCard
 @Composable
 fun VideoTabContent(
     recentRecordings: List<RecordedProgram>,
+    watchHistory: List<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
     externalFocusRequester: FocusRequester,
@@ -59,11 +60,10 @@ fun VideoTabContent(
         item {
             RecordedSection(
                 title = "視聴履歴",
-                items = emptyList(),
+                items = watchHistory, // ViewModelから取得した履歴リスト
                 konomiIp = konomiIp,
                 konomiPort = konomiPort,
-                onProgramClick = {},
-                isPlaceholder = true
+                onProgramClick = onProgramClick
             )
         }
     }

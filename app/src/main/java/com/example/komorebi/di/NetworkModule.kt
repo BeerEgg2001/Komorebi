@@ -1,12 +1,13 @@
-package com.example.komorebi
+package com.example.komorebi.di
 
 import com.example.komorebi.data.SettingsRepository
-import com.example.komorebi.viewmodel.KonomiApi
-import com.example.komorebi.data.repository.KonomiTvApiService // これを追加
+import com.example.komorebi.data.repository.KonomiTvApiService
+import com.example.komorebi.data.api.KonomiApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -29,7 +30,7 @@ object NetworkModule {
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
 
-                val baseUrlString = kotlinx.coroutines.runBlocking {
+                val baseUrlString = runBlocking {
                     settingsRepository.getBaseUrl()
                 }
 
@@ -54,7 +55,7 @@ object NetworkModule {
     @Singleton
     fun provideRetrofit(okHttpClient: OkHttpClient): Retrofit {
         return Retrofit.Builder()
-            .baseUrl("http://localhost/")
+            .baseUrl("http://192-168-100-60.local.konomi.tv:7000")
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

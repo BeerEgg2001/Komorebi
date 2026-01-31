@@ -4,7 +4,6 @@ import android.os.Build
 import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
@@ -13,11 +12,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
@@ -57,8 +54,7 @@ fun LiveContent(
         groupedChannels.keys.map { key -> if (key == "GR") "地デジ" else key }
     }
 
-    // ★ 追加：各カテゴリーの横スクロール状態を保持するMap
-    // 本来は一階層上のScreenやViewModelで保持して渡すと、タブ切り替えでもリセットされなくなります
+    // 各カテゴリーの横スクロール状態を保持
     val rowStates = remember { mutableMapOf<String, androidx.tv.foundation.lazy.list.TvLazyListState>() }
 
     val targetId = lastFocusedChannelId ?: lastWatchedChannel?.id
@@ -75,7 +71,6 @@ fun LiveContent(
     var showList by remember { mutableStateOf(false) }
     val channelFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
 
-    // ... (Tickロジックはそのまま) ...
     var globalTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         showList = true
@@ -85,26 +80,20 @@ fun LiveContent(
         }
     }
 
-    // ★ 修正：フォーカス復元ロジックの強化
+    // スクロールとフォーカスの復元
     LaunchedEffect(showList) {
         if (showList && targetId != null) {
-            delay(150) // 少し短縮
-
-            // 1. カテゴリーの縦位置を復元
+            delay(150)
             if (listState.firstVisibleItemIndex != initialCategoryIndex) {
                 listState.scrollToItem(initialCategoryIndex)
             }
-
-            // 2. 該当チャンネルの横位置を特定し、スクロールを命令
             val displayCategory = categories[initialCategoryIndex]
             val originalKey = if (displayCategory == "地デジ") "GR" else displayCategory
             val channelIndex = groupedChannels[originalKey]?.indexOfFirst { it.id == targetId } ?: -1
 
             if (channelIndex >= 0) {
-                // そのカテゴリーの横スクロール状態を取得してスクロール
                 rowStates[displayCategory]?.scrollToItem(channelIndex)
             }
-
             delay(100)
             channelFocusRequesters[targetId]?.requestFocus()
         }
@@ -118,7 +107,7 @@ fun LiveContent(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
             pivotOffsets = PivotOffsets(parentFraction = 0.3f)
         ) {
             items(categories, key = { it }) { displayCategory ->
@@ -126,9 +115,7 @@ fun LiveContent(
                 val channels = groupedChannels[originalKey] ?: emptyList()
                 val categoryIndex = categories.indexOf(displayCategory)
 
-                // ★ カテゴリーごとのTvLazyListStateを取得または生成
                 val rowState = rowStates.getOrPut(displayCategory) {
-                    // 戻ってきたときにそのチャンネルが画面内にくるよう初期値を計算
                     val cIndex = if (targetId != null) channels.indexOfFirst { it.id == targetId } else -1
                     androidx.tv.foundation.lazy.list.rememberTvLazyListState(
                         initialFirstVisibleItemIndex = if (cIndex >= 0) cIndex else 0
@@ -147,7 +134,7 @@ fun LiveContent(
                     )
 
                     TvLazyRow(
-                        state = rowState, // ★ 横位置の状態を適用
+                        state = rowState,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(horizontal = 32.dp),
                         pivotOffsets = PivotOffsets(parentFraction = 0.5f),
@@ -161,7 +148,6 @@ fun LiveContent(
 
                             ChannelWideCard(
                                 channel = channel,
-                                // ... (引数はそのまま) ...
                                 mirakurunIp = mirakurunIp,
                                 mirakurunPort = mirakurunPort,
                                 globalTick = globalTick,
@@ -205,53 +191,20 @@ fun ChannelWideCard(
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
-    // スケールと光を滑らかに同期させる
-    val animatedScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.1f else 1f,
-        animationSpec = tween(250), // 250msがTV操作で最も心地よい速度です
-        label = "ScaleAnimation"
-    )
-
-    val glowAlpha by animateFloatAsState(
-        targetValue = if (isFocused) 0.6f else 0f,
-        animationSpec = tween(250),
-        label = "GlowAlpha"
-    )
-
     val progress = remember(channel.programPresent, globalTick) {
         calculateProgress(channel.programPresent?.startTime, channel.programPresent?.duration)
     }
 
-    // Surface自体に drawBehind を持たせることでレイアウトへの影響をゼロにします
     Surface(
         onClick = onClick,
         modifier = modifier
-            .width(160.dp) // 幅を微調整
-            .height(84.dp)
-            .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-            }
-            .drawBehind {
-                if (glowAlpha > 0f) {
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = glowAlpha),
-                                Color.Transparent
-                            )
-                        ),
-                        // カードのサイズに合わせた光の範囲
-                        radius = size.width * 0.9f
-                    )
-                }
-            }
+            .width(150.dp)
+            .height(78.dp)
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        // デフォルトのScaleは graphicsLayer で制御するため固定にします
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(alpha = 0.08f),
+            containerColor = Color.White.copy(alpha = 0.1f),
             focusedContainerColor = Color.White,
             contentColor = Color.White,
             focusedContentColor = Color.Black
@@ -262,49 +215,46 @@ fun ChannelWideCard(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AsyncImage(
                     model = "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo",
                     contentDescription = null,
-                    modifier = Modifier.size(42.dp, 28.dp),
+                    modifier = Modifier.size(50.dp, 30.dp),
                     contentScale = ContentScale.Fit
                 )
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Column(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.Center) {
                     Text(
                         text = channel.name,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Normal,
-                            fontSize = 10.sp
-                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
                         maxLines = 1,
-                        color = if (isFocused) Color.Black.copy(0.6f) else Color.White.copy(0.5f)
+                        color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.7f)
                     )
 
                     Text(
                         text = channel.programPresent?.title ?: "放送休止中",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        ),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        fontSize = 14.sp,
                         maxLines = 1,
                         overflow = if (isFocused) TextOverflow.Visible else TextOverflow.Ellipsis,
+                        // ★ フォーカス時のみMarqueeを有効化して負荷を軽減
                         modifier = if (isFocused) Modifier.basicMarquee() else Modifier
                     )
                 }
             }
 
             if (channel.programPresent != null) {
-                Box(modifier = Modifier.fillMaxWidth().height(3.5.dp).background(Color.Gray.copy(0.1f))) {
+                Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(Color.Gray.copy(0.1f))) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progress)
                             .fillMaxHeight()
-                            .background(if (isFocused) Color(0xFFE53935) else Color.White.copy(alpha = 0.8f))
+                            .background(if (isFocused) Color(0xFFD32F2F) else Color.White)
                     )
                 }
             }

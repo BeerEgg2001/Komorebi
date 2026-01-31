@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.*
+import com.example.komorebi.data.local.entity.toRecordedProgram
 import com.example.komorebi.data.model.KonomiHistoryProgram
 import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.ui.program.EpgScreen
@@ -77,6 +78,12 @@ fun HomeLauncherScreen(
     // 追加: 放送波タブ用のRequesterを定義
     val epgTabFocusRequester = remember { FocusRequester() }
     val epgFirstCellFocusRequester = remember { FocusRequester() }
+    val watchHistoryEntities by homeViewModel.localWatchHistory.collectAsState()
+
+// EntityリストをProgramリストに変換してUIに渡す
+    val watchHistoryPrograms = remember(watchHistoryEntities) {
+        watchHistoryEntities.map { it.toRecordedProgram() }
+    }
 
     LaunchedEffect(Unit) {
         isVisible = true
@@ -253,6 +260,7 @@ fun HomeLauncherScreen(
                                     }
                                     "ビデオ" -> VideoTabContent(
                                         recentRecordings = recentRecordings,
+                                        watchHistory = watchHistoryPrograms,
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
                                         externalFocusRequester = videoContentFocusRequester,
@@ -266,17 +274,22 @@ fun HomeLauncherScreen(
             }
         }
 
-        if (selectedProgram != null) {
-            VideoPlayerScreen(
-                program = selectedProgram!!,
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                onBackPressed = {
-                    lastBackPressTime = System.currentTimeMillis()
-                    selectedProgram = null
-                    homeViewModel.refreshHomeData()
+        key(selectedProgram?.id) {
+            if (selectedProgram != null) {
+                LaunchedEffect(selectedProgram!!.id) {
+                    homeViewModel.saveToHistory(selectedProgram!!)
                 }
-            )
+                VideoPlayerScreen(
+                    program = selectedProgram!!,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    onBackPressed = {
+                        lastBackPressTime = System.currentTimeMillis()
+                        selectedProgram = null
+                        homeViewModel.refreshHomeData()
+                    }
+                )
+            }
         }
     }
 }

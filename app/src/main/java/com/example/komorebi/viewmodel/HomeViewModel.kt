@@ -2,12 +2,16 @@ package com.example.komorebi.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.komorebi.data.local.entity.toEntity
 import com.example.komorebi.data.model.KonomiHistoryProgram
+import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -48,6 +52,17 @@ class HomeViewModel @Inject constructor( // ★@Inject を追加
             repository.refreshUser()
 
             _isLoading.value = false
+        }
+    }
+
+    // 1. ローカルDBの履歴を監視するFlowを公開
+    val localWatchHistory = repository.getLocalWatchHistory()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // 2. 保存用メソッド
+    fun saveToHistory(program: RecordedProgram) {
+        viewModelScope.launch {
+            repository.saveToLocalHistory(program.toEntity()) // toEntity()はEntityクラスで作った変換関数
         }
     }
 }
