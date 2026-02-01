@@ -42,6 +42,7 @@ import com.example.komorebi.viewmodel.ChannelViewModel
 import com.example.komorebi.viewmodel.EpgViewModel
 import com.example.komorebi.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -62,6 +63,7 @@ fun HomeLauncherScreen(
     onUiReady: () -> Unit,
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
+    val scope = rememberCoroutineScope()
 
     // --- 状態管理 ---
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(if (lastWatchedChannel != null) 1 else initialTabIndex) }
@@ -74,6 +76,7 @@ fun HomeLauncherScreen(
     var lastFocusedChannelId by remember { mutableStateOf<String?>(null) }
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     var selectedBroadcastingType by rememberSaveable { mutableStateOf("GR") }
+    var isSuppressingTabChange by remember { mutableStateOf(false) }
 
     // --- フォーカス制御用 ---
     val tabFocusRequesters = remember { List(tabs.size) { FocusRequester() } }
@@ -101,36 +104,54 @@ fun HomeLauncherScreen(
         tabFocusRequesters[selectedTabIndex].requestFocus()
     }
 
-    // 戻るキーハンドリング (変更なし)
     BackHandler(enabled = true) {
-        val currentTab = tabs[selectedTabIndex]
+        // ログを出してデバッグすると、ここが2回走っていないか確認できます
+        println("DEBUG: Back Pressed. epgSelectedProgram: ${epgSelectedProgram != null}")
+
         when {
-            epgSelectedProgram != null -> epgSelectedProgram = null
+            // A. 番組詳細が開いているなら、詳細を閉じる「だけ」で終了
+            epgSelectedProgram != null -> {
+                isSuppressingTabChange = true
+                epgSelectedProgram = null
+
+                scope.launch {
+                    // 確実に詳細が消えてからフォーカスを戻す
+                    delay(100)
+                    epgFirstCellFocusRequester.requestFocus()
+                    delay(400)
+                    isSuppressingTabChange = false
+                }
+                // when文なので、ここで処理は止まり、下の「ホームに戻る」は実行されません
+            }
+
+            // B. プレイヤーが開いているならプレイヤーを閉じる
             selectedProgram != null -> {
-                lastBackPressTime = System.currentTimeMillis()
                 selectedProgram = null
                 homeViewModel.refreshHomeData()
-                contentFocusRequesters[3].requestFocus()
             }
-            showExitDialog -> showExitDialog = false
-            currentTab == "番組表" -> {
+
+            // C. 番組表タブの中にいる場合の挙動
+            selectedTabIndex == 2 -> {
                 if (tabRowHasFocus) {
-                    if (selectedTabIndex != 0) {
-                        selectedTabIndex = 0
-                        tabFocusRequesters[0].requestFocus()
-                    } else showExitDialog = true
-                } else if (isEpgBroadcastingTabFocused) {
-                    tabFocusRequesters[selectedTabIndex].requestFocus()
+                    // タブにフォーカスがあるならホームへ
+                    selectedTabIndex = 0
+                    tabFocusRequesters[0].requestFocus()
                 } else {
-                    epgTabFocusRequester.requestFocus()
+                    // コンテンツ（番組表内）にいるなら上部タブへフォーカスを戻す
+                    tabFocusRequesters[2].requestFocus()
                 }
             }
-            !tabRowHasFocus -> tabFocusRequesters[selectedTabIndex].requestFocus()
+
+            // D. その他のタブならホームへ
             selectedTabIndex != 0 -> {
                 selectedTabIndex = 0
                 tabFocusRequesters[0].requestFocus()
             }
-            else -> showExitDialog = true
+
+            // E. 最後にアプリ終了確認
+            else -> {
+                showExitDialog = true
+            }
         }
     }
 
@@ -168,7 +189,10 @@ fun HomeLauncherScreen(
                                     .onFocusChanged { state ->
                                         if (state.isFocused) {
                                             focusedTabIndex = index
-                                            selectedTabIndex = index
+                                            // ★ 抑制フラグだけでなく、「詳細画面が非表示であること」を条件に加える
+                                            if (!isSuppressingTabChange && epgSelectedProgram == null) {
+                                                selectedTabIndex = index
+                                            }
                                         }
                                     }
                                     .focusProperties {
@@ -240,9 +264,20 @@ fun HomeLauncherScreen(
                             onBroadcastingTabFocusChanged = { isEpgBroadcastingTabFocused = it },
                             firstCellFocusRequester = epgFirstCellFocusRequester,
                             selectedProgram = epgSelectedProgram,
-                            onProgramSelected = { epgSelectedProgram = it },
+                            onProgramSelected = { program ->
+                                // ★ 修正: program が null（戻るボタン押下時）でも、タブを移動させない
+                                epgSelectedProgram = program
+                            },
                             selectedBroadcastingType = selectedBroadcastingType,
-                            onTypeSelected = { selectedBroadcastingType = it }
+                            onTypeSelected = { selectedBroadcastingType = it },
+                            onChannelSelected = { channelId ->
+                                val targetChannel = groupedChannels.values.flatten().find { it.id == channelId }
+                                if (targetChannel != null) {
+                                    // epgSelectedProgram = null // ここで消すと戻る場所がなくなるため保持するか、
+                                    // 視聴画面（VideoPlayerScreen）を EpgScreen の上に重ねる構成にします
+                                    onChannelClick(targetChannel)
+                                }
+                            }
                         )
                     }
 

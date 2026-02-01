@@ -97,18 +97,6 @@ fun LiveContent(
             val originalKey = if (targetCatName == "地デジ") "GR" else targetCatName
             val chIndex = groupedChannels[originalKey]?.indexOfFirst { it.id == targetId } ?: 0
             rowStates[targetCatName]?.scrollToItem(chIndex)
-
-//            // ★ 粘着フォーカス要求
-//            repeat(15) {
-//                val requester = channelFocusRequesters[targetId]
-//                if (requester != null) {
-//                    try {
-//                        requester.requestFocus()
-//                        return@LaunchedEffect
-//                    } catch (_: Exception) {}
-//                }
-//                delay(100)
-//            }
         }
     }
 

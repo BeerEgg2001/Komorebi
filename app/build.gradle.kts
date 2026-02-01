@@ -76,7 +76,8 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation(libs.androidx.compose.ui.test)
-    implementation(libs.androidx.compose.ui.text) // JSON変換用
+    implementation(libs.androidx.compose.ui.text)
+    implementation(libs.androidx.compose.foundation) // JSON変換用
 
     // --- 不足分：Paging 3 (HomeViewModelで使用) ---
     val paging_version = "3.3.0"
