@@ -61,6 +61,7 @@ fun LivePlayerScreen(
     isMiniListOpen: Boolean,
     onMiniListToggle: (Boolean) -> Unit,
     onChannelSelect: (Channel) -> Unit,
+    onBackPressed: () -> Unit, // ★親（MainActivity）に戻るためのコールバックを追加
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -69,7 +70,6 @@ fun LivePlayerScreen(
         derivedStateOf { groupedChannels.values.flatten().find { it.id == channel.id } ?: channel }
     }
 
-    // --- 音声・再生制御 ---
     val audioProcessor = remember { ChannelMixingAudioProcessor() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.STEREO) }
     var showOverlay by remember { mutableStateOf(false) }
@@ -81,12 +81,13 @@ fun LivePlayerScreen(
     var keyDownStartTime by remember { mutableLongStateOf(0L) }
     var isLongPressProcessed by remember { mutableStateOf(false) }
     var ignoreNextKeyUp by remember { mutableStateOf(false) }
+    var lastKeyUpTime by remember { mutableLongStateOf(0L) }
     val mainFocusRequester = remember { FocusRequester() }
 
     val exoPlayer = remember {
         val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(context: android.content.Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(audioProcessor)).build()
+            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
+                return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
             }
         }
         val extractorsFactory = DefaultExtractorsFactory().apply {
@@ -95,7 +96,6 @@ fun LivePlayerScreen(
         ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(DefaultMediaSourceFactory(context, extractorsFactory)).build().apply { playWhenReady = true }
     }
 
-    // 音声行列の適用
     LaunchedEffect(currentAudioMode) {
         val matrix = when (currentAudioMode) {
             AudioMode.MAIN -> floatArrayOf(1f, 0f, 1f, 0f)
@@ -105,9 +105,8 @@ fun LivePlayerScreen(
         audioProcessor.putChannelMixingMatrix(ChannelMixingMatrix(2, 2, matrix))
     }
 
-    // チャンネル切り替え
     LaunchedEffect(currentChannelItem.id) {
-        isManualOverlay = false; showOverlay = true; scrollState.scrollTo(0)
+        isManualOverlay = false; isPinnedOverlay = false; showOverlay = true; scrollState.scrollTo(0)
         val streamUrl = "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(currentChannelItem)}/stream"
         exoPlayer.stop(); exoPlayer.clearMediaItems()
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
@@ -119,76 +118,109 @@ fun LivePlayerScreen(
 
     DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { keyEvent ->
-        val keyCode = keyEvent.nativeKeyEvent.keyCode
-        val isEnter = keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER
-        val isBack = keyCode == NativeKeyEvent.KEYCODE_BACK
-        val isUp = keyCode == NativeKeyEvent.KEYCODE_DPAD_UP
-        val isDown = keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black)
+        .onPreviewKeyEvent { keyEvent ->
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+            val isEnter = keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER
+            val isBack = keyCode == NativeKeyEvent.KEYCODE_BACK
+            val isUp = keyCode == NativeKeyEvent.KEYCODE_DPAD_UP
+            val isDown = keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN
 
-        if (isSubMenuOpen || isMiniListOpen) {
+            // 1. サブメニュー・ミニリスト表示中の「戻る」
+            if (isSubMenuOpen || isMiniListOpen) {
+                if (isBack && keyEvent.type == KeyEventType.KeyDown) {
+                    if (isSubMenuOpen) {
+                        if (activeSubMenuCategory != null) activeSubMenuCategory = null
+                        else { isSubMenuOpen = false; ignoreNextKeyUp = true; mainFocusRequester.requestFocus() }
+                    } else { onMiniListToggle(false); mainFocusRequester.requestFocus() }
+                    return@onPreviewKeyEvent true
+                }
+                return@onPreviewKeyEvent false
+            }
+
+            // 2. 何も表示されていない時の「戻る」：親のコールバックを呼ぶ
             if (isBack && keyEvent.type == KeyEventType.KeyDown) {
-                if (isSubMenuOpen) {
-                    if (activeSubMenuCategory != null) activeSubMenuCategory = null
-                    else { isSubMenuOpen = false; ignoreNextKeyUp = true; mainFocusRequester.requestFocus() }
-                } else { onMiniListToggle(false); mainFocusRequester.requestFocus() }
-                return@onPreviewKeyEvent true
-            }
-            return@onPreviewKeyEvent false
-        }
-
-        if (showOverlay && isManualOverlay && (isUp || isDown)) {
-            if (keyEvent.type == KeyEventType.KeyDown) {
-                coroutineScope.launch { scrollState.animateScrollBy(if (isUp) -250f else 250f) }
-            }
-            return@onPreviewKeyEvent true
-        }
-
-        if (isEnter) {
-            if (keyEvent.type == KeyEventType.KeyDown) {
-                if (keyEvent.nativeKeyEvent.repeatCount == 0) {
-                    keyDownStartTime = System.currentTimeMillis(); isLongPressProcessed = false
-                } else if (!isLongPressProcessed && System.currentTimeMillis() - keyDownStartTime > 600) {
-                    isLongPressProcessed = true; ignoreNextKeyUp = true; isSubMenuOpen = true; activeSubMenuCategory = null
-                    showOverlay = false; isManualOverlay = false; isPinnedOverlay = false
+                if (showOverlay || isPinnedOverlay) {
+                    showOverlay = false; isPinnedOverlay = false; isManualOverlay = false
+                } else {
+                    onBackPressed() // 親側の isPlayerMode = false を叩く
                 }
                 return@onPreviewKeyEvent true
             }
-            if (keyEvent.type == KeyEventType.KeyUp) {
-                if (ignoreNextKeyUp) { ignoreNextKeyUp = false; return@onPreviewKeyEvent true }
-                when {
-                    !showOverlay -> { isManualOverlay = true; showOverlay = true }
-                    isManualOverlay -> { showOverlay = false; isManualOverlay = false; isPinnedOverlay = true }
-                    isPinnedOverlay -> isPinnedOverlay = false
+
+            // 3. スクロール処理
+            if (showOverlay && isManualOverlay && (isUp || isDown)) {
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    coroutineScope.launch { scrollState.animateScrollBy(if (isUp) -300f else 300f) }
                 }
                 return@onPreviewKeyEvent true
             }
-        }
 
-        if (!showOverlay && !isPinnedOverlay && keyEvent.type == KeyEventType.KeyDown && isDown) {
-            onMiniListToggle(true); return@onPreviewKeyEvent true
-        }
-        false
-    }) {
-        // 1. 映像レイヤー
+            // 4. 決定キー (Center)
+            if (isEnter) {
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    if (keyEvent.nativeKeyEvent.repeatCount == 0) {
+                        keyDownStartTime = System.currentTimeMillis(); isLongPressProcessed = false
+                    } else if (!isLongPressProcessed && (System.currentTimeMillis() - keyDownStartTime) > 600) {
+                        isLongPressProcessed = true; ignoreNextKeyUp = true; isSubMenuOpen = true
+                        activeSubMenuCategory = null; showOverlay = false; isManualOverlay = false; isPinnedOverlay = false
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (keyEvent.type == KeyEventType.KeyUp) {
+                    if (ignoreNextKeyUp) { ignoreNextKeyUp = false; return@onPreviewKeyEvent true }
+                    val now = System.currentTimeMillis()
+                    if (now - lastKeyUpTime < 200) return@onPreviewKeyEvent true
+                    lastKeyUpTime = now
+                    when {
+                        showOverlay -> { showOverlay = false; isManualOverlay = false; isPinnedOverlay = true }
+                        isPinnedOverlay -> { isPinnedOverlay = false }
+                        else -> { showOverlay = true; isManualOverlay = true; isPinnedOverlay = false }
+                    }
+                    return@onPreviewKeyEvent true
+                }
+            }
+
+            // 5. 下キーでミニリスト
+            if (!showOverlay && !isPinnedOverlay && keyEvent.type == KeyEventType.KeyDown && isDown) {
+                onMiniListToggle(true); return@onPreviewKeyEvent true
+            }
+            false
+        }) {
+        // ... (AndroidView 等の描画部分は変更なし)
         AndroidView(factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } }, modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable())
 
-        // 2. 状態通知 (右上)
         AnimatedVisibility(visible = isPinnedOverlay, enter = fadeIn(), exit = fadeOut()) {
             StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort)
         }
-
-        // 3. 番組詳細 (下部)
         AnimatedVisibility(visible = showOverlay, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
             LiveOverlayUI(currentChannelItem, currentChannelItem.programPresent?.title ?: "番組情報なし", mirakurunIp, mirakurunPort, isManualOverlay, scrollState)
         }
-
-        // 4. ミニリスト (左側)
-        if (isMiniListOpen) {
-            ChannelListScreen(groupedChannels = groupedChannels, activeChannel = currentChannelItem, isMiniMode = true, onChannelClick = { onChannelSelect(it) }, onDismiss = { onMiniListToggle(false); mainFocusRequester.requestFocus() })
+        AnimatedVisibility(
+            visible = isMiniListOpen,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        ) {
+            ChannelListScreen(
+                groupedChannels = groupedChannels,
+                activeChannel = currentChannelItem,
+                isMiniMode = true,
+                onChannelClick = { channel ->
+                    // 1. チャンネルを切り替える
+                    onChannelSelect(channel)
+                    // 2. リストを閉じる
+                    onMiniListToggle(false)
+                    // 3. プレイヤー本体にフォーカスを戻す
+                    mainFocusRequester.requestFocus()
+                },
+                onDismiss = {
+                    onMiniListToggle(false)
+                    mainFocusRequester.requestFocus()
+                }
+            )
         }
-
-        // 5. サブメニュー (右側)
         AnimatedVisibility(visible = isSubMenuOpen, enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(), exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut()) {
             SubMenuOverlay(currentMode = currentAudioMode, activeCategory = activeSubMenuCategory, onCategorySelect = { activeSubMenuCategory = it }, onAudioModeSelect = { currentAudioMode = it; isSubMenuOpen = false; mainFocusRequester.requestFocus() }, onDismiss = { isSubMenuOpen = false; mainFocusRequester.requestFocus() })
         }

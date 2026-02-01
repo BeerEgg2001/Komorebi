@@ -77,8 +77,17 @@ class MainActivity : ComponentActivity() {
 //                        else -> showExitDialog = true
 //                    }
 //                }
-                BackHandler(enabled = !isPlayerMode || !isSettingsMode) {
-                    showExitDialog = true
+                // 再生中かどうかでBackHandlerの挙動を変える
+                BackHandler(enabled = true) {
+                    if (isPlayerMode) {
+                        // 再生モードなら、終了ダイアログを出さずにリストに戻る
+                        isPlayerMode = false
+                    } else if (isSettingsMode) {
+                        isSettingsMode = false
+                    } else {
+                        // ホーム画面なら終了ダイアログを表示
+                        showExitDialog = true
+                    }
                 }
 
                 if (totalLoading) {
@@ -90,17 +99,14 @@ class MainActivity : ComponentActivity() {
                                 selectedChannel?.let { currentChannel ->
                                     key(currentChannel.id) {
                                         LivePlayerScreen(
-                                            channel = currentChannel,
+                                            channel = selectedChannel!!,
+                                            groupedChannels = groupedChannels,
                                             mirakurunIp = mirakurunIp,
                                             mirakurunPort = mirakurunPort,
-                                            groupedChannels = groupedChannels,
                                             isMiniListOpen = isMiniListOpen,
                                             onMiniListToggle = { isMiniListOpen = it },
-                                            onChannelSelect = { selected ->
-                                                selectedChannel = selected
-                                                isMiniListOpen = false
-                                                currentTabIndex = 1
-                                            }
+                                            onChannelSelect = { selectedChannel = it },
+                                            onBackPressed = { isPlayerMode = false } // ★ここを追加
                                         )
                                     }
                                 }
