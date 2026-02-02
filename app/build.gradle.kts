@@ -1,8 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    alias(libs.plugins.kotlin.compose) // KSPを適用
-    id("com.google.dagger.hilt.android") // 追加
+    alias(libs.plugins.kotlin.compose)
+    id("com.google.dagger.hilt.android")
     id("kotlin-kapt")
     id("com.google.devtools.ksp")
 }
@@ -19,7 +19,32 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // --- C++ ビルド設定 (1/2): ABIの設定 ---
+        externalNativeBuild {
+            cmake {
+                // 必要に応じて C++ コンパイラ引数を追加
+                cppFlags("-std=c++11")
+            }
+        }
+        ndk {
+            // 低スペック端末(Android TV等)で一般的なアーキテクチャに限定してビルド時間を短縮
+            // 実機が 64bit なら arm64-v8a、32bit なら armeabi-v7a です
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+        }
     }
+
+    // --- C++ ビルド設定 (2/2): CMakeLists.txt のパス指定 ---
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.2.3" // インストールされているCMakeのバージョンに合わせて変更可能
+        }
+    }
+
+    // NDKのバージョンを明示的に指定（Android Studio の SDK Manager でインストール済みのもの）
+    // 指定しない場合は最新が使われますが、固定したほうがビルドが安定します
+    // ndkVersion = "25.1.8937393"
 
     buildTypes {
         release {
@@ -37,8 +62,11 @@ android {
     kotlin {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-            // もし追加の引数がある場合はここにも書けます
-            freeCompilerArgs.add("-Xjvm-default=all")
+            freeCompilerArgs.addAll(
+                "-Xjvm-default=all",
+                // ↓ この行を追加：TV Material3 の実験的API警告を無視（許可）します
+                "-opt-in=androidx.tv.material3.ExperimentalTvMaterial3Api"
+            )
         }
     }
 }
