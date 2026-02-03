@@ -19,57 +19,90 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import java.time.Duration
 
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class EpgViewModel @Inject constructor(
     private val repository: EpgRepository,
-    private val settingsRepository: SettingsRepository // 追加
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
-    // import があれば 'by' が正しく機能します
+
+    // --- [State] データの状態 ---
     var uiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
         private set
 
     private val _isPreloading = MutableStateFlow(true)
     val isPreloading: StateFlow<Boolean> = _isPreloading
+
     private val broadcastingTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
 
-    // ロゴ生成用に現在のベースURLを保持
+    // --- [State] UI表示の状態管理 ---
+    // UI側の remember から移動。これにより日時変更時もリセットされず、ViewModelが変更を検知できる
+    private val _baseTime = MutableStateFlow(OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0))
+    val baseTime: StateFlow<OffsetDateTime> = _baseTime.asStateFlow()
+
+    // 番組表の描画定数（UIとViewModelで共通化）
+    val dpPerMinute = 1.3f
+    val hourHeightDp = 60 * dpPerMinute
+
+    // 設定情報
     private var currentBaseUrl by mutableStateOf("")
     private var mirakurunBaseUrl by mutableStateOf("")
 
-    // 選択されたチャンネルIDを保持するState（Player画面がこれを監視して再生を開始する）
+    // プレイヤー連携用
     private val _selectedChannelId = MutableStateFlow<String?>(null)
     val selectedChannelId: StateFlow<String?> = _selectedChannelId
 
+    private val _selectedBroadcastingType = MutableStateFlow("GR")
+    val selectedBroadcastingType = _selectedBroadcastingType.asStateFlow()
+
     init {
-        // 初期化時にベースURLを取得しておく
         viewModelScope.launch {
             val ip = settingsRepository.mirakurunIp.first()
             val port = settingsRepository.mirakurunPort.first()
             mirakurunBaseUrl = "http://$ip:$port"
             currentBaseUrl = settingsRepository.getBaseUrl().removeSuffix("/")
-            // ★ ベースURLが確定したら即座に読み込み開始
-            loadEpg(1)
+
+            // 初回読み込み
+            preloadAllEpgData()
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
+    /**
+     * 表示の起点時間を更新する（日時指定ジャンプで使用）
+     */
+    fun updateBaseTime(newTime: OffsetDateTime) {
+        _baseTime.value = newTime
+        // ここで新しい時間のデータを再取得するロジックがあれば呼ぶ
+        loadEpg(days = 1)
+    }
+
+    /**
+     * 指定された時間に対するY軸のオフセット（dp相当の数値）を計算する
+     */
+    fun getYOffsetForTime(timeStr: String): Float {
+        return try {
+            val startTime = OffsetDateTime.parse(timeStr)
+            val minutes = Duration.between(baseTime.value, startTime).toMinutes()
+            minutes * dpPerMinute
+        } catch (e: Exception) {
+            0f
+        }
+    }
+
+    /**
+     * 指定された日数のEPGデータを読み込む
+     */
     fun loadEpg(days: Long) {
         viewModelScope.launch {
             uiState = EpgUiState.Loading
-// 現在時刻をそのまま取得（秒以下を0にするとリクエストURLが綺麗になります）
-//            val now = OffsetDateTime.now().withSecond(0).withNano(0)
-
-            // ヒント: 現在放送中の番組をしっかり表示したい場合は、
-            // 30分前（.minusMinutes(30)）から取得するのが一般的です
-            val baseTime = OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0)
-
-            // fetchEpgData に渡す
+            // updateBaseTime で設定された baseTime を使用してリクエスト
             val result = repository.fetchEpgData(
-                startTime = baseTime,
-                channelType = null, // 明示的にnullを渡す（全取得）
+                startTime = baseTime.value,
+                channelType = null,
                 days = days
             )
 
@@ -80,33 +113,26 @@ class EpgViewModel @Inject constructor(
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
+    /**
+     * 全放送波のデータをプリロードする
+     */
     fun preloadAllEpgData() {
         viewModelScope.launch {
             _isPreloading.value = true
             uiState = EpgUiState.Loading
             try {
-                // 現在時刻から直近の0分0秒を起点にする
-                val baseTime = OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0)
-
-                // 各放送波（GR, BS, CS...）ごとに並列でリクエストを投げる
                 val deferredList = broadcastingTypes.map { type ->
                     async {
-                        // Result<List<EpgChannelWrapper>> が返ってくるので getOrThrow() で展開
                         repository.fetchEpgData(
-                            startTime = baseTime,
+                            startTime = baseTime.value,
                             channelType = type,
-                            days = 1 // 必要に応じて期間を調整
+                            days = 1
                         ).getOrThrow()
                     }
                 }
-
-                // awaitAll() で全放送波の結果を待ち、flatten() で一つの List<EpgChannelWrapper> にまとめる
                 val allData = deferredList.awaitAll().flatten()
-
                 uiState = EpgUiState.Success(allData)
             } catch (e: Exception) {
-                e.printStackTrace()
                 uiState = EpgUiState.Error(e.message ?: "Unknown Error")
             } finally {
                 _isPreloading.value = false
@@ -115,38 +141,32 @@ class EpgViewModel @Inject constructor(
     }
 
     /**
-     * 指定されたチャンネルIDで再生を開始する
+     * チャンネル・番組情報の補助メソッド
      */
-    fun playChannel(channelId: String) {
-        viewModelScope.launch {
-            _selectedChannelId.value = channelId
-            // ここで必要に応じて、再生画面への遷移フラグを立てたり、
-            // 最後に視聴したチャンネルとして保存する処理を追加します
-        }
-    }
-
-    /**
-     * 再生完了後やエラー時にIDをクリアする
-     */
-    fun clearSelectedChannel() {
-        _selectedChannelId.value = null
-    }
-
-    // チャンネルオブジェクトから URL を生成する
     fun getMirakurunLogoUrl(channel: EpgChannel): String {
-        // channel.id が数字（ServiceId）であることを想定しています
-        // もし channel.serviceId というプロパティがあるならそれを使ってください
         val streamId = buildStreamId(channel)
         return "$mirakurunBaseUrl/api/services/$streamId/logo"
     }
 
-    fun buildStreamId(channel: EpgChannel): String {
+    private fun buildStreamId(channel: EpgChannel): String {
         val networkIdPart = when (channel.type) {
             "GR" -> channel.network_id.toString()
             "BS", "CS", "SKY", "BS4K" -> "${channel.network_id}00"
             else -> channel.network_id.toString()
         }
         return "${networkIdPart}${channel.service_id}"
+    }
+
+    fun playChannel(channelId: String) {
+        viewModelScope.launch { _selectedChannelId.value = channelId }
+    }
+
+    fun clearSelectedChannel() {
+        _selectedChannelId.value = null
+    }
+
+    fun updateBroadcastingType(type: String) {
+        _selectedBroadcastingType.value = type
     }
 }
 
