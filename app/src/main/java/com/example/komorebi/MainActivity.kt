@@ -10,15 +10,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.media3.common.util.Log
-import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
 import com.example.komorebi.ui.theme.KomorebiTheme
 import com.example.komorebi.ui.theme.SettingsScreen
@@ -30,22 +25,24 @@ import com.example.komorebi.ui.live.LivePlayerScreen
 import com.example.komorebi.viewmodel.Channel
 import com.example.komorebi.viewmodel.ChannelViewModel
 import com.example.komorebi.viewmodel.EpgViewModel
+import com.example.komorebi.viewmodel.HomeViewModel
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: ChannelViewModel by viewModels()
-    private val epgViewModel: EpgViewModel by viewModels()
+    // ViewModelの定義（重複を削除し整理）
     private val channelViewModel: ChannelViewModel by viewModels()
+    private val epgViewModel: EpgViewModel by viewModels()
+    private val homeViewModel: HomeViewModel by viewModels()
 
     @RequiresApi(Build.VERSION_CODES.O)
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        viewModel.fetchChannels()
+        // 初期データの取得開始
+        channelViewModel.fetchChannels()
         epgViewModel.preloadAllEpgData()
         channelViewModel.fetchRecentRecordings()
 
@@ -53,56 +50,46 @@ class MainActivity : ComponentActivity() {
             KomorebiTheme {
                 val context = LocalContext.current
                 val activity = context as? Activity
-                var isUiReady by remember { mutableStateOf(false) }
-                val scope = rememberCoroutineScope()
 
-                val isChannelLoading by viewModel.isLoading.collectAsState()
+                // --- データ状態の監視 ---
+                val isChannelLoading by channelViewModel.isLoading.collectAsState()
                 val isEpgLoading by epgViewModel.isPreloading.collectAsState()
-                val groupedChannels by viewModel.groupedChannels.collectAsState()
+                val groupedChannels by channelViewModel.groupedChannels.collectAsState()
 
-                // --- 状態保持 ---
+                // --- アプリ画面の状態 ---
                 var selectedChannel by remember { mutableStateOf<Channel?>(null) }
                 var isSettingsMode by remember { mutableStateOf(false) }
                 var isMiniListOpen by remember { mutableStateOf(false) }
                 var showExitDialog by remember { mutableStateOf(false) }
 
-                // タブの状態を MainActivity で一括管理し、戻ってきた時に保持されるようにします
+                // タブ位置の保持
                 var currentTabIndex by remember { mutableIntStateOf(0) }
 
-                val isDataLoading = isChannelLoading || isEpgLoading
-                val extraDelay = getDynamicDelay()
-
+                // 設定リポジトリの準備
                 val repository = remember { SettingsRepository(context) }
                 val mirakurunIp by repository.mirakurunIp.collectAsState(initial = "192.168.100.60")
                 val mirakurunPort by repository.mirakurunPort.collectAsState(initial = "40772")
                 val konomiIp by repository.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
                 val konomiPort by repository.konomiPort.collectAsState(initial = "7000")
 
-                // ★ BackHandler：最優先（視聴中）から順に判定
+                // データ準備が整うまで全画面Loading
+                val isInitialLoading = isChannelLoading || isEpgLoading
+
+                // バックボタン制御
                 BackHandler(enabled = true) {
                     when {
-                        // 1. ライブ視聴中なら視聴を終了（selectedChannelをnullにすればHomeに戻る）
-                        selectedChannel != null -> {
-                            selectedChannel = null
-                        }
-                        // 2. 設定画面なら設定を閉じる
-                        isSettingsMode -> {
-                            isSettingsMode = false
-                        }
-                        // 3. それ以外（Home画面）は HomeLauncherScreen 側の BackHandler に任せるため
-                        // 本来はここでは何もしないか、ダイアログ表示。
-                        // HomeLauncher側でBackHandlerがあるため、こちらはHome時はダイアログ表示に統一
-                        else -> {
-                            showExitDialog = true
-                        }
+                        selectedChannel != null -> { selectedChannel = null }
+                        isSettingsMode -> { isSettingsMode = false }
+                        else -> { showExitDialog = true }
                     }
                 }
 
-                if (isDataLoading) {
+                if (isInitialLoading) {
                     LoadingScreen()
                 } else {
                     Box(modifier = Modifier.fillMaxSize()) {
                         when {
+                            // 1. ライブ視聴画面
                             selectedChannel != null -> {
                                 key(selectedChannel!!.id) {
                                     LivePlayerScreen(
@@ -113,72 +100,49 @@ class MainActivity : ComponentActivity() {
                                         isMiniListOpen = isMiniListOpen,
                                         onMiniListToggle = { isMiniListOpen = it },
                                         onChannelSelect = { selectedChannel = it },
-                                        onBackPressed = {
-                                            selectedChannel = null
-                                        }
+                                        onBackPressed = { selectedChannel = null }
                                     )
                                 }
                             }
+                            // 2. 設定画面
                             isSettingsMode -> {
                                 SettingsScreen(onBack = { isSettingsMode = false })
                             }
+                            // 3. メインランチャー（ホーム、番組表、ビデオ等）
                             else -> {
                                 HomeLauncherScreen(
+                                    channelViewModel = channelViewModel,
+                                    homeViewModel = homeViewModel,
+                                    epgViewModel = epgViewModel,
                                     groupedChannels = groupedChannels,
-                                    lastWatchedChannel = selectedChannel,
+                                    lastWatchedChannel = null, // 必要に応じて状態管理に追加してください
                                     mirakurunIp = mirakurunIp,
                                     mirakurunPort = mirakurunPort,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
                                     initialTabIndex = currentTabIndex,
-                                    // タブ変更イベントを拾って MainActivity の currentTabIndex を更新
                                     onTabChange = { currentTabIndex = it },
                                     onChannelClick = { channel ->
                                         selectedChannel = channel
-                                        // ★修正ポイント: ここで強制的に 1 にしていたのを削除
-                                        // これにより、番組表(2)から遷移した場合は 2 のまま保持されます
+                                        homeViewModel.saveLastChannel(channel)
                                     },
                                     onUiReady = {
-                                        scope.launch {
-                                            delay(extraDelay)
-                                            isUiReady = true
-                                        }
+                                        // 内部でロード完了を待機するため、ここでは特別な処理は不要
                                     }
                                 )
-                            }
-                        }
-
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = !isUiReady,
-                            enter = androidx.compose.animation.fadeIn(),
-                            exit = androidx.compose.animation.fadeOut()
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                LoadingScreen()
                             }
                         }
                     }
                 }
 
+                // 終了確認ダイアログ
                 if (showExitDialog) {
-                    ExitDialog(onConfirm = { activity?.finish() }, onDismiss = { showExitDialog = false })
+                    ExitDialog(
+                        onConfirm = { activity?.finish() },
+                        onDismiss = { showExitDialog = false }
+                    )
                 }
             }
         }
-    }
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun getDynamicDelay(): Long {
-    val context = LocalContext.current
-    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-    val memoryInfo = ActivityManager.MemoryInfo()
-    activityManager.getMemoryInfo(memoryInfo)
-    val totalRamGb = memoryInfo.totalMem / (1024 * 1024 * 1024.0)
-    return when {
-        totalRamGb <= 1.5 -> 7000L
-        totalRamGb <= 3.0 -> 4500L
-        else -> 1000L
     }
 }

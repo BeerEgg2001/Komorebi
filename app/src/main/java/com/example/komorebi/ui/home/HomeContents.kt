@@ -1,12 +1,14 @@
 package com.example.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -17,6 +19,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.foundation.PivotOffsets
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyRow
@@ -27,83 +30,137 @@ import com.example.komorebi.data.model.getThumbnailUrl
 import com.example.komorebi.viewmodel.Channel
 import java.time.Instant
 import androidx.tv.foundation.lazy.list.itemsIndexed
+import com.example.komorebi.buildStreamId
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeContents(
-    lastWatchedChannel: Channel?,
+    lastWatchedChannels: List<Channel>,
     watchHistory: List<KonomiHistoryProgram>,
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     konomiIp: String,
     konomiPort: String,
+    mirakurunIp: String,
+    mirakurunPort: String,
     modifier: Modifier = Modifier,
     tabFocusRequester: FocusRequester,    // ナビゲーションの「ホーム」タブ
     externalFocusRequester: FocusRequester // コンテンツへの入り口
 ) {
+    fun getLogoUrl(channel: Channel): String {
+        val url = "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo"
+        Log.d("DEBUG", "Logo URL: $url")
+        return url
+    }
+    val typeLabels = mapOf(
+        "GR" to "地デジ",
+        "BS" to "BS",
+        "CS" to "CS",
+        "BS4K" to "BS4K",
+        "SKY" to "スカパー"
+    )
+
     TvLazyColumn(
-        modifier = modifier.fillMaxSize(), // ★ 修正: focusRequesterとonPreviewKeyEventを削除
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 24.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp),
         pivotOffsets = PivotOffsets(parentFraction = 0.15f)
     ) {
-        // --- 1. 前回視聴したチャンネル ---
         item {
-            Column(modifier = Modifier.padding(horizontal = 32.dp)) {
-                SectionHeader(title = "前回視聴したチャンネル")
+            Column {
+                SectionHeader(
+                    title = "前回視聴したチャンネル",
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                if (lastWatchedChannel != null) {
-                    var isChannelFocused by remember { mutableStateOf(false) }
+                if (lastWatchedChannels.isNotEmpty()) {
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        pivotOffsets = PivotOffsets(parentFraction = 0.5f)
+                    ) {
+                        itemsIndexed(lastWatchedChannels) { index, channel ->
+                            var isFocused by remember { mutableStateOf(false) }
 
-                    Surface(
-                        onClick = { onChannelClick(lastWatchedChannel) },
-                        modifier = Modifier
-                            .width(160.dp)
-                            .height(80.dp)
-                            // ★ 修正: この画面の最初の要素にRequesterを付与
-                            .focusRequester(externalFocusRequester)
-                            .onFocusChanged { isChannelFocused = it.isFocused }
-                            .focusProperties {
-                                // ★ 修正: 上キーを押したら確実に「ホーム」タブに戻る
-                                up = tabFocusRequester
-                            },
-                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Color.White.copy(0.1f),
-                            focusedContainerColor = Color.White
-                        )
-                    ) {
-                        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = lastWatchedChannel.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (isChannelFocused) Color.Black else Color.White
-                            )
+                            Surface(
+                                onClick = { onChannelClick(channel) },
+                                modifier = Modifier
+                                    .width(200.dp) // 横並びにするため、幅を少し広げる（180->200）とゆとりが出ます
+                                    .height(100.dp)
+                                    .onFocusChanged { isFocused = it.isFocused }
+                                    .then(if (index == 0) Modifier.focusRequester(externalFocusRequester) else Modifier)
+                                    .focusProperties { up = tabFocusRequester },
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
+                                colors = ClickableSurfaceDefaults.colors(
+                                    containerColor = Color.White.copy(0.1f),
+                                    focusedContainerColor = Color.White
+                                ),
+                                shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
+                            ) {
+                                // ★ Row を使って「ロゴ」と「テキスト」を横に並べる
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(8.dp), // 全体のパディングを少し詰め
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // 1. 左側の局ロゴ（サイズアップ & 背景なし）
+                                    AsyncImage(
+                                        model = getLogoUrl(channel),
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .size(64.dp) // 48dpから64dpへ拡大
+                                            // .background(...) を削除
+                                            .padding(2.dp), // 最小限の余白
+                                        contentScale = ContentScale.Fit
+                                    )
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    // 2. 右側のテキスト情報
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            text = channel.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = if (isFocused) Color.Black else Color.White,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontWeight = FontWeight.Bold,
+                                            lineHeight = 16.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        val displayType = typeLabels[channel.type] ?: channel.type
+                                        Text(
+                                            text = "$displayType ${channel.channelNumber ?: ""}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(
+                                                0.7f
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                            }
                         }
-                    }
                 } else {
-                    // データがない場合のプレースホルダー。ここが入り口になる可能性があるためRequesterを付与。
-                    Surface(
-                        onClick = {},
-                        enabled = false,
-                        modifier = Modifier
-                            .width(280.dp)
-                            .height(80.dp)
-                            .focusRequester(externalFocusRequester)
-                            .focusProperties { up = tabFocusRequester },
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Color.White.copy(0.05f),
-                            disabledContainerColor = Color.White.copy(0.05f)
-                        )
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "最近視聴した番組はありません",
-                                color = Color.White.copy(alpha = 0.5f),
-                                style = MaterialTheme.typography.bodyMedium
+                    // プレースホルダー (ここも padding を調整)
+                    Box(modifier = Modifier.padding(horizontal = 32.dp)) {
+                        Surface(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.width(240.dp).height(80.dp),
+                            colors = ClickableSurfaceDefaults.colors(
+                                disabledContainerColor = Color.White.copy(0.05f)
                             )
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("最近視聴した番組はありません", color = Color.White.copy(0.5f))
+                            }
                         }
                     }
                 }
@@ -129,9 +186,6 @@ fun HomeContents(
                                 onClick = { onHistoryClick(history) },
                                 modifier = Modifier.focusProperties {
                                     // 1行目にデータがない場合などの保険。必要に応じて追加可能
-                                    if (lastWatchedChannel == null && index == 0) {
-                                        // 既に上でRequesterを消費しているため、ここは自然な移動に任せる
-                                    }
                                 }
                             )
                         }

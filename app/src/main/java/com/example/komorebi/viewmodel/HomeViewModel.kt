@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.komorebi.data.local.entity.LastChannelEntity
 import com.example.komorebi.data.local.entity.toEntity
 import com.example.komorebi.data.local.entity.toKonomiHistoryProgram
 import com.example.komorebi.data.model.KonomiHistoryProgram
@@ -27,7 +28,6 @@ class HomeViewModel @Inject constructor(
     // 読み込み状態の管理
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
     /**
      * 単一の真実のソース (Single Source of Truth)
      * ローカルDBを監視し、常に最新の履歴（API由来 + ローカル由来）をUIへ流します。
@@ -41,6 +41,33 @@ class HomeViewModel @Inject constructor(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
+        )
+
+    val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
+        .map { entities: List<LastChannelEntity> -> // ★ ここが「List」であることを明示
+            // リスト全体を map して、個々の Entity を Channel に変換する
+            entities.map { entity ->
+                Channel(
+                    id = entity.channelId,
+                    name = entity.name,
+                    type = entity.type,
+                    channelNumber = entity.channelNumber?: "",
+                    // 以下、Channelクラスの必須パラメータを埋める
+                    displayChannelId = entity.channelId,
+                    networkId = entity.networkId,
+                    serviceId = entity.serviceId,
+                    isWatchable = true,
+                    isDisplay = true,
+                    programPresent = null,
+                    programFollowing = null,
+                    remocon_Id = 0
+                )
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList() // ★ 初期値も空リストに変更
         )
 
     init {
@@ -81,6 +108,22 @@ class HomeViewModel @Inject constructor(
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
             repository.saveToLocalHistory(program.toEntity())
+        }
+    }
+
+    fun saveLastChannel(channel: Channel) {
+        viewModelScope.launch {
+            repository.saveLastChannel(
+                LastChannelEntity(
+                    channelId = channel.id,
+                    name = channel.name,
+                    type = channel.type,
+                    channelNumber = channel.channelNumber,
+                    networkId = channel.networkId,
+                    serviceId = channel.serviceId,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
         }
     }
 }

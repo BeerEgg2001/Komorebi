@@ -13,11 +13,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.*
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,7 +53,6 @@ fun EpgScreen(
     onChannelSelected: (String) -> Unit,
 ) {
     val uiState = viewModel.uiState
-    // 常に最新の「正時」をベースにする
     val baseTime = remember { OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0) }
 
     val displayChannels by remember(selectedBroadcastingType, uiState) {
@@ -90,7 +91,8 @@ fun EpgScreen(
                             viewModel = viewModel,
                             onProgramClick = { onProgramSelected(it) },
                             firstCellFocusRequester = firstCellFocusRequester,
-                            tabFocusRequester = tabFocusRequester
+                            tabFocusRequester = tabFocusRequester,
+                            visibleChannelCount = 7 // ★ここでチャンネル数を指定（例: 7チャンネル）
                         )
                     }
                 }
@@ -120,28 +122,29 @@ fun EpgGrid(
     baseTime: OffsetDateTime,
     viewModel: EpgViewModel,
     onProgramClick: (EpgProgram) -> Unit,
-    firstCellFocusRequester: FocusRequester, // これを「今の番組」用として使う
-    tabFocusRequester: FocusRequester
+    firstCellFocusRequester: FocusRequester,
+    tabFocusRequester: FocusRequester,
+    visibleChannelCount: Int = 6 // ★デフォルト値を設定
 ) {
     val verticalScrollState = rememberScrollState()
     val horizontalScrollState = rememberScrollState()
-    val channelWidth = 150.dp
+
+    // ★ 画面サイズからチャンネル幅を動的に計算
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
     val timeColumnWidth = 55.dp
     val headerHeight = 48.dp
+    val channelWidth = (screenWidth - timeColumnWidth) / visibleChannelCount
 
-    // 現在時刻に基づいたスクロール位置の計算
     val now = OffsetDateTime.now()
     val minutesFromBase = Duration.between(baseTime, now).toMinutes()
-    val currentPositionPx = (minutesFromBase * DP_PER_MINUTE)
 
     LaunchedEffect(channels) {
-        // 現在時刻の30分前が一番上に来るようにスクロール
         val targetScrollDp = ((minutesFromBase - 30) * DP_PER_MINUTE).dp
         verticalScrollState.scrollTo(targetScrollDp.value.toInt())
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // --- ヘッダー（変更なし） ---
         Row(modifier = Modifier.fillMaxWidth().zIndex(4f)) {
             DateHeaderBox(baseTime, timeColumnWidth, headerHeight)
             Row(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
@@ -152,7 +155,6 @@ fun EpgGrid(
         }
 
         Row(modifier = Modifier.fillMaxSize()) {
-            // 時間軸
             Column(modifier = Modifier.width(timeColumnWidth).fillMaxHeight().background(Color(0xFF111111)).verticalScroll(verticalScrollState).zIndex(2f)) {
                 TimeColumnContent(baseTime)
             }
@@ -168,12 +170,8 @@ fun EpgGrid(
                     channels.forEachIndexed { channelIndex, channelWrapper ->
                         Box(modifier = Modifier.width(channelWidth).height(HOUR_HEIGHT * 24)) {
                             channelWrapper.programs.forEach { program ->
-
-                                // ★ 修正ポイント：現在時刻に最も近い「最初のチャンネルの番組」にRequesterを割り当てる
                                 val startTime = OffsetDateTime.parse(program.start_time)
                                 val endTime = startTime.plusSeconds(program.duration.toLong())
-
-                                // 「最初のチャンネル」かつ「現在放送中」のセルを特定
                                 val isCurrentLiveOnFirstChannel = channelIndex == 0 &&
                                         now.isAfter(startTime.minusMinutes(5)) && now.isBefore(endTime)
 
@@ -181,8 +179,7 @@ fun EpgGrid(
                                     epgProgram = program,
                                     baseTime = baseTime,
                                     width = channelWidth,
-                                    isFirstCellOfChannel = false, // 下記 focusProperties で一括管理するため false
-                                    // 条件に合致するセルにのみ Requester を渡す
+                                    isFirstCellOfChannel = false,
                                     focusRequester = if (isCurrentLiveOnFirstChannel) firstCellFocusRequester else null,
                                     tabFocusRequester = tabFocusRequester,
                                     onProgramClick = onProgramClick
@@ -197,6 +194,8 @@ fun EpgGrid(
     }
 }
 
+// --- CompactProgramCell, BroadcastingTypeTabs, ChannelHeaderCell, TimeColumnContent, CurrentTimeIndicatorOptimized, DateHeaderBox は変更なし（境界線実装済み版） ---
+
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun CompactProgramCell(
@@ -210,8 +209,6 @@ fun CompactProgramCell(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val density = LocalDensity.current
-
-    // コンテンツの実際の高さを保持するステート
     var contentHeightDp by remember { mutableStateOf(0.dp) }
 
     val cellData = remember(epgProgram.id, baseTime) {
@@ -229,7 +226,6 @@ fun CompactProgramCell(
         }
     } ?: return
 
-    // ★ 拡張量を動的に計算 (コンテンツの高さが本来の高さより大きい場合のみ、その差分を拡張)
     val expansionAmount = if (isFocused) {
         (contentHeightDp - cellData.height).coerceAtLeast(0.dp)
     } else 0.dp
@@ -255,21 +251,38 @@ fun CompactProgramCell(
             .drawBehind {
                 val fullHeight = size.height + animatedExpansion.toPx()
                 val bgColor = if (cellData.isPast) Color(0xFF151515) else Color(0xFF222222)
+                val borderColor = Color(0xFF333333)
 
                 drawRect(
                     color = bgColor,
-                    topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                    topLeft = Offset.Zero,
                     size = size.copy(height = fullHeight)
                 )
+
                 drawRect(
                     color = if (cellData.isPast) Color.Gray else cellData.genreColor,
-                    topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                    topLeft = Offset.Zero,
                     size = size.copy(width = 3.dp.toPx(), height = fullHeight)
                 )
+
+                // セルの境界線（右と下）
+                drawLine(
+                    color = borderColor,
+                    start = Offset(size.width, 0f),
+                    end = Offset(size.width, fullHeight),
+                    strokeWidth = 1.dp.toPx()
+                )
+                drawLine(
+                    color = borderColor,
+                    start = Offset(0f, fullHeight),
+                    end = Offset(size.width, fullHeight),
+                    strokeWidth = 1.dp.toPx()
+                )
+
                 if (isFocused) {
                     drawRect(
                         color = Color.White,
-                        topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                        topLeft = Offset.Zero,
                         style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
                         size = size.copy(height = fullHeight)
                     )
@@ -280,7 +293,6 @@ fun CompactProgramCell(
             modifier = Modifier
                 .width(width)
                 .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                // ★ ここでコンテンツの実際の高さを計測
                 .onGloballyPositioned { coords ->
                     contentHeightDp = with(density) { coords.size.height.toDp() }
                 }
@@ -300,7 +312,7 @@ fun CompactProgramCell(
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = textAlpha),
                 fontWeight = if (isFocused) FontWeight.Bold else FontWeight.SemiBold,
-                maxLines = if (isFocused) 6 else 1, // タイトルが長い場合も考慮
+                maxLines = if (isFocused) 6 else 1,
                 overflow = TextOverflow.Ellipsis,
                 lineHeight = 13.sp
             )
@@ -312,7 +324,6 @@ fun CompactProgramCell(
                     fontSize = 9.sp,
                     color = Color.White.copy(alpha = if (isFocused) 0.8f else 0.5f * textAlpha),
                     lineHeight = 11.sp,
-                    // フォーカス時は全文読めるように制限を外すか、多めに設定
                     maxLines = if (isFocused) 10 else 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -321,69 +332,65 @@ fun CompactProgramCell(
     }
 }
 
-    @Composable
-    fun BroadcastingTypeTabs(
-        selectedType: String,
-        onTypeSelected: (String) -> Unit,
-        tabFocusRequester: FocusRequester,
-        onFocusChanged: (Boolean) -> Unit,
-        firstCellFocusRequester: FocusRequester,
-        categories: List<String>
+@Composable
+fun BroadcastingTypeTabs(
+    selectedType: String,
+    onTypeSelected: (String) -> Unit,
+    tabFocusRequester: FocusRequester,
+    onFocusChanged: (Boolean) -> Unit,
+    firstCellFocusRequester: FocusRequester,
+    categories: List<String>
+) {
+    val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .onFocusChanged { onFocusChanged(it.hasFocus) }
+            .focusGroup(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+        categories.forEach { code ->
+            val isSelected = selectedType == code
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .onFocusChanged { onFocusChanged(it.hasFocus) }
-                .focusGroup(), // タブ間移動を自然にする
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            categories.forEach { code ->
-                val isSelected = selectedType == code
-
-                Surface(
-                    onClick = { onTypeSelected(code) },
-                    modifier = Modifier
-                        .width(110.dp)
-                        .height(36.dp)
-                        .padding(horizontal = 4.dp)
-                        // 選択されているタブが、上（ナビ）や下（番組表）からの復帰ポイントになる
-                        .then(if (isSelected) Modifier.focusRequester(tabFocusRequester) else Modifier)
-                        .onFocusChanged {
-                            if (it.isFocused && selectedType != code) {
-                                onTypeSelected(code)
-                            }
+            Surface(
+                onClick = { onTypeSelected(code) },
+                modifier = Modifier
+                    .width(110.dp)
+                    .height(36.dp)
+                    .padding(horizontal = 4.dp)
+                    .then(if (isSelected) Modifier.focusRequester(tabFocusRequester) else Modifier)
+                    .onFocusChanged {
+                        if (it.isFocused && selectedType != code) {
+                            onTypeSelected(code)
                         }
-                        .focusProperties {
-                            // ★ 重要: 下キーを押した時は、確実に番組表の最初のセルへ飛ばす
-                            down = firstCellFocusRequester
-                        },
-                    shape = ClickableSurfaceDefaults.shape(RectangleShape),
-                    colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color.Transparent,
-                        focusedContainerColor = Color.White,
-                        contentColor = if (isSelected) Color.White else Color.Gray,
-                        focusedContentColor = Color.Black
-                    ),
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
-                ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        androidx.compose.material3.Text(
-                            text = typeLabels[code] ?: code,
-                            fontSize = 15.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = LocalContentColor.current
-                        )
                     }
+                    .focusProperties {
+                        down = firstCellFocusRequester
+                    },
+                shape = ClickableSurfaceDefaults.shape(RectangleShape),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = Color.Transparent,
+                    focusedContainerColor = Color.White,
+                    contentColor = if (isSelected) Color.White else Color.Gray,
+                    focusedContentColor = Color.Black
+                ),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f)
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    androidx.compose.material3.Text(
+                        text = typeLabels[code] ?: code,
+                        fontSize = 15.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = LocalContentColor.current
+                    )
                 }
             }
         }
     }
-
-// --- 他のコンポーネント（ChannelHeaderCell, TimeColumnContent 等）は変更なしで継続利用可能 ---
+}
 
 @Composable
 fun ChannelHeaderCell(channel: EpgChannel, width: Dp, height: Dp, logoUrl: String) {
@@ -411,7 +418,7 @@ fun TimeColumnContent(baseTime: OffsetDateTime) {
         val displayTime = baseTime.plusHours(hourOffset.toLong())
         Box(
             modifier = Modifier.height(HOUR_HEIGHT).fillMaxWidth()
-                .drawBehind { drawLine(Color(0xFF222222), androidx.compose.ui.geometry.Offset(0f, size.height), androidx.compose.ui.geometry.Offset(size.width, size.height), 1.dp.toPx()) },
+                .drawBehind { drawLine(Color(0xFF222222), Offset(0f, size.height), Offset(size.width, size.height), 1.dp.toPx()) },
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {

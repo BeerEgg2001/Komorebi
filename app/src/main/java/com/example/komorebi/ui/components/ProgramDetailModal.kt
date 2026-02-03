@@ -1,6 +1,7 @@
 package com.example.komorebi.ui.program
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -57,6 +58,10 @@ fun ProgramDetailModal(
         now.isAfter(start) && now.isBefore(end)
     }
 
+    BackHandler {
+        onDismiss()
+    }
+
     // 表示時の初期化処理
     LaunchedEffect(Unit) {
         // 500msロックすることで、前の画面の「決定キー」の残響を完全に無視させる
@@ -79,6 +84,15 @@ fun ProgramDetailModal(
             .fillMaxSize()
             .zIndex(1000f)
             .background(Color(0xFF080808))
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK &&
+                    keyEvent.nativeKeyEvent.action == NativeKeyEvent.ACTION_UP) {
+                    onDismiss()
+                    true // イベントを消費
+                } else {
+                    false
+                }
+            }
             // 背面のクリックイベント等を完全に遮断
             .pointerInput(Unit) {}
     ) {

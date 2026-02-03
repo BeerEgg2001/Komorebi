@@ -127,7 +127,10 @@ fun LiveContent(
                             mirakurunIp = mirakurunIp,
                             mirakurunPort = mirakurunPort,
                             globalTick = globalTick,
-                            onClick = { onChannelClick(channel) },
+                            onClick = {
+                                onChannelClick(channel)
+
+                            },
                             modifier = Modifier
                                 // ターゲット（前回値など）のカードにのみRequesterを付与。
                                 // これにより、TabRowで「下」を押した時にこのカードにフォーカスが飛ぶ。

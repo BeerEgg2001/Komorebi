@@ -3,6 +3,7 @@ package com.example.komorebi.di
 import android.content.Context
 import androidx.room.Room
 import com.example.komorebi.data.local.AppDatabase
+import com.example.komorebi.data.local.dao.LastChannelDao
 import com.example.komorebi.data.local.dao.WatchHistoryDao
 import dagger.Module
 import dagger.Provides
@@ -21,12 +22,17 @@ object DatabaseModule {
         @ApplicationContext context: Context
     ): AppDatabase {
         return Room.databaseBuilder(context, AppDatabase::class.java, "komorebi.db")
-            .fallbackToDestructiveMigration() // ← これを追加するとスキーマ変更時にDBを自動で作り直してくれます
+            .fallbackToDestructiveMigration(dropAllTables = true) // ← これを追加するとスキーマ変更時にDBを自動で作り直してくれます
             .build()
     }
 
     @Provides
     fun provideWatchHistoryDao(database: AppDatabase): WatchHistoryDao {
         return database.watchHistoryDao()
+    }
+
+    @Provides
+    fun provideLastChannelDao(database: AppDatabase): LastChannelDao {
+        return database.lastChannelDao()
     }
 }
