@@ -9,6 +9,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,11 +34,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import coil.compose.rememberAsyncImagePainter
 import com.example.komorebi.data.model.EpgProgram
 import com.example.komorebi.viewmodel.EpgUiState
 import com.example.komorebi.ui.theme.NotoSansJP
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.OffsetDateTime
@@ -48,7 +51,7 @@ import java.util.*
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalTextApi::class)
 @Composable
 fun ModernEpgCanvasEngine(
-    uiState: EpgUiState.Success,
+    uiState: EpgUiState,
     logoUrls: List<String>,
     topTabFocusRequester: FocusRequester,
     contentFocusRequester: FocusRequester,
@@ -56,50 +59,38 @@ fun ModernEpgCanvasEngine(
     onProgramSelected: (EpgProgram) -> Unit,
     jumpTargetTime: OffsetDateTime?,
     onJumpFinished: () -> Unit,
-    onEpgJumpMenuStateChanged: (Boolean) -> Unit
+    onEpgJumpMenuStateChanged: (Boolean) -> Unit,
+    currentType: String,
+    onTypeChanged: (String) -> Unit
 ) {
-    if (uiState.data.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("番組データが取得できませんでした。", color = Color.White)
-        }
-        return
+    // 1. 直近の成功データを保持
+    val lastSuccessData = remember { mutableStateOf<EpgUiState.Success?>(null) }
+    if (uiState is EpgUiState.Success) {
+        lastSuccessData.value = uiState
     }
 
-    // --- 1. 基準時刻(baseTime)の決定 ---
-    val baseTime = remember(uiState) {
-        val earliest = uiState.data.flatMap { it.programs }
-            .mapNotNull { runCatching { OffsetDateTime.parse(it.start_time) }.getOrNull() }
-            .minByOrNull { it.toEpochSecond() }
-            ?: OffsetDateTime.now()
-        earliest.withMinute(0).withSecond(0).withNano(0)
+    val displayData = lastSuccessData.value ?: return
+
+    // 2. 放送波種別の定義
+    val availableBroadcastingTypes = remember {
+        listOf(
+            "地上波" to "GR",
+            "BS" to "BS",
+            "CS" to "CS",
+            "BS4K" to "BS4K",
+            "SKY" to "SKY"
+        )
     }
 
-    val maxScrollMinutes = 1440 * 14
-    val limitTime = remember(baseTime) { baseTime.plusMinutes(maxScrollMinutes.toLong()) }
-
-    // --- 2. データ変換（穴埋め処理） ---
-    val filledChannelWrappers = remember(uiState.data, baseTime) {
-        uiState.data.map { wrapper ->
-            wrapper.copy(
-                programs = EpgDataConverter.getFilledPrograms(
-                    wrapper.channel.id, wrapper.programs, baseTime, limitTime
-                )
-            )
-        }
-    }
-
-    val COLUMNS = filledChannelWrappers.size
-
-    // --- 3. レイアウト定数 ---
+    // --- レイアウト定数 ---
     val channelWidth = 130.dp
-    val hourHeight = 180.dp
+    val hourHeight = 80.dp
     val timeBarWidth = 60.dp
-    val headerHeight = 60.dp
+    val headerHeight = 45.dp
     val tabHeight = 48.dp
     val minExpandedHeight = 140.dp
     val bottomPadding = 120.dp
     val scrollPadding = 32.dp
-    val broadcastingTypes = listOf("地上波", "BS", "CS", "BS4K", "SKY")
 
     val density = LocalDensity.current
     val config = LocalConfiguration.current
@@ -116,8 +107,31 @@ fun ModernEpgCanvasEngine(
     val textMeasurer = rememberTextMeasurer()
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
 
-    // --- 4. 状態管理 ---
+    // --- 状態管理 ---
     var focusedCol by remember { mutableIntStateOf(0) }
+
+    val baseTime = remember(displayData) {
+        val earliest = displayData.data.flatMap { it.programs }
+            .mapNotNull { runCatching { OffsetDateTime.parse(it.start_time) }.getOrNull() }
+            .minByOrNull { it.toEpochSecond() }
+            ?: OffsetDateTime.now()
+        earliest.withMinute(0).withSecond(0).withNano(0)
+    }
+
+    val maxScrollMinutes = 1440 * 14
+    val limitTime = remember(baseTime) { baseTime.plusMinutes(maxScrollMinutes.toLong()) }
+
+    val filledChannelWrappers = remember(displayData.data, baseTime) {
+        displayData.data.map { wrapper ->
+            wrapper.copy(
+                programs = EpgDataConverter.getFilledPrograms(
+                    wrapper.channel.id, wrapper.programs, baseTime, limitTime
+                )
+            )
+        }
+    }
+    val COLUMNS = filledChannelWrappers.size
+
     val initialFocusedMin = remember(baseTime) {
         val now = OffsetDateTime.now()
         if (now.isBefore(baseTime)) 0
@@ -126,51 +140,93 @@ fun ModernEpgCanvasEngine(
 
     var focusedMin by remember { mutableIntStateOf(initialFocusedMin) }
     var isContentFocused by remember { mutableStateOf(false) }
-    var selectedBroadcastingIndex by remember { mutableStateOf(0) }
-    var currentFocusedProgram by remember { mutableStateOf<EpgProgram?>(null) }
 
-    val subTabFocusRequesters = remember { List(broadcastingTypes.size) { FocusRequester() } }
+    val selectedBroadcastingIndex = remember(currentType, availableBroadcastingTypes) {
+        availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
+    }
+
+    var currentFocusedProgram by remember { mutableStateOf<EpgProgram?>(null) }
+    val subTabFocusRequesters = remember(availableBroadcastingTypes) {
+        List(availableBroadcastingTypes.size) { FocusRequester() }
+    }
     val jumpMenuFocusRequester = remember { FocusRequester() }
+
+    // ジャンプ中の排他制御用
     var isJumping by remember { mutableStateOf(false) }
 
-    // --- 5. アニメーション ---
+    // タブ切り替え後のフォーカス維持
+    LaunchedEffect(currentType) {
+        if (!isContentFocused) {
+            val idx = availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
+            subTabFocusRequesters.getOrNull(idx)?.requestFocus()
+        }
+    }
+
+    // --- アニメーション ---
     val fastSpring = spring<Float>(stiffness = Spring.StiffnessHigh, dampingRatio = Spring.DampingRatioNoBouncy)
     val scrollX = remember { Animatable(0f) }
     val initialScrollY = -(initialFocusedMin / 60f * hhPx)
     val scrollY = remember { Animatable(initialScrollY) }
-
     val animX = remember { Animatable(0f) }
     val animY = remember { Animatable((initialFocusedMin / 60f * hhPx)) }
     val animH = remember { Animatable(hhPx) }
 
-    // --- 6. ジャンプ処理 ---
+    // --- 日時指定ジャンプ実行ロジック (修正版：フォーカス強制移動を追加) ---
     LaunchedEffect(jumpTargetTime) {
         if (jumpTargetTime != null) {
             isJumping = true
+
+            // 1. ジャンプ先分数を計算
             val diffMinutes = Duration.between(baseTime, jumpTargetTime).toMinutes().toInt()
             val safeMinutes = diffMinutes.coerceIn(0, maxScrollMinutes - 60)
 
+            // 2. インデックス更新（左上のセルを狙うため Col=0）
             focusedCol = 0
             focusedMin = safeMinutes
 
+            // 3. ジャンプ先の番組を即座に特定してアニメーション目標をセット
+            if (filledChannelWrappers.isNotEmpty()) {
+                val channel = filledChannelWrappers[0]
+                val focusTime = baseTime.plusMinutes(safeMinutes.toLong())
+                val prog = channel.programs.find { p ->
+                    val s = EpgDataConverter.safeParseTime(p.start_time, baseTime)
+                    val e = EpgDataConverter.safeParseTime(p.end_time, s.plusMinutes(1))
+                    !focusTime.isBefore(s) && focusTime.isBefore(e)
+                }
+                currentFocusedProgram = prog
+
+                // 座標の即時反映
+                val (sOff, dur) = prog?.let { EpgDataConverter.calculateSafeOffsets(it, baseTime) } ?: (safeMinutes.toFloat() to 30f)
+                val targetH = if (prog?.title == "（番組情報なし）") (dur/60f*hhPx) else (dur/60f*hhPx).coerceAtLeast(minExpHPx)
+
+                launch { animX.snapTo(0f) }
+                launch { animY.snapTo((sOff / 60f) * hhPx) }
+                launch { animH.snapTo(targetH) }
+            }
+
+            // 4. スクロールアニメーション
             val targetScrollY = -(safeMinutes / 60f * hhPx)
-            val maxScrollYLimit = -((maxScrollMinutes / 60f) * hhPx + bPadPx - (screenHeightPx - with(density) { tabHeight.toPx() + headerHeight.toPx() })).coerceAtLeast(0f)
+            val visibleH = screenHeightPx - with(density) { tabHeight.toPx() + headerHeight.toPx() }
+            val maxScrollYLimit = -((maxScrollMinutes / 60f) * hhPx + bPadPx - visibleH).coerceAtLeast(0f)
 
-            launch { scrollY.animateTo(targetScrollY.coerceIn(maxScrollYLimit, 0f), fastSpring) }
             launch { scrollX.animateTo(0f, fastSpring) }
+            scrollY.animateTo(targetScrollY.coerceIn(maxScrollYLimit, 0f), fastSpring)
 
+            // 5. 完了通知とフォーカスの強制取得
             onJumpFinished()
             contentFocusRequester.requestFocus()
-            kotlinx.coroutines.delay(150)
+
+            delay(200)
             isJumping = false
         }
     }
 
-    // --- 7. フォーカス・スクロール追従ロジック ---
-    LaunchedEffect(focusedCol, focusedMin) {
-        if (isJumping) return@LaunchedEffect
+    // --- フォーカス追従ロジック ---
+    LaunchedEffect(focusedCol, focusedMin, filledChannelWrappers) {
+        if (isJumping || filledChannelWrappers.isEmpty()) return@LaunchedEffect
 
-        val channel = filledChannelWrappers[focusedCol]
+        val safeCol = focusedCol.coerceIn(0, (filledChannelWrappers.size - 1).coerceAtLeast(0))
+        val channel = filledChannelWrappers[safeCol]
         val focusTime = baseTime.plusMinutes(focusedMin.toLong())
 
         val prog = channel.programs.find { p ->
@@ -180,10 +236,8 @@ fun ModernEpgCanvasEngine(
         }
         currentFocusedProgram = prog
 
-        val (sOff, dur) = prog?.let { EpgDataConverter.calculateSafeOffsets(it, baseTime) }
-            ?: (focusedMin.toFloat() to 30f)
-
-        val targetX = focusedCol * cwPx
+        val (sOff, dur) = prog?.let { EpgDataConverter.calculateSafeOffsets(it, baseTime) } ?: (focusedMin.toFloat() to 30f)
+        val targetX = safeCol * cwPx
         val targetY = (sOff / 60f) * hhPx
         val originalH = (dur / 60f) * hhPx
         val targetH = if (prog?.title == "（番組情報なし）") originalH else originalH.coerceAtLeast(minExpHPx)
@@ -200,19 +254,16 @@ fun ModernEpgCanvasEngine(
         else if (targetX + cwPx > -scrollX.value + visibleW) sX = -(targetX + cwPx - visibleW)
 
         var sY = scrollY.value
-        if (targetY + targetH > -scrollY.value + visibleH) {
-            sY = -(targetY + targetH - visibleH + sPadPx)
-        }
-        if (targetY < -scrollY.value) {
-            sY = -targetY
-        }
+        if (targetY + targetH > -scrollY.value + visibleH) sY = -(targetY + targetH - visibleH + sPadPx)
+        if (targetY < -scrollY.value) sY = -targetY
 
         val maxScrollYLimit = -((maxScrollMinutes / 60f) * hhPx + bPadPx - visibleH).coerceAtLeast(0f)
+
         launch { scrollX.animateTo(sX.coerceIn(-(COLUMNS * cwPx - visibleW).coerceAtLeast(0f), 0f), fastSpring) }
         launch { scrollY.animateTo(sY.coerceIn(maxScrollYLimit, 0f), fastSpring) }
     }
 
-    // --- 8. スタイル定義 ---
+    // スタイル定義 (省略せず維持)
     val programTitleStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = 14.sp) }
     val programDescStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp, fontWeight = FontWeight.Normal, lineHeight = 13.sp) }
     val channelNumberStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black) }
@@ -222,10 +273,9 @@ fun ModernEpgCanvasEngine(
     val dateLabelStyle = remember { TextStyle(fontFamily = NotoSansJP, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
 
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // --- タブエリア ---
+        // --- 放送波・日時指定タブエリア ---
         Box(modifier = Modifier.fillMaxWidth().height(tabHeight).background(Color(0xFF0A0A0A))) {
             Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                // 1. 日時指定ボタン (左側に固定)
                 var isJumpButtonFocused by remember { mutableStateOf(false) }
                 Box(
                     modifier = Modifier.width(130.dp).fillMaxHeight()
@@ -233,7 +283,7 @@ fun ModernEpgCanvasEngine(
                         .focusRequester(jumpMenuFocusRequester)
                         .focusProperties {
                             up = topTabFocusRequester
-                            right = subTabFocusRequesters[0]
+                            right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default
                             down = contentFocusRequester
                         }
                         .onKeyEvent { event ->
@@ -251,27 +301,24 @@ fun ModernEpgCanvasEngine(
                     Text("日時指定", color = if (isJumpButtonFocused) Color.Black else Color.White, style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 15.sp))
                 }
 
-                // 2. 放送波種別タブ (残りのスペースで中央揃え)
                 Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    Row(
-                        modifier = Modifier.fillMaxHeight(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        broadcastingTypes.forEachIndexed { index, type ->
+                    Row(modifier = Modifier.fillMaxHeight(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        availableBroadcastingTypes.forEachIndexed { index, (label, apiValue) ->
                             var isTabFocused by remember { mutableStateOf(false) }
-                            val isSelected = selectedBroadcastingIndex == index
+                            val isSelected = currentType == apiValue
                             Box(
                                 modifier = Modifier.width(110.dp).fillMaxHeight()
                                     .onFocusChanged {
                                         isTabFocused = it.isFocused
-                                        if (it.isFocused) selectedBroadcastingIndex = index
+                                        if (it.isFocused && currentType != apiValue) {
+                                            onTypeChanged(apiValue)
+                                        }
                                     }
                                     .focusRequester(subTabFocusRequesters[index])
                                     .focusProperties {
                                         up = topTabFocusRequester
                                         left = if (index == 0) jumpMenuFocusRequester else subTabFocusRequesters[index - 1]
-                                        right = if (index == broadcastingTypes.size - 1) FocusRequester.Default else subTabFocusRequesters[index + 1]
+                                        right = if (index == availableBroadcastingTypes.size - 1) FocusRequester.Default else subTabFocusRequesters[index + 1]
                                         down = contentFocusRequester
                                     }
                                     .onKeyEvent { event ->
@@ -282,7 +329,7 @@ fun ModernEpgCanvasEngine(
                                     .focusable().background(if (isTabFocused) Color.White else Color.Transparent),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(type, color = if (isTabFocused) Color.Black else Color.White, style = TextStyle(fontSize = 15.sp))
+                                Text(label, color = if (isTabFocused) Color.Black else Color.White, style = TextStyle(fontSize = 15.sp))
                                 if (isSelected && !isTabFocused) {
                                     Box(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.6f).height(3.dp).background(Color.White))
                                 }
@@ -290,7 +337,6 @@ fun ModernEpgCanvasEngine(
                         }
                     }
                 }
-
                 Spacer(modifier = Modifier.width(130.dp))
             }
         }
@@ -299,7 +345,11 @@ fun ModernEpgCanvasEngine(
         Box(modifier = Modifier.fillMaxWidth().weight(1f)
             .focusRequester(contentFocusRequester)
             .onFocusChanged { isContentFocused = it.isFocused }
-            .focusProperties { up = subTabFocusRequesters[selectedBroadcastingIndex] }
+            .focusProperties {
+                if (subTabFocusRequesters.isNotEmpty()) {
+                    up = subTabFocusRequesters[selectedBroadcastingIndex.coerceIn(0, subTabFocusRequesters.size - 1)]
+                }
+            }
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
@@ -316,13 +366,22 @@ fun ModernEpgCanvasEngine(
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                             currentFocusedProgram?.let { if (it.title != "（番組情報なし）") onProgramSelected(it) }; true
                         }
-                        Key.Back, Key.Escape -> { subTabFocusRequesters[selectedBroadcastingIndex].requestFocus(); true }
+                        Key.Back, Key.Escape -> {
+                            if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[selectedBroadcastingIndex].requestFocus()
+                            true
+                        }
                         else -> false
                     }
                 } else false
             }
             .focusable()
         ) {
+            if (uiState is EpgUiState.Loading) {
+                Box(modifier = Modifier.fillMaxSize().zIndex(5f).background(Color.Black.copy(alpha = 0.3f)), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            }
+
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val curX = scrollX.value; val curY = scrollY.value
 
@@ -347,7 +406,6 @@ fun ModernEpgCanvasEngine(
                                     size = Size(cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
                                 )
 
-                                // 通常表示時のテキスト描画（セルの高さに応じて概要も表示）
                                 val titleLayout = textMeasurer.measure(
                                     text = p.title,
                                     style = programTitleStyle.copy(color = if (isPast || isEmpty) Color.Gray else Color.White),
@@ -356,19 +414,14 @@ fun ModernEpgCanvasEngine(
                                 )
                                 drawText(titleLayout, topLeft = Offset(x + 10f, py + 8f))
 
-                                // --- 追加機能: 拡大表示前でも高さに余裕があれば概要を表示 ---
                                 if (!isEmpty && !p.description.isNullOrBlank()) {
                                     val titleHeight = titleLayout.size.height.toFloat()
-                                    // 概要を表示するのに必要な最低限の余白があるか確認（タイトル下16px以上）
                                     val availableDescHeight = (ph - titleHeight - 20f).coerceAtLeast(0f)
-                                    if (availableDescHeight > 24f) { // 概ね2行分程度の高さがあれば表示
+                                    if (availableDescHeight > 24f) {
                                         val descLayout = textMeasurer.measure(
                                             text = p.description,
                                             style = programDescStyle.copy(color = if (isPast) Color.DarkGray else Color.LightGray),
-                                            constraints = Constraints(
-                                                maxWidth = (cwPx - 16f).toInt(),
-                                                maxHeight = availableDescHeight.toInt()
-                                            ),
+                                            constraints = Constraints(maxWidth = (cwPx - 16f).toInt(), maxHeight = availableDescHeight.toInt()),
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         drawText(descLayout, topLeft = Offset(x + 10f, py + titleHeight + 12f))
@@ -389,45 +442,24 @@ fun ModernEpgCanvasEngine(
                         }
                     }
 
-                    // --- 拡大表示ロジック ---
+                    // 拡大表示 (フォーカス枠)
                     if (isContentFocused) {
                         val fx = twPx + curX + animX.value
                         val fy = hhAreaPx + curY + animY.value
                         val fh = animH.value
-
-                        // フォーカス背景 (既存のコンテンツを隠す)
                         drawRect(Color(0xFF383838), Offset(fx + 1f, fy + 1f), Size(cwPx - 2f, fh - 2f))
-
                         currentFocusedProgram?.let { p ->
-                            val isEmpty = p.title == "（番組情報なし）"
-
-                            // 1. タイトル描画
-                            val titleLayout = textMeasurer.measure(
-                                text = p.title,
-                                style = programTitleStyle,
-                                constraints = Constraints(maxWidth = (cwPx - 20f).toInt())
-                            )
+                            val titleLayout = textMeasurer.measure(text = p.title, style = programTitleStyle, constraints = Constraints(maxWidth = (cwPx - 20f).toInt()))
                             drawText(titleLayout, topLeft = Offset(fx + 10f, fy + 8f))
-
-                            // 2. 概要描画 (拡大時は必ず表示を試みる)
-                            if (!isEmpty && !p.description.isNullOrBlank()) {
+                            if (p.title != "（番組情報なし）" && !p.description.isNullOrBlank()) {
                                 val titleHeight = titleLayout.size.height.toFloat()
                                 val availableDescHeight = (fh - titleHeight - 20f).coerceAtLeast(0f)
                                 if (availableDescHeight > 20f) {
-                                    val descLayout = textMeasurer.measure(
-                                        text = p.description,
-                                        style = programDescStyle,
-                                        constraints = Constraints(
-                                            maxWidth = (cwPx - 20f).toInt(),
-                                            maxHeight = availableDescHeight.toInt()
-                                        ),
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    val descLayout = textMeasurer.measure(text = p.description, style = programDescStyle, constraints = Constraints(maxWidth = (cwPx - 20f).toInt(), maxHeight = availableDescHeight.toInt()), overflow = TextOverflow.Ellipsis)
                                     drawText(descLayout, topLeft = Offset(fx + 10f, fy + titleHeight + 12f))
                                 }
                             }
                         }
-                        // フォーカス枠
                         drawRoundRect(Color.White, Offset(fx - 1f, fy - 1f), Size(cwPx + 2f, fh + 2f), CornerRadius(2f), Stroke(4f))
                     }
                 }
@@ -438,15 +470,13 @@ fun ModernEpgCanvasEngine(
                         val time = baseTime.plusHours(h.toLong())
                         val fy = hhAreaPx + curY + (h * hhPx)
                         if (fy + hhPx < hhAreaPx || fy > size.height) continue
-
                         val hour = time.hour
                         val bgColor = when(hour) { in 4..10 -> Color(0xFF2E2424); in 11..17 -> Color(0xFF242E24); else -> Color(0xFF24242E) }
                         drawRect(bgColor, Offset(0f, fy), Size(twPx, hhPx))
-
                         val amPmLayout = textMeasurer.measure(if (hour < 12) "AM" else "PM", amPmStyle)
-                        drawText(amPmLayout, topLeft = Offset((twPx - amPmLayout.size.width) / 2, fy + 15f))
+                        drawText(amPmLayout, topLeft = Offset((twPx - amPmLayout.size.width) / 2, fy + 10f))
                         val hourLayout = textMeasurer.measure(hour.toString(), timeTextStyle)
-                        drawText(hourLayout, topLeft = Offset((twPx - hourLayout.size.width) / 2, fy + 35f))
+                        drawText(hourLayout, topLeft = Offset((twPx - hourLayout.size.width) / 2, fy + 26f))
                         drawLine(Color(0xFF444444), Offset(0f, fy), Offset(twPx, fy), 1f)
                     }
                 }
@@ -460,10 +490,12 @@ fun ModernEpgCanvasEngine(
                         val lWPx = with(density) { 30.dp.toPx() }; val lHPx = with(density) { 18.dp.toPx() }
                         val numLayout = textMeasurer.measure(wrapper.channel.channel_number ?: "---", channelNumberStyle)
                         val startX = x + (cwPx - (lWPx + 6f + numLayout.size.width)) / 2
-                        if (c < logoPainters.size) { translate(startX, 10f) { with(logoPainters[c]) { draw(Size(lWPx, lHPx)) } } }
-                        drawText(numLayout, topLeft = Offset(startX + lWPx + 6f, 10f + (lHPx - numLayout.size.height) / 2))
+
+                        if (c < logoPainters.size) { translate(startX, 6f) { with(logoPainters[c]) { draw(Size(lWPx, lHPx)) } } }
+                        drawText(numLayout, topLeft = Offset(startX + lWPx + 6f, 6f + (lHPx - numLayout.size.height) / 2))
+
                         val nameLayout = textMeasurer.measure(wrapper.channel.name, channelNameStyle, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = (cwPx - 16f).toInt()))
-                        drawText(nameLayout, topLeft = Offset(x + (cwPx - nameLayout.size.width) / 2, 10f + lHPx + 4f))
+                        drawText(nameLayout, topLeft = Offset(x + (cwPx - nameLayout.size.width) / 2, 6f + lHPx + 2f))
                     }
                 }
 
@@ -474,8 +506,8 @@ fun ModernEpgCanvasEngine(
                 val dayOfWeekStr = "(${displayTime.dayOfWeek.getDisplayName(JavaTextStyle.SHORT, Locale.JAPANESE)})"
                 val dayColor = when (displayTime.dayOfWeek.value) { 7 -> Color(0xFFFF5252); 6 -> Color(0xFF448AFF); else -> Color.White }
                 val fullDateLayout = textMeasurer.measure(
-                    text = AnnotatedString(text = "$dateStr\n$dayOfWeekStr", spanStyles = listOf(AnnotatedString.Range(SpanStyle(color = Color.White), 0, dateStr.length), AnnotatedString.Range(SpanStyle(color = dayColor), dateStr.length + 1, dateStr.length + 1 + dayOfWeekStr.length))),
-                    style = dateLabelStyle.copy(textAlign = TextAlign.Center),
+                    text = AnnotatedString(text = "$dateStr\n$dayOfWeekStr", spanStyles = listOf(AnnotatedString.Range(SpanStyle(color = Color.White, fontSize = 11.sp), 0, dateStr.length), AnnotatedString.Range(SpanStyle(color = dayColor, fontSize = 11.sp), dateStr.length + 1, dateStr.length + 1 + dayOfWeekStr.length))),
+                    style = dateLabelStyle.copy(textAlign = TextAlign.Center, lineHeight = 14.sp),
                     constraints = Constraints(maxWidth = twPx.toInt())
                 )
                 drawText(fullDateLayout, topLeft = Offset((twPx - fullDateLayout.size.width) / 2, (hhAreaPx - fullDateLayout.size.height) / 2))

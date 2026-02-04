@@ -7,9 +7,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,20 +18,16 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.foundation.PivotOffsets
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.itemsIndexed
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import androidx.tv.material3.MaterialTheme.typography
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -48,30 +41,38 @@ fun EpgJumpMenu(
     val now = OffsetDateTime.now()
     val fullTimeSlots = remember { (0..23).toList() }
 
-    // パフォーマンスのため、インデックス管理を最適化
+    // フォーカスされているインデックスを管理
     var globalFocusedIndex by remember { mutableIntStateOf(now.hour) }
 
     val slotHeight = 13.dp
     val columnWidth = 85.dp
 
-    // FocusRequesterを2次元で保持
+    // 2次元FocusRequester
     val focusRequesters = remember(dates.size) {
         List(dates.size) { List(24) { FocusRequester() } }
     }
 
     BackHandler(enabled = true) { onDismiss() }
 
+    // 初期フォーカス
     LaunchedEffect(Unit) {
-        delay(50) // 少し短くしてレスポンス改善
-        focusRequesters[0][now.hour].requestFocus()
+        delay(50)
+        // 範囲外エラー防止のため coerceIn を使用
+        val safeHour = now.hour.coerceIn(0, 23)
+        focusRequesters[0][safeHour].requestFocus()
     }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f)).focusGroup(),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f))
+            .focusGroup(),
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            modifier = Modifier.width(IntrinsicSize.Min).wrapContentHeight()
+            modifier = Modifier
+                .width(IntrinsicSize.Min)
+                .wrapContentHeight()
                 .focusProperties { exit = { FocusRequester.Cancel } }
                 .focusGroup(),
             shape = RoundedCornerShape(8.dp),
@@ -84,7 +85,10 @@ fun EpgJumpMenu(
             ) {
                 Text(
                     text = "日時指定ジャンプ",
-                    style = typography.headlineLarge.copy(fontWeight = FontWeight.Black, letterSpacing = 4.sp),
+                    style = typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 4.sp
+                    ),
                     color = Color.White,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -94,14 +98,27 @@ fun EpgJumpMenu(
                     Column(horizontalAlignment = Alignment.End) {
                         Box(modifier = Modifier.width(60.dp).height(35.dp))
                         fullTimeSlots.forEach { hour ->
-                            Box(modifier = Modifier.height(slotHeight).width(60.dp).padding(end = 8.dp), contentAlignment = Alignment.CenterEnd) {
+                            Box(
+                                modifier = Modifier
+                                    .height(slotHeight)
+                                    .width(60.dp)
+                                    .padding(end = 8.dp),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
                                 val label = when {
                                     hour == 0 -> "AM 0"
                                     hour == 12 -> "PM 0"
                                     hour % 3 == 0 -> "${hour % 12}"
                                     else -> ""
                                 }
-                                if (label.isNotEmpty()) Text(label, fontSize = 10.sp, color = Color.LightGray, fontWeight = FontWeight.Bold)
+                                if (label.isNotEmpty()) {
+                                    Text(
+                                        label,
+                                        fontSize = 10.sp,
+                                        color = Color.LightGray,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -114,8 +131,7 @@ fun EpgJumpMenu(
                             fullTimeSlots.forEachIndexed { tIdx, hour ->
                                 val currentGlobalIndex = (dIdx * 24) + tIdx
 
-                                // ★再構成を抑制: globalFocusedIndex が変わった時だけ計算されるようにする
-                                val isInSelectionRange by remember(currentGlobalIndex) {
+                                val isInSelectionRange by remember(currentGlobalIndex, globalFocusedIndex) {
                                     derivedStateOf {
                                         currentGlobalIndex >= globalFocusedIndex &&
                                                 currentGlobalIndex < globalFocusedIndex + 3
@@ -124,7 +140,10 @@ fun EpgJumpMenu(
 
                                 Surface(
                                     onClick = {
-                                        val slotTime = date.withHour(hour).withMinute(0).withSecond(0).withNano(0)
+                                        // 修正ポイント: ChronoUnit.HOURSで切り捨てることで、
+                                        // 秒やナノ秒のノイズを完全に除去し、エンジン側で計算しやすくする
+                                        val slotTime = date.withHour(hour)
+                                            .truncatedTo(ChronoUnit.HOURS)
                                         onSelect(slotTime)
                                     },
                                     modifier = Modifier
@@ -132,17 +151,19 @@ fun EpgJumpMenu(
                                         .height(slotHeight)
                                         .focusRequester(focusRequesters[dIdx][tIdx])
                                         .focusProperties {
-                                            // ★ 修正1: 23時で下を押したら翌日0時へ
+                                            // 23時で下を押したら翌日0時へ
                                             if (tIdx == 23 && dIdx < dates.size - 1) {
                                                 down = focusRequesters[dIdx + 1][0]
                                             }
-                                            // ★ 修正2: 0時で上を押したら前日23時へ
+                                            // 0時で上を押したら前日23時へ
                                             if (tIdx == 0 && dIdx > 0) {
                                                 up = focusRequesters[dIdx - 1][23]
                                             }
                                         }
                                         .onFocusChanged {
-                                            if (it.isFocused) globalFocusedIndex = currentGlobalIndex
+                                            if (it.isFocused) {
+                                                globalFocusedIndex = currentGlobalIndex
+                                            }
                                         },
                                     shape = ClickableSurfaceDefaults.shape(shape = RectangleShape),
                                     colors = ClickableSurfaceDefaults.colors(
@@ -171,7 +192,9 @@ fun HeaderCell(date: OffsetDateTime, width: Dp) {
     val isSunday = date.dayOfWeek.value == 7
     val isSaturday = date.dayOfWeek.value == 6
     Column(
-        modifier = Modifier.width(width).height(35.dp), // 高さを少し削る
+        modifier = Modifier
+            .width(width)
+            .height(35.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {

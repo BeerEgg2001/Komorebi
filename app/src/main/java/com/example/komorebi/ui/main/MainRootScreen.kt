@@ -8,15 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.komorebi.data.SettingsRepository
 import com.example.komorebi.data.model.EpgProgram
 import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.ui.home.HomeLauncherScreen
-import com.example.komorebi.ui.home.LoadingScreen
-import com.example.komorebi.ui.live.LivePlayerScreen
-import com.example.komorebi.ui.theme.SettingsScreen
 import com.example.komorebi.viewmodel.*
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -43,15 +38,17 @@ fun MainRootScreen(
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
 
-    // 統合バックボタン管理
+    // 統合バックボタン管理 (修正)
     BackHandler(enabled = true) {
         when {
-            // 安全策として残しますが、通常ここを通る前に下層（Container）で処理されます
-            epgSelectedProgram != null -> {
-                epgSelectedProgram = null
-            }
+            // 再生中の動画を閉じる
             selectedChannel != null -> { selectedChannel = null }
             selectedProgram != null -> { selectedProgram = null }
+
+            // ★ 番組表内の「詳細ダイアログ」や「ジャンプメニュー」は、
+            // EpgNavigationContainer 内の BackHandler が優先的に処理されるため、
+            // ここでは「それらがすべて閉じている場合」にのみ HomeLauncher 側のバック処理へ流す
+            epgSelectedProgram != null -> { epgSelectedProgram = null }
             isEpgJumpMenuOpen -> { isEpgJumpMenuOpen = false }
 
             // 何も開いていない場合、初めて HomeLauncherScreen の「タブ移動・終了」ロジックへ
@@ -73,7 +70,6 @@ fun MainRootScreen(
             konomiPort = konomiPort,
             initialTabIndex = currentTabIndex,
             onTabChange = { currentTabIndex = it },
-            // ここが重要：再生状態を共有する
             selectedChannel = selectedChannel,
             onChannelClick = { channel ->
                 selectedChannel = channel
@@ -92,14 +88,12 @@ fun MainRootScreen(
             onFinalBack = onExitApp,
             onUiReady = { },
             onNavigateToPlayer = { channelId, ip, port ->
-                // channelId から Channel オブジェクトを見つけてセットする
-                // groupedChannels 内を検索して一致するチャンネルを探します
                 val channel = groupedChannels.values.flatten().find { it.id == channelId }
                 if (channel != null) {
                     selectedChannel = channel
                     homeViewModel.saveLastChannel(channel)
-                    // 詳細画面を閉じる（再生を優先するため）
                     epgSelectedProgram = null
+                    isEpgJumpMenuOpen = false // プレイヤー移行時はメニューも閉じる
                 }
             }
         )

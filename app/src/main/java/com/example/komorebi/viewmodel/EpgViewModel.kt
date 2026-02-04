@@ -59,6 +59,8 @@ class EpgViewModel @Inject constructor(
             }.collectLatest { (ip, port, type) ->
                 if (ip.isNotEmpty() && port.isNotEmpty()) {
                     refreshEpgData(type)
+                    // 初回ロード完了時にプリロードフラグを下ろす
+                    _isPreloading.value = false
                 }
             }
         }
@@ -73,6 +75,7 @@ class EpgViewModel @Inject constructor(
 
             // 配信制限の定義
             val now = OffsetDateTime.now()
+            // 開始は 00:00:00 固定（後に「1時間前まで表示」のロジックでフィルタリングするが、データとしては当日分から持つ）
             val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
 
             // EPGの最大配信期間は1週間（7日間）とする
@@ -82,10 +85,11 @@ class EpgViewModel @Inject constructor(
             val requestedEnd = now.plusDays(3)
             val end = if (requestedEnd.isAfter(epgLimit)) epgLimit else requestedEnd
 
+            val typeToFetch = channelType ?: _selectedBroadcastingType.value
             val result = repository.fetchEpgData(
                 startTime = start,
                 endTime = end,
-                channelType = channelType ?: _selectedBroadcastingType.value
+                channelType = typeToFetch
             )
 
             result.onSuccess { data ->
@@ -129,7 +133,7 @@ class EpgViewModel @Inject constructor(
             )
 
             result.onSuccess { newData ->
-                // 既存のデータとマージする等の処理（簡略化のためリフレッシュと同様に扱う例）
+                // ロゴURLの生成とUI状態の更新
                 val logoUrls = newData.map { getLogoUrl(it.channel) }
                 uiState = EpgUiState.Success(
                     data = newData,
@@ -149,12 +153,16 @@ class EpgViewModel @Inject constructor(
             "BS", "CS", "SKY", "BS4K" -> "${channel.network_id}00"
             else -> channel.network_id.toString()
         }
-        val streamId = "$networkIdPart${channel.service_id}"
+        // service_id は通常 5桁の文字列としてリクエストする必要があるためパディングを追加
+        val serviceIdStr = channel.service_id.toString()
+        val streamId = "$networkIdPart$serviceIdStr"
         return "$mirakurunBaseUrl/api/services/$streamId/logo"
     }
 
     fun updateBroadcastingType(type: String) {
-        _selectedBroadcastingType.value = type
+        if (_selectedBroadcastingType.value != type) {
+            _selectedBroadcastingType.value = type
+        }
     }
 }
 

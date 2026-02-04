@@ -56,7 +56,6 @@ fun HomeLauncherScreen(
     onBackTriggered: () -> Unit,
     onFinalBack: () -> Unit,
     onUiReady: () -> Unit,
-    // 追加: 番組表からプレイヤーへの遷移用コールバック
     onNavigateToPlayer: (String, String, String) -> Unit
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
@@ -67,8 +66,9 @@ fun HomeLauncherScreen(
     val isFullScreenMode = (selectedChannel != null) || (selectedProgram != null) || (epgSelectedProgram != null)
     var isNavigatingToTabRow by remember { mutableStateOf(false) }
 
-    // EPGのUI状態を監視
+    // EPGのUI状態と放送波種別の状態を監視
     val epgUiState = epgViewModel.uiState
+    val currentBroadcastingType by epgViewModel.selectedBroadcastingType.collectAsState()
 
     // 取得したチャンネルリストに基づいてロゴURLのリストを生成
     val logoUrls = remember(epgUiState) {
@@ -99,16 +99,12 @@ fun HomeLauncherScreen(
     LaunchedEffect(triggerBack) {
         if (triggerBack) {
             if (selectedTabIndex > 0) {
-                // 1. インデックスが0より大きい（ライブ、番組表など）なら「ホーム」に戻す
                 selectedTabIndex = 0
                 onTabChange(0)
-                // タブにフォーカスを戻す
                 tabFocusRequesters[0].requestFocus()
             } else {
-                // 2. すでに「ホーム(0)」にいるなら、アプリ終了シーケンスへ
                 onFinalBack()
             }
-            // 処理が終わったことを親に通知（フラグをfalseに戻してもらう）
             onBackTriggered()
         }
     }
@@ -116,7 +112,7 @@ fun HomeLauncherScreen(
     // 初回表示時のフォーカスセット
     LaunchedEffect(Unit) {
         onUiReady()
-        delay(500)
+        delay(600) // 起動時の安定性を高めるため微増
         runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
     }
 
@@ -159,6 +155,7 @@ fun HomeLauncherScreen(
                         modifier = Modifier
                             .focusRequester(tabFocusRequesters[index])
                             .focusProperties {
+                                // 番組表タブの場合は下キーでEPG内のコンテンツへ
                                 if (index == 2) {
                                     down = contentFirstItemRequesters[index]
                                 } else {
@@ -178,19 +175,15 @@ fun HomeLauncherScreen(
         }
 
         // --- メインコンテンツエリア ---
-        Box(modifier = Modifier
-            .weight(1f)
-            .onFocusChanged { state ->
-                // 必要に応じてフォーカス管理ロジックを記述
-            }
-        ) {
+        Box(modifier = Modifier.weight(1f)) {
             AnimatedContent(
                 targetState = selectedTabIndex,
                 contentKey = { it },
                 transitionSpec = {
-                    fadeIn(animationSpec = androidx.compose.animation.core.tween(100)) togetherWith
-                            fadeOut(animationSpec = androidx.compose.animation.core.tween(100))
-                }
+                    fadeIn(animationSpec = androidx.compose.animation.core.tween(150)) togetherWith
+                            fadeOut(animationSpec = androidx.compose.animation.core.tween(150))
+                },
+                label = "TabContentTransition"
             ) { targetIndex ->
                 when (targetIndex) {
                     2 -> { // 番組表タブ
@@ -207,8 +200,13 @@ fun HomeLauncherScreen(
                                     onProgramSelected = onEpgProgramSelected,
                                     isJumpMenuOpen = isEpgJumpMenuOpen,
                                     onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                                    // ★ 修正箇所: 不足していた引数を追加
-                                    onNavigateToPlayer = onNavigateToPlayer
+                                    onNavigateToPlayer = onNavigateToPlayer,
+
+                                    // 放送波種別の連動用パラメータ
+                                    currentType = currentBroadcastingType,
+                                    onTypeChanged = { newType ->
+                                        epgViewModel.updateBroadcastingType(newType)
+                                    }
                                 )
                             }
                             is EpgUiState.Loading -> {
