@@ -90,7 +90,18 @@ fun MainRootScreen(
             triggerBack = triggerHomeBack,
             onBackTriggered = { triggerHomeBack = false },
             onFinalBack = onExitApp,
-            onUiReady = { }
+            onUiReady = { },
+            onNavigateToPlayer = { channelId, ip, port ->
+                // channelId から Channel オブジェクトを見つけてセットする
+                // groupedChannels 内を検索して一致するチャンネルを探します
+                val channel = groupedChannels.values.flatten().find { it.id == channelId }
+                if (channel != null) {
+                    selectedChannel = channel
+                    homeViewModel.saveLastChannel(channel)
+                    // 詳細画面を閉じる（再生を優先するため）
+                    epgSelectedProgram = null
+                }
+            }
         )
     }
 }

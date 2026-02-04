@@ -30,164 +30,126 @@ class EpgViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
-    // --- [State] データの状態 ---
     var uiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
         private set
 
     private val _isPreloading = MutableStateFlow(true)
     val isPreloading: StateFlow<Boolean> = _isPreloading
 
-    private val broadcastingTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
-
-    // --- [State] UI表示の状態管理 ---
-    private val _baseTime = MutableStateFlow(OffsetDateTime.now().withMinute(0).withSecond(0).withNano(0))
-    val baseTime: StateFlow<OffsetDateTime> = _baseTime.asStateFlow()
-
-    // 番組表の描画定数
-    val dpPerMinute = 1.3f
-    val hourHeightDp = 60 * dpPerMinute
-
-    // 設定情報
-    private var mirakurunBaseUrl by mutableStateOf("")
-
-    // プレイヤー連携用
-    private val _activeChannelForPlayer = MutableStateFlow<Channel?>(null)
-    val activeChannelForPlayer: StateFlow<Channel?> = _activeChannelForPlayer
-
     private val _selectedBroadcastingType = MutableStateFlow("GR")
-    val selectedBroadcastingType = _selectedBroadcastingType.asStateFlow()
+    val selectedBroadcastingType: StateFlow<String> = _selectedBroadcastingType.asStateFlow()
+
+    private var mirakurunIp = ""
+    private var mirakurunPort = ""
 
     init {
+        loadInitialData()
+    }
+
+    private fun loadInitialData() {
         viewModelScope.launch {
-            // 設定値の取得
             combine(
                 settingsRepository.mirakurunIp,
-                settingsRepository.mirakurunPort
-            ) { ip, port ->
-                "http://$ip:$port"
-            }.collect { url ->
-                mirakurunBaseUrl = url
-                // URL確定後に初回読み込み
-                preloadAllEpgData()
-            }
-        }
-    }
-
-    /**
-     * 全放送波のデータを取得・保持する
-     */
-    fun preloadAllEpgData() {
-        viewModelScope.launch {
-            _isPreloading.value = true
-            uiState = EpgUiState.Loading
-            try {
-                val deferredList = broadcastingTypes.map { type ->
-                    async {
-                        repository.fetchEpgData(
-                            startTime = _baseTime.value,
-                            endTime = _baseTime.value.plusDays(1),
-                            channelType = type
-                        ).getOrThrow()
-                    }
+                settingsRepository.mirakurunPort,
+                _selectedBroadcastingType
+            ) { ip, port, type ->
+                mirakurunIp = ip
+                mirakurunPort = port
+                Triple(ip, port, type)
+            }.collectLatest { (ip, port, type) ->
+                if (ip.isNotEmpty() && port.isNotEmpty()) {
+                    refreshEpgData(type)
                 }
-                val allData = deferredList.awaitAll().flatten()
-                uiState = EpgUiState.Success(allData)
-            } catch (e: Exception) {
-                uiState = EpgUiState.Error(e.message ?: "データの取得に失敗しました")
-            } finally {
-                _isPreloading.value = false
             }
         }
     }
 
     /**
-     * 表示の起点時間を更新し、その時間のデータを再ロードする（日付変更用）
+     * EPGデータを取得（配信期間1週間の制限を考慮）
      */
-    fun updateBaseTime(newTime: OffsetDateTime) {
+    fun refreshEpgData(channelType: String? = null) {
         viewModelScope.launch {
-            _baseTime.value = newTime
-            preloadAllEpgData() // 日付が変わるため再取得
-        }
-    }
+            uiState = EpgUiState.Loading
 
-    /**
-     * 番組詳細から「視聴」が押された際の処理
-     */
-    fun onPlayProgram(program: EpgProgram) {
-        val currentData = uiState as? EpgUiState.Success ?: return
-        val wrapper = currentData.data.find { it.channel.id == program.channel_id }
+            // 配信制限の定義
+            val now = OffsetDateTime.now()
+            val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
 
-        wrapper?.let {
-            _activeChannelForPlayer.value = convertToPlayerChannel(it)
-        }
-    }
+            // EPGの最大配信期間は1週間（7日間）とする
+            val epgLimit = now.plusDays(7)
 
-    /**
-     * プレイヤーを閉じる際の処理
-     */
-    fun closePlayer() {
-        _activeChannelForPlayer.value = null
-    }
+            // 終了時刻を「現在+3日（デフォルト取得分）」とするが、最大でもepgLimitを超えないようにする
+            val requestedEnd = now.plusDays(3)
+            val end = if (requestedEnd.isAfter(epgLimit)) epgLimit else requestedEnd
 
-    /**
-     * 番組表データ型をプレイヤー用データ型へ変換
-     */
-    private fun convertToPlayerChannel(wrapper: EpgChannelWrapper): Channel {
-        val ec = wrapper.channel
-        return Channel(
-            id = ec.id,
-            displayChannelId = ec.display_channel_id,
-            name = ec.name,
-            channelNumber = ec.channel_number,
-            networkId = ec.network_id.toLong(),
-            serviceId = ec.service_id.toLong(),
-            type = ec.type,
-            isWatchable = ec.is_watchable,
-            isDisplay = true,
-            programPresent = wrapper.programs.firstOrNull()?.let { prog ->
-                val start = OffsetDateTime.parse(prog.start_time)
-                val end = OffsetDateTime.parse(prog.end_time)
-                val durationInSeconds = Duration.between(start, end).seconds.toInt()
+            val result = repository.fetchEpgData(
+                startTime = start,
+                endTime = end,
+                channelType = channelType ?: _selectedBroadcastingType.value
+            )
 
-                // ★ ここで EpgGenre -> Genre の変換を行う
-                val mappedGenres = prog.genres?.map { epgGenre ->
-                    com.example.komorebi.viewmodel.Genre(
-                        major = epgGenre.major,
-                        middle = epgGenre.middle
-                    )
-                } ?: emptyList()
-
-                PlayerProgram(
-                    id = prog.id,
-                    title = prog.title,
-                    description = prog.description,
-                    detail = prog.detail,
-                    startTime = prog.start_time,
-                    endTime = prog.end_time,
-                    duration = durationInSeconds,
-                    genres = mappedGenres, // 変換後のリストを渡す
-                    videoResolution = ""
+            result.onSuccess { data ->
+                val logoUrls = data.map { getLogoUrl(it.channel) }
+                uiState = EpgUiState.Success(
+                    data = data,
+                    logoUrls = logoUrls,
+                    mirakurunIp = mirakurunIp,
+                    mirakurunPort = mirakurunPort
                 )
-            },
-            programFollowing = null,
-            remocon_Id = ec.remocon_id
-        )
+            }.onFailure { e ->
+                uiState = EpgUiState.Error(e.message ?: "Unknown Error")
+            }
+        }
     }
 
     /**
-     * チャンネルロゴのURLを取得
+     * 追加の番組データを取得（ジャンプ機能などで未来を見る場合）
      */
+    fun fetchExtendedEpgData(targetTime: OffsetDateTime) {
+        val currentState = uiState as? EpgUiState.Success ?: return
+
+        viewModelScope.launch {
+            val now = OffsetDateTime.now()
+            val epgLimit = now.plusDays(7) // 配信限界：1週間後
+
+            // リクエストする開始・終了時刻の決定
+            val start = targetTime.minusHours(6)
+            var end = targetTime.plusDays(1)
+
+            // 配信限界を超えないようにガード
+            if (start.isAfter(epgLimit)) return@launch // 完全に範囲外なら何もしない
+            if (end.isAfter(epgLimit)) {
+                end = epgLimit
+            }
+
+            val result = repository.fetchEpgData(
+                startTime = start,
+                endTime = end,
+                channelType = _selectedBroadcastingType.value
+            )
+
+            result.onSuccess { newData ->
+                // 既存のデータとマージする等の処理（簡略化のためリフレッシュと同様に扱う例）
+                val logoUrls = newData.map { getLogoUrl(it.channel) }
+                uiState = EpgUiState.Success(
+                    data = newData,
+                    logoUrls = logoUrls,
+                    mirakurunIp = mirakurunIp,
+                    mirakurunPort = mirakurunPort
+                )
+            }
+        }
+    }
+
     @OptIn(UnstableApi::class)
     fun getLogoUrl(channel: EpgChannel): String {
+        val mirakurunBaseUrl = "http://$mirakurunIp:$mirakurunPort"
         val networkIdPart = when (channel.type) {
             "GR" -> channel.network_id.toString()
             "BS", "CS", "SKY", "BS4K" -> "${channel.network_id}00"
             else -> channel.network_id.toString()
         }
-
         val streamId = "$networkIdPart${channel.service_id}"
-        // BS/CS等の場合は networkId を 10進数5桁等に調整が必要な場合があります（昨日作成したbuildStreamId相当）
-        Log.i("logourl","streamId: $streamId")
         return "$mirakurunBaseUrl/api/services/$streamId/logo"
     }
 
@@ -198,6 +160,11 @@ class EpgViewModel @Inject constructor(
 
 sealed class EpgUiState {
     object Loading : EpgUiState()
-    data class Success(val data: List<EpgChannelWrapper>) : EpgUiState()
+    data class Success(
+        val data: List<EpgChannelWrapper>,
+        val logoUrls: List<String>,
+        val mirakurunIp: String,
+        val mirakurunPort: String
+    ) : EpgUiState()
     data class Error(val message: String) : EpgUiState()
 }

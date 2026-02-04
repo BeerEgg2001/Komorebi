@@ -37,49 +37,30 @@ fun EpgNavigationContainer(
     selectedProgram: EpgProgram?,
     onProgramSelected: (EpgProgram?) -> Unit,
     isJumpMenuOpen: Boolean,
-    onJumpMenuStateChanged: (Boolean) -> Unit
+    onJumpMenuStateChanged: (Boolean) -> Unit,
+    onNavigateToPlayer: (String, String, String) -> Unit
 ) {
-    // ★追加: ジャンプ先の時間を保持する状態
+    // ジャンプ先を保持する内部状態
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
-    val contentFocusRequester = remember { FocusRequester() }
-    var isReturningFromDetail by remember { mutableStateOf(false) }
-    val subTabEntryRequester = remember { FocusRequester() }
-
-    LaunchedEffect(selectedProgram) {
-        if (selectedProgram == null && isReturningFromDetail) {
-            // 詳細から戻った際に番組表へフォーカスを戻す
-            delay(50)
-            contentRequester.requestFocus()
-            isReturningFromDetail = false
-        }
-    }
+    val detailInitialFocusRequester = remember { FocusRequester() }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 1. 番組表本体
+        // 1. メインの番組表（Canvasエンジン）
+        // エラー修正：パラメータ名を ModernEpgCanvasEngine の定義に合わせます
         ModernEpgCanvasEngine(
             uiState = uiState,
             logoUrls = logoUrls,
             topTabFocusRequester = mainTabFocusRequester,
             contentFocusRequester = contentRequester,
-            entryFocusRequester = subTabEntryRequester,
-            onProgramSelected = { program ->
-                isReturningFromDetail = true
-                onProgramSelected(program)
-            },
-            jumpTargetTime = jumpTargetTime,
+            entryFocusRequester = contentRequester, // 追加：番組表に入った際の初期フォーカス先
+            onProgramSelected = onProgramSelected,
+            jumpTargetTime = jumpTargetTime,        // 修正：パラメータ名を一致させる
             onJumpFinished = { jumpTargetTime = null },
-            onEpgJumpMenuStateChanged = onJumpMenuStateChanged
+            onEpgJumpMenuStateChanged = onJumpMenuStateChanged // 修正：パラメータ名を一致させる
         )
 
-        // 2. 詳細画面オーバーレイ (selectedProgram がある時のみ表示)
+        // 2. 番組詳細オーバーレイ
         if (selectedProgram != null) {
-            val detailInitialFocusRequester = remember { FocusRequester() }
-
-            LaunchedEffect(selectedProgram) {
-                yield()
-                detailInitialFocusRequester.requestFocus()
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -97,21 +78,31 @@ fun EpgNavigationContainer(
                     .focusable()
             ) {
                 ProgramDetailScreen(
-                    program = selectedProgram!!,
-                    onPlayClick = { /* ... */ },
-                    onRecordClick = { /* ... */ },
+                    program = selectedProgram,
+                    onPlayClick = {
+                        onNavigateToPlayer(
+                            selectedProgram.channel_id,
+                            mirakurunIp,
+                            mirakurunPort
+                        )
+                    },
+                    onRecordClick = { /* 録画予約ロジック(将来用) */ },
                     onBackClick = { onProgramSelected(null) },
                     initialFocusRequester = detailInitialFocusRequester
                 )
             }
+
+            LaunchedEffect(selectedProgram) {
+                yield()
+                detailInitialFocusRequester.requestFocus()
+            }
         }
 
-        // 3. 日時指定メニュー (isJumpMenuOpen が true なら、詳細画面が開いていなくても表示)
-        // ここを if (selectedProgram != null) の外に出しました
+        // 3. 日時指定メニュー（EPG配信制限：1週間分 = 今日 + 6日）
         if (isJumpMenuOpen) {
             val now = OffsetDateTime.now()
-            // 今日から8日分の日付リストを作成
-            val dates = remember { List(8) { now.plusDays(it.toLong()) } }
+            // EPGは1週間分（今日を入れて7日間）のみ
+            val dates = remember { List(7) { now.plusDays(it.toLong()) } }
 
             EpgJumpMenu(
                 dates = dates,

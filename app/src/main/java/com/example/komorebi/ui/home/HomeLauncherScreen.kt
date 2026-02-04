@@ -22,7 +22,6 @@ import androidx.tv.material3.*
 import com.example.komorebi.data.model.EpgProgram
 import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.ui.epg.EpgNavigationContainer
-import com.example.komorebi.ui.epg.ModernEpgCanvasEngine
 import com.example.komorebi.viewmodel.Channel
 import com.example.komorebi.viewmodel.ChannelViewModel
 import com.example.komorebi.viewmodel.EpgUiState
@@ -57,6 +56,8 @@ fun HomeLauncherScreen(
     onBackTriggered: () -> Unit,
     onFinalBack: () -> Unit,
     onUiReady: () -> Unit,
+    // 追加: 番組表からプレイヤーへの遷移用コールバック
+    onNavigateToPlayer: (String, String, String) -> Unit
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
@@ -158,13 +159,9 @@ fun HomeLauncherScreen(
                         modifier = Modifier
                             .focusRequester(tabFocusRequesters[index])
                             .focusProperties {
-                                // クラッシュ防止：
-                                // 番組表(index=2)以外は、まだコンテンツ側にフォーカスを受け取る要素がないため
-                                // index == 2 の時だけ下への移動を許可する
                                 if (index == 2) {
                                     down = contentFirstItemRequesters[index]
                                 } else {
-                                    // 他のタブでは下キーを無効化（または行き先を指定しない）
                                     down = FocusRequester.Default
                                 }
                             }
@@ -184,10 +181,7 @@ fun HomeLauncherScreen(
         Box(modifier = Modifier
             .weight(1f)
             .onFocusChanged { state ->
-                // もし「フォーカスが外れたらタブに戻す」というロジックがある場合
-                if (!state.hasFocus && !state.isFocused) {
-                    // ここでタブにリクエストを戻しているはず
-                }
+                // 必要に応じてフォーカス管理ロジックを記述
             }
         ) {
             AnimatedContent(
@@ -205,14 +199,16 @@ fun HomeLauncherScreen(
                                 EpgNavigationContainer(
                                     uiState = state,
                                     logoUrls = logoUrls,
-                                    mirakurunIp = mirakurunIp, // 必要に応じて
+                                    mirakurunIp = mirakurunIp,
                                     mirakurunPort = mirakurunPort,
                                     mainTabFocusRequester = tabFocusRequesters[2],
                                     contentRequester = contentFirstItemRequesters[2],
                                     selectedProgram = epgSelectedProgram,
                                     onProgramSelected = onEpgProgramSelected,
                                     isJumpMenuOpen = isEpgJumpMenuOpen,
-                                    onJumpMenuStateChanged = onEpgJumpMenuStateChanged
+                                    onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
+                                    // ★ 修正箇所: 不足していた引数を追加
+                                    onNavigateToPlayer = onNavigateToPlayer
                                 )
                             }
                             is EpgUiState.Loading -> {
@@ -232,7 +228,6 @@ fun HomeLauncherScreen(
                         }
                     }
                     else -> {
-                        // 他のタブ（ホーム、ライブ、ビデオ）のプレースホルダー
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
                                 text = "${tabs[targetIndex]} コンテンツは準備中です",
