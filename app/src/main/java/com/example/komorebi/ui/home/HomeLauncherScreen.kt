@@ -56,7 +56,9 @@ fun HomeLauncherScreen(
     onBackTriggered: () -> Unit,
     onFinalBack: () -> Unit,
     onUiReady: () -> Unit,
-    onNavigateToPlayer: (String, String, String) -> Unit
+    onNavigateToPlayer: (String, String, String) -> Unit,
+    // 追加: 視聴から戻った際にフォーカスを当てるためのチャンネルID
+    lastPlayerChannelId: String? = null
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
@@ -83,6 +85,7 @@ fun HomeLauncherScreen(
     val tabFocusRequesters = remember { List(tabs.size) { FocusRequester() } }
     val contentFirstItemRequesters = remember { List(tabs.size) { FocusRequester() } }
     var tabRowHasFocus by remember { mutableStateOf(false) }
+    var restoreChannelId: String? = null
 
     // タブ切り替え時のコンテンツロード制御
     val loadedTabs = remember { mutableStateListOf<Int>() }
@@ -112,8 +115,12 @@ fun HomeLauncherScreen(
     // 初回表示時のフォーカスセット
     LaunchedEffect(Unit) {
         onUiReady()
-        delay(600) // 起動時の安定性を高めるため微増
-        runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
+        // restoreChannelId がある＝視聴から戻ってきた時は、
+        // ここでタブにフォーカスを当ててしまうと、番組セルからフォーカスが逃げるためスキップする
+        if (restoreChannelId == null) {
+            delay(600)
+            runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
+        }
     }
 
     Column(
@@ -155,7 +162,6 @@ fun HomeLauncherScreen(
                         modifier = Modifier
                             .focusRequester(tabFocusRequesters[index])
                             .focusProperties {
-                                // 番組表タブの場合は下キーでEPG内のコンテンツへ
                                 if (index == 2) {
                                     down = contentFirstItemRequesters[index]
                                 } else {
@@ -201,12 +207,12 @@ fun HomeLauncherScreen(
                                     isJumpMenuOpen = isEpgJumpMenuOpen,
                                     onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
                                     onNavigateToPlayer = onNavigateToPlayer,
-
-                                    // 放送波種別の連動用パラメータ
                                     currentType = currentBroadcastingType,
                                     onTypeChanged = { newType ->
                                         epgViewModel.updateBroadcastingType(newType)
-                                    }
+                                    },
+                                    // 追加：視聴画面から戻った時のチャンネルIDを渡す
+                                    restoreChannelId = lastPlayerChannelId
                                 )
                             }
                             is EpgUiState.Loading -> {

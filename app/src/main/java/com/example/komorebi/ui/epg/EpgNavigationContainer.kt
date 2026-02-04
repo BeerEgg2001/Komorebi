@@ -22,6 +22,7 @@ import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.example.komorebi.data.model.EpgProgram
 import com.example.komorebi.viewmodel.EpgUiState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 
@@ -41,17 +42,20 @@ fun EpgNavigationContainer(
     onJumpMenuStateChanged: (Boolean) -> Unit,
     onNavigateToPlayer: (String, String, String) -> Unit,
     currentType: String,
-    onTypeChanged: (String) -> Unit
+    onTypeChanged: (String) -> Unit,
+    restoreChannelId: String? = null
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     val detailInitialFocusRequester = remember { FocusRequester() }
 
+    // 視聴から戻った直後のフォーカス奪還を防止するためのフラグ
+    var isRestoringFocus by remember(restoreChannelId) { mutableStateOf(restoreChannelId != null) }
+
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
-        // メインコンテンツ
         ModernEpgCanvasEngine(
             uiState = uiState,
             logoUrls = logoUrls,
-            topTabFocusRequester = mainTabFocusRequester, // ホームのメインタブ
+            topTabFocusRequester = mainTabFocusRequester,
             contentFocusRequester = contentRequester,
             entryFocusRequester = contentRequester,
             onProgramSelected = { prog -> onProgramSelected(prog) },
@@ -59,10 +63,10 @@ fun EpgNavigationContainer(
             onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged,
             currentType = currentType,
-            onTypeChanged = onTypeChanged
+            onTypeChanged = onTypeChanged,
+            restoreChannelId = restoreChannelId
         )
 
-        // 番組詳細オーバーレイ
         if (selectedProgram != null) {
             Box(
                 modifier = Modifier
@@ -94,7 +98,15 @@ fun EpgNavigationContainer(
             }
         }
 
-        // 日時指定メニュー
+        // 復旧用IDがある場合、少し遅延させてから確実にコンテンツへフォーカスを固定する
+        LaunchedEffect(restoreChannelId) {
+            if (restoreChannelId != null) {
+                delay(800) // HomeLauncher側のタブフォーカス(600ms)より後に実行
+                contentRequester.requestFocus()
+                isRestoringFocus = false
+            }
+        }
+
         if (isJumpMenuOpen) {
             val now = OffsetDateTime.now()
             val dates = remember { List(7) { now.plusDays(it.toLong()) } }

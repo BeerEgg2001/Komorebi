@@ -57,16 +57,21 @@ fun ProgramDetailScreen(
     // isReady は詳細情報の遅延表示用として維持
     var isReady by remember { mutableStateOf(false) }
 
+    var isClickEnabled by remember { mutableStateOf(false) }
+
     LaunchedEffect(program) {
-        // 画面が表示されたら一度だけフォーカスを要求
+        isClickEnabled = false // 初期値は無効
         yield()
         try {
             initialFocusRequester.requestFocus()
         } catch (e: Exception) {
-            // フォーカス要求失敗によるクラッシュを防止
             Log.e("Detail", "Focus request failed", e)
         }
         isReady = true
+
+        // 300〜500ms程度待機してからクリックを有効にする
+        delay(500)
+        isClickEnabled = true
     }
 
     Box(
@@ -100,7 +105,7 @@ fun ProgramDetailScreen(
             ) {
                 if (isBroadcasting) {
                     Button(
-                        onClick = { onPlayClick(program) },
+                        onClick = { if (isClickEnabled) onPlayClick(program) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(initialFocusRequester) // 親からのRequesterを使用
@@ -122,7 +127,8 @@ fun ProgramDetailScreen(
                 OutlinedButton(
                     onClick = {
                         // 連打によるクラッシュ防止：一度だけ実行されるように
-                        onBackClick()
+                        if (isClickEnabled) onBackClick()
+
                     },
                     modifier = Modifier
                         .fillMaxWidth()
