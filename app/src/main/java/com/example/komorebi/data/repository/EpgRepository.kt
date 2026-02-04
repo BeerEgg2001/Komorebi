@@ -26,48 +26,47 @@ interface KonomiTvApiService {
 class EpgRepository @Inject constructor(
     private val apiService: KonomiTvApiService
 ) {
-        /**
-         * 指定期間の番組表データを取得
-         */
-        // EpgRepository.kt の fetchEpgData を修正
-        @OptIn(UnstableApi::class)
-        @RequiresApi(Build.VERSION_CODES.O)
-        suspend fun fetchEpgData(
-            startTime: OffsetDateTime,
-            channelType: String? = null,
-            days: Long
-        ): Result<List<EpgChannelWrapper>> {
-            return try {
-                // ISO8601形式でフォーマット
-                val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
-                val startStr = startTime.format(formatter)
-                val endStr = startTime.plusDays(days).format(formatter) // 最初は「6時間分」などでテスト
+    /**
+     * 指定された開始時刻と終了時刻の範囲で番組表データを取得
+     */
+    @OptIn(UnstableApi::class)
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun fetchEpgData(
+        startTime: OffsetDateTime,
+        endTime: OffsetDateTime, // days: Long から変更
+        channelType: String? = null
+    ): Result<List<EpgChannelWrapper>> {
+        return try {
+            val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+            val startStr = startTime.format(formatter)
+            val endStr = endTime.format(formatter)
 
-                val response = apiService.getEpgPrograms(
-                    startTime = startStr,
-                    endTime = endStr,
-                    channelType = channelType
-                )
-                Result.success(response.channels)
-            } catch (e: Exception) {
-                Log.e("EPG", "Fetch Error", e) // ログを出してエラー内容を確認
-                Result.failure(e)
-            }
-        }
-
-        /**
-         * 特定のチャンネルIDのみを抽出する（ピン留め機能用など）
-         */
-        suspend fun fetchPinnedChannels(
-            pinnedIds: List<String>
-        ): Result<List<EpgChannelWrapper>> {
-            return try {
-                val response = apiService.getEpgPrograms(
-                    pinnedChannelIds = pinnedIds.joinToString(",")
-                )
-                Result.success(response.channels)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+            // apiService は constructor で定義されているため、ここからアクセス可能
+            val response = apiService.getEpgPrograms(
+                startTime = startStr,
+                endTime = endStr,
+                channelType = channelType
+            )
+            Result.success(response.channels)
+        } catch (e: Exception) {
+            Log.e("EPG", "Fetch Error: $startTime to $endTime", e)
+            Result.failure(e)
         }
     }
+
+    /**
+     * 特定のチャンネルIDのみを抽出する
+     */
+    suspend fun fetchPinnedChannels(
+        pinnedIds: List<String>
+    ): Result<List<EpgChannelWrapper>> {
+        return try {
+            val response = apiService.getEpgPrograms(
+                pinnedChannelIds = pinnedIds.joinToString(",")
+            )
+            Result.success(response.channels)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+}

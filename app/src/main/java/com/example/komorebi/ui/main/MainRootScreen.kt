@@ -46,12 +46,16 @@ fun MainRootScreen(
     // 統合バックボタン管理
     BackHandler(enabled = true) {
         when {
+            // 安全策として残しますが、通常ここを通る前に下層（Container）で処理されます
+            epgSelectedProgram != null -> {
+                epgSelectedProgram = null
+            }
             selectedChannel != null -> { selectedChannel = null }
             selectedProgram != null -> { selectedProgram = null }
-            epgSelectedProgram != null -> { epgSelectedProgram = null }
             isEpgJumpMenuOpen -> { isEpgJumpMenuOpen = false }
+
+            // 何も開いていない場合、初めて HomeLauncherScreen の「タブ移動・終了」ロジックへ
             else -> {
-                // コンテンツからタブにフォーカスを戻す指示
                 triggerHomeBack = true
             }
         }

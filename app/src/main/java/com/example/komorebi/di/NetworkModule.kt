@@ -26,7 +26,7 @@ object NetworkModule {
             level = HttpLoggingInterceptor.Level.BODY // 通信先のURLだけを表示
         }
         return OkHttpClient.Builder()
-            //.addInterceptor(logging) // ログ出力を追加
+            .addInterceptor(logging) // ログ出力を追加
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
 
