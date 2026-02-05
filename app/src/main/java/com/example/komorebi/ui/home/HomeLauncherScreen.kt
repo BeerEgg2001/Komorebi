@@ -271,8 +271,11 @@ fun HomeLauncherScreen(
                             recentRecordings = recentRecordings,
                             watchHistory = watchHistoryPrograms,
                             selectedProgram = selectedProgram,
-                            konomiIp = konomiIp, konomiPort = konomiPort,
-                            externalFocusRequester = contentFirstItemRequesters[3],
+                            konomiIp = konomiIp,
+                            konomiPort = konomiPort,
+                            // 引数名を修正し、LiveContentと同様にタブバーのRequesterを渡す
+                            topNavFocusRequester = tabFocusRequesters[3],
+                            contentFirstItemRequester = contentFirstItemRequesters[3],
                             onProgramClick = onProgramSelected
                         )
                     }

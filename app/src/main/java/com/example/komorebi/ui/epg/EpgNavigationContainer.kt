@@ -10,14 +10,12 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.example.komorebi.data.model.EpgProgram
@@ -48,8 +46,14 @@ fun EpgNavigationContainer(
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     val detailInitialFocusRequester = remember { FocusRequester() }
 
-    // 視聴から戻った直後のフォーカス奪還を防止するためのフラグ
-    var isRestoringFocus by remember(restoreChannelId) { mutableStateOf(restoreChannelId != null) }
+    // 詳細画面から戻る際のフォーカス復旧用
+    var internalRestoreChannelId by remember { mutableStateOf<String?>(restoreChannelId) }
+    var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
+
+    // 外部からの restoreChannelId が変わったら内部状態も更新
+    LaunchedEffect(restoreChannelId) {
+        internalRestoreChannelId = restoreChannelId
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
         ModernEpgCanvasEngine(
@@ -58,13 +62,16 @@ fun EpgNavigationContainer(
             topTabFocusRequester = mainTabFocusRequester,
             contentFocusRequester = contentRequester,
             entryFocusRequester = contentRequester,
-            onProgramSelected = { prog -> onProgramSelected(prog) },
+            onProgramSelected = { prog ->
+                onProgramSelected(prog)
+            },
             jumpTargetTime = jumpTargetTime,
             onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged,
             currentType = currentType,
             onTypeChanged = onTypeChanged,
-            restoreChannelId = restoreChannelId
+            restoreChannelId = internalRestoreChannelId,
+            restoreProgramStartTime = internalRestoreStartTime
         )
 
         if (selectedProgram != null) {
@@ -76,6 +83,9 @@ fun EpgNavigationContainer(
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown &&
                             (event.key == Key.Back || event.key == Key.Escape)) {
+                            // 戻る際に場所を記録
+                            internalRestoreChannelId = selectedProgram.channel_id
+                            internalRestoreStartTime = selectedProgram.start_time
                             onProgramSelected(null)
                             true
                         } else false
@@ -88,7 +98,12 @@ fun EpgNavigationContainer(
                         onNavigateToPlayer(selectedProgram.channel_id, mirakurunIp, mirakurunPort)
                     },
                     onRecordClick = { /* 予約 */ },
-                    onBackClick = { onProgramSelected(null) },
+                    onBackClick = {
+                        // 戻る際に場所を記録
+                        internalRestoreChannelId = selectedProgram.channel_id
+                        internalRestoreStartTime = selectedProgram.start_time
+                        onProgramSelected(null)
+                    },
                     initialFocusRequester = detailInitialFocusRequester
                 )
             }
@@ -99,11 +114,13 @@ fun EpgNavigationContainer(
         }
 
         // 復旧用IDがある場合、少し遅延させてから確実にコンテンツへフォーカスを固定する
-        LaunchedEffect(restoreChannelId) {
-            if (restoreChannelId != null) {
-                delay(800) // HomeLauncher側のタブフォーカス(600ms)より後に実行
+        LaunchedEffect(internalRestoreChannelId) {
+            if (internalRestoreChannelId != null) {
+                delay(800)
                 contentRequester.requestFocus()
-                isRestoringFocus = false
+                // 一度復旧したらクリアする（再描画時のループ防止。必要に応じてコメントアウト）
+                // internalRestoreChannelId = null
+                // internalRestoreStartTime = null
             }
         }
 

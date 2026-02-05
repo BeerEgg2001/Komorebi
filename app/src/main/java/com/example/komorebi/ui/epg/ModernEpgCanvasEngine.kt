@@ -1,6 +1,7 @@
 package com.example.komorebi.ui.epg
 
 import android.os.Build
+import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -62,7 +63,8 @@ fun ModernEpgCanvasEngine(
     onEpgJumpMenuStateChanged: (Boolean) -> Unit,
     currentType: String,
     onTypeChanged: (String) -> Unit,
-    restoreChannelId: String? = null
+    restoreChannelId: String? = null,
+    restoreProgramStartTime: String? = null
 ) {
     val lastSuccessData = remember { mutableStateOf<EpgUiState.Success?>(null) }
     if (uiState is EpgUiState.Success) { lastSuccessData.value = uiState }
@@ -74,7 +76,7 @@ fun ModernEpgCanvasEngine(
 
     // --- レイアウト定数 ---
     val channelWidth = 130.dp
-    val hourHeight = 80.dp
+    val hourHeight = 75.dp
     val timeBarWidth = 60.dp
     val headerHeight = 45.dp
     val tabHeight = 48.dp
@@ -97,6 +99,20 @@ fun ModernEpgCanvasEngine(
     val textMeasurer = rememberTextMeasurer()
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
 
+    // --- スタイル定義 ---
+    val programTitleStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = 14.sp) }
+    val programDescStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp, fontWeight = FontWeight.Normal, lineHeight = 13.sp) }
+    val channelNumberStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black) }
+    val channelNameStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp) }
+    val timeTextStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+    val amPmStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+    val dateLabelStyle = remember { TextStyle(fontFamily = NotoSansJP, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+
+    val colorEmpty = remember { Color(0xFF0C0C0C) }
+    val colorPast = remember { Color(0xFF161616) }
+    val colorNormal = remember { Color(0xFF222222) }
+    val colorFocused = remember { Color(0xFF383838) }
+
     // --- 状態管理 ---
     var focusedCol by remember { mutableIntStateOf(0) }
     val baseTime = remember(displayData) {
@@ -115,13 +131,13 @@ fun ModernEpgCanvasEngine(
     }
     val COLUMNS = filledChannelWrappers.size
 
-    val initialFocusedMin = remember(baseTime) {
+    val getNowMinutes = {
         val now = OffsetDateTime.now()
         if (now.isBefore(baseTime)) 0
         else Duration.between(baseTime, now).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
     }
 
-    var focusedMin by remember { mutableIntStateOf(initialFocusedMin) }
+    var focusedMin by remember { mutableIntStateOf(getNowMinutes()) }
     var isContentFocused by remember { mutableStateOf(false) }
     val selectedBroadcastingIndex = remember(currentType, availableBroadcastingTypes) {
         availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
@@ -131,32 +147,44 @@ fun ModernEpgCanvasEngine(
     val subTabFocusRequesters = remember(availableBroadcastingTypes) { List(availableBroadcastingTypes.size) { FocusRequester() } }
     val jumpMenuFocusRequester = remember { FocusRequester() }
 
-    // --- アニメーション ---
-    val fastSpring = spring<Float>(stiffness = Spring.StiffnessHigh, dampingRatio = Spring.DampingRatioNoBouncy)
+    val scrollSpring = remember { spring<Float>(stiffness = 800f, dampingRatio = Spring.DampingRatioNoBouncy) }
+    val focusSpring = remember { spring<Float>(stiffness = Spring.StiffnessHigh, dampingRatio = Spring.DampingRatioNoBouncy) }
+
     val scrollX = remember { Animatable(0f) }
-    val initialScrollY = -(initialFocusedMin / 60f * hhPx)
+    val initialScrollY = -(getNowMinutes() / 60f * hhPx)
     val scrollY = remember { Animatable(initialScrollY) }
     val animX = remember { Animatable(0f) }
-    val animY = remember { Animatable((initialFocusedMin / 60f * hhPx)) }
+    val animY = remember { Animatable((getNowMinutes() / 60f * hhPx)) }
     val animH = remember { Animatable(hhPx) }
 
     val scope = rememberCoroutineScope()
+    var shouldRequestSubTabFocus by remember { mutableStateOf(false) }
 
-    // 視聴画面からの復帰
-    LaunchedEffect(restoreChannelId, filledChannelWrappers) {
+    // 長押し制御用フラグ
+    var isLongPressHandled by remember { mutableStateOf(false) }
+
+    // 復帰ロジック
+    LaunchedEffect(restoreChannelId, restoreProgramStartTime, filledChannelWrappers) {
         if (restoreChannelId != null && filledChannelWrappers.isNotEmpty()) {
             val colIndex = filledChannelWrappers.indexOfFirst { it.channel.id == restoreChannelId }
             if (colIndex != -1) {
-                val now = OffsetDateTime.now()
-                val diffMin = ChronoUnit.MINUTES.between(baseTime, now).toInt().coerceAtLeast(0)
+                val targetTime = if (restoreProgramStartTime != null) {
+                    runCatching { OffsetDateTime.parse(restoreProgramStartTime) }.getOrNull() ?: OffsetDateTime.now()
+                } else {
+                    OffsetDateTime.now()
+                }
+
+                val diffMin = ChronoUnit.MINUTES.between(baseTime, targetTime).toInt().coerceAtLeast(0)
                 focusedCol = colIndex
                 focusedMin = diffMin
+
                 val targetScrollX = -(colIndex * cwPx)
                 val targetScrollY = -(diffMin / 60f * hhPx)
                 val visibleW = screenWidthPx - twPx
-                val visibleH = screenHeightPx - with(density) { tabHeight.toPx() + headerHeight.toPx() }
+                val visibleH = screenHeightPx - (tabHeight.value * density.density + hhAreaPx)
                 val maxScrollX = -(COLUMNS * cwPx - visibleW).coerceAtLeast(0f)
                 val maxScrollY = -((maxScrollMinutes / 60f) * hhPx + bPadPx - visibleH).coerceAtLeast(0f)
+
                 launch { scrollX.snapTo(targetScrollX.coerceIn(maxScrollX, 0f)) }
                 launch { scrollY.snapTo(targetScrollY.coerceIn(maxScrollY, 0f)) }
                 contentFocusRequester.requestFocus()
@@ -164,7 +192,14 @@ fun ModernEpgCanvasEngine(
         }
     }
 
-    // ジャンプ実行
+    LaunchedEffect(currentType) {
+        if (shouldRequestSubTabFocus) {
+            val index = availableBroadcastingTypes.indexOfFirst { it.second == currentType }
+            if (index != -1) subTabFocusRequesters[index].requestFocus()
+            shouldRequestSubTabFocus = false
+        }
+    }
+
     LaunchedEffect(jumpTargetTime) {
         if (jumpTargetTime != null) {
             val diffMinutes = Duration.between(baseTime, jumpTargetTime).toMinutes().toInt()
@@ -172,62 +207,56 @@ fun ModernEpgCanvasEngine(
             focusedCol = 0
             focusedMin = safeMinutes
             val targetScrollY = -(safeMinutes / 60f * hhPx)
-            val visibleH = screenHeightPx - with(density) { tabHeight.toPx() + headerHeight.toPx() }
+            val visibleH = screenHeightPx - (tabHeight.value * density.density + hhAreaPx)
             val maxScrollYLimit = -((maxScrollMinutes / 60f) * hhPx + bPadPx - visibleH).coerceAtLeast(0f)
             launch { scrollX.snapTo(0f) }
-            launch { scrollY.snapTo(targetScrollY.coerceIn(maxScrollYLimit, 0f)) }
+            launch { scrollY.animateTo(targetScrollY.coerceIn(maxScrollYLimit, 0f), scrollSpring) }
             onJumpFinished()
             contentFocusRequester.requestFocus()
         }
     }
 
-    // フォーカス追従
     LaunchedEffect(focusedCol, focusedMin, filledChannelWrappers) {
         if (filledChannelWrappers.isEmpty()) return@LaunchedEffect
         val safeCol = focusedCol.coerceIn(0, (filledChannelWrappers.size - 1).coerceAtLeast(0))
         val channel = filledChannelWrappers[safeCol]
         val focusTime = baseTime.plusMinutes(focusedMin.toLong())
+
         val prog = channel.programs.find { p ->
             val s = EpgDataConverter.safeParseTime(p.start_time, baseTime)
             val e = EpgDataConverter.safeParseTime(p.end_time, s.plusMinutes(1))
             !focusTime.isBefore(s) && focusTime.isBefore(e)
         }
         currentFocusedProgram = prog
+
         val (sOff, dur) = prog?.let { EpgDataConverter.calculateSafeOffsets(it, baseTime) } ?: (focusedMin.toFloat() to 30f)
         val targetX = safeCol * cwPx
         val targetY = (sOff / 60f) * hhPx
         val targetH = if (prog?.title == "（番組情報なし）") (dur/60f*hhPx) else (dur/60f*hhPx).coerceAtLeast(minExpHPx)
 
-        launch { animX.animateTo(targetX, fastSpring) }
-        launch { animY.animateTo(targetY, fastSpring) }
-        launch { animH.animateTo(targetH, fastSpring) }
+        launch { animX.animateTo(targetX, focusSpring) }
+        launch { animY.animateTo(targetY, focusSpring) }
+        launch { animH.animateTo(targetH, focusSpring) }
 
         val visibleW = screenWidthPx - twPx
-        val visibleH = screenHeightPx - (with(density) { tabHeight.toPx() + headerHeight.toPx() })
+        val visibleH = screenHeightPx - (tabHeight.value * density.density + hhAreaPx)
+
         var sX = scrollX.value
         if (targetX < -scrollX.value) sX = -targetX
         else if (targetX + cwPx > -scrollX.value + visibleW) sX = -(targetX + cwPx - visibleW)
+
         var sY = scrollY.value
         if (targetY + targetH > -scrollY.value + visibleH) sY = -(targetY + targetH - visibleH + sPadPx)
         if (targetY < -scrollY.value) sY = -targetY
+
         val maxScrollYLimit = -((maxScrollMinutes / 60f) * hhPx + bPadPx - visibleH).coerceAtLeast(0f)
-        launch { scrollX.animateTo(sX.coerceIn(-(COLUMNS * cwPx - visibleW).coerceAtLeast(0f), 0f), fastSpring) }
-        launch { scrollY.animateTo(sY.coerceIn(maxScrollYLimit, 0f), fastSpring) }
+        launch { scrollX.animateTo(sX.coerceIn(-(COLUMNS * cwPx - visibleW).coerceAtLeast(0f), 0f), scrollSpring) }
+        launch { scrollY.animateTo(sY.coerceIn(maxScrollYLimit, 0f), scrollSpring) }
     }
 
-    // スタイル
-    val programTitleStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = 14.sp) }
-    val programDescStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp, fontWeight = FontWeight.Normal, lineHeight = 13.sp) }
-    val channelNumberStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black) }
-    val channelNameStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp) }
-    val timeTextStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
-    val amPmStyle = remember { TextStyle(fontFamily = NotoSansJP, color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-    val dateLabelStyle = remember { TextStyle(fontFamily = NotoSansJP, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-
         Spacer(modifier = Modifier
-            .focusRequester(topTabFocusRequester)
+            .focusRequester(remember { FocusRequester() })
             .focusProperties { down = jumpMenuFocusRequester }
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
@@ -238,25 +267,41 @@ fun ModernEpgCanvasEngine(
             .focusable()
         )
 
-        // --- 放送波・日時指定タブエリア ---
         Box(modifier = Modifier.fillMaxWidth().height(tabHeight).background(Color(0xFF0A0A0A))) {
             Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 var isJumpButtonFocused by remember { mutableStateOf(false) }
                 Box(
-                    modifier = Modifier.width(130.dp).fillMaxHeight()
+                    modifier = Modifier.width(110.dp).fillMaxHeight()
                         .onFocusChanged { isJumpButtonFocused = it.isFocused }
                         .focusRequester(jumpMenuFocusRequester)
                         .focusProperties {
-                            up = topTabFocusRequester
                             right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default
                             down = contentFocusRequester
                         }
                         .onKeyEvent { event ->
+                            if (event.key == Key.Back || event.key == Key.Escape) {
+                                if (event.type == KeyEventType.KeyDown) {
+                                    if (event.nativeKeyEvent.isLongPress) {
+                                        focusedCol = 0
+                                        focusedMin = getNowMinutes()
+                                        contentFocusRequester.requestFocus()
+                                        isLongPressHandled = true
+                                        return@onKeyEvent true
+                                    }
+                                } else if (event.type == KeyEventType.KeyUp) {
+                                    if (isLongPressHandled) {
+                                        isLongPressHandled = false
+                                        return@onKeyEvent true
+                                    }
+                                    topTabFocusRequester.requestFocus()
+                                    return@onKeyEvent true
+                                }
+                            }
+
                             if (event.type == KeyEventType.KeyDown) {
                                 when (event.key) {
-                                    Key.Back, Key.Escape -> { topTabFocusRequester.requestFocus(); true }
+                                    Key.DirectionUp -> { topTabFocusRequester.requestFocus(); true }
                                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { onEpgJumpMenuStateChanged(true); true }
-                                    // 下キー押下時に強制的に番組表へ飛ばす
                                     Key.DirectionDown -> { contentFocusRequester.requestFocus(); true }
                                     else -> false
                                 }
@@ -275,30 +320,44 @@ fun ModernEpgCanvasEngine(
                             val isSelected = currentType == apiValue
                             Box(
                                 modifier = Modifier.width(110.dp).fillMaxHeight()
-                                    .onFocusChanged {
-                                        isTabFocused = it.isFocused
-                                        if (it.isFocused && currentType != apiValue) {
-                                            onTypeChanged(apiValue)
-                                        }
-                                    }
+                                    .onFocusChanged { isTabFocused = it.isFocused }
                                     .focusRequester(subTabFocusRequesters[index])
                                     .focusProperties {
-                                        up = topTabFocusRequester
                                         left = if (index == 0) jumpMenuFocusRequester else subTabFocusRequesters[index - 1]
                                         right = if (index == availableBroadcastingTypes.size - 1) FocusRequester.Default else subTabFocusRequesters[index + 1]
-                                        // 指定はしているが、onKeyEventでも担保する
                                         down = contentFocusRequester
                                     }
                                     .onKeyEvent { event ->
+                                        if (event.key == Key.Back || event.key == Key.Escape) {
+                                            if (event.type == KeyEventType.KeyDown) {
+                                                if (event.nativeKeyEvent.isLongPress) {
+                                                    focusedCol = 0
+                                                    focusedMin = getNowMinutes()
+                                                    contentFocusRequester.requestFocus()
+                                                    isLongPressHandled = true
+                                                    return@onKeyEvent true
+                                                }
+                                            } else if (event.type == KeyEventType.KeyUp) {
+                                                if (isLongPressHandled) {
+                                                    isLongPressHandled = false
+                                                    return@onKeyEvent true
+                                                }
+                                                topTabFocusRequester.requestFocus()
+                                                return@onKeyEvent true
+                                            }
+                                        }
+
                                         if (event.type == KeyEventType.KeyDown) {
                                             when (event.key) {
-                                                Key.Back, Key.Escape -> { topTabFocusRequester.requestFocus(); true }
-                                                // 【重要】下キー押下時に強制的に番組表(contentFocusRequester)へフォーカスを移す
-                                                // これにより、データロード中のフォーカス逸脱を防ぐ
-                                                Key.DirectionDown -> {
-                                                    contentFocusRequester.requestFocus()
+                                                Key.DirectionUp -> { topTabFocusRequester.requestFocus(); true }
+                                                Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                                                    if (currentType != apiValue) {
+                                                        shouldRequestSubTabFocus = true
+                                                        onTypeChanged(apiValue)
+                                                    }
                                                     true
                                                 }
+                                                Key.DirectionDown -> { contentFocusRequester.requestFocus(); true }
                                                 else -> false
                                             }
                                         } else false
@@ -314,21 +373,42 @@ fun ModernEpgCanvasEngine(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.width(130.dp))
+                Spacer(modifier = Modifier.width(80.dp))
             }
         }
 
-        // --- 番組表 Canvas ---
         Box(modifier = Modifier.fillMaxWidth().weight(1f)
             .focusRequester(contentFocusRequester)
             .onFocusChanged { isContentFocused = it.isFocused }
             .focusProperties {
                 if (subTabFocusRequesters.isNotEmpty()) {
-                    // contentFocusRequesterから上に戻る際、現在選択されている放送波タブに戻る
                     up = subTabFocusRequesters[selectedBroadcastingIndex.coerceIn(0, subTabFocusRequesters.size - 1)]
                 }
             }
             .onKeyEvent { event ->
+                // Contentエリアでの戻るキー長押し制御
+                if (event.key == Key.Back || event.key == Key.Escape) {
+                    if (event.type == KeyEventType.KeyDown) {
+                        if (event.nativeKeyEvent.isLongPress) {
+                            focusedCol = 0
+                            focusedMin = getNowMinutes()
+                            // 位置更新はLaunchedEffectで自動で行われる
+                            isLongPressHandled = true
+                            return@onKeyEvent true
+                        }
+                    } else if (event.type == KeyEventType.KeyUp) {
+                        if (isLongPressHandled) {
+                            isLongPressHandled = false
+                            return@onKeyEvent true
+                        }
+                        // 通常の戻る：サブタブへフォーカス
+                        if (subTabFocusRequesters.isNotEmpty()) {
+                            subTabFocusRequesters[selectedBroadcastingIndex.coerceIn(0, subTabFocusRequesters.size - 1)].requestFocus()
+                        }
+                        return@onKeyEvent true
+                    }
+                }
+
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
                         Key.DirectionRight -> { if (focusedCol < COLUMNS - 1) { focusedCol++; true } else false }
@@ -350,10 +430,6 @@ fun ModernEpgCanvasEngine(
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
                             currentFocusedProgram?.let { if (it.title != "（番組情報なし）") onProgramSelected(it) }; true
                         }
-                        Key.Back, Key.Escape -> {
-                            if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[selectedBroadcastingIndex.coerceIn(0, subTabFocusRequesters.size - 1)].requestFocus()
-                            true
-                        }
                         else -> false
                     }
                 } else false
@@ -368,6 +444,7 @@ fun ModernEpgCanvasEngine(
 
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val curX = scrollX.value; val curY = scrollY.value
+                val nowTime = OffsetDateTime.now()
 
                 clipRect(left = twPx, top = hhAreaPx) {
                     filledChannelWrappers.forEachIndexed { c, wrapper ->
@@ -379,44 +456,43 @@ fun ModernEpgCanvasEngine(
                             val py = hhAreaPx + curY + (sOff / 60f * hhPx)
                             val ph = (dur / 60f * hhPx)
 
-                            if (py + ph > hhAreaPx && py < size.height) {
-                                val isPast = EpgDataConverter.safeParseTime(p.end_time, baseTime).isBefore(OffsetDateTime.now())
-                                val isEmpty = p.title == "（番組情報なし）"
+                            if (py + ph < hhAreaPx || py > size.height) return@forEach
 
-                                drawRect(
-                                    color = if (isEmpty) Color(0xFF0C0C0C) else if (isPast) Color(0xFF161616) else Color(0xFF222222),
-                                    topLeft = Offset(x + 1f, py + 1f),
-                                    size = Size(cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
-                                )
+                            val isPast = EpgDataConverter.safeParseTime(p.end_time, baseTime).isBefore(nowTime)
+                            val isEmpty = p.title == "（番組情報なし）"
 
-                                val titleLayout = textMeasurer.measure(
-                                    text = p.title,
-                                    style = programTitleStyle.copy(color = if (isPast || isEmpty) Color.Gray else Color.White),
-                                    constraints = Constraints(maxWidth = (cwPx - 16f).toInt(), maxHeight = (ph - 12f).toInt().coerceAtLeast(0)),
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                drawText(titleLayout, topLeft = Offset(x + 10f, py + 8f))
+                            drawRect(
+                                color = if (isEmpty) colorEmpty else if (isPast) colorPast else colorNormal,
+                                topLeft = Offset(x + 1f, py + 1f),
+                                size = Size(cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
+                            )
 
-                                if (!isEmpty && !p.description.isNullOrBlank()) {
-                                    val titleHeight = titleLayout.size.height.toFloat()
-                                    val availableDescHeight = (ph - titleHeight - 20f).coerceAtLeast(0f)
-                                    if (availableDescHeight > 24f) {
-                                        val descLayout = textMeasurer.measure(
-                                            text = p.description,
-                                            style = programDescStyle.copy(color = if (isPast) Color.DarkGray else Color.LightGray),
-                                            constraints = Constraints(maxWidth = (cwPx - 16f).toInt(), maxHeight = availableDescHeight.toInt()),
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        drawText(descLayout, topLeft = Offset(x + 10f, py + titleHeight + 12f))
-                                    }
+                            val titleLayout = textMeasurer.measure(
+                                text = p.title,
+                                style = programTitleStyle.copy(color = if (isPast || isEmpty) Color.Gray else Color.White),
+                                constraints = Constraints(maxWidth = (cwPx - 16f).toInt(), maxHeight = (ph - 12f).toInt().coerceAtLeast(0)),
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            drawText(titleLayout, topLeft = Offset(x + 10f, py + 8f))
+
+                            if (!isEmpty && !p.description.isNullOrBlank()) {
+                                val titleHeight = titleLayout.size.height.toFloat()
+                                val availableDescHeight = (ph - titleHeight - 20f).coerceAtLeast(0f)
+                                if (availableDescHeight > 24f) {
+                                    val descLayout = textMeasurer.measure(
+                                        text = p.description,
+                                        style = programDescStyle.copy(color = if (isPast) Color.DarkGray else Color.LightGray),
+                                        constraints = Constraints(maxWidth = (cwPx - 16f).toInt(), maxHeight = availableDescHeight.toInt()),
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    drawText(descLayout, topLeft = Offset(x + 10f, py + titleHeight + 12f))
                                 }
                             }
                         }
                     }
 
-                    val now = OffsetDateTime.now()
-                    if (now.isAfter(baseTime) && now.isBefore(limitTime)) {
-                        val nowOff = Duration.between(baseTime, now).toMinutes().toFloat()
+                    if (nowTime.isAfter(baseTime) && nowTime.isBefore(limitTime)) {
+                        val nowOff = Duration.between(baseTime, nowTime).toMinutes().toFloat()
                         val nowY = hhAreaPx + curY + (nowOff / 60f * hhPx)
                         if (nowY in hhAreaPx..size.height) {
                             drawLine(Color.Red, Offset(twPx, nowY), Offset(size.width, nowY), strokeWidth = 3f)
@@ -428,7 +504,7 @@ fun ModernEpgCanvasEngine(
                         val fx = twPx + curX + animX.value
                         val fy = hhAreaPx + curY + animY.value
                         val fh = animH.value
-                        drawRect(Color(0xFF383838), Offset(fx + 1f, fy + 1f), Size(cwPx - 2f, fh - 2f))
+                        drawRect(colorFocused, Offset(fx + 1f, fy + 1f), Size(cwPx - 2f, fh - 2f))
                         currentFocusedProgram?.let { p ->
                             val titleLayout = textMeasurer.measure(text = p.title, style = programTitleStyle, constraints = Constraints(maxWidth = (cwPx - 20f).toInt()))
                             drawText(titleLayout, topLeft = Offset(fx + 10f, fy + 8f))
@@ -447,10 +523,9 @@ fun ModernEpgCanvasEngine(
 
                 clipRect(left = 0f, top = hhAreaPx, right = twPx) {
                     for (h in 0..(maxScrollMinutes / 60)) {
-                        val time = baseTime.plusHours(h.toLong())
                         val fy = hhAreaPx + curY + (h * hhPx)
                         if (fy + hhPx < hhAreaPx || fy > size.height) continue
-                        val hour = time.hour
+                        val hour = (baseTime.hour + h) % 24
                         val bgColor = when(hour) { in 4..10 -> Color(0xFF2E2424); in 11..17 -> Color(0xFF242E24); else -> Color(0xFF24242E) }
                         drawRect(bgColor, Offset(0f, fy), Size(twPx, hhPx))
                         val amPmLayout = textMeasurer.measure(if (hour < 12) "AM" else "PM", amPmStyle)

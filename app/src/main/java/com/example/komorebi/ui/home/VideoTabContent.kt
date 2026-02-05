@@ -4,12 +4,13 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -20,6 +21,7 @@ import androidx.tv.material3.*
 import com.example.komorebi.data.model.RecordedProgram
 import com.example.komorebi.ui.components.RecordedCard
 import com.example.komorebi.ui.video.VideoPlayerScreen
+import kotlinx.coroutines.delay
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalComposeUiApi::class)
@@ -30,23 +32,30 @@ fun VideoTabContent(
     konomiIp: String,
     konomiPort: String,
     selectedProgram: RecordedProgram?,
-    externalFocusRequester: FocusRequester, // 「ビデオ」タブから下を押した時の到達点
+    // HomeLauncherScreenから渡される引数
+    topNavFocusRequester: FocusRequester,
+    contentFirstItemRequester: FocusRequester,
     onProgramClick: (RecordedProgram?) -> Unit
 ) {
-    // TV専用の TvLazyColumn を使用。
-    // modifier から focusRequester を削除し、子要素に任せる
+    val watchedProgramFocusRequester = remember { FocusRequester() }
+    val isPlayerActive = selectedProgram != null
+
+    LaunchedEffect(isPlayerActive) {
+        if (!isPlayerActive && selectedProgram != null) {
+            delay(150)
+            runCatching { watchedProgramFocusRequester.requestFocus() }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         TvLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .focusRequester(externalFocusRequester)
-                .focusProperties {
-                    exit = { FocusRequester.Default }
-                },
+                .focusRequester(contentFirstItemRequester)
+                .then(if (isPlayerActive) Modifier.focusProperties { canFocus = false } else Modifier),
             contentPadding = PaddingValues(top = 24.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(32.dp)
         ) {
-            // 1. 新着録画（ここが最初の行）
             item {
                 RecordedSection(
                     title = "新着の録画",
@@ -54,12 +63,14 @@ fun VideoTabContent(
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
                     onProgramClick = onProgramClick,
-                    // 最初のセクションの最初のアイテムにだけ、親から引き継いだRequesterを渡す
-                    firstItemFocusRequester = externalFocusRequester
+                    firstItemFocusRequester = contentFirstItemRequester,
+                    watchedProgramFocusRequester = watchedProgramFocusRequester,
+                    selectedProgramId = selectedProgram?.id,
+                    topNavFocusRequester = topNavFocusRequester,
+                    isFirstSection = true
                 )
             }
 
-            // 2. 視聴履歴
             if (watchHistory.isNotEmpty()) {
                 item {
                     RecordedSection(
@@ -68,7 +79,11 @@ fun VideoTabContent(
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         onProgramClick = onProgramClick,
-                        firstItemFocusRequester = null // 2行目以降は自動フォーカスに任せる
+                        firstItemFocusRequester = null,
+                        watchedProgramFocusRequester = watchedProgramFocusRequester,
+                        selectedProgramId = selectedProgram?.id,
+                        topNavFocusRequester = null,
+                        isFirstSection = false
                     )
                 }
             }
@@ -92,7 +107,11 @@ fun RecordedSection(
     konomiPort: String,
     onProgramClick: (RecordedProgram) -> Unit,
     isPlaceholder: Boolean = false,
-    firstItemFocusRequester: FocusRequester? = null
+    firstItemFocusRequester: FocusRequester? = null,
+    watchedProgramFocusRequester: FocusRequester,
+    selectedProgramId: Int?, // String? から Int? に修正
+    topNavFocusRequester: FocusRequester?,
+    isFirstSection: Boolean
 ) {
     Column(modifier = Modifier.graphicsLayer(clip = false)) {
         Text(
@@ -117,21 +136,33 @@ fun RecordedSection(
                 }
             } else {
                 itemsIndexed(items, key = { _, program -> program.id }) { index, program ->
+                    val isSelected = program.id == selectedProgramId
+
                     RecordedCard(
                         program = program,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         onClick = { onProgramClick(program) },
                         modifier = Modifier
-                            // ★ 修正ポイント:
-                            // 最初の行(Section) かつ 最初のアイテム(Index 0) の時だけRequesterを適用
                             .then(
-                                if (index == 0 && firstItemFocusRequester != null) {
+                                if (index == 0 && isFirstSection && firstItemFocusRequester != null) {
                                     Modifier.focusRequester(firstItemFocusRequester)
                                 } else {
                                     Modifier
                                 }
                             )
+                            .then(
+                                if (isSelected) {
+                                    Modifier.focusRequester(watchedProgramFocusRequester)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .focusProperties {
+                                if (isFirstSection && topNavFocusRequester != null) {
+                                    up = topNavFocusRequester
+                                }
+                            }
                     )
                 }
             }
