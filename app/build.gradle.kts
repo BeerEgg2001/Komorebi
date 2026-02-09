@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.komorebi"
+    namespace = "com.beeregg2001.komorebi"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.Komorebi"
+        applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -99,6 +99,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation") // 追加
     implementation("androidx.compose.ui:ui-graphics")       // 追加
+
+    // 【追加】拡張アイコンセット (CastConnected, Dns, Tv 等を使用するため)
+    implementation("androidx.compose.material:material-icons-extended")
 
     // --- TV用ライブラリ ---
     // これらは BOM に含まれないため、バージョンを固定します
