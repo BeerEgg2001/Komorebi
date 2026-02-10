@@ -8,7 +8,9 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
@@ -18,10 +20,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -41,14 +46,16 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import java.util.UUID
 import androidx.activity.compose.BackHandler
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
 
 enum class AudioMode { MAIN, SUB }
-enum class SubMenuCategory { AUDIO, VIDEO }
+// ★修正: SPEEDカテゴリを追加
+enum class SubMenuCategory { AUDIO, VIDEO, SPEED }
 
 data class IndicatorState(val icon: ImageVector, val label: String, val timestamp: Long = System.currentTimeMillis())
 
@@ -60,7 +67,6 @@ fun VideoPlayerScreen(
     konomiIp: String,
     konomiPort: String,
     onBackPressed: () -> Unit,
-    // ★追加: 視聴履歴更新用コールバック
     onUpdateWatchHistory: (RecordedProgram, Double) -> Unit
 ) {
     val context = LocalContext.current
@@ -77,11 +83,13 @@ fun VideoPlayerScreen(
     }
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
+    // ★追加: 現在の再生速度
+    var currentSpeed by remember { mutableFloatStateOf(1.0f) }
+
     var isSubMenuOpen by remember { mutableStateOf(false) }
     var activeSubMenuCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
 
-    // コントロール表示状態
     var showControls by remember { mutableStateOf(true) }
 
     val exoPlayer = remember {
@@ -125,10 +133,15 @@ fun VideoPlayerScreen(
         audioProcessor.putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
     }
 
-    // ★追加: 視聴履歴を定期的に保存する
+    // ★追加: 再生速度を適用する関数
+    fun applyPlaybackSpeed(speed: Float) {
+        currentSpeed = speed
+        exoPlayer.setPlaybackSpeed(speed)
+    }
+
     LaunchedEffect(exoPlayer) {
         while (true) {
-            delay(10000) // 10秒ごとに保存
+            delay(10000)
             if (exoPlayer.isPlaying) {
                 val currentPosSec = exoPlayer.currentPosition / 1000.0
                 onUpdateWatchHistory(program, currentPosSec)
@@ -136,7 +149,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // ★追加: 画面破棄時に最終位置を保存
     DisposableEffect(Unit) {
         onDispose {
             val currentPosSec = exoPlayer.currentPosition / 1000.0
@@ -152,12 +164,10 @@ fun VideoPlayerScreen(
         onBackPressed()
     }
 
-    // DisposableEffectでリスナーを管理 (onDisposeは上記に統合しても良いが、ExoPlayerのライフサイクルとして分ける)
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 showControls = !isPlaying
-                // 停止時にも保存
                 if (!isPlaying) {
                     val currentPosSec = exoPlayer.currentPosition / 1000.0
                     onUpdateWatchHistory(program, currentPosSec)
@@ -167,16 +177,13 @@ fun VideoPlayerScreen(
                 if (state == Player.STATE_READY || state == Player.STATE_ENDED) {
                     showControls = !exoPlayer.playWhenReady
                 }
-                // 再生終了時
                 if (state == Player.STATE_ENDED) {
                     onUpdateWatchHistory(program, exoPlayer.duration / 1000.0)
                 }
             }
         }
         exoPlayer.addListener(listener)
-        onDispose {
-            // Player release logic handled in the other DisposableEffect
-        }
+        onDispose {}
     }
 
     LaunchedEffect(Unit) {
@@ -279,8 +286,10 @@ fun VideoPlayerScreen(
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
         ) {
+            // ★修正: 再生速度情報を渡す
             TopSubMenuUI(
                 currentMode = currentAudioMode,
+                currentSpeed = currentSpeed,
                 activeCategory = activeSubMenuCategory,
                 onCategorySelect = { activeSubMenuCategory = it },
                 onAudioModeSelect = { mode ->
@@ -288,8 +297,114 @@ fun VideoPlayerScreen(
                     applyAudioStream(mode)
                     isSubMenuOpen = false
                     mainFocusRequester.requestFocus()
+                },
+                onSpeedSelect = { speed ->
+                    applyPlaybackSpeed(speed)
+                    isSubMenuOpen = false
+                    mainFocusRequester.requestFocus()
                 }
             )
+        }
+    }
+}
+
+@Composable
+fun PlayerControls(
+    exoPlayer: ExoPlayer,
+    title: String,
+    isVisible: Boolean
+) {
+    var currentPosition by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(isVisible) {
+        while (isVisible) {
+            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0)
+            duration = exoPlayer.duration.coerceAtLeast(0)
+            delay(500)
+        }
+    }
+
+    fun formatTime(ms: Long): String {
+        val totalSeconds = ms / 1000
+        val seconds = totalSeconds % 60
+        val minutes = (totalSeconds / 60) % 60
+        val hours = totalSeconds / 3600
+        return if (hours > 0) {
+            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
+    }
+
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(),
+        exit = fadeOut()
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(0.9f), Color.Transparent)
+                        )
+                    )
+                    .padding(top = 40.dp, bottom = 60.dp, start = 48.dp, end = 48.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(0.95f))
+                        )
+                    )
+                    .padding(start = 48.dp, end = 48.dp, bottom = 48.dp, top = 60.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = formatTime(currentPosition),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    LinearProgressIndicator(
+                        progress = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 24.dp)
+                            .height(6.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = Color.White.copy(0.3f)
+                    )
+
+                    Text(
+                        text = formatTime(duration),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
     }
 }
@@ -324,45 +439,104 @@ fun PlaybackIndicator(state: IndicatorState?) {
     }
 }
 
+// ★修正: LivePlayerScreenと統一感のあるUIへ変更
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TopSubMenuUI(
     currentMode: AudioMode,
+    currentSpeed: Float,
     activeCategory: SubMenuCategory?,
-    onCategorySelect: (SubMenuCategory) -> Unit,
-    onAudioModeSelect: (AudioMode) -> Unit
+    onCategorySelect: (SubMenuCategory?) -> Unit,
+    onAudioModeSelect: (AudioMode) -> Unit,
+    onSpeedSelect: (Float) -> Unit
 ) {
+    val categoryFocusRequester = remember { FocusRequester() }
+    val itemFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(activeCategory) {
+        if (activeCategory == null) categoryFocusRequester.requestFocus()
+        else itemFocusRequester.requestFocus()
+    }
+
+    val chipColors = FilterChipDefaults.colors(
+        containerColor = Color.Transparent,
+        contentColor = Color.White.copy(0.7f),
+        selectedContainerColor = Color.White,
+        selectedContentColor = Color.Black,
+        focusedContainerColor = Color.White.copy(0.2f),
+        focusedContentColor = Color.White,
+        focusedSelectedContainerColor = Color.White,
+        focusedSelectedContentColor = Color.Black
+    )
+
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.Black.copy(0.9f))
-            .padding(24.dp)
+        modifier = Modifier.fillMaxWidth().wrapContentHeight()
+            .background(Brush.verticalGradient(listOf(Color.Black.copy(0.9f), Color.Transparent)))
+            .padding(top = 24.dp, bottom = 60.dp),
+        contentAlignment = Alignment.TopCenter
     ) {
-        if (activeCategory == null) {
-            // メインメニュー
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MenuTileItem("音声切替", "現在の設定: ${if (currentMode == AudioMode.MAIN) "主音声" else "副音声"}", true) {
-                    onCategorySelect(SubMenuCategory.AUDIO)
-                }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(horizontalArrangement = Arrangement.Center) {
+                MenuTileItem(
+                    title = "音声切替",
+                    icon = Icons.Default.PlayArrow,
+                    subtitle = if(currentMode == AudioMode.MAIN) "主音声" else "副音声",
+                    isSelected = activeCategory == SubMenuCategory.AUDIO,
+                    onClick = { onCategorySelect(SubMenuCategory.AUDIO) },
+                    modifier = Modifier.focusRequester(categoryFocusRequester)
+                )
+
+                Spacer(Modifier.width(20.dp))
+                MenuTileItem(
+                    title = "再生速度",
+                    icon = Icons.Default.FastForward,
+                    subtitle = "${currentSpeed}x",
+                    isSelected = activeCategory == SubMenuCategory.SPEED,
+                    onClick = { onCategorySelect(SubMenuCategory.SPEED) },
+                )
             }
-        } else {
-            // サブメニュー
-            when (activeCategory) {
-                SubMenuCategory.AUDIO -> {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        MenuTileItem("主音声", "", currentMode == AudioMode.MAIN) { onAudioModeSelect(AudioMode.MAIN) }
-                        Spacer(Modifier.width(16.dp))
-                        MenuTileItem("副音声", "", currentMode == AudioMode.SUB) { onAudioModeSelect(AudioMode.SUB) }
+
+            Spacer(Modifier.height(24.dp))
+
+            AnimatedContent(targetState = activeCategory, label = "submenu") { category ->
+                when (category) {
+                    SubMenuCategory.AUDIO -> {
+                        Row(
+                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AudioMode.values().forEachIndexed { index, mode ->
+                                FilterChip(
+                                    selected = (currentMode == mode),
+                                    onClick = { onAudioModeSelect(mode) },
+                                    modifier = Modifier
+                                        .padding(horizontal = 6.dp)
+                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
+                                    colors = chipColors,
+                                ){ Text(if(mode == AudioMode.MAIN) "主音声" else "副音声", fontWeight = FontWeight.Medium) }
+                            }
+                        }
                     }
+                    SubMenuCategory.SPEED -> {
+                        Row(
+                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val speeds = listOf(0.75f, 1.0f, 1.5f, 2.0f)
+                            speeds.forEachIndexed { index, speed ->
+                                FilterChip(
+                                    selected = (currentSpeed == speed),
+                                    onClick = { onSpeedSelect(speed) },
+                                    modifier = Modifier
+                                        .padding(horizontal = 6.dp)
+                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
+                                    colors = chipColors,
+                                ){ Text("${speed}x", fontWeight = FontWeight.Medium) }
+                            }
+                        }
+                    }
+                    else -> Box(modifier = Modifier.height(56.dp))
                 }
-                else -> {}
             }
         }
     }
@@ -370,20 +544,24 @@ fun TopSubMenuUI(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun MenuTileItem(title: String, subtitle: String, isSelected: Boolean, onClick: () -> Unit) {
-    Button(
+fun MenuTileItem(title: String, icon: ImageVector, subtitle: String, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
         onClick = onClick,
-        colors = ButtonDefaults.colors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(0.1f),
-            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else Color.White
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isSelected) Color.White.copy(0.15f) else Color.White.copy(0.05f),
+            contentColor = Color.White,
+            focusedContainerColor = Color.White,
+            focusedContentColor = Color.Black
         ),
-        modifier = Modifier.size(160.dp, 80.dp)
+        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        modifier = modifier.size(160.dp, 84.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, fontWeight = FontWeight.Bold)
-            if (subtitle.isNotEmpty()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall)
-            }
+        Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.height(4.dp))
+            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), color = if (isSelected) Color.Unspecified else LocalContentColor.current.copy(0.6f))
         }
     }
 }

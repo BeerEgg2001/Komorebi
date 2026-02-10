@@ -41,7 +41,7 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.home.HomeLauncherScreen
 import com.beeregg2001.komorebi.ui.home.LoadingScreen
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
-import com.beeregg2001.komorebi.ui.theme.SettingsScreen
+import com.beeregg2001.komorebi.ui.home.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
 import com.beeregg2001.komorebi.viewmodel.*
@@ -75,6 +75,7 @@ fun MainRootScreen(
     var isRecordListOpen by remember { mutableStateOf(false) }
 
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
+    var lastSelectedProgramId by remember { mutableStateOf<String?>(null) } // ★追加
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
 
@@ -130,10 +131,9 @@ fun MainRootScreen(
     val isAppReady = (isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)
 
     // バックハンドラーの一括管理
-    // ★修正: ミニリストが開いている場合はそれを閉じる処理を追加
     BackHandler(enabled = true) {
         when {
-            isPlayerMiniListOpen -> isPlayerMiniListOpen = false // ミニチャンネルリストを閉じる
+            isPlayerMiniListOpen -> isPlayerMiniListOpen = false
             selectedChannel != null -> selectedChannel = null
             selectedProgram != null -> selectedProgram = null
             isSettingsOpen -> isSettingsOpen = false
@@ -167,6 +167,8 @@ fun MainRootScreen(
                         onChannelSelect = { newChannel ->
                             selectedChannel = newChannel
                             lastSelectedChannelId = newChannel.id
+                            // ライブ視聴開始時に録画IDはリセット
+                            lastSelectedProgramId = null
                             homeViewModel.saveLastChannel(newChannel)
                         },
                         onBackPressed = {
@@ -200,11 +202,18 @@ fun MainRootScreen(
                             selectedChannel = channel
                             if (channel != null) {
                                 lastSelectedChannelId = channel.id
+                                lastSelectedProgramId = null
                                 homeViewModel.saveLastChannel(channel)
                             }
                         },
                         selectedProgram = selectedProgram,
-                        onProgramSelected = { selectedProgram = it },
+                        onProgramSelected = { program ->
+                            selectedProgram = program
+                            if (program != null) {
+                                lastSelectedProgramId = program.id.toString()
+                                lastSelectedChannelId = null // チャンネルIDはリセット
+                            }
+                        },
                         epgSelectedProgram = epgSelectedProgram,
                         onEpgProgramSelected = { epgSelectedProgram = it },
                         isEpgJumpMenuOpen = isEpgJumpMenuOpen,
@@ -218,12 +227,14 @@ fun MainRootScreen(
                             if (channel != null) {
                                 selectedChannel = channel
                                 lastSelectedChannelId = channelId
+                                lastSelectedProgramId = null
                                 homeViewModel.saveLastChannel(channel)
                                 epgSelectedProgram = null
                                 isEpgJumpMenuOpen = false
                             }
                         },
                         lastPlayerChannelId = lastSelectedChannelId,
+                        lastPlayerProgramId = lastSelectedProgramId, // ★追加
                         isSettingsOpen = isSettingsOpen,
                         onSettingsToggle = { isSettingsOpen = it },
                         isRecordListOpen = isRecordListOpen,
@@ -272,7 +283,7 @@ fun MainRootScreen(
     }
 }
 
-// Dialogs are the same as before
+// Dialogs omitted
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {

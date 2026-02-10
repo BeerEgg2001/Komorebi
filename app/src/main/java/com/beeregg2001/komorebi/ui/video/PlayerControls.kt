@@ -63,7 +63,7 @@ fun PlayerControls(
             ) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.headlineLarge.copy(
+                    style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold
                     ),
                     color = Color.White,

@@ -28,8 +28,8 @@ fun ExitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                 onClick = onConfirm,
                 modifier = Modifier.focusRequester(focusRequester),
                 colors = ButtonDefaults.colors(
-                    containerColor = Color(0xFFB3261E),
-                    focusedContainerColor = Color(0xFFF2B8B5)
+                    containerColor = Color(0xFF333333),
+                    focusedContainerColor = Color.White
                 ),
                 scale = ButtonDefaults.scale(focusedScale = 1.1f)
             ) { Text("終了") }
@@ -38,12 +38,12 @@ fun ExitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             Button(
                 onClick = onDismiss,
                 colors = ButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.1f),
+                    containerColor = Color(0xFF333333).copy(alpha = 0.1f),
                     focusedContainerColor = Color.White
                 ),
                 scale = ButtonDefaults.scale(focusedScale = 1.1f)
             ) { Text("キャンセル") }
         },
-        title = { Text("アプリを終了しますか？", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center) }
+        title = { Text("アプリを終了しますか？", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Left, color = Color.White) }
     )
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,11 +21,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -46,6 +49,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
@@ -60,7 +64,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 enum class AudioMode { MAIN, SUB }
-enum class SubMenuCategory { AUDIO, VIDEO }
+// ★追加: SUBTITLE カテゴリを追加
+enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE }
 enum class StreamSource { MIRAKURUN, KONOMITV }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -85,6 +90,8 @@ fun LivePlayerScreen(
 
     val nativeLib = remember { NativeLib() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
+    // ★追加: 字幕の有効状態 (デフォルトON)
+    var isSubtitleEnabled by remember { mutableStateOf(true) }
 
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     var currentStreamSource by remember {
@@ -152,6 +159,13 @@ fun LivePlayerScreen(
         player.apply {
             playWhenReady = true
             setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
+
+            // ★追加: 初期字幕状態の設定
+            // TRACK_TYPE_TEXT (字幕) を isSubtitleEnabled に応じて有効/無効化
+            trackSelectionParameters = trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !isSubtitleEnabled)
+                .build()
+
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
                     playerError = analyzePlayerError(error)
@@ -171,6 +185,13 @@ fun LivePlayerScreen(
                 .addOverride(TrackSelectionOverride(audioGroups[targetIndex].mediaTrackGroup, 0))
                 .build()
         }
+    }
+
+    // ★追加: 字幕の有効/無効を切り替える関数
+    fun applySubtitleState(enabled: Boolean) {
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !enabled)
+            .build()
     }
 
     LaunchedEffect(currentStreamSource) {
@@ -245,9 +266,7 @@ fun LivePlayerScreen(
             }
 
             if (isMiniListOpen) {
-                // ★修正: 戻るキーの処理はChannelListOverlayとMainRootScreenのBackHandlerに任せるためfalseを返す
                 if (isBack) return@onPreviewKeyEvent false
-                // ★修正: 左キーでの閉じる機能を削除（何も返さない＝無効化ではないが、処理もしない）
                 return@onPreviewKeyEvent false
             }
 
@@ -280,8 +299,30 @@ fun LivePlayerScreen(
             false
         }) {
 
+        // ★修正: 字幕のスタイル設定を適用
         AndroidView(
-            factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
+            factory = {
+                PlayerView(it).apply {
+                    player = exoPlayer
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    keepScreenOn = true
+
+                    // 字幕のスタイル設定 (ARIB字幕を見やすく)
+                    subtitleView?.setStyle(
+                        CaptionStyleCompat(
+                            Color.White.toArgb(), // 文字色: 白
+                            Color.Black.copy(alpha = 0.5f).toArgb(), // 背景色: 半透明黒
+                            Color.Transparent.toArgb(), // ウィンドウ色
+                            CaptionStyleCompat.EDGE_TYPE_NONE, // 縁取りなし
+                            Color.Transparent.toArgb(), // 縁取り色
+                            null // フォント (nullの場合はシステムデフォルト)
+                        )
+                    )
+                    // 字幕の下部パディング調整 (必要に応じて数値を変更)
+                    subtitleView?.setBottomPaddingFraction(0.1f)
+                }
+            },
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
         )
@@ -294,7 +335,6 @@ fun LivePlayerScreen(
             LiveOverlayUI(currentChannelItem, currentChannelItem.programPresent?.title ?: "番組情報なし", mirakurunIp?:"", mirakurunPort?:"", konomiIp, konomiPort, isManualOverlay, scrollState)
         }
 
-        // ミニチャンネルリスト (画面下部にフル幅)
         AnimatedVisibility(
             visible = isMiniListOpen && playerError == null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -319,12 +359,15 @@ fun LivePlayerScreen(
             )
         }
 
+        // サブメニューの表示
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
                 currentSource = currentStreamSource,
                 activeCategory = activeSubMenuCategory,
                 isMirakurunAvailable = isMirakurunAvailable,
+                // ★追加: 字幕の状態と切り替え関数を渡す
+                isSubtitleEnabled = isSubtitleEnabled,
                 onCategorySelect = { activeSubMenuCategory = it },
                 onAudioModeSelect = { mode ->
                     currentAudioMode = mode
@@ -334,6 +377,12 @@ fun LivePlayerScreen(
                 },
                 onSourceSelect = { source ->
                     currentStreamSource = source
+                    isSubMenuOpen = false
+                    mainFocusRequester.requestFocus()
+                },
+                onSubtitleToggle = { enabled ->
+                    isSubtitleEnabled = enabled
+                    applySubtitleState(enabled)
                     isSubMenuOpen = false
                     mainFocusRequester.requestFocus()
                 }
@@ -364,6 +413,12 @@ fun LiveErrorDialog(
     onRetry: () -> Unit,
     onBack: () -> Unit
 ) {
+    val retryButtonFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        retryButtonFocusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -423,7 +478,9 @@ fun LiveErrorDialog(
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary
                         ),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(retryButtonFocusRequester)
                     ) {
                         Text(AppStrings.BUTTON_RETRY)
                     }
@@ -440,9 +497,11 @@ fun TopSubMenuUI(
     currentSource: StreamSource,
     activeCategory: SubMenuCategory?,
     isMirakurunAvailable: Boolean,
+    isSubtitleEnabled: Boolean, // ★追加
     onCategorySelect: (SubMenuCategory?) -> Unit,
     onAudioModeSelect: (AudioMode) -> Unit,
-    onSourceSelect: (StreamSource) -> Unit
+    onSourceSelect: (StreamSource) -> Unit,
+    onSubtitleToggle: (Boolean) -> Unit // ★追加
 ) {
     val categoryFocusRequester = remember { FocusRequester() }
     val itemFocusRequester = remember { FocusRequester() }
@@ -488,6 +547,16 @@ fun TopSubMenuUI(
                     isSelected = activeCategory == SubMenuCategory.VIDEO,
                     onClick = { onCategorySelect(SubMenuCategory.VIDEO) },
                 )
+
+                Spacer(Modifier.width(20.dp))
+                // ★追加: 字幕設定タイル
+                MenuTileItem(
+                    title = "字幕設定",
+                    icon = Icons.Default.ClosedCaption,
+                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
+                    isSelected = activeCategory == SubMenuCategory.SUBTITLE,
+                    onClick = { onCategorySelect(SubMenuCategory.SUBTITLE) },
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -531,6 +600,26 @@ fun TopSubMenuUI(
                                         if (source == StreamSource.MIRAKURUN) "Mirakurun (TS)" else "KonomiTV (HLS)",
                                         fontWeight = FontWeight.Medium
                                     )
+                                }
+                            }
+                        }
+                    }
+                    // ★追加: 字幕設定のチップ
+                    SubMenuCategory.SUBTITLE -> {
+                        Row(
+                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(true, false).forEachIndexed { index, enabled ->
+                                FilterChip(
+                                    selected = (isSubtitleEnabled == enabled),
+                                    onClick = { onSubtitleToggle(enabled) },
+                                    modifier = Modifier
+                                        .padding(horizontal = 6.dp)
+                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
+                                    colors = chipColors,
+                                ) {
+                                    Text(if (enabled) "表示" else "非表示", fontWeight = FontWeight.Medium)
                                 }
                             }
                         }
@@ -645,7 +734,7 @@ fun LiveOverlayUI(
                         .background(Color.White),
                     contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
                 )
-                Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(0.8f))
+                Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.titleLarge, color = Color.White.copy(0.8f))
             }
             Text(programTitle, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp), color = Color.White, modifier = Modifier.padding(vertical = 16.dp))
 

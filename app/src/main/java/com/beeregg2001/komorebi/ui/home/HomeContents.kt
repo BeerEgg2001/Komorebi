@@ -6,8 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -27,9 +27,10 @@ import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.components.isKonomiTvMode
 import com.beeregg2001.komorebi.viewmodel.Channel
 import java.time.Instant
+import kotlinx.coroutines.delay
 
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun HomeContents(
     lastWatchedChannels: List<Channel>,
@@ -42,10 +43,12 @@ fun HomeContents(
     mirakurunPort: String,
     modifier: Modifier = Modifier,
     tabFocusRequester: FocusRequester,
-    externalFocusRequester: FocusRequester
+    externalFocusRequester: FocusRequester,
+    lastFocusedChannelId: String? = null,
+    lastFocusedProgramId: String? = null
 ) {
+    val isKonomiTvMode = mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
     val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
-    val isKonomiMode = isKonomiTvMode(mirakurunIp)
 
     TvLazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -65,13 +68,34 @@ fun HomeContents(
                     ) {
                         itemsIndexed(lastWatchedChannels) { index, channel ->
                             var isFocused by remember { mutableStateOf(false) }
+
+                            val itemRequester = remember { FocusRequester() }
+                            val isTarget = channel.id == lastFocusedChannelId
+
+                            // チャンネルのフォーカス復帰
+                            LaunchedEffect(isTarget) {
+                                if (isTarget) {
+                                    delay(50)
+                                    runCatching { itemRequester.requestFocus() }
+                                }
+                            }
+
                             Surface(
                                 onClick = { onChannelClick(channel) },
                                 modifier = Modifier
                                     .width(220.dp).height(100.dp)
                                     .onFocusChanged { isFocused = it.isFocused }
-                                    .then(if (index == 0) Modifier.focusRequester(externalFocusRequester) else Modifier)
-                                    .focusProperties { up = tabFocusRequester },
+                                    .then(
+                                        if (isTarget) Modifier.focusRequester(itemRequester)
+                                        else if (index == 0 && lastFocusedChannelId == null && lastFocusedProgramId == null) Modifier.focusRequester(externalFocusRequester)
+                                        else Modifier
+                                    )
+                                    // ★修正: リストの端での移動を制限
+                                    .focusProperties {
+                                        up = tabFocusRequester
+                                        if (index == 0) left = FocusRequester.Cancel
+                                        if (index == lastWatchedChannels.lastIndex) right = FocusRequester.Cancel
+                                    },
                                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
                                 colors = ClickableSurfaceDefaults.colors(
                                     containerColor = Color.White.copy(0.1f),
@@ -80,22 +104,26 @@ fun HomeContents(
                                 shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    // ChannelLogoを使用
-                                    ChannelLogo(
-                                        channel = channel,
-                                        mirakurunIp = mirakurunIp,
-                                        mirakurunPort = mirakurunPort,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
+                                    // ロゴサイズ 72x40dp
+                                    Box(
                                         modifier = Modifier
-                                            .then(
-                                                if (isKonomiMode) Modifier.width(86.dp).height(48.dp)
-                                                else Modifier.size(56.dp)
-                                            )
-                                            .clip(MaterialTheme.shapes.small),
-                                        backgroundColor = Color.Black.copy(0.2f)
-                                    )
+                                            .size(72.dp, 40.dp)
+                                            .background(Color.Black.copy(0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val logoUrl = if (isKonomiTvMode) {
+                                            UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
+                                        } else {
+                                            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type)
+                                        }
 
+                                        AsyncImage(
+                                            model = logoUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = if (isKonomiTvMode) ContentScale.Crop else ContentScale.Fit
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(channel.name, style = MaterialTheme.typography.titleSmall, color = if (isFocused) Color.Black else Color.White, maxLines = 2, fontWeight = FontWeight.Bold)
@@ -121,12 +149,33 @@ fun HomeContents(
                         contentPadding = PaddingValues(horizontal = 32.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        itemsIndexed(watchHistory) { _, history ->
+                        itemsIndexed(watchHistory) { index, history ->
+                            val itemRequester = remember { FocusRequester() }
+                            val isTarget = history.program.id == lastFocusedProgramId
+
+                            LaunchedEffect(isTarget) {
+                                if (isTarget) {
+                                    delay(50)
+                                    runCatching { itemRequester.requestFocus() }
+                                }
+                            }
+
                             WatchHistoryCard(
                                 history = history,
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
-                                onClick = { onHistoryClick(history) }
+                                onClick = { onHistoryClick(history) },
+                                modifier = Modifier
+                                    .then(
+                                        if (isTarget) Modifier.focusRequester(itemRequester)
+                                        else if (index == 0 && lastFocusedChannelId == null && lastFocusedProgramId == null && lastWatchedChannels.isEmpty()) Modifier.focusRequester(externalFocusRequester)
+                                        else Modifier
+                                    )
+                                    // ★修正: リストの端での移動を制限
+                                    .focusProperties {
+                                        if (index == 0) left = FocusRequester.Cancel
+                                        if (index == watchHistory.lastIndex) right = FocusRequester.Cancel
+                                    }
                             )
                         }
                     }

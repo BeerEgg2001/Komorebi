@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.theme
+package com.beeregg2001.komorebi.ui.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -48,26 +48,32 @@ fun SettingsScreen(onBack: () -> Unit) {
     )
 
     val sideBarFocusRequester = remember { FocusRequester() }
-    val contentFocusRequester = remember { FocusRequester() }
 
-    // ★ 修正ポイント：画面が表示されたらサイドバーの先頭にフォーカスを当てる
+    // 各項目のFocusRequester
+    val kIpFocusRequester = remember { FocusRequester() }
+    val kPortFocusRequester = remember { FocusRequester() }
+    val mIpFocusRequester = remember { FocusRequester() }
+    val mPortFocusRequester = remember { FocusRequester() }
+
+    // 最後にフォーカスがあった項目を記憶する変数
+    var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
+
+    // ★修正: 初期フォーカスをサイドバーに固定
     LaunchedEffect(Unit) {
-        delay(100) // 描画完了を少し待ってからフォーカス
+        // UI描画完了を待ってサイドバーにフォーカス
+        delay(50)
         sideBarFocusRequester.requestFocus()
     }
 
-    // ダイアログが閉じた後のフォーカス復帰
+    // ★修正: ダイアログから戻った時のみフォーカスを復帰させる
     LaunchedEffect(editingItem) {
         if (editingItem == null) {
-            if (selectedCategoryIndex == 0) {
-                contentFocusRequester.requestFocus()
-            } else {
-                sideBarFocusRequester.requestFocus()
-            }
+            // restoreFocusRequester がある場合（＝ダイアログを開いて戻ってきた場合）のみ実行
+            // 初回起動時は null なので、勝手に右側へフォーカスが飛ぶのを防ぐ
+            restoreFocusRequester?.requestFocus()
         }
     }
 
-    // 全体の背景とレイアウト
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -107,22 +113,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                     icon = category.icon,
                     isSelected = selectedCategoryIndex == index,
                     onFocused = { selectedCategoryIndex = index },
-                    onClick = { contentFocusRequester.requestFocus() },
-                    // 最初のアイテムにフォーカスリクエスト用のタグを付ける
+                    onClick = {
+                        // カテゴリをクリック（決定）した時は、そのカテゴリの最初の項目へフォーカス移動
+                        if (index == 0) kIpFocusRequester.requestFocus()
+                    },
                     modifier = if (index == 0) Modifier.focusRequester(sideBarFocusRequester) else Modifier
                 )
             }
 
-            // スペーサーで下部に押し下げる
             Spacer(modifier = Modifier.weight(1f))
 
-            // ホームに戻るボタン
             CategoryItem(
                 title = "ホームに戻る",
                 icon = Icons.Default.Home,
                 isSelected = false,
-                onFocused = { /* 必要であればカテゴリ選択を解除する処理 */ },
-                onClick = onBack, // 戻る処理を実行
+                onFocused = { },
+                onClick = onBack,
                 modifier = Modifier
             )
         }
@@ -141,7 +147,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                     mIp = mirakurunIp,
                     mPort = mirakurunPort,
                     onEditRequest = { title, currentVal -> editingItem = title to currentVal },
-                    firstItemModifier = Modifier.focusRequester(contentFocusRequester)
+                    kIpRequester = kIpFocusRequester,
+                    kPortRequester = kPortFocusRequester,
+                    mIpRequester = mIpFocusRequester,
+                    mPortRequester = mPortFocusRequester,
+                    onItemClicked = { requester -> restoreFocusRequester = requester }
                 )
                 1 -> PlaceholderContent("表示設定は準備中です", Icons.Default.Tv)
                 2 -> AppInfoContent()
@@ -149,7 +159,6 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    // 編集ダイアログ
     editingItem?.let { (title, value) ->
         InputDialog(
             title = title,
@@ -175,14 +184,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 }
 
-// データクラス
 data class Category(val name: String, val icon: ImageVector)
 
 @Composable
 fun ConnectionSettingsContent(
     kIp: String, kPort: String, mIp: String, mPort: String,
     onEditRequest: (String, String) -> Unit,
-    firstItemModifier: Modifier = Modifier
+    kIpRequester: FocusRequester,
+    kPortRequester: FocusRequester,
+    mIpRequester: FocusRequester,
+    mPortRequester: FocusRequester,
+    onItemClicked: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
@@ -198,14 +210,20 @@ fun ConnectionSettingsContent(
                 title = "アドレス",
                 value = kIp,
                 icon = Icons.Default.Dns,
-                modifier = firstItemModifier,
-                onClick = { onEditRequest("KonomiTV アドレス", kIp) }
+                modifier = Modifier.focusRequester(kIpRequester),
+                onClick = {
+                    onItemClicked(kIpRequester)
+                    onEditRequest("KonomiTV アドレス", kIp)
+                }
             )
             SettingItem(
                 title = "ポート番号",
                 value = kPort,
-                // icon = Icons.Default.Numbers, // 必要ならアイコン追加
-                onClick = { onEditRequest("KonomiTV ポート番号", kPort) }
+                modifier = Modifier.focusRequester(kPortRequester),
+                onClick = {
+                    onItemClicked(kPortRequester)
+                    onEditRequest("KonomiTV ポート番号", kPort)
+                }
             )
         }
 
@@ -214,12 +232,20 @@ fun ConnectionSettingsContent(
                 title = "アドレス",
                 value = mIp,
                 icon = Icons.Default.Dns,
-                onClick = { onEditRequest("Mirakurun IPアドレス", mIp) }
+                modifier = Modifier.focusRequester(mIpRequester),
+                onClick = {
+                    onItemClicked(mIpRequester)
+                    onEditRequest("Mirakurun IPアドレス", mIp)
+                }
             )
             SettingItem(
                 title = "ポート番号",
                 value = mPort,
-                onClick = { onEditRequest("Mirakurun ポート番号", mPort) }
+                modifier = Modifier.focusRequester(mPortRequester),
+                onClick = {
+                    onItemClicked(mPortRequester)
+                    onEditRequest("Mirakurun ポート番号", mPort)
+                }
             )
         }
     }

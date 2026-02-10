@@ -65,9 +65,9 @@ fun HomeLauncherScreen(
     onUiReady: () -> Unit,
     onNavigateToPlayer: (String, String, String) -> Unit,
     lastPlayerChannelId: String? = null,
+    lastPlayerProgramId: String? = null,
     isSettingsOpen: Boolean = false,
     onSettingsToggle: (Boolean) -> Unit = {},
-    // ★追加: 録画一覧の状態管理
     isRecordListOpen: Boolean = false,
     onShowAllRecordings: () -> Unit = {},
     onCloseRecordList: () -> Unit = {}
@@ -106,7 +106,6 @@ fun HomeLauncherScreen(
     val settingsFocusRequester = remember { FocusRequester() }
     val contentFirstItemRequesters = remember { List(tabs.size) { FocusRequester() } }
     var tabRowHasFocus by remember { mutableStateOf(false) }
-    var restoreChannelId: String? = null
 
     val availableTypes = remember(groupedChannels) {
         groupedChannels.keys.toList()
@@ -137,14 +136,18 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(isSettingsOpen) {
         if (!isSettingsOpen && !isFullScreenMode) {
-            delay(100)
-            settingsFocusRequester.requestFocus()
+            // ★修正: 前回選択したチャンネル/番組がある場合は、設定ボタンへのフォーカスをスキップする
+            if (lastPlayerChannelId == null && lastPlayerProgramId == null) {
+                delay(100)
+                settingsFocusRequester.requestFocus()
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         onUiReady()
-        if (restoreChannelId == null) {
+        // ★修正: 同様に、前回選択IDがない場合のみタブにフォーカスを当てる
+        if (lastPlayerChannelId == null && lastPlayerProgramId == null) {
             delay(600)
             runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
         }
@@ -249,7 +252,9 @@ fun HomeLauncherScreen(
                                 mirakurunIp = mirakurunIp,
                                 mirakurunPort = mirakurunPort,
                                 externalFocusRequester = contentFirstItemRequesters[0],
-                                tabFocusRequester = tabFocusRequesters[0]
+                                tabFocusRequester = tabFocusRequesters[0],
+                                lastFocusedChannelId = lastPlayerChannelId,
+                                lastFocusedProgramId = lastPlayerProgramId
                             )
                         }
                         1 -> {
@@ -290,8 +295,6 @@ fun HomeLauncherScreen(
                             )
                         }
                         3 -> {
-                            // ★修正: 録画一覧が開いている場合はRecordListScreenを表示し、そうでなければVideoTabContentを表示
-                            // これによりタブなどのトップナビは維持されたままコンテンツのみが切り替わる
                             if (isRecordListOpen) {
                                 RecordListScreen(
                                     recentRecordings = recentRecordings,
