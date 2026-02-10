@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 
 @HiltViewModel
@@ -28,6 +29,10 @@ class ChannelViewModel @Inject constructor(
     private val _isRecordingLoading = MutableStateFlow(true)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading
 
+    // ★追加: 接続エラーフラグ（チャンネルリスト取得失敗時）
+    private val _connectionError = MutableStateFlow(false)
+    val connectionError: StateFlow<Boolean> = _connectionError.asStateFlow()
+
     private var pollingJob: Job? = null
 
     init {
@@ -36,6 +41,9 @@ class ChannelViewModel @Inject constructor(
 
     private suspend fun fetchChannelsInternal() {
         try {
+            // 処理開始時はエラーをリセット
+            _connectionError.value = false
+
             val response = repository.getChannels()
             val processed = withContext(Dispatchers.Default) {
                 val all = mutableListOf<Channel>()
@@ -49,20 +57,25 @@ class ChannelViewModel @Inject constructor(
             _groupedChannels.value = processed
         } catch (e: Exception) {
             e.printStackTrace()
+            // ★追加: エラー発生時にフラグを立てる
+            _connectionError.value = true
         } finally {
             _isLoading.value = false
         }
     }
 
     fun fetchChannels() {
+        // ★修正: 即座にローディング状態にすることで、MainRootScreenのLaunchedEffectを確実にリセットさせる
+        _isLoading.value = true
         viewModelScope.launch {
             fetchChannelsInternal()
         }
     }
 
     fun fetchRecentRecordings() {
+        // 即座にローディング状態にする
+        _isRecordingLoading.value = true
         viewModelScope.launch {
-            _isRecordingLoading.value = true
             try {
                 val response = repository.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms

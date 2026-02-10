@@ -11,6 +11,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
@@ -29,11 +31,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -44,12 +49,13 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.beeregg2001.komorebi.ChannelListScreen
 import com.beeregg2001.komorebi.NativeLib
-import com.beeregg2001.komorebi.buildStreamId
+import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import com.beeregg2001.komorebi.viewmodel.Channel
 import kotlinx.coroutines.delay
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -72,7 +78,6 @@ fun LivePlayerScreen(
     onBackPressed: () -> Unit,
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     val currentChannelItem by remember(channel.id, groupedChannels) {
         derivedStateOf { groupedChannels.values.flatten().find { it.id == channel.id } ?: channel }
@@ -92,7 +97,11 @@ fun LivePlayerScreen(
     var isSubMenuOpen by remember { mutableStateOf(false) }
     var activeSubMenuCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
 
+    var playerError by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember { mutableIntStateOf(0) }
+
     val mainFocusRequester = remember { FocusRequester() }
+    val listFocusRequester = remember { FocusRequester() }
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
     val extractorsFactory = remember {
@@ -107,7 +116,28 @@ fun LivePlayerScreen(
         }
     }
 
-    val exoPlayer = remember(currentStreamSource) {
+    fun analyzePlayerError(error: PlaybackException): String {
+        val cause = error.cause
+        return if (cause is HttpDataSource.InvalidResponseCodeException) {
+            when (cause.responseCode) {
+                404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
+                503 -> AppStrings.ERR_TUNER_FULL
+                else -> "サーバーエラー (HTTP ${cause.responseCode})"
+            }
+        } else if (cause is HttpDataSource.HttpDataSourceException) {
+            if (cause.cause is java.net.ConnectException) AppStrings.ERR_CONNECTION_REFUSED
+            else if (cause.cause is java.net.SocketTimeoutException) AppStrings.ERR_TIMEOUT
+            else AppStrings.ERR_NETWORK
+        } else if (cause is IOException) {
+            "データ読み込みエラー: ${cause.message}"
+        } else {
+            "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
+        }
+    }
+
+    val exoPlayer = remember(currentStreamSource, retryKey) {
+        playerError = null
+
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
                 return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
@@ -117,10 +147,18 @@ fun LivePlayerScreen(
         if (currentStreamSource == StreamSource.MIRAKURUN) {
             builder.setMediaSourceFactory(DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
         }
-        builder.build().apply {
+
+        val player = builder.build()
+        player.apply {
             playWhenReady = true
             setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    playerError = analyzePlayerError(error)
+                }
+            })
         }
+        player
     }
 
     fun applyAudioStream(mode: AudioMode) {
@@ -144,27 +182,44 @@ fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(currentChannelItem.id, currentStreamSource) {
+    LaunchedEffect(currentChannelItem.id, currentStreamSource, retryKey) {
         isManualOverlay = false; isPinnedOverlay = false; showOverlay = true; scrollState.scrollTo(0)
 
         val streamUrl = if (currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
             tsDataSourceFactory.tsArgs = arrayOf("-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(), "-a", "13", "-b", "5", "-c", "5")
-            "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(currentChannelItem)}/stream"
+            UrlBuilder.getMirakurunStreamUrl(
+                mirakurunIp ?: "", mirakurunPort ?: "",
+                currentChannelItem.networkId, currentChannelItem.serviceId, currentChannelItem.type
+            )
         } else {
-            Log.d("LivePlayerScreen","$konomiIp:$konomiPort/api/streams/live/${currentChannelItem.displayChannelId}/1080p-60fps/mpegts")
-            "$konomiIp:$konomiPort/api/streams/live/${currentChannelItem.displayChannelId}/1080p-60fps/mpegts"
+            UrlBuilder.getKonomiTvLiveStreamUrl(
+                konomiIp, konomiPort, currentChannelItem.displayChannelId
+            )
         }
+        Log.d("LivePlayerScreen", streamUrl)
 
         exoPlayer.stop(); exoPlayer.clearMediaItems()
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.prepare(); exoPlayer.play()
-        mainFocusRequester.requestFocus()
+
+        if (playerError == null) {
+            mainFocusRequester.requestFocus()
+        }
 
         delay(4500)
-        if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen) showOverlay = false
+        if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen && playerError == null) showOverlay = false
     }
 
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
+
+    LaunchedEffect(isMiniListOpen) {
+        if (isMiniListOpen) {
+            delay(100)
+            listFocusRequester.requestFocus()
+        } else {
+            mainFocusRequester.requestFocus()
+        }
+    }
 
     Box(modifier = Modifier
         .fillMaxSize()
@@ -177,15 +232,22 @@ fun LivePlayerScreen(
             val isUp = keyCode == NativeKeyEvent.KEYCODE_DPAD_UP
             val isDown = keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN
 
-            if (isSubMenuOpen || isMiniListOpen) {
+            if (playerError != null) return@onPreviewKeyEvent false
+
+            if (isSubMenuOpen) {
                 if (isBack) {
-                    if (isSubMenuOpen) {
-                        if (activeSubMenuCategory != null) activeSubMenuCategory = null
-                        else isSubMenuOpen = false
-                    } else onMiniListToggle(false)
+                    if (activeSubMenuCategory != null) activeSubMenuCategory = null
+                    else isSubMenuOpen = false
                     mainFocusRequester.requestFocus()
                     return@onPreviewKeyEvent true
                 }
+                return@onPreviewKeyEvent false
+            }
+
+            if (isMiniListOpen) {
+                // ★修正: 戻るキーの処理はChannelListOverlayとMainRootScreenのBackHandlerに任せるためfalseを返す
+                if (isBack) return@onPreviewKeyEvent false
+                // ★修正: 左キーでの閉じる機能を削除（何も返さない＝無効化ではないが、処理もしない）
                 return@onPreviewKeyEvent false
             }
 
@@ -224,22 +286,40 @@ fun LivePlayerScreen(
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
         )
 
-        AnimatedVisibility(visible = isPinnedOverlay, enter = fadeIn(), exit = fadeOut()) {
+        AnimatedVisibility(visible = isPinnedOverlay && playerError == null, enter = fadeIn(), exit = fadeOut()) {
             StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort)
         }
 
-        AnimatedVisibility(visible = showOverlay, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
+        AnimatedVisibility(visible = showOverlay && playerError == null && !isMiniListOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
             LiveOverlayUI(currentChannelItem, currentChannelItem.programPresent?.title ?: "番組情報なし", mirakurunIp?:"", mirakurunPort?:"", konomiIp, konomiPort, isManualOverlay, scrollState)
         }
 
-        AnimatedVisibility(visible = isMiniListOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
-            ChannelListScreen(groupedChannels = groupedChannels, activeChannel = currentChannelItem, isMiniMode = true,
-                onChannelClick = { onChannelSelect(it); onMiniListToggle(false); mainFocusRequester.requestFocus() },
-                onDismiss = { onMiniListToggle(false); mainFocusRequester.requestFocus() }
+        // ミニチャンネルリスト (画面下部にフル幅)
+        AnimatedVisibility(
+            visible = isMiniListOpen && playerError == null,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+        ) {
+            ChannelListOverlay(
+                groupedChannels = groupedChannels,
+                currentChannelId = currentChannelItem.id,
+                onChannelSelect = {
+                    onChannelSelect(it)
+                    onMiniListToggle(false)
+                    mainFocusRequester.requestFocus()
+                },
+                mirakurunIp = mirakurunIp ?: "",
+                mirakurunPort = mirakurunPort ?: "",
+                konomiIp = konomiIp,
+                konomiPort = konomiPort,
+                focusRequester = listFocusRequester
             )
         }
 
-        AnimatedVisibility(visible = isSubMenuOpen, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
+        AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
                 currentSource = currentStreamSource,
@@ -258,6 +338,97 @@ fun LivePlayerScreen(
                     mainFocusRequester.requestFocus()
                 }
             )
+        }
+
+        if (playerError != null) {
+            LiveErrorDialog(
+                errorMessage = playerError!!,
+                onRetry = {
+                    playerError = null
+                    retryKey++
+                },
+                onBack = onBackPressed
+            )
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// 以下、UIコンポーネント定義
+// ------------------------------------------------------------
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun LiveErrorDialog(
+    errorMessage: String,
+    onRetry: () -> Unit,
+    onBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = androidx.tv.material3.SurfaceDefaults.colors(
+                containerColor = Color(0xFF2B1B1B)
+            ),
+            modifier = Modifier.width(450.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFFF5252),
+                    modifier = Modifier.size(48.dp).padding(bottom = 16.dp)
+                )
+                Text(
+                    text = AppStrings.LIVE_PLAYER_ERROR_TITLE,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color(0xFFFF5252),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onBack,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.White.copy(alpha = 0.1f),
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(AppStrings.BUTTON_BACK)
+                    }
+
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(AppStrings.BUTTON_RETRY)
+                    }
+                }
+            }
         }
     }
 }
@@ -402,9 +573,9 @@ fun StatusOverlay(channel: Channel, mirakurunIp: String?, mirakurunPort: String?
 
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo"
+        UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId, channel.type)
     } else {
-        "$konomiIp:$konomiPort/api/channels/${channel.displayChannelId}/logo"
+        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
     Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.TopEnd) {
@@ -413,10 +584,9 @@ fun StatusOverlay(channel: Channel, mirakurunIp: String?, mirakurunPort: String?
                 model = logoUrl,
                 contentDescription = null,
                 modifier = Modifier
-                    .size(56.dp, 32.dp) // 表示領域を16:9等に制限
+                    .size(56.dp, 32.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(Color.White),
-                // KonomiTV(正方形)の場合は中央をクロップ、Mirakurunの場合は全体を表示
                 contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
             )
             Spacer(Modifier.width(16.dp))
@@ -444,9 +614,9 @@ fun LiveOverlayUI(
 
     val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo"
+        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type)
     } else {
-        "$konomiIp:$konomiPort/api/channels/${channel.displayChannelId}/logo"
+        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
     LaunchedEffect(program) {
@@ -470,10 +640,9 @@ fun LiveOverlayUI(
                     model = logoUrl,
                     contentDescription = null,
                     modifier = Modifier
-                        .size(80.dp, 45.dp) // 16:9の比率で表示領域を確保
+                        .size(80.dp, 45.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.White),
-                    // 正方形ロゴから上下の余白をカットして中央を抽出
                     contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
                 )
                 Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(0.8f))

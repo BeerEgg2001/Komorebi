@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.common.UrlBuilder // 追加
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.EpgChannel
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
@@ -67,6 +68,14 @@ class EpgViewModel @Inject constructor(
                 }
             }.collectLatest { }
         }
+    }
+
+    /**
+     * EPGデータを一括でプリロード/リフレッシュする
+     * 設定変更後などに呼び出される
+     */
+    fun preloadAllEpgData() {
+        refreshEpgData()
     }
 
     fun refreshEpgData(channelType: String? = null) {
@@ -133,20 +142,11 @@ class EpgViewModel @Inject constructor(
     @OptIn(UnstableApi::class)
     fun getLogoUrl(channel: EpgChannel): String {
         return if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-            // Mirakurun API
-            val mirakurunBaseUrl = "http://$mirakurunIp:$mirakurunPort"
-            val networkIdPart = when (channel.type) {
-                "GR" -> channel.network_id.toString()
-                "BS", "CS", "SKY", "BS4K" -> "${channel.network_id}00"
-                else -> channel.network_id.toString()
-            }
-            val serviceIdStr = channel.service_id.toString()
-            val streamId = "$networkIdPart$serviceIdStr"
-            "$mirakurunBaseUrl/api/services/$streamId/logo"
+            // Mirakurun API (UrlBuilderを使用)
+            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.network_id.toLong(), channel.service_id.toLong(), channel.type)
         } else {
-            // KonomiTV API
-            val konomiBaseUrl = "$konomiIp:$konomiPort"
-            "$konomiBaseUrl/api/channels/${channel.display_channel_id}/logo"
+            // KonomiTV API (UrlBuilderを使用)
+            UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.display_channel_id)
         }
     }
 

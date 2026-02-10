@@ -9,6 +9,7 @@ import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -25,11 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.foundation.PivotOffsets
 import androidx.tv.foundation.lazy.list.*
 import androidx.tv.material3.*
-import coil.compose.AsyncImage
-import com.beeregg2001.komorebi.buildStreamId
+import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.viewmodel.Channel
 import kotlinx.coroutines.delay
@@ -47,24 +46,24 @@ fun LiveContent(
     onFocusChannelChange: (String) -> Unit,
     mirakurunIp: String,
     mirakurunPort: String,
-    // KonomiTVの接続情報も追加で受け取れるように引数を拡張（既存の呼び出し元に合わせて調整してください）
     konomiIp: String,
     konomiPort: String,
     topNavFocusRequester: FocusRequester,
     contentFirstItemRequester: FocusRequester,
-    onPlayerStateChanged: (Boolean) -> Unit
+    onPlayerStateChanged: (Boolean) -> Unit,
+    lastFocusedChannelId: String? = null
 ) {
     val listState = rememberTvLazyListState()
     var internalLastFocusedId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    val watchedChannelFocusRequester = remember { FocusRequester() }
+    val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
 
     LaunchedEffect(isPlayerActive) {
         onPlayerStateChanged(isPlayerActive)
-        if (!isPlayerActive && selectedChannel != null) {
+        if (!isPlayerActive) {
             delay(150)
-            runCatching { watchedChannelFocusRequester.requestFocus() }
+            runCatching { targetChannelFocusRequester.requestFocus() }
         }
     }
 
@@ -76,8 +75,7 @@ fun LiveContent(
                 .focusRequester(contentFirstItemRequester)
                 .then(if (isPlayerActive) Modifier.focusProperties { canFocus = false } else Modifier),
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            pivotOffsets = PivotOffsets(parentFraction = 0.2f)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             val sortedKeys = groupedChannels.keys.toList()
 
@@ -100,7 +98,7 @@ fun LiveContent(
                             modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
                         ) {
                             items(channels, key = { it.id }) { channel ->
-                                val isSelected = channel.id == selectedChannel?.id
+                                val isTarget = channel.id == selectedChannel?.id || (selectedChannel == null && channel.id == lastFocusedChannelId)
 
                                 ChannelWideCard(
                                     channel = channel,
@@ -111,7 +109,7 @@ fun LiveContent(
                                     globalTick = 0,
                                     onClick = { onChannelClick(channel) },
                                     modifier = Modifier
-                                        .then(if (isSelected) Modifier.focusRequester(watchedChannelFocusRequester) else Modifier)
+                                        .then(if (isTarget) Modifier.focusRequester(targetChannelFocusRequester) else Modifier)
                                         .focusProperties {
                                             if (rowIndex == 0) {
                                                 up = topNavFocusRequester
@@ -137,6 +135,8 @@ fun LiveContent(
                 channel = selectedChannel,
                 mirakurunIp = mirakurunIp,
                 mirakurunPort = mirakurunPort,
+                konomiIp = konomiIp,
+                konomiPort = konomiPort,
                 groupedChannels = groupedChannels,
                 isMiniListOpen = isMiniListOpen,
                 onMiniListToggle = { isMiniListOpen = it },
@@ -154,8 +154,8 @@ fun ChannelWideCard(
     channel: Channel,
     mirakurunIp: String,
     mirakurunPort: String,
-    konomiIp: String = "",
-    konomiPort: String = "",
+    konomiIp: String,
+    konomiPort: String,
     globalTick: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -170,15 +170,6 @@ fun ChannelWideCard(
 
     val progress = remember(channel.programPresent, globalTick) {
         calculateProgress(channel.programPresent?.startTime, channel.programPresent?.duration)
-    }
-
-    // ロゴURLの判定: Mirakurunが優先、空ならKonomiTV
-    val logoUrl = remember(channel, mirakurunIp, mirakurunPort) {
-        if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-            "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo"
-        } else {
-            "$konomiIp:$konomiPort/api/channels/${channel.displayChannelId}/logo"
-        }
     }
 
     Surface(
@@ -208,22 +199,16 @@ fun ChannelWideCard(
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ロゴ表示領域
-                Box(
-                    modifier = Modifier
-                        .size(36.dp, 22.dp)
-                        .background(Color.Black.copy(0.2f), MaterialTheme.shapes.extraSmall),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = logoUrl,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        // ContentScale.Crop を使うことで、正方形画像からこのサイズ(36:22)に合うよう
-                        // 中央部分を切り取って（クロップして）表示します。
-                        contentScale = ContentScale.Crop
-                    )
-                }
+                // ChannelLogoを使用
+                ChannelLogo(
+                    channel = channel,
+                    mirakurunIp = mirakurunIp,
+                    mirakurunPort = mirakurunPort,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    modifier = Modifier.size(36.dp, 22.dp),
+                    backgroundColor = Color.Black.copy(0.2f)
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 

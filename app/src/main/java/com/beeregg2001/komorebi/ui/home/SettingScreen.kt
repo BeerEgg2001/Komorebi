@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CastConnected
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -48,13 +50,15 @@ fun SettingsScreen(onBack: () -> Unit) {
     val sideBarFocusRequester = remember { FocusRequester() }
     val contentFocusRequester = remember { FocusRequester() }
 
+    // ★ 修正ポイント：画面が表示されたらサイドバーの先頭にフォーカスを当てる
+    LaunchedEffect(Unit) {
+        delay(100) // 描画完了を少し待ってからフォーカス
+        sideBarFocusRequester.requestFocus()
+    }
+
     // ダイアログが閉じた後のフォーカス復帰
     LaunchedEffect(editingItem) {
         if (editingItem == null) {
-            // 少し待ってからフォーカスを戻す（Composeの再描画待ち）
-            // 直前のフォーカス位置に戻すのが理想だが、ここでは簡易的にサイドバーへ
-            // UX向上のため、本来は最後にフォーカスがあったアイテムを記憶してそこに戻すべき
-            // 今回は既存動作を踏襲しつつ、コンテンツエリアへの復帰を試みる
             if (selectedCategoryIndex == 0) {
                 contentFocusRequester.requestFocus()
             } else {
@@ -67,14 +71,14 @@ fun SettingsScreen(onBack: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF111111)) // 少し明るめの黒で質感を出す
+            .background(Color(0xFF111111))
     ) {
         // --- 左側：サイドバーメニュー ---
         Column(
             modifier = Modifier
                 .width(280.dp)
                 .fillMaxHeight()
-                .background(Color(0xFF0A0A0A)) // サイドバーは暗めに
+                .background(Color(0xFF0A0A0A))
                 .padding(vertical = 48.dp, horizontal = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -103,10 +107,24 @@ fun SettingsScreen(onBack: () -> Unit) {
                     icon = category.icon,
                     isSelected = selectedCategoryIndex == index,
                     onFocused = { selectedCategoryIndex = index },
-                    onClick = { contentFocusRequester.requestFocus() }, // クリックでコンテンツへ移動
+                    onClick = { contentFocusRequester.requestFocus() },
+                    // 最初のアイテムにフォーカスリクエスト用のタグを付ける
                     modifier = if (index == 0) Modifier.focusRequester(sideBarFocusRequester) else Modifier
                 )
             }
+
+            // スペーサーで下部に押し下げる
+            Spacer(modifier = Modifier.weight(1f))
+
+            // ホームに戻るボタン
+            CategoryItem(
+                title = "ホームに戻る",
+                icon = Icons.Default.Home,
+                isSelected = false,
+                onFocused = { /* 必要であればカテゴリ選択を解除する処理 */ },
+                onClick = onBack, // 戻る処理を実行
+                modifier = Modifier
+            )
         }
 
         // --- 右側：詳細コンテンツエリア ---
@@ -259,7 +277,7 @@ fun AppInfoContent() {
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Version 0.1.0 alpha-3",
+            text = "Version 0.1.0 alpha-4",
             style = MaterialTheme.typography.titleMedium,
             color = Color.Gray
         )
@@ -321,7 +339,6 @@ fun CategoryItem(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
             )
             Spacer(modifier = Modifier.weight(1f))
-            // 選択状態を示すインジケーター（右端のバーなど）を追加しても良い
             if (isSelected) {
                 Box(
                     modifier = Modifier

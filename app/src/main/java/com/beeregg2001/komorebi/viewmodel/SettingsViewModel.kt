@@ -15,7 +15,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
-    // 接続情報を StateFlow として公開（初期値はリポジトリのデフォルトに合わせる）
+    // 接続情報を StateFlow として公開
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "192.168.11.100")
 
@@ -28,7 +28,12 @@ class SettingsViewModel @Inject constructor(
     val konomiPort: StateFlow<String> = settingsRepository.konomiPort
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "7000")
 
-    // 設定保存用（将来設定画面を作るときに重宝します）
+    // 設定が初期化済みかどうか
+    // 初期値を true にすることで、起動直後の未読み込み状態でダイアログが一瞬表示されるのを防ぐ
+    val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    // 設定保存用
     fun updateMirakurunIp(ip: String) {
         viewModelScope.launch {
             settingsRepository.saveString(SettingsRepository.MIRAKURUN_IP, ip)

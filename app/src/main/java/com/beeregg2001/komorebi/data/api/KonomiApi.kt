@@ -13,35 +13,44 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-    interface KonomiApi {
-        @GET("api/channels")
-        suspend fun getChannels(): ChannelApiResponse
+interface KonomiApi {
+    @GET("api/channels")
+    suspend fun getChannels(): ChannelApiResponse
 
-        @GET("api/videos")
-        suspend fun getRecordedPrograms(
-            @Query("order") sort: String = "desc",
-            @Query("page") page: Int = 1,
-        ): RecordedApiResponse
+    @GET("api/videos")
+    suspend fun getRecordedPrograms(
+        @Query("order") sort: String = "desc",
+        @Query("page") page: Int = 1,
+    ): RecordedApiResponse
 
-        // --- ユーザー設定（ピン留めチャンネル等） ---
-        @GET("api/users/me")
-        suspend fun getCurrentUser(): KonomiUser
+    // ★追加: 録画番組検索API
+    @GET("api/videos/search")
+    suspend fun searchVideos(
+        @Query("keyword") keyword: String,
+        @Query("order") sort: String = "desc",
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 30 // デフォルト30件と想定
+    ): RecordedApiResponse
 
-        // --- 視聴履歴 ---
-        @GET("api/programs/history")
-        suspend fun getWatchHistory(): List<KonomiHistoryProgram>
+    // --- ユーザー設定（ピン留めチャンネル等） ---
+    @GET("api/users/me")
+    suspend fun getCurrentUser(): KonomiUser
 
-        // 視聴位置の更新（30秒以上視聴時などに叩く）
-        @POST("api/programs/history")
-        suspend fun updateWatchHistory(@Body request: HistoryUpdateRequest)
+    // --- 視聴履歴 ---
+    @GET("api/programs/history")
+    suspend fun getWatchHistory(): List<KonomiHistoryProgram>
 
-        // --- マイリスト（ブックマーク） ---
-        @GET("api/programs/bookmarks")
-        suspend fun getBookmarks(): List<KonomiProgram>
+    // 視聴位置の更新（30秒以上視聴時などに叩く）
+    @POST("api/programs/history")
+    suspend fun updateWatchHistory(@Body request: HistoryUpdateRequest)
 
-        @POST("api/programs/bookmarks/{program_id}")
-        suspend fun addBookmark(@Path("program_id") programId: String)
+    // --- マイリスト（ブックマーク） ---
+    @GET("api/programs/bookmarks")
+    suspend fun getBookmarks(): List<KonomiProgram>
 
-        @DELETE("api/programs/bookmarks/{program_id}")
-        suspend fun removeBookmark(@Path("program_id") programId: String)
-    }
+    @POST("api/programs/bookmarks/{program_id}")
+    suspend fun addBookmark(@Path("program_id") programId: String)
+
+    @DELETE("api/programs/bookmarks/{program_id}")
+    suspend fun removeBookmark(@Path("program_id") programId: String)
+}

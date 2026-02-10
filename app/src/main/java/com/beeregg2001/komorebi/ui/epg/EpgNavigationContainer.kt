@@ -3,7 +3,6 @@ package com.beeregg2001.komorebi.ui.epg
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -12,9 +11,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.EpgProgram
@@ -40,31 +39,41 @@ fun EpgNavigationContainer(
     onNavigateToPlayer: (String, String, String) -> Unit,
     currentType: String,
     onTypeChanged: (String) -> Unit,
-    restoreChannelId: String? = null
+    restoreChannelId: String? = null,
+    // ★追加: 存在するチャンネルタイプのリスト
+    availableTypes: List<String> = emptyList()
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
-    val detailInitialFocusRequester = remember { FocusRequester() }
-
-    // 詳細画面から戻る際のフォーカス復旧用
-    var internalRestoreChannelId by remember { mutableStateOf<String?>(restoreChannelId) }
+    var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
     var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(restoreChannelId) {
-        internalRestoreChannelId = restoreChannelId
+    val currentLogoUrls = remember(logoUrls) {
+        if (logoUrls.isNotEmpty()) logoUrls else emptyList()
     }
+    val displayLogoUrls = if (logoUrls.isNotEmpty()) logoUrls else currentLogoUrls
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
-        // uiStateそのものを渡し、ModernEpgCanvasEngine内でローディングやエラー表示をハンドリングさせる
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    when (event.key) {
+                        Key.Menu -> {
+                            onJumpMenuStateChanged(!isJumpMenuOpen)
+                            return@onKeyEvent true
+                        }
+                    }
+                }
+                false
+            }
+    ) {
         ModernEpgCanvasEngine_Smooth(
             uiState = uiState,
-            logoUrls = logoUrls,
+            logoUrls = displayLogoUrls,
             topTabFocusRequester = mainTabFocusRequester,
             contentFocusRequester = contentRequester,
-            entryFocusRequester = contentRequester,
-            // 修正箇所: 明示的に型を指定
-            onProgramSelected = { prog: EpgProgram ->
-                onProgramSelected(prog)
-            },
+            onProgramSelected = onProgramSelected,
             jumpTargetTime = jumpTargetTime,
             onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged,
@@ -72,36 +81,26 @@ fun EpgNavigationContainer(
             onTypeChanged = onTypeChanged,
             restoreChannelId = internalRestoreChannelId,
             restoreProgramStartTime = internalRestoreStartTime,
+            availableTypes = availableTypes // ★追加: エンジンに渡す
         )
 
         if (selectedProgram != null) {
+            val detailInitialFocusRequester = remember { FocusRequester() }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.95f))
-                    .zIndex(10f)
-                    .onKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown &&
-                            (event.key == Key.Back || event.key == Key.Escape)) {
-                            // 戻る前にフォーカスを番組表に強制移動
-                            contentRequester.requestFocus()
-
-                            internalRestoreChannelId = selectedProgram.channel_id
-                            internalRestoreStartTime = selectedProgram.start_time
-                            onProgramSelected(null)
-                            true
-                        } else false
-                    }
-                    .focusable()
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .zIndex(2f)
             ) {
                 ProgramDetailScreen(
                     program = selectedProgram,
-                    onPlayClick = {
-                        onNavigateToPlayer(selectedProgram.channel_id, mirakurunIp, mirakurunPort)
+                    onPlayClick = { program ->
+                        onNavigateToPlayer(program.channel_id, mirakurunIp, mirakurunPort)
                     },
                     onRecordClick = { /* 予約 */ },
                     onBackClick = {
-                        contentRequester.requestFocus() // ここでも強制移動
+                        contentRequester.requestFocus()
                         internalRestoreChannelId = selectedProgram.channel_id
                         internalRestoreStartTime = selectedProgram.start_time
                         onProgramSelected(null)
@@ -115,11 +114,8 @@ fun EpgNavigationContainer(
             }
         }
 
-        // 復旧用IDがある場合、少し遅延させてから確実にコンテンツへフォーカスを固定する
         LaunchedEffect(internalRestoreChannelId) {
             if (internalRestoreChannelId != null) {
-                // ModernEpgCanvasEngine_Smooth内でも遅延フォーカスを行っているが、
-                // こちらでもバックアップとして実行
                 delay(100)
                 contentRequester.requestFocus()
             }

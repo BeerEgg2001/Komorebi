@@ -1,13 +1,16 @@
 package com.beeregg2001.komorebi.ui.video
 
+import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
@@ -20,64 +23,97 @@ fun PlayerControls(
     exoPlayer: ExoPlayer,
     title: String,
     isVisible: Boolean,
-    onVisibilityChanged: (Boolean) -> Unit
+    onVisibilityChanged: (Boolean) -> Unit = {}
 ) {
+    // 再生位置の更新用
     var currentPosition by remember { mutableLongStateOf(exoPlayer.currentPosition) }
-    var duration by remember { mutableLongStateOf(exoPlayer.duration.coerceAtLeast(0L)) }
+    var duration by remember { mutableLongStateOf(exoPlayer.duration) }
+    var bufferedPosition by remember { mutableLongStateOf(exoPlayer.bufferedPosition) }
 
-    // 再生位置の更新ループ
     LaunchedEffect(isVisible) {
-        if (isVisible) {
-            while (true) {
-                currentPosition = exoPlayer.currentPosition
-                duration = exoPlayer.duration.coerceAtLeast(0L)
-                delay(500) // UI表示中は細かく更新
-            }
-        }
-    }
-
-    // 自動非表示タイマー
-    LaunchedEffect(isVisible) {
-        if (isVisible) {
-            delay(5000)
-            onVisibilityChanged(false)
+        while (isVisible) {
+            currentPosition = exoPlayer.currentPosition
+            duration = exoPlayer.duration.coerceAtLeast(1L)
+            bufferedPosition = exoPlayer.bufferedPosition
+            delay(500)
         }
     }
 
     AnimatedVisibility(
         visible = isVisible,
-        enter = fadeIn() + slideInVertically { it },
-        exit = fadeOut() + slideOutVertically { it }
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = Modifier.fillMaxSize()
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.4f)),
-            contentAlignment = Alignment.BottomCenter
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
+                        startY = 300f
+                    )
+                ),
+            contentAlignment = Alignment.BottomStart
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.8f))
-                    .padding(32.dp)
+                    .padding(horizontal = 48.dp, vertical = 40.dp)
             ) {
-                Text(text = title, style = MaterialTheme.typography.headlineSmall, color = Color.White)
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                LinearProgressIndicator(
-                    progress = if (duration > 0) currentPosition.toFloat() / duration else 0f,
-                    modifier = Modifier.fillMaxWidth(),
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
                     color = Color.White,
-                    trackColor = Color.Gray.copy(alpha = 0.5f)
+                    maxLines = 1
                 )
 
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // プログレスバー
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(3.dp))
+                ) {
+                    // バッファ済み領域
+                    val bufferProgress = (bufferedPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(bufferProgress)
+                            .fillMaxHeight()
+                            .background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+                    )
+
+                    // 現在の再生位置
+                    val playProgress = (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(playProgress)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(3.dp))
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(text = formatTime(currentPosition), color = Color.White, style = MaterialTheme.typography.bodySmall)
-                    Text(text = formatTime(duration), color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        text = formatTime(currentPosition),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.9f)
+                    )
+                    Text(
+                        text = formatTime(duration),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.9f)
+                    )
                 }
             }
         }
@@ -85,6 +121,7 @@ fun PlayerControls(
 }
 
 fun formatTime(ms: Long): String {
+    if (ms <= 0) return "00:00"
     val totalSeconds = ms / 1000
     val seconds = totalSeconds % 60
     val minutes = (totalSeconds / 60) % 60

@@ -1,4 +1,3 @@
-// ui/components/RecordedCard.kt
 package com.beeregg2001.komorebi.ui.components
 
 import androidx.compose.foundation.background
@@ -17,6 +16,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -31,8 +31,10 @@ fun RecordedCard(
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
-    // サムネイルURLを構築
-    val thumbnailUrl = "$konomiIp:$konomiPort/api/videos/${program.recordedVideo.id}/thumbnail"
+    // UrlBuilderを使用してサムネイルURLを生成
+    // RecordedProgramのIDはInt型なので、Stringに変換して渡す必要があるかもしれません
+    // UrlBuilderの定義によりますが、ここではそのまま渡しています
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
     Surface(
         onClick = onClick,
@@ -43,25 +45,19 @@ fun RecordedCard(
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.DarkGray.copy(alpha = 0.4f),
+            containerColor = Color.DarkGray,
             focusedContainerColor = Color.White
         )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // --- サムネイル画像 ---
             AsyncImage(
                 model = thumbnailUrl,
-                contentDescription = program.title,
+                contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                // 読み込み中やエラー時のプレースホルダーを設定すると親切です
-                // error = painterResource(R.drawable.error_image)
+                contentScale = ContentScale.Crop
             )
-            //Log.d("RecordedCard", "Thumbnail URL: $thumbnailUrl")
 
-            // --- 下部の情報オーバーレイ ---
-            // フォーカス時は少し背景を濃くして文字を読みやすく
-            val overlayAlpha = if (isFocused) 0.8f else 0.5f
+            val overlayAlpha = if (isFocused) 0.3f else 0.5f
 
             Column(
                 modifier = Modifier
@@ -80,9 +76,9 @@ fun RecordedCard(
                     modifier = Modifier.then(
                         if (isFocused) {
                             Modifier.basicMarquee(
-                                iterations = Int.MAX_VALUE, // 無限に繰り返す
-                                repeatDelayMillis = 1000,   // 端まで行ったら1秒待機
-                                velocity = 40.dp            // スクロール速度
+                                iterations = Int.MAX_VALUE,
+                                repeatDelayMillis = 1000,
+                                velocity = 40.dp
                             )
                         } else {
                             Modifier
@@ -90,7 +86,7 @@ fun RecordedCard(
                     )
                 )
 
-                // 録画時間（分）などを表示するとさらに便利
+                // ★修正箇所: Int型をString型に変換して渡す
                 Text(
                     text = "${(program.duration / 60).toInt()}分",
                     style = MaterialTheme.typography.labelSmall,
