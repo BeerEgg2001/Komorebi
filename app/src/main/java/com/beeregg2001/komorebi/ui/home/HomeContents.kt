@@ -18,13 +18,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.PivotOffsets
 import androidx.tv.foundation.lazy.list.*
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.beeregg2001.komorebi.buildStreamId
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
-import com.beeregg2001.komorebi.data.model.getThumbnailUrl
+import com.beeregg2001.komorebi.ui.components.ChannelLogo
+import com.beeregg2001.komorebi.ui.components.isKonomiTvMode
 import com.beeregg2001.komorebi.viewmodel.Channel
 import java.time.Instant
 
@@ -44,17 +44,15 @@ fun HomeContents(
     tabFocusRequester: FocusRequester,
     externalFocusRequester: FocusRequester
 ) {
-    val isKonomiTvMode = mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
-
     val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+    val isKonomiMode = isKonomiTvMode(mirakurunIp)
 
     TvLazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 24.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(32.dp),
-        pivotOffsets = PivotOffsets(parentFraction = 0.15f)
+        verticalArrangement = Arrangement.spacedBy(32.dp)
     ) {
-        // --- 1. 前回視聴したチャンネル ---
+        // 前回視聴したチャンネル
         item {
             Column {
                 SectionHeader(title = "前回視聴したチャンネル", modifier = Modifier.padding(horizontal = 32.dp))
@@ -82,19 +80,22 @@ fun HomeContents(
                                 shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    // ロゴのクロップ修正: 固定サイズBoxとContentScale.Cropの組み合わせ
-                                    Box(
-                                        modifier = Modifier.size(56.dp).clip(MaterialTheme.shapes.small).background(Color.Black.copy(0.2f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        AsyncImage(
-                                            model = if (isKonomiTvMode) "$konomiIp:$konomiPort/api/channels/${channel.displayChannelId}/logo"
-                                            else "http://$mirakurunIp:$mirakurunPort/api/services/${buildStreamId(channel)}/logo",
-                                            contentDescription = null,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = if (isKonomiTvMode) ContentScale.Crop else ContentScale.Fit
-                                        )
-                                    }
+                                    // ChannelLogoを使用
+                                    ChannelLogo(
+                                        channel = channel,
+                                        mirakurunIp = mirakurunIp,
+                                        mirakurunPort = mirakurunPort,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        modifier = Modifier
+                                            .then(
+                                                if (isKonomiMode) Modifier.width(86.dp).height(48.dp)
+                                                else Modifier.size(56.dp)
+                                            )
+                                            .clip(MaterialTheme.shapes.small),
+                                        backgroundColor = Color.Black.copy(0.2f)
+                                    )
+
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(channel.name, style = MaterialTheme.typography.titleSmall, color = if (isFocused) Color.Black else Color.White, maxLines = 2, fontWeight = FontWeight.Bold)
@@ -110,16 +111,16 @@ fun HomeContents(
             }
         }
 
-        // --- 2. 録画視聴履歴 (ここにデータが表示されない問題の修正) ---
+        // 録画の視聴履歴
         item {
             Column {
                 SectionHeader(title = "録画の視聴履歴", modifier = Modifier.padding(start = 32.dp, bottom = 12.dp))
 
-                TvLazyRow(
-                    contentPadding = PaddingValues(horizontal = 32.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    if (watchHistory.isNotEmpty()) {
+                if (watchHistory.isNotEmpty()) {
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
                         itemsIndexed(watchHistory) { _, history ->
                             WatchHistoryCard(
                                 history = history,
@@ -128,10 +129,9 @@ fun HomeContents(
                                 onClick = { onHistoryClick(history) }
                             )
                         }
-                    } else {
-                        // データがない時はダミーカードを5つ表示（既存デザイン維持）
-                        items(5) { DummyHistoryCard() }
                     }
+                } else {
+                    EmptyPlaceholder("視聴履歴はありません")
                 }
             }
         }
@@ -166,7 +166,8 @@ fun WatchHistoryCard(
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val program = history.program
-    val thumbnailUrl = getThumbnailUrl(program.id, konomiIp, konomiPort)
+
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
     val progress = remember(history) {
         try {
@@ -196,21 +197,6 @@ fun WatchHistoryCard(
             Box(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp).background(Color.Gray.copy(0.3f))) {
                 Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(if (isFocused) Color.Black else Color.Red))
             }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-fun DummyHistoryCard() {
-    Surface(
-        onClick = {}, enabled = false,
-        modifier = Modifier.width(260.dp).height(150.dp),
-        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        colors = ClickableSurfaceDefaults.colors(disabledContainerColor = Color.White.copy(alpha = 0.05f))
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("履歴なし", color = Color.White.copy(0.1f))
         }
     }
 }

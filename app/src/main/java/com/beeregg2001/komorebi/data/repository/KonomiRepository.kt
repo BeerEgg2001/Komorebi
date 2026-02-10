@@ -22,7 +22,7 @@ import javax.inject.Singleton
 @Singleton
 class KonomiRepository @Inject constructor(
     private val apiService: KonomiApi,
-    private val watchHistoryDao: WatchHistoryDao, // RoomのDaoを追加
+    private val watchHistoryDao: WatchHistoryDao,
     private val lastChannelDao: LastChannelDao
 ) {
     // --- ユーザー設定 (API) ---
@@ -38,6 +38,10 @@ class KonomiRepository @Inject constructor(
     suspend fun getChannels() = apiService.getChannels()
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
 
+    // ★追加: 録画番組検索
+    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) =
+        apiService.searchVideos(keyword = keyword, page = page)
+
     // --- マイリスト (API) ---
     suspend fun getBookmarks(): Result<List<KonomiProgram>> = runCatching { apiService.getBookmarks() }
 
@@ -52,15 +56,8 @@ class KonomiRepository @Inject constructor(
     }
 
     // --- 最近見たチャンネル (Room: ローカルDB) ---
-
-    /**
-     * DBから最後に視聴したチャンネルを監視可能なFlowとして取得します。
-     */
     fun getLastChannels() = lastChannelDao.getLastChannels()
 
-    /**
-     * 視聴開始時にチャンネル情報をDBへ保存（または更新）します。
-     */
     @OptIn(UnstableApi::class)
     suspend fun saveLastChannel(entity: LastChannelEntity) {
         lastChannelDao.insertOrUpdate(entity)

@@ -33,6 +33,11 @@ class SettingsRepository @Inject constructor(
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "192.168.100.60" }
     val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "40772" }
 
+    // 設定が保存（初期化）されているかチェックするFlow
+    val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
+    }
+
     // 値を保存するサスペンド関数
     suspend fun saveString(key: androidx.datastore.preferences.core.Preferences.Key<String>, value: String) {
         context.dataStore.edit { settings ->
@@ -43,8 +48,8 @@ class SettingsRepository @Inject constructor(
     // 現在設定されているベースURLを組み立てて取得する
     suspend fun getBaseUrl(): String {
         val prefs = context.dataStore.data.first()
-        var ip = prefs[KONOMI_IP] ?: "https://192-168-100-60.local.konomi.tv"
-        val port = prefs[KONOMI_PORT] ?: "40772"
+        var ip = prefs[KONOMI_IP] ?: "https://192-168-11-100.local.konomi.tv"
+        val port = prefs[KONOMI_PORT] ?: "7000"
 
         // http(s):// が抜けている場合の補完
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {

@@ -42,13 +42,23 @@ class WatchHistoryRepository @Inject constructor(
                 val entity = history.toEntity()
                 watchHistoryDao.insertOrUpdate(entity)
             }
+        }.onFailure {
+            // エラーログなど
+            it.printStackTrace()
         }
     }
 
     /**
-     * 再生開始/停止時にローカルで履歴を保存する
+     * ローカル再生の履歴をDBに保存する
+     * @param program 再生中の番組情報
+     * @param positionSeconds 現在の再生位置（秒）
      */
-    suspend fun saveLocalHistory(program: RecordedProgram) {
-        watchHistoryDao.insertOrUpdate(program.toEntity())
+    suspend fun saveWatchHistory(program: RecordedProgram, positionSeconds: Double) {
+        // RecordedProgramをDBエンティティに変換し、再生位置と現在時刻を更新して保存
+        val entity = program.toEntity().copy(
+            playbackPosition = positionSeconds,
+            watchedAt = System.currentTimeMillis()
+        )
+        watchHistoryDao.insertOrUpdate(entity)
     }
 }
