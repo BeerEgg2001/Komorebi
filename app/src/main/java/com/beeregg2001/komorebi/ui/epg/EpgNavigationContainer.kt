@@ -49,6 +49,14 @@ fun EpgNavigationContainer(
     var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
     var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
 
+    // ★追加: 外部から null が渡された時（タブ移動時など）は内部の復元用キャッシュも確実にクリアする
+    LaunchedEffect(restoreChannelId) {
+        if (restoreChannelId == null) {
+            internalRestoreChannelId = null
+            internalRestoreStartTime = null
+        }
+    }
+
     val currentLogoUrls = remember(logoUrls) {
         if (logoUrls.isNotEmpty()) logoUrls else emptyList()
     }
@@ -102,7 +110,7 @@ fun EpgNavigationContainer(
                     },
                     onRecordClick = { /* 予約 */ },
                     onBackClick = {
-                        contentRequester.requestFocus()
+                        runCatching { contentRequester.requestFocus() }
                         internalRestoreChannelId = selectedProgram.channel_id
                         internalRestoreStartTime = selectedProgram.start_time
                         onProgramSelected(null)
@@ -112,18 +120,17 @@ fun EpgNavigationContainer(
             }
             LaunchedEffect(selectedProgram) {
                 yield()
-                detailInitialFocusRequester.requestFocus()
+                runCatching { detailInitialFocusRequester.requestFocus() }
             }
         }
 
         LaunchedEffect(internalRestoreChannelId) {
             if (internalRestoreChannelId != null) {
                 delay(100)
-                contentRequester.requestFocus()
+                runCatching { contentRequester.requestFocus() }
             }
         }
 
-        // ★修正: アニメーション付きでメニューを表示するよう変更
         AnimatedVisibility(
             visible = isJumpMenuOpen,
             enter = fadeIn(),

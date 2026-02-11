@@ -9,7 +9,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -32,9 +31,6 @@ import com.beeregg2001.komorebi.viewmodel.EpgViewModel
 import com.beeregg2001.komorebi.viewmodel.HomeViewModel
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.yield
-
-val loadedTabs = mutableStateListOf<Int>()
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -70,11 +66,12 @@ fun HomeLauncherScreen(
     onSettingsToggle: (Boolean) -> Unit = {},
     isRecordListOpen: Boolean = false,
     onShowAllRecordings: () -> Unit = {},
-    onCloseRecordList: () -> Unit = {}
+    onCloseRecordList: () -> Unit = {},
+    isReturningFromPlayer: Boolean = false,
+    onReturnFocusConsumed: () -> Unit = {}
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
-    var isContentReady by remember { mutableStateOf(false) }
 
     val isFullScreenMode = (selectedChannel != null) || (selectedProgram != null) ||
             (epgSelectedProgram != null) || isSettingsOpen
@@ -97,9 +94,13 @@ fun HomeLauncherScreen(
             emptyList()
         }
     }
+
     var cachedLogoUrls by remember { mutableStateOf<List<String>>(emptyList()) }
-    if (logoUrls.isNotEmpty()) {
-        cachedLogoUrls = logoUrls
+
+    LaunchedEffect(logoUrls) {
+        if (logoUrls.isNotEmpty()) {
+            cachedLogoUrls = logoUrls
+        }
     }
 
     val tabFocusRequesters = remember { List(tabs.size) { FocusRequester() } }
@@ -109,19 +110,6 @@ fun HomeLauncherScreen(
 
     val availableTypes = remember(groupedChannels) {
         groupedChannels.keys.toList()
-    }
-
-    // ★最適化: タブが切り替わったときの遅延コンポジション制御
-    LaunchedEffect(selectedTabIndex) {
-        if (!loadedTabs.contains(selectedTabIndex)) {
-            isContentReady = false
-            // タブのクロスフェードアニメーション(150ms)が完全に終わるまでUIスレッドの重い描画を待機させる
-            // これにより、リモコンの十字キー操作に対するレスポンスが即座に行われます
-            delay(200)
-            yield() // メインスレッドの他の処理（アニメーション等）にリソースを譲る
-            loadedTabs.add(selectedTabIndex)
-        }
-        isContentReady = true
     }
 
     LaunchedEffect(triggerBack) {
@@ -146,11 +134,23 @@ fun HomeLauncherScreen(
         }
     }
 
+    var isInitialFocusSet by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         onUiReady()
-        if (lastPlayerChannelId == null && lastPlayerProgramId == null) {
-            delay(600)
-            runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
+        if (!isInitialFocusSet && !isReturningFromPlayer && lastPlayerChannelId == null && lastPlayerProgramId == null) {
+            delay(100)
+            runCatching {
+                tabFocusRequesters[selectedTabIndex].requestFocus()
+            }
+            isInitialFocusSet = true
+        }
+    }
+
+    LaunchedEffect(isReturningFromPlayer, selectedTabIndex) {
+        if (isReturningFromPlayer && selectedTabIndex != 0) {
+            delay(150)
+            runCatching { contentFirstItemRequesters[selectedTabIndex].requestFocus() }
+            onReturnFocusConsumed()
         }
     }
 
@@ -242,17 +242,8 @@ fun HomeLauncherScreen(
                     label = "TabContentTransition"
                 ) { targetIndex ->
 
-                    val showContent = isContentReady || loadedTabs.contains(targetIndex)
-
-                    if (!showContent) {
-                        // ★最適化: タブ切り替え直後から中身の構築が終わるまでの間、ローディングを表示する
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                        }
-                    } else {
+                    // ★ローディング遅延とProgressIndicatorを完全に削除し、常にコンテンツを直描き
+                    Box(modifier = Modifier.fillMaxSize().padding(horizontal = 0.dp)) {
                         when (targetIndex) {
                             0 -> {
                                 HomeContents(
@@ -283,7 +274,9 @@ fun HomeLauncherScreen(
                                     topNavFocusRequester = tabFocusRequesters[1],
                                     contentFirstItemRequester = contentFirstItemRequesters[1],
                                     onPlayerStateChanged = { },
-                                    lastFocusedChannelId = lastPlayerChannelId
+                                    lastFocusedChannelId = lastPlayerChannelId,
+                                    isReturningFromPlayer = isReturningFromPlayer && selectedTabIndex == 1,
+                                    onReturnFocusConsumed = onReturnFocusConsumed
                                 )
                             }
                             2 -> {
@@ -303,7 +296,7 @@ fun HomeLauncherScreen(
                                     onTypeChanged = { newType ->
                                         epgViewModel.updateBroadcastingType(newType)
                                     },
-                                    restoreChannelId = lastPlayerChannelId,
+                                    restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 2) lastPlayerChannelId else null,
                                     availableTypes = availableTypes
                                 )
                             }

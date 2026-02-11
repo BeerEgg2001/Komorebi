@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.EpgProgram
@@ -35,6 +36,7 @@ import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import kotlinx.coroutines.delay
 
+@UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun MainRootScreen(
@@ -47,23 +49,29 @@ fun MainRootScreen(
 ) {
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
 
-    // 全体の状態管理
     var selectedChannel by remember { mutableStateOf<Channel?>(null) }
     var selectedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
     var isEpgJumpMenuOpen by remember { mutableStateOf(false) }
     var triggerHomeBack by remember { mutableStateOf(false) }
-    var isPlayerMiniListOpen by remember { mutableStateOf(false) }
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var isRecordListOpen by remember { mutableStateOf(false) }
 
-    // ★追加: 録画視聴画面の動的な状態管理
+    var isPlayerMiniListOpen by remember { mutableStateOf(false) }
+    var playerShowOverlay by remember { mutableStateOf(true) }
+    var playerIsManualOverlay by remember { mutableStateOf(false) }
+    var playerIsPinnedOverlay by remember { mutableStateOf(false) }
+    var playerIsSubMenuOpen by remember { mutableStateOf(false) }
+
     var showPlayerControls by remember { mutableStateOf(true) }
     var isPlayerSubMenuOpen by remember { mutableStateOf(false) }
     var isPlayerSceneSearchOpen by remember { mutableStateOf(false) }
 
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
     var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
+
+    // ★追加: プレイヤーから戻ったことを通知するフラグ
+    var isReturningFromPlayer by remember { mutableStateOf(false) }
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
@@ -83,26 +91,25 @@ fun MainRootScreen(
 
     val context = LocalContext.current
 
-    // バックハンドラーの一括管理
     BackHandler(enabled = true) {
         when {
-            // ライブ視聴時のミニリスト
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
-
-            // ★録画視聴時のサブメニュー
+            playerIsSubMenuOpen -> playerIsSubMenuOpen = false
             isPlayerSubMenuOpen -> isPlayerSubMenuOpen = false
 
-            // ★録画視聴時のシーンサーチ (閉じるときにオーバーレイも隠す設定)
             isPlayerSceneSearchOpen -> {
                 isPlayerSceneSearchOpen = false
                 showPlayerControls = false
             }
 
-            // 各種画面の遷移戻り
-            selectedChannel != null -> selectedChannel = null
+            selectedChannel != null -> {
+                selectedChannel = null
+                isReturningFromPlayer = true // ★追加
+            }
             selectedProgram != null -> {
                 selectedProgram = null
-                showPlayerControls = true // 次回視聴時のために初期化
+                showPlayerControls = true
+                isReturningFromPlayer = true // ★追加
             }
             isSettingsOpen -> isSettingsOpen = false
             epgSelectedProgram != null -> epgSelectedProgram = null
@@ -113,7 +120,6 @@ fun MainRootScreen(
         }
     }
 
-    // データ読み込み監視
     LaunchedEffect(isChannelLoading, isHomeLoading, isRecLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading && !isRecLoading) {
@@ -128,7 +134,7 @@ fun MainRootScreen(
     }
 
     LaunchedEffect(Unit) {
-        delay(2000) // スプラッシュ時間
+        delay(2000)
         isSplashFinished = true
     }
 
@@ -149,16 +155,27 @@ fun MainRootScreen(
                         groupedChannels = groupedChannels,
                         isMiniListOpen = isPlayerMiniListOpen,
                         onMiniListToggle = { isPlayerMiniListOpen = it },
+                        showOverlay = playerShowOverlay,
+                        onShowOverlayChange = { playerShowOverlay = it },
+                        isManualOverlay = playerIsManualOverlay,
+                        onManualOverlayChange = { playerIsManualOverlay = it },
+                        isPinnedOverlay = playerIsPinnedOverlay,
+                        onPinnedOverlayChange = { playerIsPinnedOverlay = it },
+                        isSubMenuOpen = playerIsSubMenuOpen,
+                        onSubMenuToggle = { playerIsSubMenuOpen = it },
                         onChannelSelect = { newChannel ->
                             selectedChannel = newChannel
                             lastSelectedChannelId = newChannel.id
                             lastSelectedProgramId = null
                             homeViewModel.saveLastChannel(newChannel)
+                            isReturningFromPlayer = false // ★追加
                         },
-                        onBackPressed = { selectedChannel = null }
+                        onBackPressed = {
+                            selectedChannel = null
+                            isReturningFromPlayer = true // ★追加
+                        }
                     )
                 } else if (selectedProgram != null) {
-                    // ★録画視聴画面 (パラメータを外部ステートに接続)
                     VideoPlayerScreen(
                         program = selectedProgram!!,
                         konomiIp = konomiIp,
@@ -169,7 +186,10 @@ fun MainRootScreen(
                         onSubMenuToggle = { isPlayerSubMenuOpen = it },
                         isSceneSearchOpen = isPlayerSceneSearchOpen,
                         onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
-                        onBackPressed = { selectedProgram = null },
+                        onBackPressed = {
+                            selectedProgram = null
+                            isReturningFromPlayer = true // ★追加
+                        },
                         onUpdateWatchHistory = { prog, pos ->
                             recordViewModel.updateWatchHistory(prog, pos)
                         }
@@ -194,6 +214,7 @@ fun MainRootScreen(
                                 lastSelectedChannelId = channel.id
                                 lastSelectedProgramId = null
                                 homeViewModel.saveLastChannel(channel)
+                                isReturningFromPlayer = false // ★追加
                             }
                         },
                         selectedProgram = selectedProgram,
@@ -202,7 +223,8 @@ fun MainRootScreen(
                             if (program != null) {
                                 lastSelectedProgramId = program.id.toString()
                                 lastSelectedChannelId = null
-                                showPlayerControls = true // 起動時は表示する
+                                showPlayerControls = true
+                                isReturningFromPlayer = false // ★追加
                             }
                         },
                         epgSelectedProgram = epgSelectedProgram,
@@ -222,6 +244,7 @@ fun MainRootScreen(
                                 homeViewModel.saveLastChannel(channel)
                                 epgSelectedProgram = null
                                 isEpgJumpMenuOpen = false
+                                isReturningFromPlayer = false // ★追加
                             }
                         },
                         lastPlayerChannelId = lastSelectedChannelId,
@@ -230,13 +253,14 @@ fun MainRootScreen(
                         onSettingsToggle = { isSettingsOpen = it },
                         isRecordListOpen = isRecordListOpen,
                         onShowAllRecordings = { isRecordListOpen = true },
-                        onCloseRecordList = { isRecordListOpen = false }
+                        onCloseRecordList = { isRecordListOpen = false },
+                        isReturningFromPlayer = isReturningFromPlayer, // ★追加
+                        onReturnFocusConsumed = { isReturningFromPlayer = false } // ★追加
                     )
                 }
             }
         }
 
-        // 各種ダイアログ・設定画面・ローディング表示
         if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) {
             InitialSetupDialog(onConfirm = { isSettingsOpen = true })
         }
@@ -275,7 +299,7 @@ fun MainRootScreen(
     }
 }
 
-// Dialogs omitted
+// Dialogs omitted for brevity
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {

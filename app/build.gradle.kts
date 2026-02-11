@@ -118,6 +118,10 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
+    // --- OkHttp ---
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
+
     // --- Room (KSPへの移行を推奨) ---
     val room_version = "2.7.0-alpha11" // 2.7.0より安定している2.6.1を一旦推奨
     implementation("androidx.room:room-runtime:$room_version")
