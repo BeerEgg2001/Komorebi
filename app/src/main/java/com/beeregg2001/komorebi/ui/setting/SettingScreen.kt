@@ -324,7 +324,7 @@ fun AppInfoContent(
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Version 0.1.0 alpha-4",
+            text = "Version 0.1.0 beta-1",
             style = MaterialTheme.typography.titleMedium,
             color = Color.Gray
         )
