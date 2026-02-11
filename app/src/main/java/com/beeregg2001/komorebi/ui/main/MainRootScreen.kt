@@ -11,16 +11,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,12 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Surface
-import androidx.tv.material3.Text
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -61,7 +47,7 @@ fun MainRootScreen(
 ) {
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
 
-    // すべての状態を最上位で管理
+    // 全体の状態管理
     var selectedChannel by remember { mutableStateOf<Channel?>(null) }
     var selectedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
@@ -69,49 +55,65 @@ fun MainRootScreen(
     var triggerHomeBack by remember { mutableStateOf(false) }
     var isPlayerMiniListOpen by remember { mutableStateOf(false) }
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
-
-    // 接続エラーダイアログの表示状態
-    var showConnectionErrorDialog by remember { mutableStateOf(false) }
-
-    // 録画一覧画面の状態管理
     var isRecordListOpen by remember { mutableStateOf(false) }
 
+    // ★追加: 録画視聴画面の動的な状態管理
+    var showPlayerControls by remember { mutableStateOf(true) }
+    var isPlayerSubMenuOpen by remember { mutableStateOf(false) }
+    var isPlayerSceneSearchOpen by remember { mutableStateOf(false) }
+
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
-    var lastSelectedProgramId by remember { mutableStateOf<String?>(null) } // ★追加
+    var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
-
-    // Loading状態を監視
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
     val isHomeLoading by homeViewModel.isLoading.collectAsState()
     val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
-
     val isChannelError by channelViewModel.connectionError.collectAsState()
+    val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
+    var showConnectionErrorDialog by remember { mutableStateOf(false) }
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "192.168.100.60")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "40772")
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
 
-    val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
-
     val context = LocalContext.current
-    val splashDelay = remember {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val memoryInfo = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(memoryInfo)
-        val totalMemGb = memoryInfo.totalMem / (1024.0 * 1024.0 * 1024.0)
 
+    // バックハンドラーの一括管理
+    BackHandler(enabled = true) {
         when {
-            totalMemGb < 3.5 -> 4000L
-            totalMemGb < 6.5 -> 2500L
-            else -> 1500L
+            // ライブ視聴時のミニリスト
+            isPlayerMiniListOpen -> isPlayerMiniListOpen = false
+
+            // ★録画視聴時のサブメニュー
+            isPlayerSubMenuOpen -> isPlayerSubMenuOpen = false
+
+            // ★録画視聴時のシーンサーチ (閉じるときにオーバーレイも隠す設定)
+            isPlayerSceneSearchOpen -> {
+                isPlayerSceneSearchOpen = false
+                showPlayerControls = false
+            }
+
+            // 各種画面の遷移戻り
+            selectedChannel != null -> selectedChannel = null
+            selectedProgram != null -> {
+                selectedProgram = null
+                showPlayerControls = true // 次回視聴時のために初期化
+            }
+            isSettingsOpen -> isSettingsOpen = false
+            epgSelectedProgram != null -> epgSelectedProgram = null
+            isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
+            isRecordListOpen -> isRecordListOpen = false
+            showConnectionErrorDialog -> onExitApp()
+            else -> triggerHomeBack = true
         }
     }
 
+    // データ読み込み監視
     LaunchedEffect(isChannelLoading, isHomeLoading, isRecLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading && !isRecLoading) {
@@ -126,35 +128,16 @@ fun MainRootScreen(
     }
 
     LaunchedEffect(Unit) {
-        delay(splashDelay)
+        delay(2000) // スプラッシュ時間
         isSplashFinished = true
     }
 
     val isAppReady = (isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)
 
-    // バックハンドラーの一括管理
-    BackHandler(enabled = true) {
-        when {
-            isPlayerMiniListOpen -> isPlayerMiniListOpen = false
-            selectedChannel != null -> selectedChannel = null
-            selectedProgram != null -> selectedProgram = null
-            isSettingsOpen -> isSettingsOpen = false
-            epgSelectedProgram != null -> epgSelectedProgram = null
-            isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
-            isRecordListOpen -> isRecordListOpen = false
-            showConnectionErrorDialog -> onExitApp()
-            else -> triggerHomeBack = true
-        }
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
         val showMainContent = isAppReady && isSettingsInitialized && !showConnectionErrorDialog
 
-        AnimatedVisibility(
-            visible = showMainContent,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
+        AnimatedVisibility(visible = showMainContent, enter = fadeIn(), exit = fadeOut()) {
             Box(modifier = Modifier.fillMaxSize()) {
                 if (selectedChannel != null) {
                     LivePlayerScreen(
@@ -169,18 +152,23 @@ fun MainRootScreen(
                         onChannelSelect = { newChannel ->
                             selectedChannel = newChannel
                             lastSelectedChannelId = newChannel.id
-                            // ライブ視聴開始時に録画IDはリセット
                             lastSelectedProgramId = null
                             homeViewModel.saveLastChannel(newChannel)
                         },
-                        onBackPressed = {
-                            selectedChannel = null
-                        }
+                        onBackPressed = { selectedChannel = null }
                     )
                 } else if (selectedProgram != null) {
+                    // ★録画視聴画面 (パラメータを外部ステートに接続)
                     VideoPlayerScreen(
                         program = selectedProgram!!,
-                        konomiIp = konomiIp, konomiPort = konomiPort,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        showControls = showPlayerControls,
+                        onShowControlsChange = { showPlayerControls = it },
+                        isSubMenuOpen = isPlayerSubMenuOpen,
+                        onSubMenuToggle = { isPlayerSubMenuOpen = it },
+                        isSceneSearchOpen = isPlayerSceneSearchOpen,
+                        onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
                         onBackPressed = { selectedProgram = null },
                         onUpdateWatchHistory = { prog, pos ->
                             recordViewModel.updateWatchHistory(prog, pos)
@@ -213,7 +201,8 @@ fun MainRootScreen(
                             selectedProgram = program
                             if (program != null) {
                                 lastSelectedProgramId = program.id.toString()
-                                lastSelectedChannelId = null // チャンネルIDはリセット
+                                lastSelectedChannelId = null
+                                showPlayerControls = true // 起動時は表示する
                             }
                         },
                         epgSelectedProgram = epgSelectedProgram,
@@ -236,7 +225,7 @@ fun MainRootScreen(
                             }
                         },
                         lastPlayerChannelId = lastSelectedChannelId,
-                        lastPlayerProgramId = lastSelectedProgramId, // ★追加
+                        lastPlayerProgramId = lastSelectedProgramId,
                         isSettingsOpen = isSettingsOpen,
                         onSettingsToggle = { isSettingsOpen = it },
                         isRecordListOpen = isRecordListOpen,
@@ -247,6 +236,7 @@ fun MainRootScreen(
             }
         }
 
+        // 各種ダイアログ・設定画面・ローディング表示
         if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) {
             InitialSetupDialog(onConfirm = { isSettingsOpen = true })
         }

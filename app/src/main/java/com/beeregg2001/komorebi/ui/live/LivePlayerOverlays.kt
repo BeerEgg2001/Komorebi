@@ -55,7 +55,20 @@ fun LiveOverlayUI(channel: Channel, programTitle: String, mirakurunIp: String, m
         Column(modifier = Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(0.95f)))).padding(horizontal = 64.dp, vertical = 48.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) { AsyncImage(model = logoUrl, contentDescription = null, modifier = Modifier.size(80.dp, 45.dp).clip(RoundedCornerShape(4.dp)).background(Color.White), contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop); Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.titleLarge, color = Color.White.copy(0.8f)) }
             Text(programTitle, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp), color = Color.White, modifier = Modifier.padding(vertical = 16.dp))
-            if (showDesc && program != null) { Box(modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).padding(vertical = 8.dp)) { Column(modifier = Modifier.verticalScroll(scrollState)) { if (!program.description.isNullOrEmpty()) Text(program.description, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(0.9f), modifier = Modifier.padding(bottom = 20.dp)); program.detail?.forEach { (k, v) -> Column(Modifier.padding(bottom = 14.dp)) { Text("◆ $k", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = Color.White.copy(0.5f))); Text(v, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.85f), modifier = Modifier.padding(start = 12.dp, top = 4.dp)) } } } } }
+            // ★修正箇所: Column に .focusable() を追加してリモコンでのスクロールを可能に
+            if (showDesc && program != null) {
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).padding(vertical = 8.dp)) {
+                    Column(modifier = Modifier.verticalScroll(scrollState).focusable()) {
+                        if (!program.description.isNullOrEmpty()) Text(program.description, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(0.9f), modifier = Modifier.padding(bottom = 20.dp));
+                        program.detail?.forEach { (k, v) ->
+                            Column(Modifier.padding(bottom = 14.dp)) {
+                                Text("◆ $k", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = Color.White.copy(0.5f)));
+                                Text(v, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.85f), modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
             if (progress >= 0f) { val start = program?.startTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""; val end = program?.endTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""; Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(start, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f)); Box(modifier = Modifier.weight(1f).padding(horizontal = 20.dp).height(4.dp).background(Color.White.copy(0.15f), RoundedCornerShape(2.dp))) { Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(Color.White, RoundedCornerShape(2.dp))) }; Text(end, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f)) } }
         }
     }

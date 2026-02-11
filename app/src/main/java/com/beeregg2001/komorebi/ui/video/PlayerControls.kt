@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.video
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
@@ -12,7 +13,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp // ★追加
+import androidx.compose.ui.unit.sp
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
@@ -23,10 +24,8 @@ import java.util.Locale
 fun PlayerControls(
     exoPlayer: ExoPlayer,
     title: String,
-    isVisible: Boolean,
-    onVisibilityChanged: (Boolean) -> Unit = {}
+    isVisible: Boolean
 ) {
-    // 再生位置の更新用
     var currentPosition by remember { mutableLongStateOf(exoPlayer.currentPosition) }
     var duration by remember { mutableLongStateOf(exoPlayer.duration) }
     var bufferedPosition by remember { mutableLongStateOf(exoPlayer.bufferedPosition) }
@@ -47,22 +46,16 @@ fun PlayerControls(
         modifier = Modifier.fillMaxSize()
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
-                        startY = 300f
-                    )
-                ),
+            modifier = Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
+                    startY = 300f
+                )
+            ),
             contentAlignment = Alignment.BottomStart
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 48.dp, vertical = 40.dp)
-            ) {
-                // ★修正: テーマのデフォルト設定に依存せず、fontSize=32.sp を直接指定して確実に大きくする
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 40.dp)) {
+                // 番組名のみを表示（マーキー機能付き）
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineMedium.copy(
@@ -70,69 +63,39 @@ fun PlayerControls(
                         fontSize = 28.sp
                     ),
                     color = Color.White,
-                    maxLines = 1
+                    maxLines = 1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // ★修正: delayMillis を initialDelayMillis に変更
+                        .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 2000)
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // プログレスバー
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(3.dp))
-                ) {
-                    // バッファ済み領域
+                Box(modifier = Modifier.fillMaxWidth().height(6.dp).background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(3.dp))) {
                     val bufferProgress = (bufferedPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(bufferProgress)
-                            .fillMaxHeight()
-                            .background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(3.dp))
-                    )
-
-                    // 現在の再生位置
+                    Box(modifier = Modifier.fillMaxWidth(bufferProgress).fillMaxHeight().background(Color.White.copy(alpha = 0.5f), RoundedCornerShape(3.dp)))
                     val playProgress = (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(playProgress)
-                            .fillMaxHeight()
-                            .background(Color.White, RoundedCornerShape(3.dp))
-                    )
+                    Box(modifier = Modifier.fillMaxWidth(playProgress).fillMaxHeight().background(Color.White, RoundedCornerShape(3.dp)))
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = formatTime(currentPosition),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.9f)
-                    )
-                    Text(
-                        text = formatTime(duration),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.9f)
-                    )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(text = formatMillisToTime(currentPosition), color = Color.White.copy(alpha = 0.9f))
+                    Text(text = formatMillisToTime(duration), color = Color.White.copy(alpha = 0.9f))
                 }
             }
         }
     }
 }
 
-fun formatTime(ms: Long): String {
-    if (ms <= 0) return "00:00"
-    val totalSeconds = ms / 1000
+private fun formatMillisToTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
     val seconds = totalSeconds % 60
     val minutes = (totalSeconds / 60) % 60
     val hours = totalSeconds / 3600
-
-    return if (hours > 0) {
-        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
-    }
+    return if (hours > 0) String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    else String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }
