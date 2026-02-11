@@ -9,7 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
-import com.beeregg2001.komorebi.common.UrlBuilder // 追加
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.EpgChannel
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
@@ -58,7 +58,7 @@ class EpgViewModel @Inject constructor(
                 mirakurunPort = mPort
                 konomiIp = kIp
                 konomiPort = kPort
-                // Mirakurun または KonomiTV のどちらかが設定されていればリフレッシュ
+
                 val isMirakurunReady = mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()
                 val isKonomiReady = konomiIp.isNotEmpty() && konomiPort.isNotEmpty()
 
@@ -70,10 +70,6 @@ class EpgViewModel @Inject constructor(
         }
     }
 
-    /**
-     * EPGデータを一括でプリロード/リフレッシュする
-     * 設定変更後などに呼び出される
-     */
     fun preloadAllEpgData() {
         refreshEpgData()
     }
@@ -95,13 +91,18 @@ class EpgViewModel @Inject constructor(
             )
 
             result.onSuccess { data ->
-                val logoUrls = data.map { getLogoUrl(it.channel) }
-                uiState = EpgUiState.Success(
-                    data = data,
-                    logoUrls = logoUrls,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort
-                )
+                // ★改善点: 重いデータ変換（map処理）をバックグラウンドスレッドで実行
+                val processedState = withContext(Dispatchers.Default) {
+                    val logoUrls = data.map { getLogoUrl(it.channel) }
+                    EpgUiState.Success(
+                        data = data,
+                        logoUrls = logoUrls,
+                        mirakurunIp = mirakurunIp,
+                        mirakurunPort = mirakurunPort
+                    )
+                }
+                // UIスレッドに戻って状態を更新
+                uiState = processedState
             }.onFailure { e ->
                 uiState = EpgUiState.Error(e.message ?: "Unknown Error")
             }
@@ -125,27 +126,26 @@ class EpgViewModel @Inject constructor(
             )
 
             result.onSuccess { newData ->
-                val logoUrls = newData.map { getLogoUrl(it.channel) }
-                uiState = EpgUiState.Success(
-                    data = newData,
-                    logoUrls = logoUrls,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort
-                )
+                // ★改善点: 拡張データの処理も非同期化
+                val processedState = withContext(Dispatchers.Default) {
+                    val logoUrls = newData.map { getLogoUrl(it.channel) }
+                    EpgUiState.Success(
+                        data = newData,
+                        logoUrls = logoUrls,
+                        mirakurunIp = mirakurunIp,
+                        mirakurunPort = mirakurunPort
+                    )
+                }
+                uiState = processedState
             }
         }
     }
 
-    /**
-     * ロゴURLを組み立てる (Mirakurun優先、なければKonomiTV)
-     */
     @OptIn(UnstableApi::class)
     fun getLogoUrl(channel: EpgChannel): String {
         return if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-            // Mirakurun API (UrlBuilderを使用)
             UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.network_id.toLong(), channel.service_id.toLong(), channel.type)
         } else {
-            // KonomiTV API (UrlBuilderを使用)
             UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.display_channel_id)
         }
     }

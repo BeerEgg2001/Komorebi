@@ -72,9 +72,9 @@ fun ModernEpgCanvasEngine_Smooth(
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
 
-    // ★追加: 以前読み込まれた放送波のタイプを記憶
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
 
+    // ヘッダーへのフォーカス復帰制御
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
@@ -89,12 +89,20 @@ fun ModernEpgCanvasEngine_Smooth(
         }
     }
 
+    // データ更新時の挙動
     LaunchedEffect(uiState) {
         if (uiState is EpgUiState.Success) {
-            // ★修正: タブが切り替わったことを検知して、resetFocusフラグを渡す
             val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
             lastLoadedType = currentType
+
+            // データを更新。resetFocus=true の場合でも、ここでは requestFocus() を呼ばないため
+            // フォーカスは現在の場所（トップナビ等）に維持されます。
             epgState.updateData(uiState.data, resetFocus = isTypeChanged)
+
+            // ★修正: scrollToNow() を updatePositions に書き換え
+            if (restoreChannelId == null) {
+                epgState.updatePositions(0, epgState.getNowMinutes())
+            }
         }
     }
 
@@ -103,13 +111,19 @@ fun ModernEpgCanvasEngine_Smooth(
         val h = constraints.maxHeight.toFloat()
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
 
+        // 特定番組へのスクロール復元（視聴終了時など）
         LaunchedEffect(restoreChannelId, restoreProgramStartTime, epgState.filledChannelWrappers) {
             if (restoreChannelId != null && epgState.hasData) {
                 val colIndex = epgState.filledChannelWrappers.indexOfFirst { it.channel.id == restoreChannelId }
                 if (colIndex != -1) {
-                    val t = if (restoreProgramStartTime != null) runCatching { OffsetDateTime.parse(restoreProgramStartTime) }.getOrNull() ?: OffsetDateTime.now() else OffsetDateTime.now()
+                    val t = if (restoreProgramStartTime != null) {
+                        runCatching { OffsetDateTime.parse(restoreProgramStartTime) }.getOrNull() ?: OffsetDateTime.now()
+                    } else OffsetDateTime.now()
                     val targetTime = if (t.isBefore(epgState.baseTime)) OffsetDateTime.now() else t
                     epgState.updatePositions(colIndex, ChronoUnit.MINUTES.between(epgState.baseTime, targetTime).toInt())
+
+                    // ★重要: 復元ID（restoreChannelId）がある場合のみ、番組セルへフォーカスを移す
+                    runCatching { contentFocusRequester.requestFocus() }
                 }
             }
         }
@@ -140,13 +154,13 @@ fun ModernEpgCanvasEngine_Smooth(
                 exit = shrinkVertically()
             ) {
                 EpgHeaderSection(
-                    topTabFocusRequester,
-                    contentFocusRequester,
-                    subTabFocusRequesters,
-                    visibleTabs,
-                    onEpgJumpMenuStateChanged,
-                    onTypeChanged,
-                    currentType
+                    topTabFocusRequester = topTabFocusRequester,
+                    contentFocusRequester = contentFocusRequester,
+                    subTabFocusRequesters = subTabFocusRequesters,
+                    availableBroadcastingTypes = visibleTabs,
+                    onEpgJumpMenuStateChanged = onEpgJumpMenuStateChanged,
+                    onTypeChanged = onTypeChanged,
+                    currentType = currentType
                 )
             }
 
@@ -242,6 +256,7 @@ fun ModernEpgCanvasEngine_Smooth(
     }
 }
 
+// EpgHeaderSection 以下の実装は変更なし（そのまま維持）
 @Composable
 fun EpgHeaderSection(
     topTabFocusRequester: FocusRequester,

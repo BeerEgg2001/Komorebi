@@ -243,7 +243,7 @@ fun ConnectionSettingsContent(
             )
         }
 
-        SettingsSection(title = "Mirakurun") {
+        SettingsSection(title = "Mirakurun(オプション)") {
             SettingItem(
                 title = "アドレス",
                 value = mIp,
@@ -324,7 +324,7 @@ fun AppInfoContent(
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Version 0.1.0 beta-1",
+            text = "Version 0.1.0 beta-2",
             style = MaterialTheme.typography.titleMedium,
             color = Color.Gray
         )

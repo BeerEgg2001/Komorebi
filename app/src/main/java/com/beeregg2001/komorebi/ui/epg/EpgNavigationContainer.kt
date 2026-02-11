@@ -49,6 +49,15 @@ fun EpgNavigationContainer(
     var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
     var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
 
+    // ★修正: 親から渡される restoreChannelId を監視し、状態を同期
+    // null が渡された（他タブからの移動）場合は、内部の復元用情報もクリアする
+    LaunchedEffect(restoreChannelId) {
+        internalRestoreChannelId = restoreChannelId
+        if (restoreChannelId == null) {
+            internalRestoreStartTime = null
+        }
+    }
+
     val currentLogoUrls = remember(logoUrls) {
         if (logoUrls.isNotEmpty()) logoUrls else emptyList()
     }
@@ -102,7 +111,8 @@ fun EpgNavigationContainer(
                     },
                     onRecordClick = { /* 予約 */ },
                     onBackClick = {
-                        contentRequester.requestFocus()
+                        // 詳細から戻った時は、元の番組セルにフォーカスを戻す
+                        runCatching { contentRequester.requestFocus() }
                         internalRestoreChannelId = selectedProgram.channel_id
                         internalRestoreStartTime = selectedProgram.start_time
                         onProgramSelected(null)
@@ -112,18 +122,20 @@ fun EpgNavigationContainer(
             }
             LaunchedEffect(selectedProgram) {
                 yield()
-                detailInitialFocusRequester.requestFocus()
+                // 詳細表示時の初期フォーカスを安全に要求
+                runCatching { detailInitialFocusRequester.requestFocus() }
             }
         }
 
+        // ★修正: 復元IDがある場合のみ（再生終了後など）フォーカスを本体へ移動
+        // これにより、通常のタブ切り替え時にはフォーカスがトップナビに残ります
         LaunchedEffect(internalRestoreChannelId) {
             if (internalRestoreChannelId != null) {
                 delay(100)
-                contentRequester.requestFocus()
+                runCatching { contentRequester.requestFocus() }
             }
         }
 
-        // ★修正: アニメーション付きでメニューを表示するよう変更
         AnimatedVisibility(
             visible = isJumpMenuOpen,
             enter = fadeIn(),

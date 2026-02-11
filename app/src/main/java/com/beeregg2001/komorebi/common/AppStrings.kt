@@ -15,6 +15,16 @@ object AppStrings {
     const val BUTTON_RETRY = "再読み込み"
     const val BUTTON_BACK = "戻る"
 
+    // 状態監視・SSEイベント関連 (★今回追加)
+    const val SSE_CONNECTING = "チューナーに接続しています..."
+    const val SSE_OFFLINE = "放送が終了しました"
+
+    // サブメニュー項目 (★今回追加)
+    const val MENU_AUDIO = "音声切替"
+    const val MENU_SOURCE = "映像ソース"
+    const val MENU_SUBTITLE = "字幕設定"
+    const val MENU_QUALITY = "画質設定"
+
     // エラー詳細メッセージ
     const val ERR_TUNER_FULL = "チューナーに空きがありません (503)\n他の録画や視聴が終了するのを待ってください。"
     const val ERR_CHANNEL_NOT_FOUND = "チャンネルが見つかりません (404)\n放送局が休止中か、設定が誤っている可能性があります。"

@@ -50,19 +50,26 @@ fun LiveContent(
     topNavFocusRequester: FocusRequester,
     contentFirstItemRequester: FocusRequester,
     onPlayerStateChanged: (Boolean) -> Unit,
-    lastFocusedChannelId: String? = null
+    lastFocusedChannelId: String? = null,
+    isReturningFromPlayer: Boolean = false,
+    onReturnFocusConsumed: () -> Unit = {}
 ) {
     val listState = rememberTvLazyListState()
-    var internalLastFocusedId by rememberSaveable { mutableStateOf<String?>(null) }
-
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
 
     LaunchedEffect(isPlayerActive) {
         onPlayerStateChanged(isPlayerActive)
-        if (!isPlayerActive) {
+    }
+
+    // ★修正: プレイヤーからの復帰時のみ発火させる
+    LaunchedEffect(isReturningFromPlayer) {
+        if (isReturningFromPlayer) {
             delay(150)
-            runCatching { targetChannelFocusRequester.requestFocus() }
+            runCatching {
+                targetChannelFocusRequester.requestFocus()
+            }
+            onReturnFocusConsumed()
         }
     }
 
@@ -82,7 +89,6 @@ fun LiveContent(
                 val displayCategory = if (key == "GR") "地デジ" else key
                 val channels = groupedChannels[key] ?: emptyList()
 
-                // ★最適化: contentType を指定し、Composeエンジンにレイアウトの使い回しを指示
                 item(key = key, contentType = "CategoryRow") {
                     Column(modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)) {
                         Text(
@@ -97,9 +103,9 @@ fun LiveContent(
                             contentPadding = PaddingValues(horizontal = 32.dp),
                             modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
                         ) {
-                            // ★最適化: こちらにも contentType を指定
                             items(channels, key = { it.id }, contentType = { "ChannelCard" }) { channel ->
-                                val isTarget = channel.id == selectedChannel?.id || (selectedChannel == null && channel.id == lastFocusedChannelId)
+                                // ★修正: 最後に視聴していたチャンネルにターゲットを絞る
+                                val isTarget = channel.id == lastFocusedChannelId
 
                                 ChannelWideCard(
                                     channel = channel,
@@ -118,7 +124,6 @@ fun LiveContent(
                                         }
                                         .onFocusChanged {
                                             if (it.isFocused) {
-                                                internalLastFocusedId = channel.id
                                                 onFocusChannelChange(channel.id)
                                             }
                                         }
@@ -132,6 +137,11 @@ fun LiveContent(
 
         if (selectedChannel != null) {
             var isMiniListOpen by remember { mutableStateOf(false) }
+            var showOverlay by remember { mutableStateOf(true) }
+            var isManualOverlay by remember { mutableStateOf(false) }
+            var isPinnedOverlay by remember { mutableStateOf(false) }
+            var isSubMenuOpen by remember { mutableStateOf(false) }
+
             LivePlayerScreen(
                 channel = selectedChannel,
                 mirakurunIp = mirakurunIp,
@@ -141,6 +151,14 @@ fun LiveContent(
                 groupedChannels = groupedChannels,
                 isMiniListOpen = isMiniListOpen,
                 onMiniListToggle = { isMiniListOpen = it },
+                showOverlay = showOverlay,
+                onShowOverlayChange = { showOverlay = it },
+                isManualOverlay = isManualOverlay,
+                onManualOverlayChange = { isManualOverlay = it },
+                isPinnedOverlay = isPinnedOverlay,
+                onPinnedOverlayChange = { isPinnedOverlay = it },
+                isSubMenuOpen = isSubMenuOpen,
+                onSubMenuToggle = { isSubMenuOpen = it },
                 onChannelSelect = { onChannelClick(it) },
                 onBackPressed = { onChannelClick(null) }
             )
@@ -172,7 +190,6 @@ fun ChannelWideCard(
     val startTime = channel.programPresent?.startTime
     val duration = channel.programPresent?.duration
 
-    // ★最適化: 重いパース処理を文字列が変わった時(番組が切り替わった時)のみ1回だけ実行してキャッシュ
     val startTimeMillis = remember(startTime) {
         if (startTime.isNullOrEmpty()) 0L
         else try {
@@ -182,7 +199,6 @@ fun ChannelWideCard(
         }
     }
 
-    // 計算にはパース済みのミリ秒を使うため、極めて軽量に
     val progress = remember(startTimeMillis, duration, globalTick) {
         if (startTimeMillis == 0L || duration == null || duration <= 0) 0f
         else {

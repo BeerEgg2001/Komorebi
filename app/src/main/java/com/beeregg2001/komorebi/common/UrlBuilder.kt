@@ -78,12 +78,21 @@ object UrlBuilder {
     }
 
     /**
-     * KonomiTVのライブストリームURL
+     * KonomiTVのライブストリームURL (★quality追加)
      * デフォルトプロトコル: https
      */
     fun getKonomiTvLiveStreamUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/mpegts"
+    }
+
+    /**
+     * 状態監視用(SSE)URL (KonomiTV API) (★今回追加)
+     * デフォルトプロトコル: https
+     */
+    fun getKonomiTvLiveEventsUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/streams/live/$displayChannelId/$quality/events"
     }
 
     /**

@@ -51,7 +51,10 @@ fun HomeContents(
     val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
 
     TvLazyColumn(
-        modifier = modifier.fillMaxSize(),
+        // ★修正: リストが空の場合でも安全にフォーカスを受け止められるよう、親の大枠に Requester をアタッチ
+        modifier = modifier
+            .fillMaxSize()
+            .focusRequester(externalFocusRequester),
         contentPadding = PaddingValues(top = 24.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp)
     ) {
@@ -86,11 +89,10 @@ fun HomeContents(
                                     .width(220.dp).height(100.dp)
                                     .onFocusChanged { isFocused = it.isFocused }
                                     .then(
+                                        // ★修正: 競合を防ぐため externalFocusRequester の割り当てを削除
                                         if (isTarget) Modifier.focusRequester(itemRequester)
-                                        else if (index == 0 && lastFocusedChannelId == null && lastFocusedProgramId == null) Modifier.focusRequester(externalFocusRequester)
                                         else Modifier
                                     )
-                                    // ★修正: リストの端での移動を制限
                                     .focusProperties {
                                         up = tabFocusRequester
                                         if (index == 0) left = FocusRequester.Cancel
@@ -104,7 +106,6 @@ fun HomeContents(
                                 shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
                             ) {
                                 Row(modifier = Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    // ロゴサイズ 72x40dp
                                     Box(
                                         modifier = Modifier
                                             .size(72.dp, 40.dp)
@@ -167,11 +168,10 @@ fun HomeContents(
                                 onClick = { onHistoryClick(history) },
                                 modifier = Modifier
                                     .then(
+                                        // ★修正: 競合を防ぐため externalFocusRequester の割り当てを削除
                                         if (isTarget) Modifier.focusRequester(itemRequester)
-                                        else if (index == 0 && lastFocusedChannelId == null && lastFocusedProgramId == null && lastWatchedChannels.isEmpty()) Modifier.focusRequester(externalFocusRequester)
                                         else Modifier
                                     )
-                                    // ★修正: リストの端での移動を制限
                                     .focusProperties {
                                         if (index == 0) left = FocusRequester.Cancel
                                         if (index == watchHistory.lastIndex) right = FocusRequester.Cancel
@@ -188,8 +188,8 @@ fun HomeContents(
 }
 
 @Composable
-fun EmptyPlaceholder(message: String) {
-    Box(modifier = Modifier.padding(horizontal = 32.dp)) {
+fun EmptyPlaceholder(message: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.padding(horizontal = 32.dp)) {
         Surface(
             onClick = {}, enabled = false,
             modifier = Modifier.width(280.dp).height(80.dp),
