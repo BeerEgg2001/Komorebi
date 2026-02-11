@@ -51,7 +51,6 @@ fun HomeContents(
     val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
 
     TvLazyColumn(
-        // ★修正: リストが空の場合でも安全にフォーカスを受け止められるよう、親の大枠に Requester をアタッチ
         modifier = modifier
             .fillMaxSize()
             .focusRequester(externalFocusRequester),
@@ -75,13 +74,7 @@ fun HomeContents(
                             val itemRequester = remember { FocusRequester() }
                             val isTarget = channel.id == lastFocusedChannelId
 
-                            // チャンネルのフォーカス復帰
-                            LaunchedEffect(isTarget) {
-                                if (isTarget) {
-                                    delay(50)
-                                    runCatching { itemRequester.requestFocus() }
-                                }
-                            }
+                            // ★修正: 自動でフォーカスを奪うロジックを削除（トップナビに留まるようにするため）
 
                             Surface(
                                 onClick = { onChannelClick(channel) },
@@ -89,7 +82,6 @@ fun HomeContents(
                                     .width(220.dp).height(100.dp)
                                     .onFocusChanged { isFocused = it.isFocused }
                                     .then(
-                                        // ★修正: 競合を防ぐため externalFocusRequester の割り当てを削除
                                         if (isTarget) Modifier.focusRequester(itemRequester)
                                         else Modifier
                                     )
@@ -154,12 +146,7 @@ fun HomeContents(
                             val itemRequester = remember { FocusRequester() }
                             val isTarget = history.program.id == lastFocusedProgramId
 
-                            LaunchedEffect(isTarget) {
-                                if (isTarget) {
-                                    delay(50)
-                                    runCatching { itemRequester.requestFocus() }
-                                }
-                            }
+                            // ★修正: 自動でフォーカスを奪うロジックを削除
 
                             WatchHistoryCard(
                                 history = history,
@@ -168,7 +155,6 @@ fun HomeContents(
                                 onClick = { onHistoryClick(history) },
                                 modifier = Modifier
                                     .then(
-                                        // ★修正: 競合を防ぐため externalFocusRequester の割り当てを削除
                                         if (isTarget) Modifier.focusRequester(itemRequester)
                                         else Modifier
                                     )
@@ -187,6 +173,7 @@ fun HomeContents(
     }
 }
 
+// 以下の Composable 関数は既存のまま維持
 @Composable
 fun EmptyPlaceholder(message: String, modifier: Modifier = Modifier) {
     Box(modifier = modifier.padding(horizontal = 32.dp)) {

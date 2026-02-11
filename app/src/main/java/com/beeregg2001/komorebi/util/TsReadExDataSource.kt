@@ -11,6 +11,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
+import java.io.IOException
 
 @UnstableApi
 class TsReadExDataSource(
@@ -22,32 +23,45 @@ class TsReadExDataSource(
     private var connection: HttpURLConnection? = null
     private var inputStream: InputStream? = null
     private var uri: Uri? = null
+    private var opened = false
 
-    // バッファサイズを大きく確保
     private val inputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 5000)
     private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 10000)
     private val tempArray = ByteArray(188 * 5000)
 
-    // エラー解消: 抽象メンバ getUri() の実装
     override fun getUri(): Uri? = uri
 
     override fun open(dataSpec: DataSpec): Long {
         this.uri = dataSpec.uri
         transferInitializing(dataSpec)
 
-        handle = nativeLib.openFilter(tsArgs)
+        try {
+            handle = nativeLib.openFilter(tsArgs)
+        } catch (e: UnsatisfiedLinkError) {
+            throw IOException("Native library method 'openFilter' not found", e)
+        } catch (e: Exception) {
+            throw IOException("Failed to open native filter", e)
+        }
 
         val url = URL(dataSpec.uri.toString())
         connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10000
-            readTimeout = 10000
+            connectTimeout = 8000
+            readTimeout = 8000
             doInput = true
         }
 
-        // Java 側の I/O 効率化
-        inputStream = BufferedInputStream(connection?.inputStream, 128 * 1024)
+        val responseCode = connection?.responseCode ?: -1
+        // ★修正: !in (スペースを削除)
+        if (responseCode !in 200..299) {
+            throw IOException("Server returned code $responseCode")
+        }
+
+        inputStream = BufferedInputStream(connection!!.inputStream)
 
         transferStarted(dataSpec)
+        opened = true
+
+        // ★修正: .toLong() を追加して型を Long に合わせる
         return C.LENGTH_UNSET.toLong()
     }
 
@@ -55,10 +69,8 @@ class TsReadExDataSource(
         if (length == 0) return 0
         val input = inputStream ?: return C.RESULT_END_OF_INPUT
 
-        // 1. まず JNI の非同期キューからデータを取り出す
         var processedSize = nativeLib.popDataBuffer(handle, outputBuffer, length)
 
-        // 2. キューが空なら Mirakurun から読み込んで供給し、再度取り出す
         if (processedSize <= 0) {
             val readCount = input.read(tempArray)
             if (readCount == -1) return C.RESULT_END_OF_INPUT
@@ -67,26 +79,26 @@ class TsReadExDataSource(
                 inputBuffer.clear()
                 inputBuffer.put(tempArray, 0, readCount)
                 nativeLib.pushDataBuffer(handle, inputBuffer, readCount)
-
-                // プッシュ直後に再度ポップ
                 processedSize = nativeLib.popDataBuffer(handle, outputBuffer, length)
             }
         }
 
-        // 3. 取得できたデータを ExoPlayer に渡す
         return if (processedSize > 0) {
             outputBuffer.position(0)
             val finalReadSize = Math.min(processedSize, length)
             outputBuffer.get(buffer, offset, finalReadSize)
             finalReadSize
         } else {
-            // パケットがまだ準備できていない場合は 0 を返し、ExoPlayer に再度呼ばせる
             0
         }
     }
 
     override fun close() {
-        transferEnded()
+        if (opened) {
+            transferEnded()
+            opened = false
+        }
+
         try {
             inputStream?.close()
             connection?.disconnect()
