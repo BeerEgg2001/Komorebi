@@ -94,4 +94,14 @@ object UrlBuilder {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
     }
+
+    /**
+     * タイル状サムネイル取得 (KonomiTV API)
+     * シーンサーチ等で使用
+     */
+    fun getTiledThumbnailUrl(ip: String, port: String, videoId: Int, time: Long): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        // 指定されたパス形式に time パラメータを付与
+        return "$baseUrl/api/videos/$videoId/thumbnail/tiled?time=$time"
+    }
 }

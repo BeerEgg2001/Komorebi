@@ -97,7 +97,7 @@ fun PlayerControls(
                         modifier = Modifier
                             .fillMaxWidth(playProgress)
                             .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(3.dp))
+                            .background(Color.White, RoundedCornerShape(3.dp))
                     )
                 }
 
