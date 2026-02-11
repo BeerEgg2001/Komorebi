@@ -3,7 +3,9 @@ package com.beeregg2001.komorebi.ui.home
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
 import androidx.compose.runtime.*
@@ -12,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -50,75 +53,48 @@ fun VideoTabContent(
             .fillMaxSize()
             .focusRequester(contentFirstItemRequester)
     ) {
-        // 1. 視聴履歴セクション
+        // 1. 視聴履歴
         item {
             if (watchHistory.isNotEmpty()) {
                 VideoSectionRow(
-                    title = "視聴履歴",
-                    items = watchHistory,
-                    selectedProgramId = selectedProgram?.id,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    onProgramClick = onProgramClick,
-                    isFirstSection = true,
-                    topNavFocusRequester = topNavFocusRequester,
-                    firstItemFocusRequester = null
+                    title = "視聴履歴", items = watchHistory, selectedProgramId = selectedProgram?.id,
+                    konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = onProgramClick,
+                    isFirstSection = true, topNavFocusRequester = topNavFocusRequester
                 )
             } else {
                 Column(modifier = Modifier.padding(start = 32.dp)) {
                     Text("視聴履歴", style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(alpha = 0.8f))
-                    Spacer(Modifier.height(12.dp))
-                    Text("視聴履歴はありません", color = Color.Gray)
+                    Spacer(Modifier.height(12.dp)); Text("視聴履歴はありません", color = Color.Gray)
                 }
             }
         }
 
-        // 2. 最近の録画セクション
+        // 2. 最近の録画
         item {
-            Column {
-                Text(
-                    text = "最近の録画",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.padding(start = 32.dp, bottom = 12.dp)
-                )
-
-                VideoSectionRow(
-                    title = "", // タイトルは上で表示済み
-                    items = recentRecordings,
-                    selectedProgramId = selectedProgram?.id,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    onProgramClick = onProgramClick,
-                    isFirstSection = watchHistory.isEmpty(),
-                    topNavFocusRequester = if (watchHistory.isEmpty()) topNavFocusRequester else null,
-                    firstItemFocusRequester = null
-                )
-            }
+            VideoSectionRow(
+                title = "最近の録画", items = recentRecordings, selectedProgramId = selectedProgram?.id,
+                konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = onProgramClick,
+                isFirstSection = watchHistory.isEmpty(),
+                topNavFocusRequester = if (watchHistory.isEmpty()) topNavFocusRequester else null
+            )
         }
 
-        // 3. 「すべて表示」ボタン (リストの下に配置)
+        // 3. 「すべて表示」ボタン
         item {
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 16.dp),
-                contentAlignment = Alignment.Center
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp),
+                contentAlignment = Alignment.CenterStart // ★修正: 左揃えに変更
             ) {
                 Button(
-                    onClick = onShowAllRecordings, // MainRootScreenで処理
+                    onClick = onShowAllRecordings,
                     scale = ButtonDefaults.scale(focusedScale = 1.05f),
                     colors = ButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.15f),
-                        contentColor = Color.White,
-                        focusedContainerColor = Color.White,
-                        focusedContentColor = Color.Black
+                        containerColor = Color.White.copy(alpha = 0.15f), contentColor = Color.White,
+                        focusedContainerColor = Color.White, focusedContentColor = Color.Black
                     ),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
-                    modifier = Modifier.width(240.dp)
+                    modifier = Modifier.width(260.dp)
                 ) {
-                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.List, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp))
                     Text("すべての録画を表示", style = MaterialTheme.typography.labelLarge)
                 }
             }
@@ -137,55 +113,38 @@ fun VideoSectionRow(
     konomiPort: String,
     onProgramClick: (RecordedProgram) -> Unit,
     isFirstSection: Boolean = false,
-    topNavFocusRequester: FocusRequester? = null,
-    firstItemFocusRequester: FocusRequester? = null,
-    isPlaceholder: Boolean = false
+    topNavFocusRequester: FocusRequester? = null
 ) {
     val watchedProgramFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(selectedProgramId) {
         if (selectedProgramId != null && items.any { it.id == selectedProgramId }) {
-            delay(150)
-            runCatching { watchedProgramFocusRequester.requestFocus() }
+            delay(150); runCatching { watchedProgramFocusRequester.requestFocus() }
         }
     }
 
     Column {
         if (title.isNotEmpty()) {
-            Text(
-                title,
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White.copy(alpha = 0.8f),
-                modifier = Modifier.padding(start = 32.dp, bottom = 12.dp)
-            )
+            Text(title, style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(start = 32.dp, bottom = 12.dp))
         }
 
         TvLazyRow(
             contentPadding = PaddingValues(horizontal = 32.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.graphicsLayer(clip = false)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (isPlaceholder) {
-                items(6) {
-                    Box(Modifier.size(185.dp, 104.dp).background(Color.White.copy(alpha = 0.1f), MaterialTheme.shapes.medium))
-                }
-            } else {
-                itemsIndexed(items, key = { _, program -> program.id }) { index, program ->
-                    val isSelected = program.id == selectedProgramId
+            itemsIndexed(items, key = { _, program -> program.id }) { index, program ->
+                val isSelected = program.id == selectedProgramId
+                var isFocused by remember { mutableStateOf(false) } // ★追加: フォーカス状態
 
-                    RecordedCard(
-                        program = program,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        onClick = { onProgramClick(program) },
-                        modifier = Modifier
-                            .then(if (index == 0 && isFirstSection && firstItemFocusRequester != null) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                            .then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
-                            .focusProperties {
-                                if (isFirstSection && topNavFocusRequester != null) up = topNavFocusRequester
-                            }
-                    )
-                }
+                RecordedCard(
+                    program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
+                    modifier = Modifier
+                        .onFocusChanged { isFocused = it.isFocused } // ★追加: 状態検知
+                        .then(if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp)) else Modifier) // ★追加: 白枠
+                        .then(if (index == 0 && isFirstSection) Modifier else Modifier)
+                        .then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
+                        .focusProperties { if (isFirstSection && topNavFocusRequester != null) up = topNavFocusRequester }
+                )
             }
         }
     }

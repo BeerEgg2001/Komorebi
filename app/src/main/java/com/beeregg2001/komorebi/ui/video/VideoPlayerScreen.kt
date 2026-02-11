@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
@@ -20,8 +19,7 @@ import androidx.compose.ui.platform.*
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.*
 import androidx.media3.common.*
-import androidx.media3.common.audio.ChannelMixingAudioProcessor
-import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -33,16 +31,23 @@ import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import java.util.UUID
-import androidx.activity.compose.BackHandler
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
 
+@UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
     konomiIp: String,
     konomiPort: String,
+    // ★外部管理される状態
+    showControls: Boolean,
+    onShowControlsChange: (Boolean) -> Unit,
+    isSubMenuOpen: Boolean,
+    onSubMenuToggle: (Boolean) -> Unit,
+    isSceneSearchOpen: Boolean,
+    onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
     onUpdateWatchHistory: (RecordedProgram, Double) -> Unit
 ) {
@@ -55,9 +60,6 @@ fun VideoPlayerScreen(
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
     var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    var showControls by remember { mutableStateOf(true) }
-    var isSubMenuOpen by remember { mutableStateOf(false) }
-    var isSceneSearchOpen by remember { mutableStateOf(false) }
     var isPlayerPlaying by remember { mutableStateOf(false) }
 
     val audioProcessor = remember {
@@ -66,7 +68,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // ★重要: ExoPlayer設定の完全復元
     val exoPlayer = remember {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
@@ -93,24 +94,16 @@ fun VideoPlayerScreen(
             }
     }
 
-    // オーバーレイ消去タイマー
+    // 自動消去タイマー
     LaunchedEffect(showControls, isPlayerPlaying, isSubMenuOpen, isSceneSearchOpen) {
         if (showControls && isPlayerPlaying && !isSubMenuOpen && !isSceneSearchOpen) {
             delay(5000)
-            showControls = false
+            onShowControlsChange(false)
         }
     }
 
     LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
     LaunchedEffect(indicatorState) { if (indicatorState != null) { delay(1200); indicatorState = null } }
-
-    BackHandler {
-        when {
-            isSubMenuOpen -> { isSubMenuOpen = false; mainFocusRequester.requestFocus() }
-            isSceneSearchOpen -> { isSceneSearchOpen = false; mainFocusRequester.requestFocus() }
-            else -> onBackPressed()
-        }
-    }
 
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black)
@@ -119,26 +112,28 @@ fun VideoPlayerScreen(
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
                 if (isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
 
-                showControls = true
+                onShowControlsChange(true)
                 when (keyCode) {
-                    NativeKeyEvent.KEYCODE_BACK -> { onBackPressed(); true }
                     NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                        if (exoPlayer.isPlaying) { exoPlayer.pause(); indicatorState = IndicatorState(Icons.Default.Pause, "停止") }
-                        else { exoPlayer.play(); indicatorState = IndicatorState(Icons.Default.PlayArrow, "再生") }
+                        if (exoPlayer.isPlaying) {
+                            exoPlayer.pause()
+                            indicatorState = IndicatorState(Icons.Default.Pause, "停止")
+                        } else {
+                            exoPlayer.play()
+                            indicatorState = IndicatorState(Icons.Default.PlayArrow, "再生")
+                        }
                         true
                     }
                     NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
                         exoPlayer.seekTo(exoPlayer.currentPosition + 30000)
-                        indicatorState = IndicatorState(Icons.Default.FastForward, "+30s")
-                        true
+                        indicatorState = IndicatorState(Icons.Default.FastForward, "+30s"); true
                     }
                     NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
                         exoPlayer.seekTo(exoPlayer.currentPosition - 10000)
-                        indicatorState = IndicatorState(Icons.Default.FastRewind, "-10s")
-                        true
+                        indicatorState = IndicatorState(Icons.Default.FastRewind, "-10s"); true
                     }
-                    NativeKeyEvent.KEYCODE_DPAD_UP -> { isSubMenuOpen = true; true }
-                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> { isSceneSearchOpen = true; true }
+                    NativeKeyEvent.KEYCODE_DPAD_UP -> { onSubMenuToggle(true); true }
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> { onSceneSearchToggle(true); true }
                     else -> false
                 }
             }
@@ -149,18 +144,32 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
         )
 
-        if (!isSceneSearchOpen) {
-            PlayerControls(exoPlayer = exoPlayer, title = program.title, isVisible = showControls && !isSubMenuOpen)
-        }
+        PlayerControls(
+            exoPlayer = exoPlayer,
+            title = program.title,
+            isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen
+        )
 
-        if (isSceneSearchOpen) {
+        AnimatedVisibility(
+            visible = isSceneSearchOpen,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        ) {
             SceneSearchOverlay(
                 videoId = program.recordedVideo.id,
                 durationMs = exoPlayer.duration,
                 currentPositionMs = exoPlayer.currentPosition,
                 konomiIp = konomiIp, konomiPort = konomiPort,
-                onSeekRequested = { time -> exoPlayer.seekTo(time); isSceneSearchOpen = false; mainFocusRequester.requestFocus() },
-                onClose = { isSceneSearchOpen = false; mainFocusRequester.requestFocus() }
+                onSeekRequested = { time ->
+                    exoPlayer.seekTo(time)
+                    onSceneSearchToggle(false)
+                    mainFocusRequester.requestFocus()
+                },
+                onClose = {
+                    // SceneSearchOverlay内部のBackイベントで呼ばれる
+                    onSceneSearchToggle(false)
+                    mainFocusRequester.requestFocus()
+                }
             )
         }
 
@@ -172,9 +181,10 @@ fun VideoPlayerScreen(
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                     val tracks = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                     if (tracks.size >= 2) {
+                        val target = if (currentAudioMode == AudioMode.SUB) 1 else 0
                         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                            .addOverride(TrackSelectionOverride(tracks[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
+                            .addOverride(TrackSelectionOverride(tracks[target].mediaTrackGroup, 0))
                             .build()
                     }
                     toastState = "音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}" to System.currentTimeMillis()
@@ -192,11 +202,19 @@ fun VideoPlayerScreen(
         VideoToast(toastState)
     }
 
-    // ライフサイクル管理
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) exoPlayer.pause() }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                exoPlayer.pause()
+                onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
+            }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
+        onDispose {
+            onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            exoPlayer.release()
+        }
     }
 }
