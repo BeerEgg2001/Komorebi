@@ -111,11 +111,14 @@ fun HomeLauncherScreen(
         groupedChannels.keys.toList()
     }
 
+    // ★最適化: タブが切り替わったときの遅延コンポジション制御
     LaunchedEffect(selectedTabIndex) {
         if (!loadedTabs.contains(selectedTabIndex)) {
             isContentReady = false
+            // タブのクロスフェードアニメーション(150ms)が完全に終わるまでUIスレッドの重い描画を待機させる
+            // これにより、リモコンの十字キー操作に対するレスポンスが即座に行われます
             delay(200)
-            yield()
+            yield() // メインスレッドの他の処理（アニメーション等）にリソースを譲る
             loadedTabs.add(selectedTabIndex)
         }
         isContentReady = true
@@ -136,7 +139,6 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(isSettingsOpen) {
         if (!isSettingsOpen && !isFullScreenMode) {
-            // ★修正: 前回選択したチャンネル/番組がある場合は、設定ボタンへのフォーカスをスキップする
             if (lastPlayerChannelId == null && lastPlayerProgramId == null) {
                 delay(100)
                 settingsFocusRequester.requestFocus()
@@ -146,7 +148,6 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(Unit) {
         onUiReady()
-        // ★修正: 同様に、前回選択IDがない場合のみタブにフォーカスを当てる
         if (lastPlayerChannelId == null && lastPlayerProgramId == null) {
             delay(600)
             runCatching { tabFocusRequesters[selectedTabIndex].requestFocus() }
@@ -240,94 +241,107 @@ fun HomeLauncherScreen(
                     },
                     label = "TabContentTransition"
                 ) { targetIndex ->
-                    when (targetIndex) {
-                        0 -> {
-                            HomeContents(
-                                lastWatchedChannels = lastChannels,
-                                watchHistory = watchHistory,
-                                onChannelClick = onChannelClick,
-                                onHistoryClick = { history -> onProgramSelected(history.toRecordedProgram()) },
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
-                                externalFocusRequester = contentFirstItemRequesters[0],
-                                tabFocusRequester = tabFocusRequesters[0],
-                                lastFocusedChannelId = lastPlayerChannelId,
-                                lastFocusedProgramId = lastPlayerProgramId
+
+                    val showContent = isContentReady || loadedTabs.contains(targetIndex)
+
+                    if (!showContent) {
+                        // ★最適化: タブ切り替え直後から中身の構築が終わるまでの間、ローディングを表示する
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(48.dp)
                             )
                         }
-                        1 -> {
-                            LiveContent(
-                                groupedChannels = groupedChannels,
-                                selectedChannel = selectedChannel,
-                                lastWatchedChannel = null,
-                                onChannelClick = onChannelClick,
-                                onFocusChannelChange = { },
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
-                                konomiIp = konomiIp, konomiPort = konomiPort,
-                                topNavFocusRequester = tabFocusRequesters[1],
-                                contentFirstItemRequester = contentFirstItemRequesters[1],
-                                onPlayerStateChanged = { },
-                                lastFocusedChannelId = lastPlayerChannelId
-                            )
-                        }
-                        2 -> {
-                            EpgNavigationContainer(
-                                uiState = epgUiState,
-                                logoUrls = cachedLogoUrls,
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
-                                mainTabFocusRequester = tabFocusRequesters[2],
-                                contentRequester = contentFirstItemRequesters[2],
-                                selectedProgram = epgSelectedProgram,
-                                onProgramSelected = onEpgProgramSelected,
-                                isJumpMenuOpen = isEpgJumpMenuOpen,
-                                onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                                onNavigateToPlayer = onNavigateToPlayer,
-                                currentType = currentBroadcastingType,
-                                onTypeChanged = { newType ->
-                                    epgViewModel.updateBroadcastingType(newType)
-                                },
-                                restoreChannelId = lastPlayerChannelId,
-                                availableTypes = availableTypes
-                            )
-                        }
-                        3 -> {
-                            if (isRecordListOpen) {
-                                RecordListScreen(
-                                    recentRecordings = recentRecordings,
+                    } else {
+                        when (targetIndex) {
+                            0 -> {
+                                HomeContents(
+                                    lastWatchedChannels = lastChannels,
+                                    watchHistory = watchHistory,
+                                    onChannelClick = onChannelClick,
+                                    onHistoryClick = { history -> onProgramSelected(history.toRecordedProgram()) },
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onProgramClick = onProgramSelected,
-                                    onLoadMore = { recordViewModel.loadNextPage() },
-                                    isLoadingMore = isRecordingLoadingMore,
-                                    onBack = onCloseRecordList
-                                )
-                            } else {
-                                VideoTabContent(
-                                    recentRecordings = recentRecordings,
-                                    watchHistory = watchHistoryPrograms,
-                                    selectedProgram = selectedProgram,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    topNavFocusRequester = tabFocusRequesters[3],
-                                    contentFirstItemRequester = contentFirstItemRequesters[3],
-                                    onProgramClick = onProgramSelected,
-                                    onLoadMore = { recordViewModel.loadNextPage() },
-                                    isLoadingMore = isRecordingLoadingMore,
-                                    onShowAllRecordings = onShowAllRecordings
+                                    mirakurunIp = mirakurunIp,
+                                    mirakurunPort = mirakurunPort,
+                                    externalFocusRequester = contentFirstItemRequesters[0],
+                                    tabFocusRequester = tabFocusRequesters[0],
+                                    lastFocusedChannelId = lastPlayerChannelId,
+                                    lastFocusedProgramId = lastPlayerProgramId
                                 )
                             }
-                        }
-                        else -> {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "${tabs[targetIndex]} コンテンツは準備中です",
-                                    color = Color.Gray,
-                                    style = MaterialTheme.typography.headlineSmall
+                            1 -> {
+                                LiveContent(
+                                    groupedChannels = groupedChannels,
+                                    selectedChannel = selectedChannel,
+                                    lastWatchedChannel = null,
+                                    onChannelClick = onChannelClick,
+                                    onFocusChannelChange = { },
+                                    mirakurunIp = mirakurunIp,
+                                    mirakurunPort = mirakurunPort,
+                                    konomiIp = konomiIp, konomiPort = konomiPort,
+                                    topNavFocusRequester = tabFocusRequesters[1],
+                                    contentFirstItemRequester = contentFirstItemRequesters[1],
+                                    onPlayerStateChanged = { },
+                                    lastFocusedChannelId = lastPlayerChannelId
                                 )
+                            }
+                            2 -> {
+                                EpgNavigationContainer(
+                                    uiState = epgUiState,
+                                    logoUrls = cachedLogoUrls,
+                                    mirakurunIp = mirakurunIp,
+                                    mirakurunPort = mirakurunPort,
+                                    mainTabFocusRequester = tabFocusRequesters[2],
+                                    contentRequester = contentFirstItemRequesters[2],
+                                    selectedProgram = epgSelectedProgram,
+                                    onProgramSelected = onEpgProgramSelected,
+                                    isJumpMenuOpen = isEpgJumpMenuOpen,
+                                    onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
+                                    onNavigateToPlayer = onNavigateToPlayer,
+                                    currentType = currentBroadcastingType,
+                                    onTypeChanged = { newType ->
+                                        epgViewModel.updateBroadcastingType(newType)
+                                    },
+                                    restoreChannelId = lastPlayerChannelId,
+                                    availableTypes = availableTypes
+                                )
+                            }
+                            3 -> {
+                                if (isRecordListOpen) {
+                                    RecordListScreen(
+                                        recentRecordings = recentRecordings,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        onProgramClick = onProgramSelected,
+                                        onLoadMore = { recordViewModel.loadNextPage() },
+                                        isLoadingMore = isRecordingLoadingMore,
+                                        onBack = onCloseRecordList
+                                    )
+                                } else {
+                                    VideoTabContent(
+                                        recentRecordings = recentRecordings,
+                                        watchHistory = watchHistoryPrograms,
+                                        selectedProgram = selectedProgram,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        topNavFocusRequester = tabFocusRequesters[3],
+                                        contentFirstItemRequester = contentFirstItemRequesters[3],
+                                        onProgramClick = onProgramSelected,
+                                        onLoadMore = { recordViewModel.loadNextPage() },
+                                        isLoadingMore = isRecordingLoadingMore,
+                                        onShowAllRecordings = onShowAllRecordings
+                                    )
+                                }
+                            }
+                            else -> {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "${tabs[targetIndex]} コンテンツは準備中です",
+                                        color = Color.Gray,
+                                        style = MaterialTheme.typography.headlineSmall
+                                    )
+                                }
                             }
                         }
                     }

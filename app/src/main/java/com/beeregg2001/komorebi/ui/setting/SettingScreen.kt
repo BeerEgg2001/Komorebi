@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.home
+package com.beeregg2001.komorebi.ui.setting
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.ui.settings.OpenSourceLicensesScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -41,6 +42,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var editingItem by remember { mutableStateOf<Pair<String, String>?>(null) }
 
+    // ★追加: オープンソースライセンス画面の表示状態
+    var showLicenses by remember { mutableStateOf(false) }
+
     val categories = listOf(
         Category("接続設定", Icons.Default.CastConnected),
         Category("表示設定", Icons.Default.Tv),
@@ -55,132 +59,144 @@ fun SettingsScreen(onBack: () -> Unit) {
     val mIpFocusRequester = remember { FocusRequester() }
     val mPortFocusRequester = remember { FocusRequester() }
 
+    // ★追加: ライセンスボタンのFocusRequester
+    val appInfoLicenseRequester = remember { FocusRequester() }
+
     // 最後にフォーカスがあった項目を記憶する変数
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
 
-    // ★修正: 初期フォーカスをサイドバーに固定
-    LaunchedEffect(Unit) {
-        // UI描画完了を待ってサイドバーにフォーカス
-        delay(50)
-        sideBarFocusRequester.requestFocus()
-    }
-
-    // ★修正: ダイアログから戻った時のみフォーカスを復帰させる
-    LaunchedEffect(editingItem) {
-        if (editingItem == null) {
-            // restoreFocusRequester がある場合（＝ダイアログを開いて戻ってきた場合）のみ実行
-            // 初回起動時は null なので、勝手に右側へフォーカスが飛ぶのを防ぐ
-            restoreFocusRequester?.requestFocus()
+    if (showLicenses) {
+        // ライセンス画面を表示（※OpenSourceLicensesScreenは同一パッケージを想定）
+        OpenSourceLicensesScreen(onBack = { showLicenses = false })
+    } else {
+        // ★修正: 初期化時、ダイアログから戻った時、ライセンス画面から戻った時のフォーカス制御を統合
+        LaunchedEffect(editingItem) {
+            if (editingItem == null) {
+                if (restoreFocusRequester != null) {
+                    // ダイアログやライセンス画面から戻ってきた場合
+                    delay(50)
+                    restoreFocusRequester?.requestFocus()
+                } else {
+                    // 初回起動時
+                    delay(50)
+                    sideBarFocusRequester.requestFocus()
+                }
+            }
         }
-    }
 
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF111111))
-    ) {
-        // --- 左側：サイドバーメニュー ---
-        Column(
+        Row(
             modifier = Modifier
-                .width(280.dp)
-                .fillMaxHeight()
-                .background(Color(0xFF0A0A0A))
-                .padding(vertical = 48.dp, horizontal = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxSize()
+                .background(Color(0xFF111111))
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 32.dp, start = 8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = "設定",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            categories.forEachIndexed { index, category ->
-                CategoryItem(
-                    title = category.name,
-                    icon = category.icon,
-                    isSelected = selectedCategoryIndex == index,
-                    onFocused = { selectedCategoryIndex = index },
-                    onClick = {
-                        // カテゴリをクリック（決定）した時は、そのカテゴリの最初の項目へフォーカス移動
-                        if (index == 0) kIpFocusRequester.requestFocus()
-                    },
-                    modifier = if (index == 0) Modifier.focusRequester(sideBarFocusRequester) else Modifier
-                )
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            CategoryItem(
-                title = "ホームに戻る",
-                icon = Icons.Default.Home,
-                isSelected = false,
-                onFocused = { },
-                onClick = onBack,
+            // --- 左側：サイドバーメニュー ---
+            Column(
                 modifier = Modifier
+                    .width(280.dp)
+                    .fillMaxHeight()
+                    .background(Color(0xFF0A0A0A))
+                    .padding(vertical = 48.dp, horizontal = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 32.dp, start = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "設定",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                categories.forEachIndexed { index, category ->
+                    CategoryItem(
+                        title = category.name,
+                        icon = category.icon,
+                        isSelected = selectedCategoryIndex == index,
+                        onFocused = { selectedCategoryIndex = index },
+                        onClick = {
+                            // カテゴリをクリック（決定）した時は、そのカテゴリの最初の項目へフォーカス移動
+                            if (index == 0) kIpFocusRequester.requestFocus()
+                            if (index == 2) appInfoLicenseRequester.requestFocus() // ★追加
+                        },
+                        modifier = if (index == 0) Modifier.focusRequester(sideBarFocusRequester) else Modifier
+                    )
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                CategoryItem(
+                    title = "ホームに戻る",
+                    icon = Icons.Default.Home,
+                    isSelected = false,
+                    onFocused = { },
+                    onClick = onBack,
+                    modifier = Modifier
+                )
+            }
+
+            // --- 右側：詳細コンテンツエリア ---
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(vertical = 48.dp, horizontal = 64.dp)
+            ) {
+                when (selectedCategoryIndex) {
+                    0 -> ConnectionSettingsContent(
+                        kIp = konomiIp,
+                        kPort = konomiPort,
+                        mIp = mirakurunIp,
+                        mPort = mirakurunPort,
+                        onEditRequest = { title, currentVal -> editingItem = title to currentVal },
+                        kIpRequester = kIpFocusRequester,
+                        kPortRequester = kPortFocusRequester,
+                        mIpRequester = mIpFocusRequester,
+                        mPortRequester = mPortFocusRequester,
+                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                    )
+                    1 -> PlaceholderContent("表示設定は準備中です", Icons.Default.Tv)
+                    2 -> AppInfoContent(
+                        onShowLicenses = { showLicenses = true },
+                        licenseRequester = appInfoLicenseRequester,
+                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                    )
+                }
+            }
+        }
+
+        editingItem?.let { (title, value) ->
+            InputDialog(
+                title = title,
+                initialValue = value,
+                onDismiss = { editingItem = null },
+                onConfirm = { newValue ->
+                    scope.launch {
+                        val key = when (title) {
+                            "KonomiTV アドレス" -> SettingsRepository.KONOMI_IP
+                            "KonomiTV ポート番号" -> SettingsRepository.KONOMI_PORT
+                            "Mirakurun IPアドレス" -> SettingsRepository.MIRAKURUN_IP
+                            "Mirakurun ポート番号" -> SettingsRepository.MIRAKURUN_PORT
+                            else -> null
+                        }
+
+                        if (key != null) {
+                            repository.saveString(key, newValue)
+                        }
+                    }
+                    editingItem = null
+                }
             )
         }
-
-        // --- 右側：詳細コンテンツエリア ---
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(vertical = 48.dp, horizontal = 64.dp)
-        ) {
-            when (selectedCategoryIndex) {
-                0 -> ConnectionSettingsContent(
-                    kIp = konomiIp,
-                    kPort = konomiPort,
-                    mIp = mirakurunIp,
-                    mPort = mirakurunPort,
-                    onEditRequest = { title, currentVal -> editingItem = title to currentVal },
-                    kIpRequester = kIpFocusRequester,
-                    kPortRequester = kPortFocusRequester,
-                    mIpRequester = mIpFocusRequester,
-                    mPortRequester = mPortFocusRequester,
-                    onItemClicked = { requester -> restoreFocusRequester = requester }
-                )
-                1 -> PlaceholderContent("表示設定は準備中です", Icons.Default.Tv)
-                2 -> AppInfoContent()
-            }
-        }
-    }
-
-    editingItem?.let { (title, value) ->
-        InputDialog(
-            title = title,
-            initialValue = value,
-            onDismiss = { editingItem = null },
-            onConfirm = { newValue ->
-                scope.launch {
-                    val key = when (title) {
-                        "KonomiTV アドレス" -> SettingsRepository.KONOMI_IP
-                        "KonomiTV ポート番号" -> SettingsRepository.KONOMI_PORT
-                        "Mirakurun IPアドレス" -> SettingsRepository.MIRAKURUN_IP
-                        "Mirakurun ポート番号" -> SettingsRepository.MIRAKURUN_PORT
-                        else -> null
-                    }
-
-                    if (key != null) {
-                        repository.saveString(key, newValue)
-                    }
-                }
-                editingItem = null
-            }
-        )
     }
 }
 
@@ -288,8 +304,13 @@ fun PlaceholderContent(message: String, icon: ImageVector) {
     }
 }
 
+// ★修正: アプリ情報コンテンツにライセンスへの導線を追加
 @Composable
-fun AppInfoContent() {
+fun AppInfoContent(
+    onShowLicenses: () -> Unit,
+    licenseRequester: FocusRequester,
+    onItemClicked: (FocusRequester) -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -307,7 +328,22 @@ fun AppInfoContent() {
             style = MaterialTheme.typography.titleMedium,
             color = Color.Gray
         )
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(48.dp))
+
+        // デザインを統一したライセンス画面へのボタン
+        SettingItem(
+            title = "オープンソースライセンス",
+            value = "",
+            modifier = Modifier
+                .width(400.dp)
+                .focusRequester(licenseRequester),
+            onClick = {
+                onItemClicked(licenseRequester)
+                onShowLicenses()
+            }
+        )
+
+        Spacer(modifier = Modifier.height(48.dp))
         Text(
             text = "© 2026 Komorebi Project",
             style = MaterialTheme.typography.bodyMedium,
@@ -425,6 +461,7 @@ fun SettingItem(
                 )
             }
 
+            // valueが空文字でもレイアウトが崩れないため、ライセンスボタンでも違和感なく表示されます
             Text(
                 text = value,
                 style = MaterialTheme.typography.bodyLarge,

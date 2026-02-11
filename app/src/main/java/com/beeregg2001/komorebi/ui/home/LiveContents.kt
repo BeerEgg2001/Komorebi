@@ -32,7 +32,6 @@ import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.viewmodel.Channel
 import kotlinx.coroutines.delay
-import java.time.ZonedDateTime
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -83,7 +82,8 @@ fun LiveContent(
                 val displayCategory = if (key == "GR") "地デジ" else key
                 val channels = groupedChannels[key] ?: emptyList()
 
-                item(key = key) {
+                // ★最適化: contentType を指定し、Composeエンジンにレイアウトの使い回しを指示
+                item(key = key, contentType = "CategoryRow") {
                     Column(modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)) {
                         Text(
                             text = displayCategory,
@@ -97,7 +97,8 @@ fun LiveContent(
                             contentPadding = PaddingValues(horizontal = 32.dp),
                             modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
                         ) {
-                            items(channels, key = { it.id }) { channel ->
+                            // ★最適化: こちらにも contentType を指定
+                            items(channels, key = { it.id }, contentType = { "ChannelCard" }) { channel ->
                                 val isTarget = channel.id == selectedChannel?.id || (selectedChannel == null && channel.id == lastFocusedChannelId)
 
                                 ChannelWideCard(
@@ -168,8 +169,26 @@ fun ChannelWideCard(
         label = "cardScale"
     )
 
-    val progress = remember(channel.programPresent, globalTick) {
-        calculateProgress(channel.programPresent?.startTime, channel.programPresent?.duration)
+    val startTime = channel.programPresent?.startTime
+    val duration = channel.programPresent?.duration
+
+    // ★最適化: 重いパース処理を文字列が変わった時(番組が切り替わった時)のみ1回だけ実行してキャッシュ
+    val startTimeMillis = remember(startTime) {
+        if (startTime.isNullOrEmpty()) 0L
+        else try {
+            java.time.OffsetDateTime.parse(startTime).toInstant().toEpochMilli()
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    // 計算にはパース済みのミリ秒を使うため、極めて軽量に
+    val progress = remember(startTimeMillis, duration, globalTick) {
+        if (startTimeMillis == 0L || duration == null || duration <= 0) 0f
+        else {
+            val currentTimeMillis = System.currentTimeMillis()
+            ((currentTimeMillis - startTimeMillis).toFloat() / (duration * 1000).toFloat()).coerceIn(0f, 1f)
+        }
     }
 
     Surface(
@@ -199,7 +218,6 @@ fun ChannelWideCard(
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ChannelLogoを使用
                 ChannelLogo(
                     channel = channel,
                     mirakurunIp = mirakurunIp,
@@ -260,18 +278,5 @@ fun ChannelWideCard(
                 }
             }
         }
-    }
-}
-
-@RequiresApi(Build.VERSION_CODES.O)
-fun calculateProgress(startTimeString: String?, duration: Int?): Float {
-    if (startTimeString == null || duration == null || duration <= 0) return 0f
-    return try {
-        val startTimeMillis = ZonedDateTime.parse(startTimeString).toInstant().toEpochMilli()
-        val currentTimeMillis = System.currentTimeMillis()
-        val progress = (currentTimeMillis - startTimeMillis).toFloat() / (duration * 1000).toFloat()
-        progress.coerceIn(0f, 1f)
-    } catch (e: Exception) {
-        0f
     }
 }

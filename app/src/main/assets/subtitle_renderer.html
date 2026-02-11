@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100vw; height: 100vh;
+            background-color: transparent !important;
+            overflow: hidden;
+            position: fixed; top: 0; left: 0;
+        }
+        #subtitle-container {
+            width: 100vw; height: 100vh; position: absolute; top: 0; left: 0;
+            pointer-events: none;
+            box-sizing: border-box;
+        }
+        #subtitle-container canvas {
+            width: 100% !important; height: 100% !important;
+            display: block;
+        }
+    </style>
+    <script src="./aribb24.js"></script>
+</head>
+<body>
+<div id="subtitle-container"></div>
+<script>
+    const Aribb24Lib = window.aribb24;
+    let controller, renderer, feeder;
+    const dummyVideo = document.createElement('video');
+    dummyVideo.muted = true;
+    dummyVideo.playsInline = true;
+    dummyVideo.src = "data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAAAGlzb21hdmMxbXA0MgAAAAhZy1mcmVlAAAAi21kYXQ=";
+
+    function initRenderer() {
+        try {
+            controller = new Aribb24Lib.Controller();
+            feeder = new Aribb24Lib.MPEGTSFeeder();
+            renderer = new Aribb24Lib.CanvasMainThreadRenderer({
+                font: { normal: '"Noto Sans JP", "Hiragino Sans", sans-serif' },
+                forceFullWindow: true,
+                enableAutoInvisibility: true
+            });
+            controller.attachRenderer(renderer);
+            controller.attachFeeder(feeder);
+            const container = document.getElementById('subtitle-container');
+            controller.attachMedia(dummyVideo, container);
+            feeder.prepare(0);
+            controller.show();
+            dummyVideo.play().catch(() => {});
+            const canvas = renderer.getPresentationCanvas();
+            container.appendChild(canvas);
+            updateSize();
+        } catch (e) { console.error("Subtitle Engine Error", e); }
+    }
+
+    function updateSize() {
+        if (renderer) {
+            renderer.onContainerResize(
+                window.innerWidth * window.devicePixelRatio,
+                window.innerHeight * window.devicePixelRatio
+            );
+        }
+    }
+
+    window.receiveSubtitleData = function(ptsMs, base64Data) {
+        if (!feeder || !controller) return;
+        try {
+            const ptsSec = ptsMs / 1000.0;
+
+            // ★改善：クロックの同期を「必要なときだけ」行う（毎秒のパケットで時計を壊さない）
+            // 0.2秒以上のズレがある場合のみ同期させる
+            if (Math.abs(dummyVideo.currentTime - ptsSec) > 0.2) {
+                dummyVideo.currentTime = ptsSec;
+            }
+
+            const binary = window.atob(base64Data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+            // データを投入。
+            feeder.feedB24(bytes.buffer, ptsSec, ptsSec);
+
+            // 即座に描画を更新
+            controller.paint(true);
+        } catch (e) {}
+    };
+    window.onresize = updateSize;
+    window.onload = initRenderer;
+</script>
+</body>
+</html>

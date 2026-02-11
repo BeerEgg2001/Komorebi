@@ -7,9 +7,27 @@ import androidx.compose.ui.text.TextLayoutResult
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.epg.EpgDataConverter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
+
+// 描画用の事前計算済みデータクラス
+@RequiresApi(Build.VERSION_CODES.O)
+class UiProgram(
+    val program: EpgProgram,
+    val topY: Float,
+    val height: Float,
+    val isEmpty: Boolean,
+    val endTimeMs: Long
+)
+
+@RequiresApi(Build.VERSION_CODES.O)
+class UiChannel(
+    val wrapper: EpgChannelWrapper,
+    val uiPrograms: List<UiProgram>
+)
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Stable
@@ -19,13 +37,19 @@ class EpgState(
     // --- データ ---
     var filledChannelWrappers by mutableStateOf<List<EpgChannelWrapper>>(emptyList())
         private set
+    var uiChannels by mutableStateOf<List<UiChannel>>(emptyList())
+        private set
     var baseTime by mutableStateOf(OffsetDateTime.now())
         private set
     var limitTime by mutableStateOf(OffsetDateTime.now())
         private set
 
     val hasData: Boolean
-        get() = filledChannelWrappers.isNotEmpty()
+        get() = uiChannels.isNotEmpty()
+
+    // バックグラウンドでの計算中フラグ
+    var isCalculating by mutableStateOf(false)
+        private set
 
     // --- 状態 ---
     var focusedCol by mutableIntStateOf(0)
@@ -49,48 +73,69 @@ class EpgState(
     private val maxScrollMinutes = 1440 * 14 // 2週間
 
     /**
-     * データを更新し、初期位置を計算する
+     * バックグラウンドスレッドで重い座標計算と日時パースを一括で行う
+     * ★修正: resetFocusフラグを追加し、タブ切り替え時にフォーカスをリセットできるようにしました
      */
-    @RequiresApi(Build.VERSION_CODES.O)
-    fun updateData(newData: List<EpgChannelWrapper>) {
-        try {
-            val now = OffsetDateTime.now()
-            baseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
-            limitTime = baseTime.plusMinutes(maxScrollMinutes.toLong())
+    suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
+        isCalculating = true // 計算開始
+        withContext(Dispatchers.Default) {
+            try {
+                val now = OffsetDateTime.now()
+                val newBaseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
+                val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
-            filledChannelWrappers = newData.map { wrapper ->
-                wrapper.copy(programs = EpgDataConverter.getFilledPrograms(wrapper.channel.id, wrapper.programs, baseTime, limitTime))
+                val newUiChannels = newData.map { wrapper ->
+                    val filled = EpgDataConverter.getFilledPrograms(wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime)
+                    val uiProgs = filled.map { p ->
+                        val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
+                        val topY = (sOff / 60f) * config.hhPx
+                        val height = (dur / 60f) * config.hhPx
+                        val isEmpty = p.title == "（番組情報なし）"
+                        val endMs = try {
+                            EpgDataConverter.safeParseTime(p.end_time, newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())).toInstant().toEpochMilli()
+                        } catch (e: Exception) { 0L }
+
+                        UiProgram(p, topY, height, isEmpty, endMs)
+                    }
+                    UiChannel(wrapper.copy(programs = filled), uiProgs)
+                }
+
+                withContext(Dispatchers.Main) {
+                    baseTime = newBaseTime
+                    limitTime = newLimitTime
+                    uiChannels = newUiChannels
+                    filledChannelWrappers = newUiChannels.map { it.wrapper }
+                    textLayoutCache.clear()
+
+                    // ★修正: 初回読み込み、またはタブ切り替え(resetFocus)の時に位置をリセット
+                    if (targetScrollY == 0f || resetFocus) {
+                        val nowMin = getNowMinutes()
+                        val justHourMin = (nowMin / 60) * 60
+
+                        targetScrollX = 0f
+                        targetScrollY = -(justHourMin / 60f * config.hhPx)
+
+                        // 一番左(0)かつ現在時刻でフォーカスをセット
+                        updatePositions(0, nowMin)
+                    } else {
+                        // データ更新（裏でのポーリングなど）の場合は現在のフォーカスを維持
+                        if (uiChannels.isNotEmpty()) {
+                            updatePositions(focusedCol, focusedMin)
+                        }
+                    }
+                    isCalculating = false // 計算終了
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    uiChannels = emptyList()
+                    filledChannelWrappers = emptyList()
+                    isCalculating = false
+                }
             }
-            textLayoutCache.clear()
-
-            // 初回ロード時（スクロール位置が未設定の場合）のみ位置合わせを行う
-            if (targetScrollY == 0f) {
-                val nowMin = getNowMinutes()
-
-                // ★修正: 現在時刻の「00分」を基準にスクロール位置を決定する
-                // 例: 14:25 の場合、14:00 の位置が画面最上部に来るようにする
-                val justHourMin = (nowMin / 60) * 60
-
-                // フォーカス計算用は「現在時刻」を維持（現在放送中の番組を選択するため）
-                focusedMin = nowMin
-
-                // スクロールY座標を00分基準で設定
-                targetScrollY = -(justHourMin / 60f * config.hhPx)
-
-                // フォーカス枠のアニメーション初期値は現在時刻ベース（後で updatePositions で補正される）
-                targetAnimY = (nowMin / 60f * config.hhPx)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // エラー時は空リストで安全に動作させる
-            filledChannelWrappers = emptyList()
         }
     }
 
-    /**
-     * 画面サイズを更新する
-     * 0以下の不正な値が来た場合は無視するガードを追加
-     */
     fun updateScreenSize(width: Float, height: Float) {
         if (width > 0 && height > 0) {
             screenWidthPx = width
@@ -100,58 +145,39 @@ class EpgState(
 
     fun getNowMinutes(): Int {
         val now = OffsetDateTime.now()
-        // Duration計算時の例外ハンドリング
         return try {
             Duration.between(baseTime, now).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
-        } catch (e: Exception) {
-            0
-        }
+        } catch (e: Exception) { 0 }
     }
 
-    /**
-     * 指定位置へフォーカスを移動し、スクロール位置を計算する
-     */
     fun updatePositions(col: Int, min: Int) {
-        if (filledChannelWrappers.isEmpty()) return
+        if (uiChannels.isEmpty()) return
 
-        // 範囲外アクセス防止のためのガードを強化
-        val columns = filledChannelWrappers.size
+        val columns = uiChannels.size
         val safeCol = col.coerceIn(0, (columns - 1).coerceAtLeast(0))
         val safeMin = min.coerceIn(0, maxScrollMinutes)
 
-        // チャンネル取得時の安全策
-        val channel = filledChannelWrappers.getOrNull(safeCol) ?: return
+        val channel = uiChannels.getOrNull(safeCol) ?: return
 
-        // 時間計算時の安全策
-        val focusTime = try {
-            baseTime.plusMinutes(safeMin.toLong())
-        } catch (e: Exception) {
-            baseTime
+        val focusY = (safeMin / 60f) * config.hhPx
+        val uiProg = channel.uiPrograms.find {
+            focusY >= it.topY && focusY < it.topY + it.height
         }
 
-        // 番組検索
-        val prog = channel.programs.find { p ->
-            val s = EpgDataConverter.safeParseTime(p.start_time, baseTime)
-            val e = EpgDataConverter.safeParseTime(p.end_time, s.plusMinutes(1))
-            !focusTime.isBefore(s) && focusTime.isBefore(e)
-        }
-        currentFocusedProgram = prog
-
-        val (sOff, dur) = prog?.let { EpgDataConverter.calculateSafeOffsets(it, baseTime) }
-            ?: (safeMin.toFloat() to 30f)
+        currentFocusedProgram = uiProg?.program
 
         targetAnimX = safeCol * config.cwPx
-        targetAnimY = (sOff / 60f) * config.hhPx
-        targetAnimH = if (prog?.title == "（番組情報なし）") {
-            (dur / 60f * config.hhPx)
+        if (uiProg != null) {
+            targetAnimY = uiProg.topY
+            targetAnimH = if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
         } else {
-            (dur / 60f * config.hhPx).coerceAtLeast(config.minExpHPx)
+            targetAnimY = focusY
+            targetAnimH = 30f / 60f * config.hhPx
         }
 
-        // スクロール位置計算
-        val visibleW = (screenWidthPx - config.twPx).coerceAtLeast(100f) // 最小幅保証
+        val visibleW = (screenWidthPx - config.twPx).coerceAtLeast(100f)
         val topOffset = config.hhAreaPx
-        val visibleH = (screenHeightPx - topOffset).coerceAtLeast(100f) // 最小高さ保証
+        val visibleH = (screenHeightPx - topOffset).coerceAtLeast(100f)
 
         var nextTargetX = targetScrollX
         if (targetAnimX < -targetScrollX) nextTargetX = -targetAnimX
@@ -161,7 +187,6 @@ class EpgState(
         if (targetAnimY + targetAnimH > -targetScrollY + visibleH) nextTargetY = -(targetAnimY + targetAnimH - visibleH + config.sPadPx)
         if (targetAnimY < -targetScrollY) nextTargetY = -targetAnimY
 
-        // スクロール範囲の制限
         val maxScrollX = -(columns * config.cwPx - visibleW).coerceAtLeast(0f)
         val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
 

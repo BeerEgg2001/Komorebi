@@ -37,9 +37,10 @@ fun ChannelLogo(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(logoUrl)
-                .crossfade(true)
+                // ★最適化: TVデバイスで激しい処理落ちを引き起こすcrossfadeを無効化
+                .crossfade(false)
                 .build(),
-            contentDescription = "${channel.name} Logo",
+            contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = contentScale
         )

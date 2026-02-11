@@ -5,7 +5,9 @@ import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
@@ -17,20 +19,22 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import androidx.tv.material3.MaterialTheme.typography
-import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 
-// 最適化のためのデータ構造
 @Immutable
 data class EpgSlotState(
     val time: OffsetDateTime,
@@ -50,7 +54,6 @@ fun EpgJumpMenu(
     val now = remember { OffsetDateTime.now().truncatedTo(ChronoUnit.HOURS) }
     val fullTimeSlots = remember { (0..23).toList() }
 
-    // 全スロットの情報を事前に計算（getTimeSlotColorから@Composableを外したのでここで呼べるようになります）
     val gridData = remember(dates, now) {
         dates.mapIndexed { dIdx, date ->
             fullTimeSlots.map { hour ->
@@ -58,29 +61,26 @@ fun EpgJumpMenu(
                 EpgSlotState(
                     time = slotTime,
                     isSelectable = !slotTime.isBefore(now),
-                    baseColor = getTimeSlotColor(hour), // エラー解消箇所
+                    baseColor = getTimeSlotColor(hour),
                     globalIndex = (dIdx * 24) + hour
                 )
             }
         }
     }
 
-    // フォーカスされているインデックスを管理
     var globalFocusedIndex by remember { mutableIntStateOf(-1) }
 
     val slotHeight = 13.dp
     val columnWidth = 85.dp
 
-    // 2次元FocusRequester
     val focusRequesters = remember(dates.size) {
         List(dates.size) { List(24) { FocusRequester() } }
     }
 
     BackHandler(enabled = true) { onDismiss() }
 
-    // 初期フォーカス
+    // ★修正: delay(50) を削除し、直ちにフォーカスを要求して「一瞬間が空く」問題を解消
     LaunchedEffect(Unit) {
-        delay(50)
         var focused = false
         for (dIdx in gridData.indices) {
             for (tIdx in 0..23) {
@@ -129,7 +129,6 @@ fun EpgJumpMenu(
                 )
 
                 Row {
-                    // --- 1. 時刻ラベル列 ---
                     Column(horizontalAlignment = Alignment.End) {
                         Box(modifier = Modifier.width(60.dp).height(35.dp))
                         fullTimeSlots.forEach { hour ->
@@ -137,20 +136,19 @@ fun EpgJumpMenu(
                         }
                     }
 
-                    // --- 2. 日付・スロット列 ---
                     gridData.forEachIndexed { dIdx, daySlots ->
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             HeaderCell(dates[dIdx], columnWidth)
 
                             daySlots.forEachIndexed { tIdx, slot ->
-                                // ハイライト判定
                                 val isHighlighted = globalFocusedIndex != -1 &&
                                         slot.globalIndex >= globalFocusedIndex &&
                                         slot.globalIndex < globalFocusedIndex + 3
 
-                                Surface(
-                                    enabled = slot.isSelectable,
-                                    onClick = { onSelect(slot.time) },
+                                var isFocused by remember { mutableStateOf(false) }
+
+                                // ★修正: 重いSurfaceを最軽量のBoxに置き換え（見た目は完全に同一に再現）
+                                Box(
                                     modifier = Modifier
                                         .width(columnWidth)
                                         .height(slotHeight)
@@ -164,24 +162,30 @@ fun EpgJumpMenu(
                                             }
                                         }
                                         .onFocusChanged {
+                                            isFocused = it.isFocused
                                             if (it.isFocused) {
                                                 globalFocusedIndex = slot.globalIndex
                                             }
-                                        },
-                                    shape = ClickableSurfaceDefaults.shape(shape = RectangleShape),
-                                    colors = ClickableSurfaceDefaults.colors(
-                                        containerColor = if (isHighlighted) Color(0xFFFFFF00) else slot.baseColor,
-                                        focusedContainerColor = Color(0xFFFFFF00),
-                                        disabledContainerColor = slot.baseColor.copy(alpha = 0.1f)
-                                    ),
-                                    border = ClickableSurfaceDefaults.border(
-                                        border = Border(BorderStroke(0.5.dp, Color.Black.copy(0.3f))),
-                                        focusedBorder = Border(BorderStroke(2.dp, Color.White)),
-                                        disabledBorder = Border(BorderStroke(0.5.dp, Color.Transparent))
-                                    )
-                                ) {
-                                    Box(modifier = Modifier.fillMaxSize())
-                                }
+                                        }
+                                        .focusable(enabled = slot.isSelectable)
+                                        .onKeyEvent { event ->
+                                            if (event.type == KeyEventType.KeyDown && (event.key == Key.DirectionCenter || event.key == Key.Enter)) {
+                                                onSelect(slot.time)
+                                                true
+                                            } else false
+                                        }
+                                        .background(
+                                            if (isHighlighted || isFocused) Color(0xFFFFFF00)
+                                            else if (!slot.isSelectable) slot.baseColor.copy(alpha = 0.1f)
+                                            else slot.baseColor
+                                        )
+                                        .border(
+                                            width = if (isFocused) 2.dp else 0.5.dp,
+                                            color = if (isFocused) Color.White
+                                            else if (!slot.isSelectable) Color.Transparent
+                                            else Color.Black.copy(0.3f)
+                                        )
+                                )
                             }
                         }
                     }
@@ -247,7 +251,6 @@ fun HeaderCell(date: OffsetDateTime, width: Dp) {
     }
 }
 
-// 修正：@Composableを外し、通常の関数にしました
 fun getTimeSlotColor(hour: Int): Color {
     return when (hour) {
         in 4..10 -> Color(0xFF422B2B)  // 朝：淡赤

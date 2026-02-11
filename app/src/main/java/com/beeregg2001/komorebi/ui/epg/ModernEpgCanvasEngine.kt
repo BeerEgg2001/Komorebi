@@ -67,11 +67,13 @@ fun ModernEpgCanvasEngine_Smooth(
     val visibleTabs = remember(availableTypes) {
         if (availableTypes.isEmpty()) allTabTypes else allTabTypes.filter { it.second in availableTypes }
     }
-    // インデックス範囲外エラーを防ぐため、サイズ変更時に再生成
     val subTabFocusRequesters = remember(visibleTabs.size) { List(visibleTabs.size) { FocusRequester() } }
 
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
+
+    // ★追加: 以前読み込まれた放送波のタイプを記憶
+    var lastLoadedType by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
@@ -89,7 +91,10 @@ fun ModernEpgCanvasEngine_Smooth(
 
     LaunchedEffect(uiState) {
         if (uiState is EpgUiState.Success) {
-            epgState.updateData(uiState.data)
+            // ★修正: タブが切り替わったことを検知して、resetFocusフラグを渡す
+            val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
+            lastLoadedType = currentType
+            epgState.updateData(uiState.data, resetFocus = isTypeChanged)
         }
     }
 
@@ -220,7 +225,7 @@ fun ModernEpgCanvasEngine_Smooth(
                     )
                 }
 
-                if (uiState is EpgUiState.Loading) {
+                if (uiState is EpgUiState.Loading || epgState.isCalculating) {
                     val bgColor = if (epgState.hasData) Color.Black.copy(alpha = 0.5f) else Color.Black
                     Box(Modifier.fillMaxSize().background(bgColor), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Color.White)
@@ -250,14 +255,12 @@ fun EpgHeaderSection(
     val jumpMenuFocusRequester = remember { FocusRequester() }
 
     Box(modifier = Modifier.fillMaxWidth().height(48.dp).background(Color(0xFF0A0A0A))) {
-
         Row(
             modifier = Modifier.align(Alignment.Center),
             horizontalArrangement = Arrangement.Center
         ) {
             availableBroadcastingTypes.forEachIndexed { index, (label, apiValue) ->
                 var isTabFocused by remember { mutableStateOf(false) }
-                // フォーカスリクエスターのインデックスチェックを追加
                 val requester = if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index] else FocusRequester()
 
                 Box(
@@ -301,7 +304,6 @@ fun EpgHeaderSection(
                 .onFocusChanged { isJumpBtnFocused = it.isFocused }
                 .focusRequester(jumpMenuFocusRequester)
                 .focusProperties {
-                    // 安全に最初のタブへ移動
                     right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default
                     down = contentFocusRequester
                     up = topTabFocusRequester

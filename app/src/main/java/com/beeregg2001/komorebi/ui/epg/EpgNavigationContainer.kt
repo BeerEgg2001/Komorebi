@@ -2,6 +2,9 @@ package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
@@ -40,7 +43,6 @@ fun EpgNavigationContainer(
     currentType: String,
     onTypeChanged: (String) -> Unit,
     restoreChannelId: String? = null,
-    // ★追加: 存在するチャンネルタイプのリスト
     availableTypes: List<String> = emptyList()
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
@@ -81,7 +83,7 @@ fun EpgNavigationContainer(
             onTypeChanged = onTypeChanged,
             restoreChannelId = internalRestoreChannelId,
             restoreProgramStartTime = internalRestoreStartTime,
-            availableTypes = availableTypes // ★追加: エンジンに渡す
+            availableTypes = availableTypes
         )
 
         if (selectedProgram != null) {
@@ -121,9 +123,15 @@ fun EpgNavigationContainer(
             }
         }
 
-        if (isJumpMenuOpen) {
-            val now = OffsetDateTime.now()
-            val dates = remember { List(7) { now.plusDays(it.toLong()) } }
+        // ★修正: アニメーション付きでメニューを表示するよう変更
+        AnimatedVisibility(
+            visible = isJumpMenuOpen,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.zIndex(10f)
+        ) {
+            val now = remember { OffsetDateTime.now() }
+            val dates = remember(now) { List(7) { now.plusDays(it.toLong()) } }
             EpgJumpMenu(
                 dates = dates,
                 onSelect = { selectedTime ->

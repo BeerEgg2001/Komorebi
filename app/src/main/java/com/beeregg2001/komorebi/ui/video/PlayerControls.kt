@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp // ★追加
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
@@ -61,10 +62,12 @@ fun PlayerControls(
                     .fillMaxWidth()
                     .padding(horizontal = 48.dp, vertical = 40.dp)
             ) {
+                // ★修正: テーマのデフォルト設定に依存せず、fontSize=32.sp を直接指定して確実に大きくする
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 28.sp
                     ),
                     color = Color.White,
                     maxLines = 1

@@ -13,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +21,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,6 +35,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -140,12 +147,36 @@ fun ProgramDetailScreen(
             Spacer(modifier = Modifier.width(56.dp))
 
             // --- 右側：番組詳細情報領域 ---
+            val scrollState = rememberScrollState()
+            val coroutineScope = rememberCoroutineScope()
+
             Column(
                 modifier = Modifier
                     .weight(0.7f)
                     .fillMaxHeight()
-                    .verticalScroll(rememberScrollState())
-                    .focusable()
+                    // ★追加: フォーカスされた状態で上下キーが押されたらスクロールさせる
+                    .onKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown) {
+                            when (event.key) {
+                                Key.DirectionDown -> {
+                                    coroutineScope.launch {
+                                        // 300pxずつスクロール（お好みの量に調整可能です）
+                                        scrollState.animateScrollTo(scrollState.value + 300)
+                                    }
+                                    true
+                                }
+                                Key.DirectionUp -> {
+                                    coroutineScope.launch {
+                                        scrollState.animateScrollTo(scrollState.value - 300)
+                                    }
+                                    true
+                                }
+                                else -> false
+                            }
+                        } else false
+                    }
+                    .focusable() // ★このColumn自体がフォーカスを受け取れるようにする
+                    .verticalScroll(scrollState)
             ) {
                 // 放送時間・日付
                 val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd(E) HH:mm")

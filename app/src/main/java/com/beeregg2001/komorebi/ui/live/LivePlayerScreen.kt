@@ -1,42 +1,44 @@
-@file:OptIn(UnstableApi::class, ExperimentalAnimationApi::class)
+@file:OptIn(UnstableApi::class, ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 
 package com.beeregg2001.komorebi.ui.live
 
+import android.util.Base64
 import android.view.KeyEvent as NativeKeyEvent
+import android.view.ViewGroup
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.ClosedCaption
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.TrackSelectionOverride
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.media3.common.*
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.Log
@@ -47,9 +49,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
@@ -63,11 +65,16 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 
+private const val TAG_SUBTITLE = "SubtitleDebug"
+// ★ラグ補正値（ミリ秒）。字幕が遅れる場合はこの値を大きくします（例: -200など）
+// デフォルトで少し早め（-100ms）に送信することで、デコード時間を稼ぎます。
+private const val SUBTITLE_LATENCY_OFFSET_MS = -100L
+
 enum class AudioMode { MAIN, SUB }
-// ★追加: SUBTITLE カテゴリを追加
 enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE }
 enum class StreamSource { MIRAKURUN, KONOMITV }
 
+@ExperimentalComposeUiApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LivePlayerScreen(
@@ -90,8 +97,19 @@ fun LivePlayerScreen(
 
     val nativeLib = remember { NativeLib() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
-    // ★追加: 字幕の有効状態 (デフォルトON)
-    var isSubtitleEnabled by remember { mutableStateOf(true) }
+
+    val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
+    val isSubtitleEnabled by subtitleEnabledState
+
+    var toastMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(toastMessage) {
+        if (toastMessage != null) {
+            delay(2000)
+            toastMessage = null
+        }
+    }
+
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     var currentStreamSource by remember {
@@ -102,13 +120,13 @@ fun LivePlayerScreen(
     var isManualOverlay by remember { mutableStateOf(false) }
     var isPinnedOverlay by remember { mutableStateOf(false) }
     var isSubMenuOpen by remember { mutableStateOf(false) }
-    var activeSubMenuCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
 
     var playerError by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
+    val subMenuFocusRequester = remember { FocusRequester() }
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
     val extractorsFactory = remember {
@@ -123,28 +141,8 @@ fun LivePlayerScreen(
         }
     }
 
-    fun analyzePlayerError(error: PlaybackException): String {
-        val cause = error.cause
-        return if (cause is HttpDataSource.InvalidResponseCodeException) {
-            when (cause.responseCode) {
-                404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
-                503 -> AppStrings.ERR_TUNER_FULL
-                else -> "サーバーエラー (HTTP ${cause.responseCode})"
-            }
-        } else if (cause is HttpDataSource.HttpDataSourceException) {
-            if (cause.cause is java.net.ConnectException) AppStrings.ERR_CONNECTION_REFUSED
-            else if (cause.cause is java.net.SocketTimeoutException) AppStrings.ERR_TIMEOUT
-            else AppStrings.ERR_NETWORK
-        } else if (cause is IOException) {
-            "データ読み込みエラー: ${cause.message}"
-        } else {
-            "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
-        }
-    }
-
     val exoPlayer = remember(currentStreamSource, retryKey) {
         playerError = null
-
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
                 return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
@@ -158,21 +156,57 @@ fun LivePlayerScreen(
         val player = builder.build()
         player.apply {
             playWhenReady = true
-            setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
-
-            // ★追加: 初期字幕状態の設定
-            // TRACK_TYPE_TEXT (字幕) を isSubtitleEnabled に応じて有効/無効化
-            trackSelectionParameters = trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !isSubtitleEnabled)
-                .build()
-
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
-                    playerError = analyzePlayerError(error)
+                    val cause = error.cause
+                    playerError = if (cause is HttpDataSource.InvalidResponseCodeException) {
+                        when (cause.responseCode) {
+                            404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
+                            503 -> AppStrings.ERR_TUNER_FULL
+                            else -> "サーバーエラー (HTTP ${cause.responseCode})"
+                        }
+                    } else if (cause is HttpDataSource.HttpDataSourceException) {
+                        if (cause.cause is java.net.ConnectException) AppStrings.ERR_CONNECTION_REFUSED
+                        else if (cause.cause is java.net.SocketTimeoutException) AppStrings.ERR_TIMEOUT
+                        else AppStrings.ERR_NETWORK
+                    } else if (cause is IOException) {
+                        "データ読み込みエラー: ${cause.message}"
+                    } else {
+                        "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
+                    }
+                }
+                override fun onMetadata(metadata: Metadata) {
+                    if (!subtitleEnabledState.value) return
+                    for (i in 0 until metadata.length()) {
+                        val entry = metadata.get(i)
+                        if (entry is PrivFrame) {
+                            if (entry.owner.equals("aribb24.js", ignoreCase = true) ||
+                                entry.owner.equals("ARIB_STD_B24", ignoreCase = true)) {
+                                val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+
+                                // ★改善：PTSに補正値を適用して同期精度を高める
+                                val ptsMs = player.currentPosition + SUBTITLE_LATENCY_OFFSET_MS
+
+                                webViewRef.value?.post {
+                                    webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }", null)
+                                }
+                            }
+                        }
+                    }
                 }
             })
         }
         player
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) { exoPlayer.stop() }
+            else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
+        }
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(lifecycleObserver) }
     }
 
     fun applyAudioStream(mode: AudioMode) {
@@ -187,46 +221,18 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★追加: 字幕の有効/無効を切り替える関数
-    fun applySubtitleState(enabled: Boolean) {
-        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !enabled)
-            .build()
-    }
-
-    LaunchedEffect(currentStreamSource) {
-        if (currentStreamSource == StreamSource.KONOMITV) {
-            currentAudioMode = AudioMode.MAIN
-            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                .build()
-        }
-    }
-
     LaunchedEffect(currentChannelItem.id, currentStreamSource, retryKey) {
         isManualOverlay = false; isPinnedOverlay = false; showOverlay = true; scrollState.scrollTo(0)
-
         val streamUrl = if (currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
-            tsDataSourceFactory.tsArgs = arrayOf("-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(), "-a", "13", "-b", "5", "-c", "5")
-            UrlBuilder.getMirakurunStreamUrl(
-                mirakurunIp ?: "", mirakurunPort ?: "",
-                currentChannelItem.networkId, currentChannelItem.serviceId, currentChannelItem.type
-            )
+            tsDataSourceFactory.tsArgs = arrayOf("-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(), "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13")
+            UrlBuilder.getMirakurunStreamUrl(mirakurunIp ?: "", mirakurunPort ?: "", currentChannelItem.networkId, currentChannelItem.serviceId, currentChannelItem.type)
         } else {
-            UrlBuilder.getKonomiTvLiveStreamUrl(
-                konomiIp, konomiPort, currentChannelItem.displayChannelId
-            )
+            UrlBuilder.getKonomiTvLiveStreamUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId)
         }
-        Log.d("LivePlayerScreen", streamUrl)
-
         exoPlayer.stop(); exoPlayer.clearMediaItems()
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.prepare(); exoPlayer.play()
-
-        if (playerError == null) {
-            mainFocusRequester.requestFocus()
-        }
-
+        if (playerError == null) { mainFocusRequester.requestFocus() }
         delay(4500)
         if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen && playerError == null) showOverlay = false
     }
@@ -234,99 +240,59 @@ fun LivePlayerScreen(
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
 
     LaunchedEffect(isMiniListOpen) {
-        if (isMiniListOpen) {
-            delay(100)
-            listFocusRequester.requestFocus()
-        } else {
-            mainFocusRequester.requestFocus()
-        }
+        if (isMiniListOpen) { delay(100); listFocusRequester.requestFocus() }
+        else { mainFocusRequester.requestFocus() }
     }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(Color.Black)
-        .onPreviewKeyEvent { keyEvent ->
-            if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-            val keyCode = keyEvent.nativeKeyEvent.keyCode
-            val isEnter = keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER
-            val isBack = keyCode == NativeKeyEvent.KEYCODE_BACK
-            val isUp = keyCode == NativeKeyEvent.KEYCODE_DPAD_UP
-            val isDown = keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).onKeyEvent { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+        val keyCode = keyEvent.nativeKeyEvent.keyCode
+        val isEnter = keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER
+        val isBack = keyCode == NativeKeyEvent.KEYCODE_BACK
+        val isUp = keyCode == NativeKeyEvent.KEYCODE_DPAD_UP
+        val isDown = keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN
 
-            if (playerError != null) return@onPreviewKeyEvent false
+        if (playerError != null) return@onKeyEvent false
 
-            if (isSubMenuOpen) {
-                if (isBack) {
-                    if (activeSubMenuCategory != null) activeSubMenuCategory = null
-                    else isSubMenuOpen = false
-                    mainFocusRequester.requestFocus()
-                    return@onPreviewKeyEvent true
-                }
-                return@onPreviewKeyEvent false
+        if (isSubMenuOpen) {
+            if (isBack) { isSubMenuOpen = false; mainFocusRequester.requestFocus(); return@onKeyEvent true }
+            return@onKeyEvent false
+        }
+
+        if (isBack) {
+            if (showOverlay || isPinnedOverlay) {
+                showOverlay = false; isPinnedOverlay = false; isManualOverlay = false
+            } else if (isMiniListOpen) {
+                onMiniListToggle(false)
+                mainFocusRequester.requestFocus()
+            } else {
+                onBackPressed()
             }
+            return@onKeyEvent true
+        }
 
-            if (isMiniListOpen) {
-                if (isBack) return@onPreviewKeyEvent false
-                return@onPreviewKeyEvent false
+        if (isEnter) {
+            when {
+                showOverlay -> { showOverlay = false; isManualOverlay = false; isPinnedOverlay = true }
+                isPinnedOverlay -> { isPinnedOverlay = false }
+                else -> { showOverlay = true; isManualOverlay = true; isPinnedOverlay = false }
             }
+            return@onKeyEvent true
+        }
 
-            if (isBack) {
-                if (showOverlay || isPinnedOverlay) {
-                    showOverlay = false; isPinnedOverlay = false; isManualOverlay = false
-                } else onBackPressed()
-                return@onPreviewKeyEvent true
-            }
+        if (isUp && !showOverlay && !isPinnedOverlay && !isMiniListOpen) { isSubMenuOpen = true; return@onKeyEvent true }
+        if (isDown && !showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
+        false
+    }) {
 
-            if (isEnter) {
-                when {
-                    showOverlay -> { showOverlay = false; isManualOverlay = false; isPinnedOverlay = true }
-                    isPinnedOverlay -> { isPinnedOverlay = false }
-                    else -> { showOverlay = true; isManualOverlay = true; isPinnedOverlay = false }
-                }
-                return@onPreviewKeyEvent true
-            }
-
-            if (isUp && !showOverlay && !isPinnedOverlay) {
-                isSubMenuOpen = true
-                activeSubMenuCategory = null
-                return@onPreviewKeyEvent true
-            }
-
-            if (isDown && !showOverlay && !isPinnedOverlay) {
-                onMiniListToggle(true)
-                return@onPreviewKeyEvent true
-            }
-            false
-        }) {
-
-        // ★修正: 字幕のスタイル設定を適用
+        // --- レイヤー1: 映像 (最背面) ---
         AndroidView(
-            factory = {
-                PlayerView(it).apply {
-                    player = exoPlayer
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    keepScreenOn = true
-
-                    // 字幕のスタイル設定 (ARIB字幕を見やすく)
-                    subtitleView?.setStyle(
-                        CaptionStyleCompat(
-                            Color.White.toArgb(), // 文字色: 白
-                            Color.Black.copy(alpha = 0.5f).toArgb(), // 背景色: 半透明黒
-                            Color.Transparent.toArgb(), // ウィンドウ色
-                            CaptionStyleCompat.EDGE_TYPE_NONE, // 縁取りなし
-                            Color.Transparent.toArgb(), // 縁取り色
-                            null // フォント (nullの場合はシステムデフォルト)
-                        )
-                    )
-                    // 字幕の下部パディング調整 (必要に応じて数値を変更)
-                    subtitleView?.setBottomPaddingFraction(0.1f)
-                }
-            },
+            factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
         )
 
+        // --- レイヤー2: UI要素 ---
         AnimatedVisibility(visible = isPinnedOverlay && playerError == null, enter = fadeIn(), exit = fadeOut()) {
             StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort)
         }
@@ -339,318 +305,157 @@ fun LivePlayerScreen(
             visible = isMiniListOpen && playerError == null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
         ) {
-            ChannelListOverlay(
-                groupedChannels = groupedChannels,
-                currentChannelId = currentChannelItem.id,
-                onChannelSelect = {
-                    onChannelSelect(it)
-                    onMiniListToggle(false)
-                    mainFocusRequester.requestFocus()
-                },
-                mirakurunIp = mirakurunIp ?: "",
-                mirakurunPort = mirakurunPort ?: "",
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                focusRequester = listFocusRequester
-            )
+            ChannelListOverlay(groupedChannels = groupedChannels, currentChannelId = currentChannelItem.id, onChannelSelect = { onChannelSelect(it); onMiniListToggle(false); mainFocusRequester.requestFocus() }, mirakurunIp = mirakurunIp ?: "", mirakurunPort = mirakurunPort ?: "", konomiIp = konomiIp, konomiPort = konomiPort, focusRequester = listFocusRequester)
         }
 
-        // サブメニューの表示
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
                 currentSource = currentStreamSource,
-                activeCategory = activeSubMenuCategory,
                 isMirakurunAvailable = isMirakurunAvailable,
-                // ★追加: 字幕の状態と切り替え関数を渡す
                 isSubtitleEnabled = isSubtitleEnabled,
-                onCategorySelect = { activeSubMenuCategory = it },
-                onAudioModeSelect = { mode ->
-                    currentAudioMode = mode
-                    applyAudioStream(mode)
-                    isSubMenuOpen = false
-                    mainFocusRequester.requestFocus()
+                focusRequester = subMenuFocusRequester,
+                onAudioToggle = {
+                    currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                    applyAudioStream(currentAudioMode)
+                    toastMessage = "音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}"
                 },
-                onSourceSelect = { source ->
-                    currentStreamSource = source
-                    isSubMenuOpen = false
-                    mainFocusRequester.requestFocus()
+                onSourceToggle = {
+                    if (isMirakurunAvailable) {
+                        currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN
+                        toastMessage = "ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}"
+                    }
                 },
-                onSubtitleToggle = { enabled ->
-                    isSubtitleEnabled = enabled
-                    applySubtitleState(enabled)
-                    isSubMenuOpen = false
-                    mainFocusRequester.requestFocus()
+                onSubtitleToggle = {
+                    subtitleEnabledState.value = !subtitleEnabledState.value
+                    toastMessage = "字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}"
                 }
             )
         }
 
-        if (playerError != null) {
-            LiveErrorDialog(
-                errorMessage = playerError!!,
-                onRetry = {
-                    playerError = null
-                    retryKey++
-                },
-                onBack = onBackPressed
-            )
-        }
-    }
-}
-
-// ------------------------------------------------------------
-// 以下、UIコンポーネント定義
-// ------------------------------------------------------------
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-fun LiveErrorDialog(
-    errorMessage: String,
-    onRetry: () -> Unit,
-    onBack: () -> Unit
-) {
-    val retryButtonFocusRequester = remember { FocusRequester() }
-
-    LaunchedEffect(Unit) {
-        retryButtonFocusRequester.requestFocus()
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.85f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = androidx.tv.material3.SurfaceDefaults.colors(
-                containerColor = Color(0xFF2B1B1B)
-            ),
-            modifier = Modifier.width(450.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = Color(0xFFFF5252),
-                    modifier = Modifier.size(48.dp).padding(bottom = 16.dp)
-                )
-                Text(
-                    text = AppStrings.LIVE_PLAYER_ERROR_TITLE,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color(0xFFFF5252),
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = errorMessage,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(32.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Button(
-                        onClick = onBack,
-                        colors = ButtonDefaults.colors(
-                            containerColor = Color.White.copy(alpha = 0.1f),
-                            contentColor = Color.White
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(AppStrings.BUTTON_BACK)
+        // --- レイヤー3: 字幕 (映像の上、UIより背面) ---
+        val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    setBackgroundColor(0)
+                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(msg: ConsoleMessage?): Boolean { return true }
                     }
+                    loadUrl("file:///android_asset/subtitle_renderer.html")
+                    webViewRef.value = this
+                }
+            },
+            modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f)
+        )
 
-                    Button(
-                        onClick = onRetry,
-                        colors = ButtonDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(retryButtonFocusRequester)
-                    ) {
-                        Text(AppStrings.BUTTON_RETRY)
-                    }
+        // --- レイヤー4: トースト通知 ---
+        Box(modifier = Modifier.fillMaxSize().padding(bottom = 80.dp), contentAlignment = Alignment.BottomCenter) {
+            AnimatedVisibility(visible = toastMessage != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                Box(modifier = Modifier.background(Color.Black.copy(0.85f), RoundedCornerShape(32.dp)).border(1.dp, Color.White.copy(0.2f), RoundedCornerShape(32.dp)).padding(horizontal = 28.dp, vertical = 14.dp)) {
+                    Text(text = toastMessage ?: "", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             }
         }
+
+        if (playerError != null) {
+            LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)
+        }
     }
 }
 
+@ExperimentalComposeUiApi
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TopSubMenuUI(
     currentAudioMode: AudioMode,
     currentSource: StreamSource,
-    activeCategory: SubMenuCategory?,
     isMirakurunAvailable: Boolean,
-    isSubtitleEnabled: Boolean, // ★追加
-    onCategorySelect: (SubMenuCategory?) -> Unit,
-    onAudioModeSelect: (AudioMode) -> Unit,
-    onSourceSelect: (StreamSource) -> Unit,
-    onSubtitleToggle: (Boolean) -> Unit // ★追加
+    isSubtitleEnabled: Boolean,
+    focusRequester: FocusRequester,
+    onAudioToggle: () -> Unit,
+    onSourceToggle: () -> Unit,
+    onSubtitleToggle: () -> Unit
 ) {
-    val categoryFocusRequester = remember { FocusRequester() }
-    val itemFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    LaunchedEffect(activeCategory) {
-        if (activeCategory == null) categoryFocusRequester.requestFocus()
-        else itemFocusRequester.requestFocus()
-    }
-
-    val chipColors = FilterChipDefaults.colors(
-        containerColor = Color.Transparent,
-        contentColor = Color.White.copy(0.7f),
-        selectedContainerColor = Color.White,
-        selectedContentColor = Color.Black,
-        focusedContainerColor = Color.White.copy(0.2f),
-        focusedContentColor = Color.White,
-        focusedSelectedContainerColor = Color.White,
-        focusedSelectedContentColor = Color.Black
-    )
-
-    Box(
-        modifier = Modifier.fillMaxWidth().wrapContentHeight()
-            .background(Brush.verticalGradient(listOf(Color.Black.copy(0.9f), Color.Transparent)))
-            .padding(top = 24.dp, bottom = 60.dp),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(horizontalArrangement = Arrangement.Center) {
-                MenuTileItem(
-                    title = "音声切替",
-                    icon = Icons.Default.PlayArrow,
-                    subtitle = if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
-                    isSelected = activeCategory == SubMenuCategory.AUDIO,
-                    onClick = { onCategorySelect(SubMenuCategory.AUDIO) },
-                    modifier = Modifier.focusRequester(categoryFocusRequester)
-                )
-
-                Spacer(Modifier.width(20.dp))
-                MenuTileItem(
-                    title = "映像設定",
-                    icon = Icons.Default.Build,
-                    subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
-                    isSelected = activeCategory == SubMenuCategory.VIDEO,
-                    onClick = { onCategorySelect(SubMenuCategory.VIDEO) },
-                )
-
-                Spacer(Modifier.width(20.dp))
-                // ★追加: 字幕設定タイル
-                MenuTileItem(
-                    title = "字幕設定",
-                    icon = Icons.Default.ClosedCaption,
-                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
-                    isSelected = activeCategory == SubMenuCategory.SUBTITLE,
-                    onClick = { onCategorySelect(SubMenuCategory.SUBTITLE) },
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            AnimatedContent(targetState = activeCategory, label = "submenu") { category ->
-                when (category) {
-                    SubMenuCategory.AUDIO -> {
-                        Row(
-                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AudioMode.values().forEachIndexed { index, mode ->
-                                FilterChip(
-                                    selected = (currentAudioMode == mode),
-                                    onClick = { onAudioModeSelect(mode) },
-                                    modifier = Modifier
-                                        .padding(horizontal = 6.dp)
-                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
-                                    colors = chipColors,
-                                ){ Text(if(mode == AudioMode.MAIN) "主音声" else "副音声", fontWeight = FontWeight.Medium) }
-                            }
-                        }
-                    }
-                    SubMenuCategory.VIDEO -> {
-                        Row(
-                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            StreamSource.values().filter {
-                                if (!isMirakurunAvailable) it == StreamSource.KONOMITV else true
-                            }.forEachIndexed { index, source ->
-                                FilterChip(
-                                    selected = (currentSource == source),
-                                    onClick = { onSourceSelect(source) },
-                                    modifier = Modifier
-                                        .padding(horizontal = 6.dp)
-                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
-                                    colors = chipColors,
-                                ) {
-                                    Text(
-                                        if (source == StreamSource.MIRAKURUN) "Mirakurun (TS)" else "KonomiTV (HLS)",
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    // ★追加: 字幕設定のチップ
-                    SubMenuCategory.SUBTITLE -> {
-                        Row(
-                            modifier = Modifier.background(Color.White.copy(0.1f), RoundedCornerShape(16.dp)).padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(true, false).forEachIndexed { index, enabled ->
-                                FilterChip(
-                                    selected = (isSubtitleEnabled == enabled),
-                                    onClick = { onSubtitleToggle(enabled) },
-                                    modifier = Modifier
-                                        .padding(horizontal = 6.dp)
-                                        .then(if(index == 0) Modifier.focusRequester(itemFocusRequester) else Modifier),
-                                    colors = chipColors,
-                                ) {
-                                    Text(if (enabled) "表示" else "非表示", fontWeight = FontWeight.Medium)
-                                }
-                            }
-                        }
-                    }
-                    else -> Box(modifier = Modifier.height(56.dp))
-                }
-            }
+    Box(modifier = Modifier.fillMaxWidth().wrapContentHeight().background(Brush.verticalGradient(listOf(Color.Black.copy(0.9f), Color.Transparent))).padding(top = 24.dp, bottom = 60.dp), contentAlignment = Alignment.TopCenter) {
+        Row(horizontalArrangement = Arrangement.Center) {
+            MenuTileItem(
+                title = "音声切替", icon = Icons.Default.PlayArrow,
+                subtitle = if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
+                onClick = onAudioToggle,
+                modifier = Modifier.focusRequester(focusRequester).focusProperties { left = FocusRequester.Cancel }
+            )
+            Spacer(Modifier.width(20.dp))
+            MenuTileItem(
+                title = "映像ソース", icon = Icons.Default.Build,
+                subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
+                onClick = onSourceToggle,
+                enabled = isMirakurunAvailable
+            )
+            Spacer(Modifier.width(20.dp))
+            MenuTileItem(
+                title = "字幕設定", icon = Icons.Default.ClosedCaption,
+                subtitle = if(isSubtitleEnabled) "表示" else "非表示",
+                onClick = onSubtitleToggle,
+                modifier = Modifier.focusProperties { right = FocusRequester.Cancel }
+            )
         }
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun MenuTileItem(title: String, icon: ImageVector, subtitle: String, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun MenuTileItem(
+    title: String, icon: ImageVector, subtitle: String,
+    onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true
+) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isSelected) Color.White.copy(0.15f) else Color.White.copy(0.05f),
-            contentColor = Color.White,
+            containerColor = Color.White.copy(0.1f),
+            contentColor = if (enabled) Color.White else Color.White.copy(0.3f),
             focusedContainerColor = Color.White,
             focusedContentColor = Color.Black
         ),
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
-        modifier = modifier.size(160.dp, 84.dp)
+        modifier = modifier.size(180.dp, 100.dp).alpha(if(enabled) 1f else 0.5f)
     ) {
         Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(icon, null, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.height(4.dp))
+            Icon(icon, null, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.height(8.dp))
             Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), color = if (isSelected) Color.Unspecified else LocalContentColor.current.copy(0.6f))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = LocalContentColor.current.copy(0.7f))
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Unit) {
+    val retryButtonFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { retryButtonFocusRequester.requestFocus() }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)), modifier = Modifier.width(450.dp)) {
+            Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(48.dp).padding(bottom = 16.dp))
+                Text(text = AppStrings.LIVE_PLAYER_ERROR_TITLE, style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp)); Text(text = errorMessage, style = MaterialTheme.typography.bodyLarge, color = Color.White, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(32.dp)); Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Button(onClick = onBack, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.weight(1f)) { Text(AppStrings.BUTTON_BACK) }
+                Button(onClick = onRetry, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.weight(1f).focusRequester(retryButtonFocusRequester)) { Text(AppStrings.BUTTON_RETRY) }
+            }
+            }
         }
     }
 }
@@ -659,109 +464,32 @@ fun MenuTileItem(title: String, icon: ImageVector, subtitle: String, isSelected:
 fun StatusOverlay(channel: Channel, mirakurunIp: String?, mirakurunPort: String?, konomiIp: String, konomiPort: String) {
     var currentTime by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while(true) { currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(1000) } }
-
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId, channel.type)
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
-    }
-
+    val logoUrl = if (isMirakurunAvailable) UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId, channel.type) else UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.TopEnd) {
         Row(modifier = Modifier.background(Color.Black.copy(0.8f), RoundedCornerShape(8.dp)).border(1.dp, Color.White.copy(0.15f), RoundedCornerShape(8.dp)).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
-                model = logoUrl,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(56.dp, 32.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White),
-                contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
-            )
-            Spacer(Modifier.width(16.dp))
-            Text("${formatChannelType(channel.type)}${channel.channelNumber}", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+            AsyncImage(model = logoUrl, contentDescription = null, modifier = Modifier.size(56.dp, 32.dp).clip(RoundedCornerShape(2.dp)).background(Color.White), contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop)
+            Spacer(Modifier.width(16.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(20.dp)); Text(currentTime, style = MaterialTheme.typography.headlineSmall.copy(fontSize = 20.sp), color = Color.White)
         }
     }
 }
 
 @Composable
-fun LiveOverlayUI(
-    channel: Channel,
-    programTitle: String,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
-    showDesc: Boolean,
-    scrollState: ScrollState
-) {
+fun LiveOverlayUI(channel: Channel, programTitle: String, mirakurunIp: String, mirakurunPort: String, konomiIp: String, konomiPort: String, showDesc: Boolean, scrollState: ScrollState) {
     val program = channel.programPresent
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     var progress by remember { mutableFloatStateOf(-1f) }
-
     val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type)
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
-    }
-
-    LaunchedEffect(program) {
-        if (program != null && !program.startTime.isNullOrEmpty() && !program.endTime.isNullOrEmpty()) {
-            val startMs = sdf.parse(program.startTime)?.time ?: 0L
-            val endMs = sdf.parse(program.endTime)?.time ?: 0L
-            val total = endMs - startMs
-            if (total > 0) {
-                while (System.currentTimeMillis() < endMs) {
-                    progress = ((System.currentTimeMillis() - startMs).toFloat() / total).coerceIn(0f, 1f)
-                    delay(5000)
-                }
-            }
-        }
-    }
-
+    val logoUrl = if (isMirakurunAvailable) UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type) else UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
+    LaunchedEffect(program) { if (program != null && !program.startTime.isNullOrEmpty() && !program.endTime.isNullOrEmpty()) { val startMs = sdf.parse(program.startTime)?.time ?: 0L; val endMs = sdf.parse(program.endTime)?.time ?: 0L; val total = endMs - startMs; if (total > 0) { while (System.currentTimeMillis() < endMs) { progress = ((System.currentTimeMillis() - startMs).toFloat() / total).coerceIn(0f, 1f); delay(5000) } } } }
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(modifier = Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(0.95f)))).padding(horizontal = 64.dp, vertical = 48.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(
-                    model = logoUrl,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(80.dp, 45.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color.White),
-                    contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
-                )
-                Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.titleLarge, color = Color.White.copy(0.8f))
-            }
+            Row(verticalAlignment = Alignment.CenterVertically) { AsyncImage(model = logoUrl, contentDescription = null, modifier = Modifier.size(80.dp, 45.dp).clip(RoundedCornerShape(4.dp)).background(Color.White), contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop); Spacer(Modifier.width(24.dp)); Text("${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}", style = MaterialTheme.typography.titleLarge, color = Color.White.copy(0.8f)) }
             Text(programTitle, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp), color = Color.White, modifier = Modifier.padding(vertical = 16.dp))
-
-            if (showDesc && program != null) {
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).padding(vertical = 8.dp)) {
-                    Column(modifier = Modifier.verticalScroll(scrollState)) {
-                        if (!program.description.isNullOrEmpty()) Text(program.description, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(0.9f), modifier = Modifier.padding(bottom = 20.dp))
-                        program.detail?.forEach { (k, v) ->
-                            Column(Modifier.padding(bottom = 14.dp)) {
-                                Text("◆ $k", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = Color.White.copy(0.5f)))
-                                Text(v, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.85f), modifier = Modifier.padding(start = 12.dp, top = 4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-            if (progress >= 0f) {
-                val start = program?.startTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
-                val end = program?.endTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Text(start, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f))
-                    Box(modifier = Modifier.weight(1f).padding(horizontal = 20.dp).height(4.dp).background(Color.White.copy(0.15f), RoundedCornerShape(2.dp))) {
-                        Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(Color.White, RoundedCornerShape(2.dp)))
-                    }
-                    Text(end, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f))
-                }
-            }
+            if (showDesc && program != null) { Box(modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).padding(vertical = 8.dp)) { Column(modifier = Modifier.verticalScroll(scrollState)) { if (!program.description.isNullOrEmpty()) Text(program.description, style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(0.9f), modifier = Modifier.padding(bottom = 20.dp)); program.detail?.forEach { (k, v) -> Column(Modifier.padding(bottom = 14.dp)) { Text("◆ $k", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = Color.White.copy(0.5f))); Text(v, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.85f), modifier = Modifier.padding(start = 12.dp, top = 4.dp)) } } } } }
+            if (progress >= 0f) { val start = program?.startTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""; val end = program?.endTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""; Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(start, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f)); Box(modifier = Modifier.weight(1f).padding(horizontal = 20.dp).height(4.dp).background(Color.White.copy(0.15f), RoundedCornerShape(2.dp))) { Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(Color.White, RoundedCornerShape(2.dp))) }; Text(end, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.5f)) } }
         }
     }
 }

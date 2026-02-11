@@ -25,9 +25,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -46,15 +50,11 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import java.util.UUID
 import androidx.activity.compose.BackHandler
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
 
 enum class AudioMode { MAIN, SUB }
-// ★修正: SPEEDカテゴリを追加
 enum class SubMenuCategory { AUDIO, VIDEO, SPEED }
 
 data class IndicatorState(val icon: ImageVector, val label: String, val timestamp: Long = System.currentTimeMillis())
@@ -83,7 +83,6 @@ fun VideoPlayerScreen(
     }
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
-    // ★追加: 現在の再生速度
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
 
     var isSubMenuOpen by remember { mutableStateOf(false) }
@@ -120,6 +119,20 @@ fun VideoPlayerScreen(
             }
     }
 
+    // ★追加: ライフサイクルを監視し、バックグラウンドに回ったら一時停止する
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val lifecycleObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                exoPlayer.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
+        }
+    }
+
     fun applyAudioStream(mode: AudioMode) {
         val tracks = exoPlayer.currentTracks
         val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
@@ -133,7 +146,6 @@ fun VideoPlayerScreen(
         audioProcessor.putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
     }
 
-    // ★追加: 再生速度を適用する関数
     fun applyPlaybackSpeed(speed: Float) {
         currentSpeed = speed
         exoPlayer.setPlaybackSpeed(speed)
@@ -275,6 +287,7 @@ fun VideoPlayerScreen(
 
         PlaybackIndicator(indicatorState)
 
+        // 別ファイルに切り出された PlayerControls を使用
         PlayerControls(
             exoPlayer = exoPlayer,
             title = program.title,
@@ -286,7 +299,6 @@ fun VideoPlayerScreen(
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
         ) {
-            // ★修正: 再生速度情報を渡す
             TopSubMenuUI(
                 currentMode = currentAudioMode,
                 currentSpeed = currentSpeed,
@@ -304,107 +316,6 @@ fun VideoPlayerScreen(
                     mainFocusRequester.requestFocus()
                 }
             )
-        }
-    }
-}
-
-@Composable
-fun PlayerControls(
-    exoPlayer: ExoPlayer,
-    title: String,
-    isVisible: Boolean
-) {
-    var currentPosition by remember { mutableLongStateOf(0L) }
-    var duration by remember { mutableLongStateOf(0L) }
-
-    LaunchedEffect(isVisible) {
-        while (isVisible) {
-            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0)
-            duration = exoPlayer.duration.coerceAtLeast(0)
-            delay(500)
-        }
-    }
-
-    fun formatTime(ms: Long): String {
-        val totalSeconds = ms / 1000
-        val seconds = totalSeconds % 60
-        val minutes = (totalSeconds / 60) % 60
-        val hours = totalSeconds / 3600
-        return if (hours > 0) {
-            String.format("%02d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format("%02d:%02d", minutes, seconds)
-        }
-    }
-
-    AnimatedVisibility(
-        visible = isVisible,
-        enter = fadeIn(),
-        exit = fadeOut()
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(0.9f), Color.Transparent)
-                        )
-                    )
-                    .padding(top = 40.dp, bottom = 60.dp, start = 48.dp, end = 48.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(0.95f))
-                        )
-                    )
-                    .padding(start = 48.dp, end = 48.dp, bottom = 48.dp, top = 60.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = formatTime(currentPosition),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    LinearProgressIndicator(
-                        progress = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 24.dp)
-                            .height(6.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = Color.White.copy(0.3f)
-                    )
-
-                    Text(
-                        text = formatTime(duration),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
         }
     }
 }
@@ -439,7 +350,6 @@ fun PlaybackIndicator(state: IndicatorState?) {
     }
 }
 
-// ★修正: LivePlayerScreenと統一感のあるUIへ変更
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TopSubMenuUI(
