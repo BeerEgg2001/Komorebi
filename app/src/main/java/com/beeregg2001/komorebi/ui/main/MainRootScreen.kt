@@ -70,7 +70,7 @@ fun MainRootScreen(
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
     var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
 
-    // ★追加: プレイヤーから戻ったことを通知するフラグ
+    // プレイヤーから戻ったことを通知するフラグ
     var isReturningFromPlayer by remember { mutableStateOf(false) }
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
@@ -89,8 +89,6 @@ fun MainRootScreen(
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
 
-    val context = LocalContext.current
-
     BackHandler(enabled = true) {
         when {
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
@@ -104,12 +102,12 @@ fun MainRootScreen(
 
             selectedChannel != null -> {
                 selectedChannel = null
-                isReturningFromPlayer = true // ★戻る時はフラグを立てる
+                isReturningFromPlayer = true
             }
             selectedProgram != null -> {
                 selectedProgram = null
                 showPlayerControls = true
-                isReturningFromPlayer = true // ★戻る時はフラグを立てる
+                isReturningFromPlayer = true
             }
             isSettingsOpen -> isSettingsOpen = false
             epgSelectedProgram != null -> epgSelectedProgram = null
@@ -165,14 +163,14 @@ fun MainRootScreen(
                         onSubMenuToggle = { playerIsSubMenuOpen = it },
                         onChannelSelect = { newChannel ->
                             selectedChannel = newChannel
-                            lastSelectedChannelId = newChannel.id // ★ミニリストでの変更を保存
+                            lastSelectedChannelId = newChannel.id
                             lastSelectedProgramId = null
                             homeViewModel.saveLastChannel(newChannel)
-                            isReturningFromPlayer = false // 再生中はフラグを下ろす
+                            isReturningFromPlayer = false
                         },
                         onBackPressed = {
                             selectedChannel = null
-                            isReturningFromPlayer = true // ★戻る時はフラグを立てる
+                            isReturningFromPlayer = true
                         }
                     )
                 } else if (selectedProgram != null) {
@@ -188,7 +186,7 @@ fun MainRootScreen(
                         onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
                         onBackPressed = {
                             selectedProgram = null
-                            isReturningFromPlayer = true // ★戻る時はフラグを立てる
+                            isReturningFromPlayer = true
                         },
                         onUpdateWatchHistory = { prog, pos ->
                             recordViewModel.updateWatchHistory(prog, pos)
@@ -254,8 +252,8 @@ fun MainRootScreen(
                         isRecordListOpen = isRecordListOpen,
                         onShowAllRecordings = { isRecordListOpen = true },
                         onCloseRecordList = { isRecordListOpen = false },
-                        isReturningFromPlayer = isReturningFromPlayer, // ★フラグを渡す
-                        onReturnFocusConsumed = { isReturningFromPlayer = false } // ★フラグをリセットするコールバック
+                        isReturningFromPlayer = isReturningFromPlayer,
+                        onReturnFocusConsumed = { isReturningFromPlayer = false }
                     )
                 }
             }
@@ -348,6 +346,50 @@ fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
                     Button(onClick = onGoToSettings, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.weight(1f)) {
                         Text(AppStrings.GO_TO_SETTINGS_SHORT)
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * ★追加: 非対応OSバージョンを通知するダイアログ
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun IncompatibleOsDialog(onExit: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "非対応のOSバージョン",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color(0xFFFF5252),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API ${Build.VERSION.SDK_INT}) は現在サポートされていません。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.LightGray
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Button(
+                    onClick = onExit,
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color.White.copy(alpha = 0.1f),
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("アプリを終了する")
                 }
             }
         }
