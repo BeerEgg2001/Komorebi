@@ -37,6 +37,8 @@ fun TopSubMenuUI(
     currentQuality: StreamQuality,
     isMirakurunAvailable: Boolean,
     isSubtitleEnabled: Boolean,
+    // ★追加: 字幕機能がサポートされているか（Mirakurun以外か）
+    isSubtitleSupported: Boolean,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSourceToggle: () -> Unit,
@@ -110,6 +112,15 @@ fun TopSubMenuUI(
                 )
                 Spacer(Modifier.width(16.dp))
                 MenuTileItem(
+                    title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
+                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
+                    onClick = onSubtitleToggle,
+                    // ★修正: Mirakurunの場合は無効化
+                    enabled = isSubtitleSupported,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                )
+                Spacer(Modifier.width(16.dp))
+                MenuTileItem(
                     title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
                     subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
                     onClick = onSourceToggle,
@@ -130,13 +141,6 @@ fun TopSubMenuUI(
                             // もし2階層目が開いていなければ下移動をキャンセル
                             if (!isQualityMode) down = FocusRequester.Cancel
                         }
-                )
-                Spacer(Modifier.width(16.dp))
-                MenuTileItem(
-                    title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
-                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
-                    onClick = onSubtitleToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
             }
 

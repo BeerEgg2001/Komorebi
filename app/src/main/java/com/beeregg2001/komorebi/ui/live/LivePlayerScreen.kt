@@ -83,8 +83,11 @@ fun LivePlayerScreen(
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
+    // 全チャンネルのフラットリスト（State復元用などで使用）
+    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
+
     val currentChannelItem by remember(channel.id, groupedChannels) {
-        derivedStateOf { groupedChannels.values.flatten().find { it.id == channel.id } ?: channel }
+        derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
     }
 
     val nativeLib = remember { NativeLib() }
@@ -150,19 +153,18 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★修正: 起動直後の「Offline」を一定時間許容する遅延評価ロジック
+    // オフライン判定の猶予ロジック
     LaunchedEffect(sseStatus, sseDetail) {
         if (sseStatus == "Offline") {
-            // すでに致命的なエラーとして即時判定されている場合は何もしない
             if (playerError != null) return@LaunchedEffect
-
-            delay(6000) // 6秒間猶予を与える（この間にStandbyやONAirに変わればエラーにならない）
+            delay(6000)
             if (sseStatus == "Offline" && playerError == null) {
                 playerError = sseDetail.ifEmpty { AppStrings.SSE_OFFLINE }
             }
         }
     }
 
+    // KonomiTV SSE コネクション管理
     DisposableEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         if (currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
 
@@ -177,16 +179,14 @@ fun LivePlayerScreen(
                     sseStatus = json.optString("status", "Unknown")
                     sseDetail = json.optString("detail", "読み込み中...")
 
-                    // ★追加: 致命的なエラーや起動失敗が含まれる場合は即座にエラーダイアログを表示し、プレイヤーを停止する
-                    if (sseStatus == "Error" ||
-                        (sseStatus == "Offline" && (sseDetail.contains("失敗") || sseDetail.contains("エラー")))) {
+                    if (sseStatus == "Error" || (sseStatus == "Offline" && (sseDetail.contains("失敗") || sseDetail.contains("エラー")))) {
                         playerError = sseDetail.ifEmpty { "チューナーの起動に失敗しました" }
-                        exoPlayer.stop() // 不要な読み込みを停止させる
+                        exoPlayer.stop()
                         return@runCatching
                     }
 
                     when (sseStatus) {
-                        "Offline" -> { /* LaunchedEffect の遅延評価に任せる */ }
+                        "Offline" -> { }
                         "Standby" -> { if (exoPlayer.isPlaying) exoPlayer.pause() }
                         "ONAir" -> { if (!exoPlayer.isPlaying && playerError == null) exoPlayer.play() }
                     }
@@ -200,15 +200,29 @@ fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(exoPlayer, isSubtitleEnabled) { while(true) { if (isSubtitleEnabled && exoPlayer.isPlaying) { val currentPos = exoPlayer.currentPosition; webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null) } }; delay(100) } }
+    // 字幕同期
+    LaunchedEffect(exoPlayer, isSubtitleEnabled) {
+        while(true) {
+            if (isSubtitleEnabled && exoPlayer.isPlaying) {
+                val currentPos = exoPlayer.currentPosition
+                webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null) }
+            }
+            delay(100)
+        }
+    }
 
+    // ライフサイクル管理
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop() else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() } }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop()
+            else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
     }
 
+    // オーバーレイ自動非表示
     LaunchedEffect(currentChannelItem.id) {
         onManualOverlayChange(false)
         onPinnedOverlayChange(false)
@@ -221,6 +235,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // ストリームURL生成と再生開始
     LaunchedEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         sseStatus = "Standby"
         sseDetail = AppStrings.SSE_CONNECTING
@@ -231,53 +246,93 @@ fun LivePlayerScreen(
         } else {
             UrlBuilder.getKonomiTvLiveStreamUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
         }
-        exoPlayer.stop(); exoPlayer.clearMediaItems()
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
-        exoPlayer.prepare(); exoPlayer.play()
+        exoPlayer.prepare()
+        exoPlayer.play()
 
         if (playerError == null) { mainFocusRequester.requestFocus() }
     }
 
+    // フォーカス管理
     LaunchedEffect(isMiniListOpen) { if (isMiniListOpen) { delay(100); listFocusRequester.requestFocus() } else if (!isManualOverlay) { mainFocusRequester.requestFocus() } }
+    LaunchedEffect(isSubMenuOpen) { if (isSubMenuOpen) { delay(100); subMenuFocusRequester.requestFocus() } }
     LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black).onKeyEvent { keyEvent ->
-        if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
-        val keyCode = keyEvent.nativeKeyEvent.keyCode
-        if (playerError != null) return@onKeyEvent false
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black)
+        .onKeyEvent { keyEvent ->
+            if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+            if (playerError != null) return@onKeyEvent false
 
-        when (keyCode) {
-            NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                if (!isSubMenuOpen && !isMiniListOpen) {
-                    when {
-                        showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
-                        isPinnedOverlay -> onPinnedOverlayChange(false)
-                        else -> { onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(false) }
+            // サブメニュー表示時はキーイベントを消費せず、メニュー内の移動(Compose標準フォーカス)に任せる
+            if (isSubMenuOpen) return@onKeyEvent false
+
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+
+            // 左右キーでのチャンネルザッピング (放送波種別内のみ)
+            if (!isMiniListOpen) {
+                // 現在のチャンネルが含まれるグループリストを取得 (例: 地デジなら地デジのリスト)
+                val currentGroupList = groupedChannels.values.find { list -> list.any { it.id == currentChannelItem.id } }
+
+                if (currentGroupList != null) {
+                    val currentIndex = currentGroupList.indexOfFirst { it.id == currentChannelItem.id }
+                    if (currentIndex != -1) {
+                        when (keyCode) {
+                            NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
+                                val prevIndex = if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1
+                                onChannelSelect(currentGroupList[prevIndex])
+                                return@onKeyEvent true
+                            }
+                            NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                val nextIndex = if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0
+                                onChannelSelect(currentGroupList[nextIndex])
+                                return@onKeyEvent true
+                            }
+                        }
                     }
-                    return@onKeyEvent true
                 }
             }
-            NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                if (showOverlay && isManualOverlay) {
-                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
-                    return@onKeyEvent true
+
+            when (keyCode) {
+                NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                    if (!isSubMenuOpen && !isMiniListOpen) {
+                        when {
+                            showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
+                            isPinnedOverlay -> onPinnedOverlayChange(false)
+                            else -> { onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(false) }
+                        }
+                        return@onKeyEvent true
+                    }
                 }
-                if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onSubMenuToggle(true); return@onKeyEvent true }
-            }
-            NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (showOverlay && isManualOverlay) {
-                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
-                    return@onKeyEvent true
+                NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                    if (showOverlay && isManualOverlay) {
+                        coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
+                        return@onKeyEvent true
+                    }
+                    if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onSubMenuToggle(true); return@onKeyEvent true }
                 }
-                if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
+                NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (showOverlay && isManualOverlay) {
+                        coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
+                        return@onKeyEvent true
+                    }
+                    if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
+                }
             }
+            false
         }
-        false
-    }) {
+    ) {
         AndroidView(
             factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
-            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(mainFocusRequester)
+                .focusable()
+                .alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
         )
 
         // 読み込み中表示
@@ -320,9 +375,26 @@ fun LivePlayerScreen(
                 scrollState = scrollState
             )
         }
+
         AnimatedVisibility(visible = isMiniListOpen && playerError == null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            ChannelListOverlay(groupedChannels = groupedChannels, currentChannelId = currentChannelItem.id, onChannelSelect = { onChannelSelect(it); onMiniListToggle(false); mainFocusRequester.requestFocus() }, mirakurunIp = mirakurunIp ?: "", mirakurunPort = mirakurunPort ?: "", konomiIp = konomiIp, konomiPort = konomiPort, focusRequester = listFocusRequester)
+            ChannelListOverlay(
+                groupedChannels = groupedChannels,
+                currentChannelId = currentChannelItem.id,
+                onChannelSelect = {
+                    onChannelSelect(it)
+                    onMiniListToggle(false)
+                    // ★修正: FocusRequesterの競合クラッシュ対策
+                    // 選局に伴う画面更新中にrequestFocusが呼ばれると "FocusRequester is not initialized" で落ちる場合があるため安全に実行する
+                    runCatching { mainFocusRequester.requestFocus() }
+                },
+                mirakurunIp = mirakurunIp ?: "",
+                mirakurunPort = mirakurunPort ?: "",
+                konomiIp = konomiIp,
+                konomiPort = konomiPort,
+                focusRequester = listFocusRequester
+            )
         }
+
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
@@ -330,10 +402,31 @@ fun LivePlayerScreen(
                 currentQuality = currentQuality,
                 isMirakurunAvailable = isMirakurunAvailable,
                 isSubtitleEnabled = isSubtitleEnabled,
+                isSubtitleSupported = currentStreamSource != StreamSource.MIRAKURUN,
                 focusRequester = subMenuFocusRequester,
-                onAudioToggle = { currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN; val tracks = exoPlayer.currentTracks; val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (audioGroups.size >= 2) { exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build() }; toastState = ("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}") to System.currentTimeMillis() },
-                onSourceToggle = { if (isMirakurunAvailable) { currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN; toastState = ("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}") to System.currentTimeMillis() } },
-                onSubtitleToggle = { subtitleEnabledState.value = !subtitleEnabledState.value; toastState = ("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis() },
+                onAudioToggle = {
+                    currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                    val tracks = exoPlayer.currentTracks
+                    val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    if (audioGroups.size >= 2) {
+                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                            .addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
+                            .build()
+                    }
+                    toastState = ("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}") to System.currentTimeMillis()
+                },
+                onSourceToggle = {
+                    if (isMirakurunAvailable) {
+                        currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN
+                        toastState = ("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}") to System.currentTimeMillis()
+                        onSubMenuToggle(false)
+                    }
+                },
+                onSubtitleToggle = {
+                    subtitleEnabledState.value = !subtitleEnabledState.value
+                    toastState = ("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis()
+                },
                 onQualitySelect = { selectedQuality ->
                     if (currentQuality != selectedQuality) {
                         currentQuality = selectedQuality
@@ -347,7 +440,19 @@ fun LivePlayerScreen(
         }
 
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
-        AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f))
+        AndroidView(factory = { ctx ->
+            WebView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                setBackgroundColor(0)
+                settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
+                }
+                loadUrl("file:///android_asset/subtitle_renderer.html")
+                webViewRef.value = this
+            }
+        }, modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f))
 
         LiveToast(message = toastState?.first)
 
