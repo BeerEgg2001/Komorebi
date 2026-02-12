@@ -1,7 +1,6 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
-import android.view.KeyEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
@@ -43,7 +42,8 @@ fun ModernEpgCanvasEngine_Smooth(
     uiState: EpgUiState,
     logoUrls: List<String>,
     topTabFocusRequester: FocusRequester,
-    contentFocusRequester: FocusRequester,
+    headerFocusRequester: FocusRequester,
+    gridFocusRequester: FocusRequester,
     onProgramSelected: (EpgProgram) -> Unit,
     jumpTargetTime: OffsetDateTime?,
     onJumpFinished: () -> Unit,
@@ -71,10 +71,8 @@ fun ModernEpgCanvasEngine_Smooth(
 
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
-
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
 
-    // ヘッダーへのフォーカス復帰制御
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
@@ -89,17 +87,11 @@ fun ModernEpgCanvasEngine_Smooth(
         }
     }
 
-    // データ更新時の挙動
     LaunchedEffect(uiState) {
         if (uiState is EpgUiState.Success) {
             val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
             lastLoadedType = currentType
-
-            // データを更新。resetFocus=true の場合でも、ここでは requestFocus() を呼ばないため
-            // フォーカスは現在の場所（トップナビ等）に維持されます。
             epgState.updateData(uiState.data, resetFocus = isTypeChanged)
-
-            // ★修正: scrollToNow() を updatePositions に書き換え
             if (restoreChannelId == null) {
                 epgState.updatePositions(0, epgState.getNowMinutes())
             }
@@ -111,7 +103,6 @@ fun ModernEpgCanvasEngine_Smooth(
         val h = constraints.maxHeight.toFloat()
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
 
-        // 特定番組へのスクロール復元（視聴終了時など）
         LaunchedEffect(restoreChannelId, restoreProgramStartTime, epgState.filledChannelWrappers) {
             if (restoreChannelId != null && epgState.hasData) {
                 val colIndex = epgState.filledChannelWrappers.indexOfFirst { it.channel.id == restoreChannelId }
@@ -121,9 +112,7 @@ fun ModernEpgCanvasEngine_Smooth(
                     } else OffsetDateTime.now()
                     val targetTime = if (t.isBefore(epgState.baseTime)) OffsetDateTime.now() else t
                     epgState.updatePositions(colIndex, ChronoUnit.MINUTES.between(epgState.baseTime, targetTime).toInt())
-
-                    // ★重要: 復元ID（restoreChannelId）がある場合のみ、番組セルへフォーカスを移す
-                    runCatching { contentFocusRequester.requestFocus() }
+                    runCatching { gridFocusRequester.requestFocus() }
                 }
             }
         }
@@ -133,7 +122,7 @@ fun ModernEpgCanvasEngine_Smooth(
                 val jumpMin = Duration.between(epgState.baseTime, jumpTargetTime).toMinutes().toInt()
                 epgState.updatePositions(0, jumpMin)
                 onJumpFinished()
-                contentFocusRequester.requestFocus()
+                gridFocusRequester.requestFocus()
             }
         }
 
@@ -155,7 +144,8 @@ fun ModernEpgCanvasEngine_Smooth(
             ) {
                 EpgHeaderSection(
                     topTabFocusRequester = topTabFocusRequester,
-                    contentFocusRequester = contentFocusRequester,
+                    headerFocusRequester = headerFocusRequester,
+                    gridFocusRequester = gridFocusRequester,
                     subTabFocusRequesters = subTabFocusRequesters,
                     availableBroadcastingTypes = visibleTabs,
                     onEpgJumpMenuStateChanged = onEpgJumpMenuStateChanged,
@@ -172,7 +162,7 @@ fun ModernEpgCanvasEngine_Smooth(
                     Spacer(
                         modifier = Modifier
                             .fillMaxSize()
-                            .focusRequester(contentFocusRequester)
+                            .focusRequester(gridFocusRequester)
                             .onFocusChanged {
                                 isContentFocused = it.isFocused
                                 if (it.isFocused) {
@@ -233,7 +223,8 @@ fun ModernEpgCanvasEngine_Smooth(
                             .focusable()
                             .drawWithCache {
                                 onDrawBehind {
-                                    drawer.draw(this, epgState, animValues, logoPainters)
+                                    // ★修正: 描画時にフォーカス状態を渡す
+                                    drawer.draw(this, epgState, animValues, logoPainters, isContentFocused)
                                 }
                             }
                     )
@@ -256,11 +247,12 @@ fun ModernEpgCanvasEngine_Smooth(
     }
 }
 
-// EpgHeaderSection 以下の実装は変更なし（そのまま維持）
+// EpgHeaderSectionは変更なし
 @Composable
 fun EpgHeaderSection(
     topTabFocusRequester: FocusRequester,
-    contentFocusRequester: FocusRequester,
+    headerFocusRequester: FocusRequester,
+    gridFocusRequester: FocusRequester,
     subTabFocusRequesters: List<FocusRequester>,
     availableBroadcastingTypes: List<Pair<String, String>>,
     onEpgJumpMenuStateChanged: (Boolean) -> Unit,
@@ -269,6 +261,10 @@ fun EpgHeaderSection(
 ) {
     val jumpMenuFocusRequester = remember { FocusRequester() }
 
+    val currentTypeIndex = remember(currentType, availableBroadcastingTypes) {
+        availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
+    }
+
     Box(modifier = Modifier.fillMaxWidth().height(48.dp).background(Color(0xFF0A0A0A))) {
         Row(
             modifier = Modifier.align(Alignment.Center),
@@ -276,11 +272,14 @@ fun EpgHeaderSection(
         ) {
             availableBroadcastingTypes.forEachIndexed { index, (label, apiValue) ->
                 var isTabFocused by remember { mutableStateOf(false) }
+
                 val requester = if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index] else FocusRequester()
+                val isTargetForParentFocus = index == currentTypeIndex
 
                 Box(
                     modifier = Modifier.width(110.dp).fillMaxHeight()
                         .onFocusChanged { isTabFocused = it.isFocused }
+                        .then(if (isTargetForParentFocus) Modifier.focusRequester(headerFocusRequester) else Modifier)
                         .focusRequester(requester)
                         .focusProperties {
                             left = if (index == 0) jumpMenuFocusRequester else {
@@ -289,7 +288,7 @@ fun EpgHeaderSection(
                             right = if (index == availableBroadcastingTypes.size - 1) FocusRequester.Default else {
                                 if (index + 1 in subTabFocusRequesters.indices) subTabFocusRequesters[index + 1] else FocusRequester.Default
                             }
-                            down = contentFocusRequester
+                            down = gridFocusRequester
                             up = topTabFocusRequester
                         }
                         .onKeyEvent { event ->
@@ -320,7 +319,7 @@ fun EpgHeaderSection(
                 .focusRequester(jumpMenuFocusRequester)
                 .focusProperties {
                     right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default
-                    down = contentFocusRequester
+                    down = gridFocusRequester
                     up = topTabFocusRequester
                 }
                 .onKeyEvent { event ->

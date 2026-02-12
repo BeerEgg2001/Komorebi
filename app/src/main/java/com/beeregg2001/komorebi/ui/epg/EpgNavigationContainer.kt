@@ -34,7 +34,7 @@ fun EpgNavigationContainer(
     mirakurunIp: String,
     mirakurunPort: String,
     mainTabFocusRequester: FocusRequester,
-    contentRequester: FocusRequester,
+    contentRequester: FocusRequester, // ★これを「ヘッダー（放送波タブ）」用として使う
     selectedProgram: EpgProgram?,
     onProgramSelected: (EpgProgram?) -> Unit,
     isJumpMenuOpen: Boolean,
@@ -49,8 +49,9 @@ fun EpgNavigationContainer(
     var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
     var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
 
-    // ★修正: 親から渡される restoreChannelId を監視し、状態を同期
-    // null が渡された（他タブからの移動）場合は、内部の復元用情報もクリアする
+    // ★内部でグリッド用のRequesterを生成（親から隠蔽してシンプル化）
+    val gridFocusRequester = remember { FocusRequester() }
+
     LaunchedEffect(restoreChannelId) {
         internalRestoreChannelId = restoreChannelId
         if (restoreChannelId == null) {
@@ -83,7 +84,8 @@ fun EpgNavigationContainer(
             uiState = uiState,
             logoUrls = displayLogoUrls,
             topTabFocusRequester = mainTabFocusRequester,
-            contentFocusRequester = contentRequester,
+            headerFocusRequester = contentRequester, // ★親からのRequesterをヘッダーに渡す
+            gridFocusRequester = gridFocusRequester, // ★内部生成したRequesterをグリッドに渡す
             onProgramSelected = onProgramSelected,
             jumpTargetTime = jumpTargetTime,
             onJumpFinished = { jumpTargetTime = null },
@@ -111,8 +113,8 @@ fun EpgNavigationContainer(
                     },
                     onRecordClick = { /* 予約 */ },
                     onBackClick = {
-                        // 詳細から戻った時は、元の番組セルにフォーカスを戻す
-                        runCatching { contentRequester.requestFocus() }
+                        // 詳細から戻った時は、グリッド（番組セル）にフォーカスを戻す
+                        runCatching { gridFocusRequester.requestFocus() }
                         internalRestoreChannelId = selectedProgram.channel_id
                         internalRestoreStartTime = selectedProgram.start_time
                         onProgramSelected(null)
@@ -122,17 +124,15 @@ fun EpgNavigationContainer(
             }
             LaunchedEffect(selectedProgram) {
                 yield()
-                // 詳細表示時の初期フォーカスを安全に要求
                 runCatching { detailInitialFocusRequester.requestFocus() }
             }
         }
 
-        // ★修正: 復元IDがある場合のみ（再生終了後など）フォーカスを本体へ移動
-        // これにより、通常のタブ切り替え時にはフォーカスがトップナビに残ります
         LaunchedEffect(internalRestoreChannelId) {
             if (internalRestoreChannelId != null) {
                 delay(100)
-                runCatching { contentRequester.requestFocus() }
+                // 復元時は直接グリッドへフォーカス
+                runCatching { gridFocusRequester.requestFocus() }
             }
         }
 
