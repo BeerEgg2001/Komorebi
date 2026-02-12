@@ -2,7 +2,6 @@ package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,7 +15,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyRow
@@ -44,6 +42,9 @@ fun VideoTabContent(
     onShowAllRecordings: () -> Unit = {}
 ) {
     val listState = rememberTvLazyListState()
+
+    // ★削除: ここにあった LaunchedEffect(Unit) { ... } を削除しました。
+    // これにより、タブ切り替え時に勝手にフォーカスを奪う動作がなくなります。
 
     TvLazyColumn(
         state = listState,
@@ -83,7 +84,7 @@ fun VideoTabContent(
         item {
             Box(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp),
-                contentAlignment = Alignment.CenterStart // ★修正: 左揃えに変更
+                contentAlignment = Alignment.CenterStart
             ) {
                 Button(
                     onClick = onShowAllRecordings,
@@ -134,13 +135,13 @@ fun VideoSectionRow(
         ) {
             itemsIndexed(items, key = { _, program -> program.id }) { index, program ->
                 val isSelected = program.id == selectedProgramId
-                var isFocused by remember { mutableStateOf(false) } // ★追加: フォーカス状態
+                var isFocused by remember { mutableStateOf(false) }
 
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
                     modifier = Modifier
-                        .onFocusChanged { isFocused = it.isFocused } // ★追加: 状態検知
-                        .then(if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp)) else Modifier) // ★追加: 白枠
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .then(if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp)) else Modifier)
                         .then(if (index == 0 && isFirstSection) Modifier else Modifier)
                         .then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
                         .focusProperties { if (isFirstSection && topNavFocusRequester != null) up = topNavFocusRequester }
