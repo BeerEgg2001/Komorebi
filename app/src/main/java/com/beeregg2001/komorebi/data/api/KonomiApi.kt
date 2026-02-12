@@ -6,10 +6,12 @@ import com.beeregg2001.komorebi.data.model.KonomiProgram
 import com.beeregg2001.komorebi.data.model.KonomiUser
 import com.beeregg2001.komorebi.data.model.RecordedApiResponse
 import com.beeregg2001.komorebi.viewmodel.ChannelApiResponse
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -53,4 +55,12 @@ interface KonomiApi {
 
     @DELETE("api/programs/bookmarks/{program_id}")
     suspend fun removeBookmark(@Path("program_id") programId: String)
+
+    // ★追加: 録画ストリームの生存確認（ハートビート）
+    @PUT("api/streams/video/{video_id}/{quality}/keep-alive")
+    suspend fun keepAlive(
+        @Path("video_id") videoId: Int,
+        @Path("quality") quality: String,
+        @Query("session_id") sessionId: String
+    ): Response<Unit>
 }

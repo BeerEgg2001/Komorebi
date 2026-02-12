@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
+import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
 import androidx.annotation.*
 import androidx.compose.animation.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.*
 import androidx.media3.common.*
 import androidx.media3.common.audio.*
@@ -30,6 +32,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import java.util.UUID
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
@@ -41,7 +44,6 @@ fun VideoPlayerScreen(
     program: RecordedProgram,
     konomiIp: String,
     konomiPort: String,
-    // ★外部管理される状態
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -49,12 +51,15 @@ fun VideoPlayerScreen(
     isSceneSearchOpen: Boolean,
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
-    onUpdateWatchHistory: (RecordedProgram, Double) -> Unit
+    onUpdateWatchHistory: (RecordedProgram, Double) -> Unit,
+    // ★追加: ViewModelを注入
+    recordViewModel: RecordViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val sessionId = remember { UUID.randomUUID().toString() }
+    val quality = "1080p-60fps" // UrlBuilderのデフォルト値
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
@@ -82,7 +87,7 @@ fun VideoPlayerScreen(
             .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory))
             .build().apply {
                 val mediaItem = MediaItem.Builder()
-                    .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, sessionId))
+                    .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, sessionId, quality))
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
                     .build()
                 setMediaItem(mediaItem)
@@ -92,6 +97,22 @@ fun VideoPlayerScreen(
                 })
                 prepare(); playWhenReady = true
             }
+    }
+
+    // ★追加: 録画ストリーム維持用の定期実行タイマー
+    // 再生中 (isPlayerPlaying == true) の間、20秒ごとに keep-alive API を叩く
+    LaunchedEffect(isPlayerPlaying) {
+        if (isPlayerPlaying) {
+            while (true) {
+                recordViewModel.keepAliveStream(
+                    videoId = program.recordedVideo.id,
+                    quality = quality,
+                    sessionId = sessionId
+                )
+                delay(20000) // 20秒間隔
+                Log.d("HEART_BEAT","heart_beat check ok")
+            }
+        }
     }
 
     // 自動消去タイマー
@@ -166,7 +187,6 @@ fun VideoPlayerScreen(
                     mainFocusRequester.requestFocus()
                 },
                 onClose = {
-                    // SceneSearchOverlay内部のBackイベントで呼ばれる
                     onSceneSearchToggle(false)
                     mainFocusRequester.requestFocus()
                 }

@@ -1,14 +1,17 @@
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -18,7 +21,10 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -31,6 +37,56 @@ import com.beeregg2001.komorebi.viewmodel.EpgViewModel
 import com.beeregg2001.komorebi.viewmodel.HomeViewModel
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
+
+private const val TAG = "EPG_DEBUG_HOME"
+
+/**
+ * ★新規追加: 1秒ごとに更新されるデジタル時計
+ */
+@RequiresApi(Build.VERSION_CODES.O)
+@Composable
+fun DigitalClock(modifier: Modifier = Modifier) {
+    var currentTime by remember { mutableStateOf(LocalTime.now()) }
+    // ★追加: アニメーション用の表示フラグ
+    var isVisible by remember { mutableStateOf(false) }
+
+    // ★追加: アルファ値のアニメーション設定
+    val alpha by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = 1000, // 1秒かけてフェードイン
+            delayMillis = 300      // コンテンツ表示から少し遅らせる
+        ),
+        label = "ClockFadeIn"
+    )
+
+    LaunchedEffect(Unit) {
+        // 描画開始後にフラグをONにする
+        isVisible = true
+
+        while (true) {
+            currentTime = LocalTime.now()
+            delay(1000)
+        }
+    }
+
+    val timeStr = currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))
+
+    Text(
+        text = timeStr,
+        color = Color.White,
+        style = MaterialTheme.typography.titleLarge.copy(
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.sp,
+            fontSize = 20.sp
+        ),
+        modifier = modifier
+            // ★追加: graphicsLayer でアルファ値を適用
+            .graphicsLayer(alpha = alpha)
+    )
+}
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -79,6 +135,7 @@ fun HomeLauncherScreen(
         }
     }
 
+    // フルスクリーンモード（詳細画面や設定画面が開いている時）はナビを隠す設定
     val isFullScreenMode = (selectedChannel != null) || (selectedProgram != null) ||
             (epgSelectedProgram != null) || isSettingsOpen
 
@@ -110,14 +167,6 @@ fun HomeLauncherScreen(
     var topNavHasFocus by remember { mutableStateOf(false) }
     var internalLastPlayerChannelId by remember(lastPlayerChannelId) { mutableStateOf(lastPlayerChannelId) }
     val availableTypes = remember(groupedChannels) { groupedChannels.keys.toList() }
-
-    // ★追加: 録画一覧から戻ってきた時(true -> false)だけ、フォーカスをコンテンツに戻す
-    LaunchedEffect(isRecordListOpen) {
-        if (!isRecordListOpen && selectedTabIndex == 3) {
-            delay(50) // Crossfadeの切り替わり待ち
-            runCatching { contentFirstItemRequesters[3].requestFocus() }
-        }
-    }
 
     LaunchedEffect(triggerBack) {
         if (triggerBack) {
@@ -159,7 +208,6 @@ fun HomeLauncherScreen(
             if (selectedTabIndex == 0) {
                 runCatching { tabFocusRequesters[0].requestFocus() }
             } else if (selectedTabIndex == 3) {
-                // ビデオタブへ戻る時は、コンテンツの一番上へフォーカス
                 runCatching { contentFirstItemRequesters[3].requestFocus() }
             }
             onReturnFocusConsumed()
@@ -168,16 +216,24 @@ fun HomeLauncherScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
+            // トップナビゲーション部分
             AnimatedVisibility(
                 visible = !isFullScreenMode,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 18.dp, start = 40.dp, end = 40.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 18.dp, start = 40.dp, end = 40.dp)
                         .onFocusChanged { topNavHasFocus = it.hasFocus },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // ★追加: タブの左側に時計を表示
+                    DigitalClock()
+
+                    Spacer(modifier = Modifier.width(32.dp))
+
                     TabRow(
                         selectedTabIndex = selectedTabIndex,
                         modifier = Modifier.weight(1f).focusGroup(),
@@ -193,7 +249,12 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = selectedTabIndex == index,
                                 onFocus = {
+                                    Log.d(TAG, "Tab onFocus: index=$index, menuOpen=$isEpgJumpMenuOpen")
+
+                                    if (isEpgJumpMenuOpen || isRecordListOpen) return@Tab
+
                                     if (selectedTabIndex != index) {
+                                        Log.d(TAG, "Tab changed from $selectedTabIndex to $index")
                                         selectedTabIndex = index
                                         onTabChange(index)
                                         onReturnFocusConsumed()

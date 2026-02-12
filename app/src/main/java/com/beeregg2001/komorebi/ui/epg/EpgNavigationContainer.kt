@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -25,6 +26,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 
+private const val TAG = "EPG_DEBUG_CONTAINER"
+
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -34,7 +37,7 @@ fun EpgNavigationContainer(
     mirakurunIp: String,
     mirakurunPort: String,
     mainTabFocusRequester: FocusRequester,
-    contentRequester: FocusRequester, // ★これを「ヘッダー（放送波タブ）」用として使う
+    contentRequester: FocusRequester,
     selectedProgram: EpgProgram?,
     onProgramSelected: (EpgProgram?) -> Unit,
     isJumpMenuOpen: Boolean,
@@ -49,7 +52,6 @@ fun EpgNavigationContainer(
     var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
     var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
 
-    // ★内部でグリッド用のRequesterを生成（親から隠蔽してシンプル化）
     val gridFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(restoreChannelId) {
@@ -84,8 +86,8 @@ fun EpgNavigationContainer(
             uiState = uiState,
             logoUrls = displayLogoUrls,
             topTabFocusRequester = mainTabFocusRequester,
-            headerFocusRequester = contentRequester, // ★親からのRequesterをヘッダーに渡す
-            gridFocusRequester = gridFocusRequester, // ★内部生成したRequesterをグリッドに渡す
+            headerFocusRequester = contentRequester,
+            gridFocusRequester = gridFocusRequester,
             onProgramSelected = onProgramSelected,
             jumpTargetTime = jumpTargetTime,
             onJumpFinished = { jumpTargetTime = null },
@@ -113,7 +115,6 @@ fun EpgNavigationContainer(
                     },
                     onRecordClick = { /* 予約 */ },
                     onBackClick = {
-                        // 詳細から戻った時は、グリッド（番組セル）にフォーカスを戻す
                         runCatching { gridFocusRequester.requestFocus() }
                         internalRestoreChannelId = selectedProgram.channel_id
                         internalRestoreStartTime = selectedProgram.start_time
@@ -131,7 +132,6 @@ fun EpgNavigationContainer(
         LaunchedEffect(internalRestoreChannelId) {
             if (internalRestoreChannelId != null) {
                 delay(100)
-                // 復元時は直接グリッドへフォーカス
                 runCatching { gridFocusRequester.requestFocus() }
             }
         }
@@ -147,10 +147,18 @@ fun EpgNavigationContainer(
             EpgJumpMenu(
                 dates = dates,
                 onSelect = { selectedTime ->
+                    Log.d(TAG, "Jump action: Transferring focus to grid Box")
+
+                    // ★最重要：メニュー消失による「フォーカス迷子」を防ぐため、先に番組表Boxへフォーカスを逃がす
+                    runCatching { gridFocusRequester.requestFocus() }
+
                     jumpTargetTime = selectedTime
                     onJumpMenuStateChanged(false)
                 },
-                onDismiss = { onJumpMenuStateChanged(false) }
+                onDismiss = {
+                    onJumpMenuStateChanged(false)
+                    runCatching { contentRequester.requestFocus() }
+                }
             )
         }
     }

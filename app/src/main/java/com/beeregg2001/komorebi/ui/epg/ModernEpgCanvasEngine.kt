@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
@@ -34,6 +35,9 @@ import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
+import kotlinx.coroutines.delay
+
+private const val TAG = "EPG_DEBUG_ENGINE"
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -73,6 +77,9 @@ fun ModernEpgCanvasEngine_Smooth(
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
 
+    // ★描画完了フラグ
+    var hasRenderedFirstFrame by remember { mutableStateOf(false) }
+
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
@@ -91,6 +98,7 @@ fun ModernEpgCanvasEngine_Smooth(
         if (uiState is EpgUiState.Success) {
             val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
             lastLoadedType = currentType
+            hasRenderedFirstFrame = false // リセット
             epgState.updateData(uiState.data, resetFocus = isTypeChanged)
             if (restoreChannelId == null) {
                 epgState.updatePositions(0, epgState.getNowMinutes())
@@ -119,10 +127,17 @@ fun ModernEpgCanvasEngine_Smooth(
 
         LaunchedEffect(jumpTargetTime) {
             if (jumpTargetTime != null) {
+                Log.d(TAG, "Engine: Start jumping to $jumpTargetTime")
+                hasRenderedFirstFrame = false // ジャンプ開始でローディング表示
                 val jumpMin = Duration.between(epgState.baseTime, jumpTargetTime).toMinutes().toInt()
+
+                // ★修正：一番左の列(0)に明示的に合わせる
                 epgState.updatePositions(0, jumpMin)
                 onJumpFinished()
-                gridFocusRequester.requestFocus()
+
+                // 座標更新後にフォーカスを再要求
+                delay(50)
+                runCatching { gridFocusRequester.requestFocus() }
             }
         }
 
@@ -154,84 +169,88 @@ fun ModernEpgCanvasEngine_Smooth(
                 )
             }
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                var isContentFocused by remember { mutableStateOf(false) }
-                var isBackLongPressed by remember { mutableStateOf(false) }
+            // ★修正: Box自体をフォーカス可能にし、常に存在するコンテナにRequesterを紐付けます
+            // これにより描画計算中もフォーカスを安定して保持できます
+            var isContentFocused by remember { mutableStateOf(false) }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .focusRequester(gridFocusRequester)
+                    .onFocusChanged {
+                        Log.d(TAG, "Grid focus changed: hasFocus=${it.isFocused}")
+                        isContentFocused = it.isFocused
+                        if (it.isFocused) {
+                            isHeaderVisible = false
+                        }
+                    }
+                    .onKeyEvent { event ->
+                        if (event.key == Key.Back) {
+                            if (event.type == KeyEventType.KeyDown) {
+                                if (event.nativeKeyEvent.isLongPress) {
+                                    epgState.updatePositions(0, epgState.getNowMinutes())
+                                    return@onKeyEvent true
+                                }
+                                return@onKeyEvent true
+                            } else if (event.type == KeyEventType.KeyUp) {
+                                isHeaderVisible = true
+                                val currentIndex = visibleTabs.indexOfFirst { it.second == currentType }
+                                pendingHeaderFocusIndex = currentIndex
+                                return@onKeyEvent true
+                            }
+                        }
 
+                        if (event.type == KeyEventType.KeyDown) {
+                            when (event.key) {
+                                Key.DirectionRight -> { epgState.updatePositions(epgState.focusedCol + 1, epgState.focusedMin); true }
+                                Key.DirectionLeft -> { epgState.updatePositions(epgState.focusedCol - 1, epgState.focusedMin); true }
+                                Key.DirectionDown -> {
+                                    val next = epgState.currentFocusedProgram?.let {
+                                        Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.end_time, epgState.baseTime)).toMinutes().toInt()
+                                    } ?: (epgState.focusedMin + 30)
+                                    epgState.updatePositions(epgState.focusedCol, next); true
+                                }
+                                Key.DirectionUp -> {
+                                    val prev = epgState.currentFocusedProgram?.let {
+                                        Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.start_time, epgState.baseTime)).toMinutes().toInt() - 1
+                                    } ?: (epgState.focusedMin - 30)
+                                    if (prev < 0) {
+                                        isHeaderVisible = true
+                                        val currentIndex = visibleTabs.indexOfFirst { it.second == currentType }
+                                        pendingHeaderFocusIndex = currentIndex
+                                        true
+                                    } else { epgState.updatePositions(epgState.focusedCol, prev); true }
+                                }
+                                Key.DirectionCenter, Key.Enter -> {
+                                    epgState.currentFocusedProgram?.let {
+                                        if (it.title != "（番組情報なし）") onProgramSelected(it)
+                                    }; true
+                                }
+                                else -> false
+                            }
+                        } else false
+                    }
+                    .focusable()
+            ) {
                 if (epgState.hasData) {
                     Spacer(
                         modifier = Modifier
                             .fillMaxSize()
-                            .focusRequester(gridFocusRequester)
-                            .onFocusChanged {
-                                isContentFocused = it.isFocused
-                                if (it.isFocused) {
-                                    isHeaderVisible = false
-                                }
-                            }
-                            .onKeyEvent { event ->
-                                if (event.key == Key.Back) {
-                                    if (event.type == KeyEventType.KeyDown) {
-                                        if (event.nativeKeyEvent.isLongPress) {
-                                            isBackLongPressed = true
-                                            epgState.updatePositions(0, epgState.getNowMinutes())
-                                            return@onKeyEvent true
-                                        }
-                                        return@onKeyEvent true
-                                    } else if (event.type == KeyEventType.KeyUp) {
-                                        if (isBackLongPressed) {
-                                            isBackLongPressed = false
-                                            return@onKeyEvent true
-                                        }
-                                        isHeaderVisible = true
-                                        val currentIndex = visibleTabs.indexOfFirst { it.second == currentType }
-                                        pendingHeaderFocusIndex = currentIndex
-                                        return@onKeyEvent true
-                                    }
-                                }
-
-                                if (event.type == KeyEventType.KeyDown) {
-                                    when (event.key) {
-                                        Key.DirectionRight -> { epgState.updatePositions(epgState.focusedCol + 1, epgState.focusedMin); true }
-                                        Key.DirectionLeft -> { epgState.updatePositions(epgState.focusedCol - 1, epgState.focusedMin); true }
-                                        Key.DirectionDown -> {
-                                            val next = epgState.currentFocusedProgram?.let {
-                                                Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.end_time, epgState.baseTime)).toMinutes().toInt()
-                                            } ?: (epgState.focusedMin + 30)
-                                            epgState.updatePositions(epgState.focusedCol, next); true
-                                        }
-                                        Key.DirectionUp -> {
-                                            val prev = epgState.currentFocusedProgram?.let {
-                                                Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.start_time, epgState.baseTime)).toMinutes().toInt() - 1
-                                            } ?: (epgState.focusedMin - 30)
-                                            if (prev < 0) {
-                                                isHeaderVisible = true
-                                                val currentIndex = visibleTabs.indexOfFirst { it.second == currentType }
-                                                pendingHeaderFocusIndex = currentIndex
-                                                true
-                                            } else { epgState.updatePositions(epgState.focusedCol, prev); true }
-                                        }
-                                        Key.DirectionCenter, Key.Enter -> {
-                                            epgState.currentFocusedProgram?.let {
-                                                if (it.title != "（番組情報なし）") onProgramSelected(it)
-                                            }; true
-                                        }
-                                        else -> false
-                                    }
-                                } else false
-                            }
-                            .focusable()
                             .drawWithCache {
                                 onDrawBehind {
-                                    // ★修正: 描画時にフォーカス状態を渡す
                                     drawer.draw(this, epgState, animValues, logoPainters, isContentFocused)
+                                    // 描画が実際に実行されたらフラグを立てる
+                                    hasRenderedFirstFrame = true
                                 }
                             }
                     )
                 }
 
-                if (uiState is EpgUiState.Loading || epgState.isCalculating) {
-                    val bgColor = if (epgState.hasData) Color.Black.copy(alpha = 0.5f) else Color.Black
+                // ★修正：実際にキャンバス描画が完了するまでローディングを表示し続ける
+                val isLoading = uiState is EpgUiState.Loading || epgState.isCalculating || !hasRenderedFirstFrame
+
+                if (isLoading) {
+                    val bgColor = if (epgState.hasData && hasRenderedFirstFrame) Color.Black.copy(alpha = 0.5f) else Color.Black
                     Box(Modifier.fillMaxSize().background(bgColor), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Color.White)
                     }
@@ -247,7 +266,6 @@ fun ModernEpgCanvasEngine_Smooth(
     }
 }
 
-// EpgHeaderSectionは変更なし
 @Composable
 fun EpgHeaderSection(
     topTabFocusRequester: FocusRequester,

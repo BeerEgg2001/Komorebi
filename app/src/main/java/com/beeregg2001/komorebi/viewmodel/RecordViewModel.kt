@@ -121,4 +121,19 @@ class RecordViewModel @Inject constructor(
             historyRepository.saveWatchHistory(program, positionSeconds)
         }
     }
+
+    /**
+     * ★追加: 録画ストリームを維持する
+     */
+    fun keepAliveStream(videoId: Int, quality: String, sessionId: String) {
+        viewModelScope.launch {
+            try {
+                // KonomiRepository経由でApiのkeepAliveを呼ぶように実装してください
+                repository.keepAlive(videoId, quality, sessionId)
+            } catch (e: Exception) {
+                // バックグラウンド処理なのでログ出力のみでOK
+                e.printStackTrace()
+            }
+        }
+    }
 }

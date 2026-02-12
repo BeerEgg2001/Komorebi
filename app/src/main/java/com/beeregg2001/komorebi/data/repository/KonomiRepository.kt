@@ -38,9 +38,22 @@ class KonomiRepository @Inject constructor(
     suspend fun getChannels() = apiService.getChannels()
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
 
-    // ★追加: 録画番組検索
+    // 録画番組検索
     suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) =
         apiService.searchVideos(keyword = keyword, page = page)
+
+    // ★修正: 戻り値の型変更に合わせ、成功判定を追加
+    @UnstableApi
+    suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
+        runCatching {
+            val response = apiService.keepAlive(videoId, quality, sessionId)
+            if (!response.isSuccessful) {
+                Log.w("KEEP_ALIVE", "Failed: ${response.code()}")
+            }
+        }.onFailure {
+            it.printStackTrace()
+        }
+    }
 
     // --- マイリスト (API) ---
     suspend fun getBookmarks(): Result<List<KonomiProgram>> = runCatching { apiService.getBookmarks() }
