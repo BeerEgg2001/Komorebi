@@ -87,40 +87,50 @@ fun LivePlayerScreen(
     onChannelSelect: (Channel) -> Unit,
     onBackPressed: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
+
+    // ★設定値の収集
+    val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
+    val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
+    val commentOpacityStr by repository.commentOpacity.collectAsState(initial = "1.0")
+    val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
+    val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
+
+    // 数値型への変換
+    val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
+    val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
+    val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
+    val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
+
     val isEmulator = remember {
-        Build.FINGERPRINT.startsWith("generic")
-                || Build.FINGERPRINT.startsWith("unknown")
-                || Build.MODEL.contains("google_sdk")
-                || Build.MODEL.contains("Emulator")
-                || Build.MODEL.contains("Android SDK built for x86")
-                || Build.MANUFACTURER.contains("Genymotion")
-                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-                || "google_sdk" == Build.PRODUCT
+        Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk"
     }
 
     var forceSoftwareRendering by remember { mutableStateOf(isEmulator) }
     val processedCommentIds = remember { Collections.synchronizedSet(LinkedHashSet<String>()) }
-    val context = LocalContext.current
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
-
     val currentChannelItem by remember(channel.id, groupedChannels) {
         derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
     }
 
-    val nativeLib = remember { NativeLib() }
+    val nativeLib = remember { com.beeregg2001.komorebi.NativeLib() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentQuality by remember(initialQuality) { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
     val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
     val isSubtitleEnabled by subtitleEnabledState
-    // ★追加: コメント有効状態
-    val commentEnabledState = rememberSaveable { mutableStateOf(true) }
+
+    // ★初期表示設定を反映
+    val commentEnabledState = rememberSaveable(commentDefaultDisplayStr) {
+        mutableStateOf(commentDefaultDisplayStr == "ON")
+    }
     val isCommentEnabled by commentEnabledState
 
     var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val webViewRef = remember { mutableStateOf<android.webkit.WebView?>(null) }
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     var currentStreamSource by remember { mutableStateOf(if (isMirakurunAvailable) StreamSource.MIRAKURUN else StreamSource.KONOMITV) }
 
@@ -128,7 +138,7 @@ fun LivePlayerScreen(
     var retryKey by remember { mutableIntStateOf(0) }
 
     var sseStatus by remember { mutableStateOf("Standby") }
-    var sseDetail by remember { mutableStateOf(AppStrings.SSE_CONNECTING) }
+    var sseDetail by remember { mutableStateOf(com.beeregg2001.komorebi.common.AppStrings.SSE_CONNECTING) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
@@ -140,26 +150,26 @@ fun LivePlayerScreen(
     val updatedIsPinnedOverlay by rememberUpdatedState(isPinnedOverlay)
     val updatedIsSubMenuOpen by rememberUpdatedState(isSubMenuOpen)
 
-    val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
-    val extractorsFactory = remember { DefaultExtractorsFactory().apply { setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS) } }
-    val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
+    val tsDataSourceFactory = remember { com.beeregg2001.komorebi.util.TsReadExDataSourceFactory(nativeLib, arrayOf()) }
+    val extractorsFactory = remember { androidx.media3.extractor.DefaultExtractorsFactory().apply { setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS) } }
+    val audioProcessor = remember { androidx.media3.common.audio.ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(androidx.media3.common.audio.ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
 
     fun analyzePlayerError(error: PlaybackException): String {
         val cause = error.cause
-        return if (cause is HttpDataSource.InvalidResponseCodeException) {
-            when (cause.responseCode) { 404 -> AppStrings.ERR_CHANNEL_NOT_FOUND; 503 -> AppStrings.ERR_TUNER_FULL; else -> "サーバーエラー (HTTP ${cause.responseCode})" }
-        } else if (cause is HttpDataSource.HttpDataSourceException) {
-            if (cause.cause is java.net.ConnectException) AppStrings.ERR_CONNECTION_REFUSED else if (cause.cause is java.net.SocketTimeoutException) AppStrings.ERR_TIMEOUT else AppStrings.ERR_NETWORK
-        } else if (cause is IOException) { "データ読み込みエラー: ${cause.message}" }
-        else { "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
+        return if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+            when (cause.responseCode) { 404 -> com.beeregg2001.komorebi.common.AppStrings.ERR_CHANNEL_NOT_FOUND; 503 -> com.beeregg2001.komorebi.common.AppStrings.ERR_TUNER_FULL; else -> "サーバーエラー (HTTP ${cause.responseCode})" }
+        } else if (cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException) {
+            if (cause.cause is java.net.ConnectException) com.beeregg2001.komorebi.common.AppStrings.ERR_CONNECTION_REFUSED else if (cause.cause is java.net.SocketTimeoutException) com.beeregg2001.komorebi.common.AppStrings.ERR_TIMEOUT else com.beeregg2001.komorebi.common.AppStrings.ERR_NETWORK
+        } else if (cause is java.io.IOException) { "データ読み込みエラー: ${cause.message}" }
+        else { "${com.beeregg2001.komorebi.common.AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
     }
 
     val exoPlayer = remember(currentStreamSource, retryKey, currentQuality) {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? { return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
+        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): androidx.media3.exoplayer.audio.DefaultAudioSink? { return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
         }
-        ExoPlayer.Builder(context, renderersFactory).apply {
-            if (currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
+        androidx.media3.exoplayer.ExoPlayer.Builder(context, renderersFactory).apply {
+            if (currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
         }.build().apply {
             playWhenReady = true
             addListener(object : Player.Listener {
@@ -171,8 +181,8 @@ fun LivePlayerScreen(
                     if (!subtitleEnabledState.value) return
                     for (i in 0 until metadata.length()) {
                         val entry = metadata.get(i)
-                        if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
-                            val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                        if (entry is androidx.media3.extractor.metadata.id3.PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                            val base64Data = android.util.Base64.encodeToString(entry.privateData, android.util.Base64.NO_WRAP)
                             val ptsMs = currentPosition + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
                             webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }", null) }
                         }
@@ -187,18 +197,18 @@ fun LivePlayerScreen(
             if (playerError != null) return@LaunchedEffect
             delay(6000)
             if (sseStatus == "Offline" && playerError == null) {
-                playerError = sseDetail.ifEmpty { AppStrings.SSE_OFFLINE }
+                playerError = sseDetail.ifEmpty { com.beeregg2001.komorebi.common.AppStrings.SSE_OFFLINE }
             }
         }
     }
 
     DisposableEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         if (currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
-        val eventUrl = UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
-        val client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
-        val request = Request.Builder().url(eventUrl).build()
-        val listener = object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+        val eventUrl = com.beeregg2001.komorebi.common.UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
+        val client = okhttp3.OkHttpClient.Builder().readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+        val request = okhttp3.Request.Builder().url(eventUrl).build()
+        val listener = object : okhttp3.sse.EventSourceListener() {
+            override fun onEvent(eventSource: okhttp3.sse.EventSource, id: String?, type: String?, data: String) {
                 runCatching {
                     val json = JSONObject(data)
                     sseStatus = json.optString("status", "Unknown")
@@ -216,7 +226,7 @@ fun LivePlayerScreen(
                 }
             }
         }
-        val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
+        val eventSource = okhttp3.sse.EventSources.createFactory(client).newEventSource(request, listener)
         onDispose {
             eventSource.cancel()
             client.dispatcher.executorService.shutdown()
@@ -233,11 +243,11 @@ fun LivePlayerScreen(
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop()
-            else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) exoPlayer.stop()
+            else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
@@ -265,17 +275,14 @@ fun LivePlayerScreen(
         }
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
-        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+        exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(streamUrl))
         exoPlayer.prepare()
         exoPlayer.play()
         if (playerError == null) { mainFocusRequester.requestFocus() }
     }
 
-    // ★修正: 実況機能 (isCommentEnabled に連動)
     DisposableEffect(currentChannelItem.id, isCommentEnabled) {
         processedCommentIds.clear()
-
-        // コメント無効時は接続しない
         if (!isCommentEnabled) {
             danmakuViewRef.value?.removeAllDanmakus(true)
             return@DisposableEffect onDispose { }
@@ -305,12 +312,15 @@ fun LivePlayerScreen(
                         danmakuViewRef.value?.let { view ->
                             (view as? android.view.View)?.post {
                                 if (!view.isPrepared) return@post
-                                val danmaku = view.config.mDanmakuFactory.createDanmaku(master.flame.danmaku.danmaku.model.BaseDanmaku.TYPE_SCROLL_RL)
+                                val danmaku = view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL)
                                 if (danmaku != null) {
                                     danmaku.text = content
                                     danmaku.padding = 5
                                     val density = view.context.resources.displayMetrics.density
-                                    danmaku.textSize = 32f * density
+
+                                    // ★設定された倍率(commentFontSizeScale)を適用
+                                    danmaku.textSize = (32f * commentFontSizeScale) * density
+
                                     danmaku.textColor = AndroidColor.WHITE
                                     danmaku.textShadowColor = AndroidColor.BLACK
                                     danmaku.setTime(view.currentTime + 10)
@@ -343,11 +353,11 @@ fun LivePlayerScreen(
                     val currentIndex = currentGroupList.indexOfFirst { it.id == currentChannelItem.id }
                     if (currentIndex != -1) {
                         when (keyCode) {
-                            NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                 onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1])
                                 return@onKeyEvent true
                             }
-                            NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                                 onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0])
                                 return@onKeyEvent true
                             }
@@ -356,7 +366,7 @@ fun LivePlayerScreen(
                 }
             }
             when (keyCode) {
-                NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
                     if (!isSubMenuOpen && !isMiniListOpen) {
                         when {
                             showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
@@ -366,11 +376,11 @@ fun LivePlayerScreen(
                         return@onKeyEvent true
                     }
                 }
-                NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                     if (showOverlay && isManualOverlay) { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; return@onKeyEvent true }
                     if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onSubMenuToggle(true); return@onKeyEvent true }
                 }
-                NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (showOverlay && isManualOverlay) { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; return@onKeyEvent true }
                     if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
                 }
@@ -379,16 +389,19 @@ fun LivePlayerScreen(
         }
     ) {
         AndroidView(
-            factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
+            factory = { androidx.media3.ui.PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
         )
 
-        // ★修正: コメント表示
         if (isCommentEnabled) {
             LiveCommentOverlay(
                 modifier = Modifier.fillMaxSize(),
                 useSoftwareRendering = forceSoftwareRendering,
+                // ★設定値を Overlay に渡す
+                speed = commentSpeed,
+                opacity = commentOpacity,
+                maxLines = commentMaxLines,
                 onViewCreated = { view -> danmakuViewRef.value = view }
             )
         }

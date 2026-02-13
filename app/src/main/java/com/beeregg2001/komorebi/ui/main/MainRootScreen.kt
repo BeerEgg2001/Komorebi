@@ -1,3 +1,4 @@
+
 @file:OptIn(ExperimentalComposeUiApi::class)
 
 package com.beeregg2001.komorebi.ui.main
@@ -51,8 +52,6 @@ fun MainRootScreen(
 
     var selectedChannel by remember { mutableStateOf<Channel?>(null) }
     var selectedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
-
-    // ★追加: 選択された録画番組の初期再生位置
     var initialPlaybackPositionMs by remember { mutableLongStateOf(0L) }
 
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
@@ -82,8 +81,6 @@ fun MainRootScreen(
     val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
-
-    // ★追加: 視聴履歴リストを監視して、再生位置の検索に使用
     val watchHistory by homeViewModel.watchHistory.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
@@ -110,21 +107,9 @@ fun MainRootScreen(
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
             playerIsSubMenuOpen -> playerIsSubMenuOpen = false
             isPlayerSubMenuOpen -> isPlayerSubMenuOpen = false
-
-            isPlayerSceneSearchOpen -> {
-                isPlayerSceneSearchOpen = false
-                showPlayerControls = false
-            }
-
-            selectedChannel != null -> {
-                selectedChannel = null
-                isReturningFromPlayer = true
-            }
-            selectedProgram != null -> {
-                selectedProgram = null
-                showPlayerControls = true
-                isReturningFromPlayer = true
-            }
+            isPlayerSceneSearchOpen -> { isPlayerSceneSearchOpen = false; showPlayerControls = false }
+            selectedChannel != null -> { selectedChannel = null; isReturningFromPlayer = true }
+            selectedProgram != null -> { selectedProgram = null; showPlayerControls = true; isReturningFromPlayer = true }
             isSettingsOpen -> closeSettingsAndRefresh()
             epgSelectedProgram != null -> epgSelectedProgram = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
@@ -162,10 +147,8 @@ fun MainRootScreen(
                 if (selectedChannel != null) {
                     LivePlayerScreen(
                         channel = selectedChannel!!,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
+                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                        konomiIp = konomiIp, konomiPort = konomiPort,
                         groupedChannels = groupedChannels,
                         isMiniListOpen = isPlayerMiniListOpen,
                         onMiniListToggle = { isPlayerMiniListOpen = it },
@@ -184,50 +167,32 @@ fun MainRootScreen(
                             homeViewModel.saveLastChannel(newChannel)
                             isReturningFromPlayer = false
                         },
-                        onBackPressed = {
-                            selectedChannel = null
-                            isReturningFromPlayer = true
-                        }
+                        onBackPressed = { selectedChannel = null; isReturningFromPlayer = true }
                     )
                 } else if (selectedProgram != null) {
                     VideoPlayerScreen(
                         program = selectedProgram!!,
-                        initialPositionMs = initialPlaybackPositionMs, // ★追加: 初期位置を渡す
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
+                        initialPositionMs = initialPlaybackPositionMs,
+                        konomiIp = konomiIp, konomiPort = konomiPort,
                         showControls = showPlayerControls,
                         onShowControlsChange = { showPlayerControls = it },
                         isSubMenuOpen = isPlayerSubMenuOpen,
                         onSubMenuToggle = { isPlayerSubMenuOpen = it },
                         isSceneSearchOpen = isPlayerSceneSearchOpen,
                         onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
-                        onBackPressed = {
-                            selectedProgram = null
-                            isReturningFromPlayer = true
-                        },
-                        onUpdateWatchHistory = { prog, pos ->
-                            recordViewModel.updateWatchHistory(prog, pos)
-                        }
+                        onBackPressed = { selectedProgram = null; isReturningFromPlayer = true },
+                        onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
                     )
                 } else {
                     HomeLauncherScreen(
-                        channelViewModel = channelViewModel,
-                        homeViewModel = homeViewModel,
-                        epgViewModel = epgViewModel,
-                        recordViewModel = recordViewModel,
-                        groupedChannels = groupedChannels,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        initialTabIndex = currentTabIndex,
-                        onTabChange = { currentTabIndex = it },
+                        channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
+                        groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort,
+                        initialTabIndex = currentTabIndex, onTabChange = { currentTabIndex = it },
                         selectedChannel = selectedChannel,
                         onChannelClick = { channel ->
                             selectedChannel = channel
                             if (channel != null) {
-                                lastSelectedChannelId = channel.id
-                                lastSelectedProgramId = null
+                                lastSelectedChannelId = channel.id; lastSelectedProgramId = null
                                 homeViewModel.saveLastChannel(channel)
                                 isReturningFromPlayer = false
                             }
@@ -235,11 +200,19 @@ fun MainRootScreen(
                         selectedProgram = selectedProgram,
                         onProgramSelected = { program ->
                             if (program != null) {
-                                // ★追加: 再生開始前に履歴から前回の位置を取得
+                                // ★修正: 再生開始前に履歴をチェック
                                 val history = watchHistory.find { it.program.id == program.id.toString() }
-                                initialPlaybackPositionMs = if (history != null && history.playback_position > 5) {
-                                    // 5秒未満は最初からとみなす（KonomiTVの仕様に準拠）
-                                    (history.playback_position * 1000).toLong()
+                                val duration = program.recordedVideo.duration // 秒単位
+
+                                initialPlaybackPositionMs = if (history != null) {
+                                    val pos = history.playback_position
+                                    // 5秒以上再生しており、かつ終了10秒前より手前であれば「続きから再生」
+                                    // それ以外（最初の方、またはほぼ最後まで視聴済み）は最初から再生
+                                    if (pos > 5 && pos < (duration - 10)) {
+                                        (pos * 1000).toLong()
+                                    } else {
+                                        0L
+                                    }
                                 } else {
                                     0L
                                 }
@@ -253,35 +226,20 @@ fun MainRootScreen(
                                 selectedProgram = null
                             }
                         },
-                        epgSelectedProgram = epgSelectedProgram,
-                        onEpgProgramSelected = { epgSelectedProgram = it },
-                        isEpgJumpMenuOpen = isEpgJumpMenuOpen,
-                        onEpgJumpMenuStateChanged = { isEpgJumpMenuOpen = it },
-                        triggerBack = triggerHomeBack,
-                        onBackTriggered = { triggerHomeBack = false },
-                        onFinalBack = onExitApp,
-                        onUiReady = { },
+                        epgSelectedProgram = epgSelectedProgram, onEpgProgramSelected = { epgSelectedProgram = it },
+                        isEpgJumpMenuOpen = isEpgJumpMenuOpen, onEpgJumpMenuStateChanged = { isEpgJumpMenuOpen = it },
+                        triggerBack = triggerHomeBack, onBackTriggered = { triggerHomeBack = false }, onFinalBack = onExitApp, onUiReady = { },
                         onNavigateToPlayer = { channelId, _, _ ->
                             val channel = groupedChannels.values.flatten().find { it.id == channelId }
                             if (channel != null) {
-                                selectedChannel = channel
-                                lastSelectedChannelId = channelId
-                                lastSelectedProgramId = null
-                                homeViewModel.saveLastChannel(channel)
-                                epgSelectedProgram = null
-                                isEpgJumpMenuOpen = false
-                                isReturningFromPlayer = false
+                                selectedChannel = channel; lastSelectedChannelId = channelId; lastSelectedProgramId = null
+                                homeViewModel.saveLastChannel(channel); epgSelectedProgram = null; isEpgJumpMenuOpen = false; isReturningFromPlayer = false
                             }
                         },
-                        lastPlayerChannelId = lastSelectedChannelId,
-                        lastPlayerProgramId = lastSelectedProgramId,
-                        isSettingsOpen = isSettingsOpen,
-                        onSettingsToggle = { isSettingsOpen = it },
-                        isRecordListOpen = isRecordListOpen,
-                        onShowAllRecordings = { isRecordListOpen = true },
-                        onCloseRecordList = { isRecordListOpen = false },
-                        isReturningFromPlayer = isReturningFromPlayer,
-                        onReturnFocusConsumed = { isReturningFromPlayer = false }
+                        lastPlayerChannelId = lastSelectedChannelId, lastPlayerProgramId = lastSelectedProgramId,
+                        isSettingsOpen = isSettingsOpen, onSettingsToggle = { isSettingsOpen = it },
+                        isRecordListOpen = isRecordListOpen, onShowAllRecordings = { isRecordListOpen = true }, onCloseRecordList = { isRecordListOpen = false },
+                        isReturningFromPlayer = isReturningFromPlayer, onReturnFocusConsumed = { isReturningFromPlayer = false }
                     )
                 }
             }
@@ -292,26 +250,14 @@ fun MainRootScreen(
         }
 
         if (showConnectionErrorDialog && isSettingsInitialized && !isSettingsOpen) {
-            ConnectionErrorDialog(
-                onGoToSettings = {
-                    showConnectionErrorDialog = false
-                    isSettingsOpen = true
-                },
-                onExit = onExitApp
-            )
+            ConnectionErrorDialog(onGoToSettings = { showConnectionErrorDialog = false; isSettingsOpen = true }, onExit = onExitApp)
         }
 
         if (isSettingsOpen) {
-            SettingsScreen(
-                onBack = closeSettingsAndRefresh
-            )
+            SettingsScreen(onBack = closeSettingsAndRefresh)
         }
 
-        AnimatedVisibility(
-            visible = !isAppReady && isSettingsInitialized && !isSettingsOpen && !showConnectionErrorDialog,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
+        AnimatedVisibility(visible = !isAppReady && isSettingsInitialized && !isSettingsOpen && !showConnectionErrorDialog, enter = fadeIn(), exit = fadeOut()) {
             LoadingScreen()
         }
     }
