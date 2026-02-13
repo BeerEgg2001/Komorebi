@@ -77,6 +77,11 @@ class KonomiRepository @Inject constructor(
         Log.d("DEBUG", "Channel saved: ${entity.name}")
     }
 
+    // ★追加: 実況APIを呼び出す関数
+    suspend fun getJikkyoInfo(channelId: String) = runCatching {
+        apiService.getJikkyoInfo(channelId)
+    }
+
     // 視聴位置同期 (API)
     suspend fun syncPlaybackPosition(programId: String, position: Double) {
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }

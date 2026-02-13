@@ -24,6 +24,7 @@ object AppStrings {
     const val MENU_SOURCE = "映像ソース"
     const val MENU_SUBTITLE = "字幕設定"
     const val MENU_QUALITY = "画質設定"
+    const val MENU_COMMENT = "コメント表示"
 
     // エラー詳細メッセージ
     const val ERR_TUNER_FULL = "チューナーに空きがありません (503)\n他の録画や視聴が終了するのを待ってください。"

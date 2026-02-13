@@ -24,6 +24,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleInstance"
+            android:hardwareAccelerated="true"
             android:theme="@style/Theme.ComposeTv">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
