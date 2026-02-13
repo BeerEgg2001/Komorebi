@@ -51,6 +51,10 @@ fun MainRootScreen(
 
     var selectedChannel by remember { mutableStateOf<Channel?>(null) }
     var selectedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
+
+    // ★追加: 選択された録画番組の初期再生位置
+    var initialPlaybackPositionMs by remember { mutableLongStateOf(0L) }
+
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
     var isEpgJumpMenuOpen by remember { mutableStateOf(false) }
     var triggerHomeBack by remember { mutableStateOf(false) }
@@ -70,7 +74,6 @@ fun MainRootScreen(
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
     var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
 
-    // プレイヤーから戻ったことを通知するフラグ
     var isReturningFromPlayer by remember { mutableStateOf(false) }
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
@@ -80,6 +83,9 @@ fun MainRootScreen(
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
 
+    // ★追加: 視聴履歴リストを監視して、再生位置の検索に使用
+    val watchHistory by homeViewModel.watchHistory.collectAsState()
+
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
     var showConnectionErrorDialog by remember { mutableStateOf(false) }
@@ -88,6 +94,16 @@ fun MainRootScreen(
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "40772")
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
+
+    val closeSettingsAndRefresh = {
+        isSettingsOpen = false
+        isDataReady = false
+        showConnectionErrorDialog = false
+        channelViewModel.fetchChannels()
+        epgViewModel.preloadAllEpgData()
+        homeViewModel.refreshHomeData()
+        recordViewModel.fetchRecentRecordings()
+    }
 
     BackHandler(enabled = true) {
         when {
@@ -109,7 +125,7 @@ fun MainRootScreen(
                 showPlayerControls = true
                 isReturningFromPlayer = true
             }
-            isSettingsOpen -> isSettingsOpen = false
+            isSettingsOpen -> closeSettingsAndRefresh()
             epgSelectedProgram != null -> epgSelectedProgram = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
             isRecordListOpen -> isRecordListOpen = false
@@ -176,6 +192,7 @@ fun MainRootScreen(
                 } else if (selectedProgram != null) {
                     VideoPlayerScreen(
                         program = selectedProgram!!,
+                        initialPositionMs = initialPlaybackPositionMs, // ★追加: 初期位置を渡す
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         showControls = showPlayerControls,
@@ -217,12 +234,23 @@ fun MainRootScreen(
                         },
                         selectedProgram = selectedProgram,
                         onProgramSelected = { program ->
-                            selectedProgram = program
                             if (program != null) {
+                                // ★追加: 再生開始前に履歴から前回の位置を取得
+                                val history = watchHistory.find { it.program.id == program.id.toString() }
+                                initialPlaybackPositionMs = if (history != null && history.playback_position > 5) {
+                                    // 5秒未満は最初からとみなす（KonomiTVの仕様に準拠）
+                                    (history.playback_position * 1000).toLong()
+                                } else {
+                                    0L
+                                }
+
+                                selectedProgram = program
                                 lastSelectedProgramId = program.id.toString()
                                 lastSelectedChannelId = null
                                 showPlayerControls = true
                                 isReturningFromPlayer = false
+                            } else {
+                                selectedProgram = null
                             }
                         },
                         epgSelectedProgram = epgSelectedProgram,
@@ -275,15 +303,7 @@ fun MainRootScreen(
 
         if (isSettingsOpen) {
             SettingsScreen(
-                onBack = {
-                    isSettingsOpen = false
-                    isDataReady = false
-                    showConnectionErrorDialog = false
-                    channelViewModel.fetchChannels()
-                    epgViewModel.preloadAllEpgData()
-                    homeViewModel.refreshHomeData()
-                    recordViewModel.fetchRecentRecordings()
-                }
+                onBack = closeSettingsAndRefresh
             )
         }
 
@@ -352,9 +372,6 @@ fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
     }
 }
 
-/**
- * ★追加: 非対応OSバージョンを通知するダイアログ
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun IncompatibleOsDialog(onExit: () -> Unit) {

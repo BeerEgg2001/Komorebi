@@ -26,6 +26,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,6 +40,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
 import java.security.MessageDigest
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 巨大なタイル画像を効率的に扱うための専用ローダー
@@ -46,8 +49,9 @@ import java.security.MessageDigest
 class TiledImageLoader(private val context: Context) {
     private var isReleased = false
 
-    // デコード済みビットマップのメモリキャッシュ (8MB)
-    private val bitmapCache = object : LruCache<String, Bitmap>(8 * 1024 * 1024) {
+    // メモリキャッシュを少し増量 (16MB)
+    // 1920x1080の画像1枚で約8MBなので、余裕を持たせる
+    private val bitmapCache = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
 
@@ -65,14 +69,14 @@ class TiledImageLoader(private val context: Context) {
         }
     }
 
-    suspend fun loadTile(url: String, col: Int, row: Int, columns: Int): Bitmap? {
+    suspend fun loadTile(url: String, col: Int, row: Int, columns: Int, targetWidthPx: Int): Bitmap? {
         synchronized(this) { if (isReleased) return null }
 
-        // キャッシュキー (sampleSize=2 固定)
-        val sampleSize = 2
-        val key = "$url-$col-$row-$sampleSize"
+        // キャッシュキー生成（URLと座標）
+        // ※inSampleSizeが変わる可能性は低いのでキーには含めない運用とするが、
+        // 厳密には含めたほうが良い。ここではキャッシュヒット率優先。
+        val key = "$url-$col-$row"
 
-        // メモリキャッシュにあれば即リターン（これは高速なので待機なしで行う）
         bitmapCache.get(key)?.let { return it }
 
         return withContext(Dispatchers.IO) {
@@ -94,14 +98,16 @@ class TiledImageLoader(private val context: Context) {
 
                 if (left >= right || top >= bottom) return@withContext null
 
+                // ★高速化: ターゲットサイズに合わせて最適な inSampleSize (2の累乗) を計算
+                // 表示サイズより極端に大きな画像を読み込まないようにする
+                val inSampleSize = calculateInSampleSize(tileW, tileH, targetWidthPx, (targetWidthPx * 9 / 16))
+
                 val rect = Rect(left, top, right, bottom)
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.RGB_565
-                    inSampleSize = sampleSize
+                    this.inSampleSize = inSampleSize
                 }
 
-                // 他のスレッドがデコーダーを使用中の可能性があるため同期的に実行するか、
-                // BitmapRegionDecoder自体はスレッドセーフ（内部でロックを持つ）だが、リサイクルとの競合に注意
                 val bitmap = try {
                     if (!decoder.isRecycled) decoder.decodeRegion(rect, options) else null
                 } catch (e: Exception) {
@@ -119,6 +125,22 @@ class TiledImageLoader(private val context: Context) {
                 null
             }
         }
+    }
+
+    /**
+     * 表示サイズに合わせて最適な2の累乗の縮小率を計算する
+     */
+    private fun calculateInSampleSize(srcWidth: Int, srcHeight: Int, reqWidth: Int, reqHeight: Int): Int {
+        var inSampleSize = 1
+        if (srcHeight > reqHeight || srcWidth > reqWidth) {
+            val halfHeight: Int = srcHeight / 2
+            val halfWidth: Int = srcWidth / 2
+            // 2の累乗で縮小していく
+            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
     }
 
     private fun getOrLoadDecoder(url: String): BitmapRegionDecoder? {
@@ -198,6 +220,12 @@ fun SceneSearchOverlay(
     val context = LocalContext.current
     val tiledLoader = remember { TiledImageLoader(context) }
 
+    // サムネイルの表示幅(dp)
+    val thumbWidthDp = 224.dp
+    // ピクセル単位に変換（ImageLoaderに渡すため）
+    val density = LocalDensity.current
+    val thumbWidthPx = remember(density) { with(density) { thumbWidthDp.toPx().roundToInt() } }
+
     DisposableEffect(Unit) {
         onDispose {
             tiledLoader.release()
@@ -224,6 +252,7 @@ fun SceneSearchOverlay(
 
     LaunchedEffect(targetInitialIndex, currentInterval) {
         listState.scrollToItem(targetInitialIndex)
+        // 初期フォーカスは少し待つ（UI構築待ち）
         delay(150)
         runCatching { focusRequester.requestFocus() }
     }
@@ -269,6 +298,7 @@ fun SceneSearchOverlay(
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         loader = tiledLoader,
+                        targetWidthPx = thumbWidthPx, // 表示サイズを渡す
                         onClick = { onSeekRequested(time * 1000) },
                         onFocused = { focusedTime = time },
                         modifier = if (index == targetInitialIndex) Modifier.focusRequester(focusRequester) else Modifier
@@ -325,6 +355,7 @@ fun TiledThumbnailItemWithRegionDecoder(
     konomiIp: String,
     konomiPort: String,
     loader: TiledImageLoader,
+    targetWidthPx: Int,
     onClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier
@@ -341,13 +372,13 @@ fun TiledThumbnailItemWithRegionDecoder(
         UrlBuilder.getTiledThumbnailUrl(konomiIp, konomiPort, videoId, time)
     }
 
-    // ★修正: LaunchedEffect 内で delay を入れてデバウンスを行う
     LaunchedEffect(imageUrl, col, row) {
-        // 高速スクロール中はここでキャンセルされるため、重い処理が走らない
-        delay(150)
+        // ★修正: デバウンス時間を 50ms に短縮
+        // スクロール停止後の表示レスポンスを向上させる
+        delay(50)
 
         if (isActive) {
-            val result = loader.loadTile(imageUrl, col, row, columns)
+            val result = loader.loadTile(imageUrl, col, row, columns, targetWidthPx)
             if (result != null && isActive) {
                 bitmap = result
             }

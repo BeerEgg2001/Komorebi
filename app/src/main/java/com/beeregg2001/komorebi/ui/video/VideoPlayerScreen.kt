@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
+    initialPositionMs: Long = 0, // ★追加: 初期再生位置（ミリ秒）
     konomiIp: String,
     konomiPort: String,
     showControls: Boolean,
@@ -96,7 +97,14 @@ fun VideoPlayerScreen(
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(playing: Boolean) { isPlayerPlaying = playing }
                 })
-                prepare(); playWhenReady = true
+
+                // ★追加: 前回の続きから再生（シーク）
+                if (initialPositionMs > 0) {
+                    seekTo(initialPositionMs)
+                }
+
+                prepare()
+                playWhenReady = true
             }
     }
 
@@ -123,6 +131,8 @@ fun VideoPlayerScreen(
                     quality = quality,
                     sessionId = sessionId
                 )
+                // ★追加: 再生中も定期的に視聴履歴を更新（30秒ごとなど）すると、強制終了時も安心です
+                onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
                 delay(20000)
                 Log.d("HEART_BEAT","heart_beat check ok")
             }
@@ -247,7 +257,6 @@ fun VideoPlayerScreen(
         onDispose {
             onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
             lifecycleOwner.lifecycle.removeObserver(observer)
-            // ★修正: stop() -> clearVideoSurface() -> release() の順で安全に停止
             exoPlayer.stop()
             exoPlayer.clearVideoSurface()
             exoPlayer.release()
