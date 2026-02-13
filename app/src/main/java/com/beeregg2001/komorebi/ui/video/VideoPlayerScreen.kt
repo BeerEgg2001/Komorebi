@@ -52,20 +52,21 @@ fun VideoPlayerScreen(
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
     onUpdateWatchHistory: (RecordedProgram, Double) -> Unit,
-    // ★追加: ViewModelを注入
     recordViewModel: RecordViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val sessionId = remember { UUID.randomUUID().toString() }
-    val quality = "1080p-60fps" // UrlBuilderのデフォルト値
+    val quality = "1080p-60fps"
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
     var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
     var isPlayerPlaying by remember { mutableStateOf(false) }
+
+    var wasPlayingBeforeSceneSearch by remember { mutableStateOf(false) }
 
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
@@ -99,8 +100,21 @@ fun VideoPlayerScreen(
             }
     }
 
-    // ★追加: 録画ストリーム維持用の定期実行タイマー
-    // 再生中 (isPlayerPlaying == true) の間、20秒ごとに keep-alive API を叩く
+    LaunchedEffect(isSceneSearchOpen) {
+        if (isSceneSearchOpen) {
+            if (exoPlayer.isPlaying) {
+                wasPlayingBeforeSceneSearch = true
+                exoPlayer.pause()
+            } else {
+                wasPlayingBeforeSceneSearch = false
+            }
+        } else {
+            if (wasPlayingBeforeSceneSearch) {
+                exoPlayer.play()
+            }
+        }
+    }
+
     LaunchedEffect(isPlayerPlaying) {
         if (isPlayerPlaying) {
             while (true) {
@@ -109,13 +123,12 @@ fun VideoPlayerScreen(
                     quality = quality,
                     sessionId = sessionId
                 )
-                delay(20000) // 20秒間隔
+                delay(20000)
                 Log.d("HEART_BEAT","heart_beat check ok")
             }
         }
     }
 
-    // 自動消去タイマー
     LaunchedEffect(showControls, isPlayerPlaying, isSubMenuOpen, isSceneSearchOpen) {
         if (showControls && isPlayerPlaying && !isSubMenuOpen && !isSceneSearchOpen) {
             delay(5000)
@@ -234,6 +247,9 @@ fun VideoPlayerScreen(
         onDispose {
             onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // ★修正: stop() -> clearVideoSurface() -> release() の順で安全に停止
+            exoPlayer.stop()
+            exoPlayer.clearVideoSurface()
             exoPlayer.release()
         }
     }

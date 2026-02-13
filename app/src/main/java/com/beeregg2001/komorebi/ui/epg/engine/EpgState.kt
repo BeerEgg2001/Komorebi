@@ -162,7 +162,7 @@ class EpgState(
     }
 
     /**
-     * ★追加: 指定時刻へ強制的にジャンプする (番組情報の有無に関係なく移動)
+     * ★追加: 指定時刻へ強制的にジャンプし、番組がある列にフォーカスを合わせる
      */
     fun jumpToTime(targetTime: OffsetDateTime) {
         val targetMin = try {
@@ -171,15 +171,33 @@ class EpgState(
 
         Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
 
-        // 1. フォーカス情報の更新（カーソル位置の決定）
-        // forceScroll=true で、内部的なフォーカス座標更新のみ行い、スクロール計算はスキップさせる
-        updatePositionsInternal(0, targetMin, forceScroll = true)
+        // ★追加ロジック: その時間に番組が存在する列を探す
+        // デフォルトは一番左(0)だが、空なら右隣へ順に探していく
+        var bestCol = 0
+        if (uiChannels.isNotEmpty()) {
+            val targetY = (targetMin / 60f) * config.hhPx
+
+            // 全列を走査して、そのY座標に番組があるかチェック
+            for (i in uiChannels.indices) {
+                val channel = uiChannels[i]
+                val hasProgram = channel.uiPrograms.any {
+                    targetY >= it.topY && targetY < it.topY + it.height
+                }
+
+                if (hasProgram) {
+                    bestCol = i
+                    break // 見つかったらループ終了（一番左側の有効な列を採用）
+                }
+            }
+        }
+
+        // 1. フォーカス情報の更新（見つけた列を使用）
+        updatePositionsInternal(bestCol, targetMin, forceScroll = true)
 
         // 2. スクロール位置の強制セット
-        // 指定時刻が画面上部(hhAreaPxの下)に来るように計算
         val targetY = (targetMin / 60f) * config.hhPx
 
-        // シンプルに「指定時刻を上部に合わせる」
+        // 画面上部に合わせる
         val desiredScrollY = -targetY
 
         // スクロール範囲内に収める

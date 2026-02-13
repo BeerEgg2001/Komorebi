@@ -177,9 +177,8 @@ fun ModernEpgCanvasEngine_Smooth(
                     .onFocusChanged {
                         Log.d(TAG, "Grid focus changed: hasFocus=${it.isFocused}")
                         isContentFocused = it.isFocused
-                        if (it.isFocused) {
-                            isHeaderVisible = false
-                        }
+                        // ★重要修正: フォーカス時にヘッダーを隠さない（isHeaderVisible = false を削除）
+                        // レイアウトの安定性を優先し、フォーカスロストを防ぐ
                     }
                     .onKeyEvent { event ->
                         if (event.key == Key.Back) {
@@ -213,6 +212,8 @@ fun ModernEpgCanvasEngine_Smooth(
                                         Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.start_time, epgState.baseTime)).toMinutes().toInt() - 1
                                     } ?: (epgState.focusedMin - 30)
                                     if (prev < 0) {
+                                        // 上端に達したらヘッダーへフォーカス移動
+                                        // isHeaderVisible は常に true なのでスムーズに移動可能
                                         isHeaderVisible = true
                                         val currentIndex = visibleTabs.indexOfFirst { it.second == currentType }
                                         pendingHeaderFocusIndex = currentIndex
