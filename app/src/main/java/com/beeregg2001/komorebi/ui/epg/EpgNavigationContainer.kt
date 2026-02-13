@@ -147,12 +147,15 @@ fun EpgNavigationContainer(
             EpgJumpMenu(
                 dates = dates,
                 onSelect = { selectedTime ->
-                    Log.d(TAG, "Jump action: Transferring focus to grid Box")
+                    Log.d(TAG, "Jump action selected")
 
-                    // ★最重要：メニュー消失による「フォーカス迷子」を防ぐため、先に番組表Boxへフォーカスを逃がす
+                    // 1. フォーカスを先にグリッドへ移す
                     runCatching { gridFocusRequester.requestFocus() }
 
+                    // 2. エンジンにジャンプ指示
                     jumpTargetTime = selectedTime
+
+                    // 3. メニューを閉じる（HomeLauncherScreenのクールダウンガードが発動する）
                     onJumpMenuStateChanged(false)
                 },
                 onDismiss = {

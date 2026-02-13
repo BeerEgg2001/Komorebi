@@ -101,7 +101,7 @@ fun ModernEpgCanvasEngine_Smooth(
             hasRenderedFirstFrame = false // リセット
             epgState.updateData(uiState.data, resetFocus = isTypeChanged)
             if (restoreChannelId == null) {
-                epgState.updatePositions(0, epgState.getNowMinutes())
+                // epgState.updatePositions(0, epgState.getNowMinutes())
             }
         }
     }
@@ -129,10 +129,9 @@ fun ModernEpgCanvasEngine_Smooth(
             if (jumpTargetTime != null) {
                 Log.d(TAG, "Engine: Start jumping to $jumpTargetTime")
                 hasRenderedFirstFrame = false // ジャンプ開始でローディング表示
-                val jumpMin = Duration.between(epgState.baseTime, jumpTargetTime).toMinutes().toInt()
 
-                // ★修正：一番左の列(0)に明示的に合わせる
-                epgState.updatePositions(0, jumpMin)
+                // ★修正: 専用の強制ジャンプメソッドを使用することで、番組有無に関係なく移動可能に
+                epgState.jumpToTime(jumpTargetTime)
                 onJumpFinished()
 
                 // 座標更新後にフォーカスを再要求
@@ -169,8 +168,6 @@ fun ModernEpgCanvasEngine_Smooth(
                 )
             }
 
-            // ★修正: Box自体をフォーカス可能にし、常に存在するコンテナにRequesterを紐付けます
-            // これにより描画計算中もフォーカスを安定して保持できます
             var isContentFocused by remember { mutableStateOf(false) }
             Box(
                 modifier = Modifier
@@ -188,7 +185,8 @@ fun ModernEpgCanvasEngine_Smooth(
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) {
                                 if (event.nativeKeyEvent.isLongPress) {
-                                    epgState.updatePositions(0, epgState.getNowMinutes())
+                                    // ★修正: 長押し時は jumpToNow() を使用
+                                    epgState.jumpToNow()
                                     return@onKeyEvent true
                                 }
                                 return@onKeyEvent true
@@ -239,14 +237,12 @@ fun ModernEpgCanvasEngine_Smooth(
                             .drawWithCache {
                                 onDrawBehind {
                                     drawer.draw(this, epgState, animValues, logoPainters, isContentFocused)
-                                    // 描画が実際に実行されたらフラグを立てる
                                     hasRenderedFirstFrame = true
                                 }
                             }
                     )
                 }
 
-                // ★修正：実際にキャンバス描画が完了するまでローディングを表示し続ける
                 val isLoading = uiState is EpgUiState.Loading || epgState.isCalculating || !hasRenderedFirstFrame
 
                 if (isLoading) {

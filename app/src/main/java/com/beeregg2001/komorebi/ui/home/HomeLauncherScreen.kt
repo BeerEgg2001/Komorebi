@@ -37,35 +37,26 @@ import com.beeregg2001.komorebi.viewmodel.EpgViewModel
 import com.beeregg2001.komorebi.viewmodel.HomeViewModel
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 private const val TAG = "EPG_DEBUG_HOME"
 
-/**
- * ★新規追加: 1秒ごとに更新されるデジタル時計
- */
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun DigitalClock(modifier: Modifier = Modifier) {
     var currentTime by remember { mutableStateOf(LocalTime.now()) }
-    // ★追加: アニメーション用の表示フラグ
     var isVisible by remember { mutableStateOf(false) }
 
-    // ★追加: アルファ値のアニメーション設定
     val alpha by animateFloatAsState(
         targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = 1000, // 1秒かけてフェードイン
-            delayMillis = 300      // コンテンツ表示から少し遅らせる
-        ),
+        animationSpec = tween(durationMillis = 1000, delayMillis = 300),
         label = "ClockFadeIn"
     )
 
     LaunchedEffect(Unit) {
-        // 描画開始後にフラグをONにする
         isVisible = true
-
         while (true) {
             currentTime = LocalTime.now()
             delay(1000)
@@ -82,9 +73,7 @@ fun DigitalClock(modifier: Modifier = Modifier) {
             letterSpacing = 1.sp,
             fontSize = 20.sp
         ),
-        modifier = modifier
-            // ★追加: graphicsLayer でアルファ値を適用
-            .graphicsLayer(alpha = alpha)
+        modifier = modifier.graphicsLayer(alpha = alpha)
     )
 }
 
@@ -128,6 +117,7 @@ fun HomeLauncherScreen(
 ) {
     val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(initialTabIndex) {
         if (selectedTabIndex != initialTabIndex) {
@@ -135,7 +125,6 @@ fun HomeLauncherScreen(
         }
     }
 
-    // フルスクリーンモード（詳細画面や設定画面が開いている時）はナビを隠す設定
     val isFullScreenMode = (selectedChannel != null) || (selectedProgram != null) ||
             (epgSelectedProgram != null) || isSettingsOpen
 
@@ -167,6 +156,21 @@ fun HomeLauncherScreen(
     var topNavHasFocus by remember { mutableStateOf(false) }
     var internalLastPlayerChannelId by remember(lastPlayerChannelId) { mutableStateOf(lastPlayerChannelId) }
     val availableTypes = remember(groupedChannels) { groupedChannels.keys.toList() }
+
+    // ★追加: フォーカスガード状態（メニューが閉じた後も少しだけ維持する）
+    var isFocusGuardActive by remember { mutableStateOf(false) }
+
+    // ★追加: ガード状態の制御ロジック
+    LaunchedEffect(isEpgJumpMenuOpen, isRecordListOpen) {
+        if (isEpgJumpMenuOpen || isRecordListOpen) {
+            isFocusGuardActive = true
+        } else {
+            // メニューが閉じた後、フォーカスが安定するまで0.8秒待つ（クールダウン）
+            // この間はホームタブへの強制移動をブロックする
+            delay(800)
+            isFocusGuardActive = false
+        }
+    }
 
     LaunchedEffect(triggerBack) {
         if (triggerBack) {
@@ -216,7 +220,6 @@ fun HomeLauncherScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
-            // トップナビゲーション部分
             AnimatedVisibility(
                 visible = !isFullScreenMode,
                 enter = fadeIn() + expandVertically(),
@@ -229,9 +232,7 @@ fun HomeLauncherScreen(
                         .onFocusChanged { topNavHasFocus = it.hasFocus },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // ★追加: タブの左側に時計を表示
                     DigitalClock()
-
                     Spacer(modifier = Modifier.width(32.dp))
 
                     TabRow(
@@ -249,9 +250,17 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = selectedTabIndex == index,
                                 onFocus = {
-                                    Log.d(TAG, "Tab onFocus: index=$index, menuOpen=$isEpgJumpMenuOpen")
-
-                                    if (isEpgJumpMenuOpen || isRecordListOpen) return@Tab
+                                    // ★重要修正: ガード中はフォーカス変更を一切受け付けない
+                                    if (isFocusGuardActive) {
+                                        Log.d(TAG, "Tab focus blocked by guard. Index: $index")
+                                        // ガード中にタブにフォーカスが来たら、元のコンテンツへ即座に押し返す
+                                        if (!isEpgJumpMenuOpen && !isRecordListOpen) {
+                                            scope.launch {
+                                                runCatching { contentFirstItemRequesters[selectedTabIndex].requestFocus() }
+                                            }
+                                        }
+                                        return@Tab
+                                    }
 
                                     if (selectedTabIndex != index) {
                                         Log.d(TAG, "Tab changed from $selectedTabIndex to $index")

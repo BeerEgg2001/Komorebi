@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.epg.engine
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextLayoutResult
@@ -12,6 +13,8 @@ import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
+
+private const val TAG = "EPG_STATE"
 
 // 描画用の事前計算済みデータクラス
 @RequiresApi(Build.VERSION_CODES.O)
@@ -51,6 +54,10 @@ class EpgState(
     var isCalculating by mutableStateOf(false)
         private set
 
+    // 初期化済みフラグ
+    var isInitialized by mutableStateOf(false)
+        private set
+
     // --- 状態 ---
     var focusedCol by mutableIntStateOf(0)
     var focusedMin by mutableIntStateOf(0)
@@ -74,13 +81,13 @@ class EpgState(
 
     /**
      * バックグラウンドスレッドで重い座標計算と日時パースを一括で行う
-     * ★修正: resetFocusフラグを追加し、タブ切り替え時にフォーカスをリセットできるようにしました
      */
     suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
-        isCalculating = true // 計算開始
+        isCalculating = true
         withContext(Dispatchers.Default) {
             try {
                 val now = OffsetDateTime.now()
+                // 現在時刻の2時間前から開始
                 val newBaseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
@@ -107,23 +114,20 @@ class EpgState(
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
                     textLayoutCache.clear()
 
-                    // ★修正: 初回読み込み、またはタブ切り替え(resetFocus)の時に位置をリセット
-                    if (targetScrollY == 0f || resetFocus) {
-                        val nowMin = getNowMinutes()
-                        val justHourMin = (nowMin / 60) * 60
-
-                        targetScrollX = 0f
-                        targetScrollY = -(justHourMin / 60f * config.hhPx)
-
-                        // 一番左(0)かつ現在時刻でフォーカスをセット
-                        updatePositions(0, nowMin)
+                    // 初回またはリセット要求時は「現在時刻へ強制ジャンプ」
+                    if (!isInitialized || resetFocus) {
+                        jumpToNow()
+                        isInitialized = true
                     } else {
-                        // データ更新（裏でのポーリングなど）の場合は現在のフォーカスを維持
+                        // データ更新時は位置を維持しつつ、フォーカス対象を再計算
                         if (uiChannels.isNotEmpty()) {
+                            if (focusedCol >= uiChannels.size) {
+                                focusedCol = uiChannels.size - 1
+                            }
                             updatePositions(focusedCol, focusedMin)
                         }
                     }
-                    isCalculating = false // 計算終了
+                    isCalculating = false
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -150,7 +154,56 @@ class EpgState(
         } catch (e: Exception) { 0 }
     }
 
+    /**
+     * 現在時刻へ強制的にジャンプする
+     */
+    fun jumpToNow() {
+        jumpToTime(OffsetDateTime.now())
+    }
+
+    /**
+     * ★追加: 指定時刻へ強制的にジャンプする (番組情報の有無に関係なく移動)
+     */
+    fun jumpToTime(targetTime: OffsetDateTime) {
+        val targetMin = try {
+            Duration.between(baseTime, targetTime).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
+        } catch (e: Exception) { 0 }
+
+        Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
+
+        // 1. フォーカス情報の更新（カーソル位置の決定）
+        // forceScroll=true で、内部的なフォーカス座標更新のみ行い、スクロール計算はスキップさせる
+        updatePositionsInternal(0, targetMin, forceScroll = true)
+
+        // 2. スクロール位置の強制セット
+        // 指定時刻が画面上部(hhAreaPxの下)に来るように計算
+        val targetY = (targetMin / 60f) * config.hhPx
+
+        // シンプルに「指定時刻を上部に合わせる」
+        val desiredScrollY = -targetY
+
+        // スクロール範囲内に収める
+        val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
+        val visibleH = (effectiveScreenHeight - config.hhAreaPx).coerceAtLeast(100f)
+        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+
+        targetScrollX = 0f
+        targetScrollY = desiredScrollY.coerceIn(maxScrollY, 0f)
+    }
+
+    /**
+     * 指定された位置へフォーカスを移動し、必要に応じてスクロールする
+     * 外部公開用
+     */
     fun updatePositions(col: Int, min: Int) {
+        updatePositionsInternal(col, min, forceScroll = false)
+    }
+
+    /**
+     * 内部ロジック
+     * forceScroll = true の場合はスクロール位置の自動調整を行わない（呼び出し元でセットするため）
+     */
+    private fun updatePositionsInternal(col: Int, min: Int, forceScroll: Boolean) {
         if (uiChannels.isEmpty()) return
 
         val columns = uiChannels.size
@@ -171,13 +224,24 @@ class EpgState(
             targetAnimY = uiProg.topY
             targetAnimH = if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
         } else {
+            // 番組が見つからない場合もフォーカス枠の座標だけは計算する
             targetAnimY = focusY
             targetAnimH = 30f / 60f * config.hhPx
         }
 
-        val visibleW = (screenWidthPx - config.twPx).coerceAtLeast(100f)
+        focusedCol = safeCol
+        focusedMin = safeMin
+
+        // 強制スクロールモード（jumpToTimeなど）の場合はここで終了
+        if (forceScroll) return
+
+        // --- 通常のスクロール追従ロジック ---
+        val effectiveScreenWidth = if (screenWidthPx > 0) screenWidthPx else 1920f
+        val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
+
+        val visibleW = (effectiveScreenWidth - config.twPx).coerceAtLeast(100f)
         val topOffset = config.hhAreaPx
-        val visibleH = (screenHeightPx - topOffset).coerceAtLeast(100f)
+        val visibleH = (effectiveScreenHeight - topOffset).coerceAtLeast(100f)
 
         var nextTargetX = targetScrollX
         if (targetAnimX < -targetScrollX) nextTargetX = -targetAnimX
@@ -192,8 +256,5 @@ class EpgState(
 
         targetScrollX = nextTargetX.coerceIn(maxScrollX, 0f)
         targetScrollY = nextTargetY.coerceIn(maxScrollY, 0f)
-
-        focusedCol = safeCol
-        focusedMin = safeMin
     }
 }
