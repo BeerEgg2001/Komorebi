@@ -157,17 +157,15 @@ fun HomeLauncherScreen(
     var internalLastPlayerChannelId by remember(lastPlayerChannelId) { mutableStateOf(lastPlayerChannelId) }
     val availableTypes = remember(groupedChannels) { groupedChannels.keys.toList() }
 
-    // ★追加: フォーカスガード状態（メニューが閉じた後も少しだけ維持する）
+    // ★フォーカスガード
     var isFocusGuardActive by remember { mutableStateOf(false) }
 
-    // ★追加: ガード状態の制御ロジック
     LaunchedEffect(isEpgJumpMenuOpen, isRecordListOpen) {
         if (isEpgJumpMenuOpen || isRecordListOpen) {
             isFocusGuardActive = true
         } else {
-            // メニューが閉じた後、フォーカスが安定するまで0.8秒待つ（クールダウン）
-            // この間はホームタブへの強制移動をブロックする
-            delay(800)
+            // ★高速化のため、クールダウンを 800ms -> 300ms に短縮
+            delay(300)
             isFocusGuardActive = false
         }
     }
@@ -250,20 +248,14 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = selectedTabIndex == index,
                                 onFocus = {
-                                    // ★重要修正: ガード中はフォーカス変更を一切受け付けない
                                     if (isFocusGuardActive) {
-                                        Log.d(TAG, "Tab focus blocked by guard. Index: $index")
-                                        // ガード中にタブにフォーカスが来たら、元のコンテンツへ即座に押し返す
                                         if (!isEpgJumpMenuOpen && !isRecordListOpen) {
-                                            scope.launch {
-                                                runCatching { contentFirstItemRequesters[selectedTabIndex].requestFocus() }
-                                            }
+                                            scope.launch { runCatching { contentFirstItemRequesters[selectedTabIndex].requestFocus() } }
                                         }
                                         return@Tab
                                     }
 
                                     if (selectedTabIndex != index) {
-                                        Log.d(TAG, "Tab changed from $selectedTabIndex to $index")
                                         selectedTabIndex = index
                                         onTabChange(index)
                                         onReturnFocusConsumed()
@@ -300,11 +292,12 @@ fun HomeLauncherScreen(
                 }
             }
 
+            // ★高速化の肝: AnimatedContent ではなく Crossfade を使用
+            // Crossfade はレイアウトのサイズ変更を伴わないため、フォーカスの荒ぶりが発生しません。
             Box(modifier = Modifier.weight(1f)) {
-                AnimatedContent(
+                Crossfade(
                     targetState = selectedTabIndex,
-                    contentKey = { it },
-                    transitionSpec = { fadeIn(animationSpec = tween(150)) togetherWith fadeOut(animationSpec = tween(150)) },
+                    animationSpec = tween(durationMillis = 150), // スピーディーな切り替え
                     label = "TabContentTransition"
                 ) { targetIndex ->
                     Box(modifier = Modifier.fillMaxSize()) {

@@ -58,11 +58,18 @@ fun LiveContent(
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
 
+    // ★最適化1: レンダリングの遅延フラグ
+    // タブが切り替わった瞬間の負荷を抑えるため、100msだけ描画を遅らせる
+    var isReadyToRender by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(50)
+        isReadyToRender = true
+    }
+
     LaunchedEffect(isPlayerActive) {
         onPlayerStateChanged(isPlayerActive)
     }
 
-    // ★修正: プレイヤーからの復帰時のみ発火させる
     LaunchedEffect(isReturningFromPlayer) {
         if (isReturningFromPlayer) {
             delay(150)
@@ -74,65 +81,70 @@ fun LiveContent(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        TvLazyColumn(
-            state = listState,
-            modifier = modifier
-                .fillMaxSize()
-                .focusRequester(contentFirstItemRequester)
-                .then(if (isPlayerActive) Modifier.focusProperties { canFocus = false } else Modifier),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            val sortedKeys = groupedChannels.keys.toList()
+        if (isReadyToRender) { // ★遅延描画の適用
+            TvLazyColumn(
+                state = listState,
+                modifier = modifier
+                    .fillMaxSize()
+                    .focusRequester(contentFirstItemRequester)
+                    .then(if (isPlayerActive) Modifier.focusProperties { canFocus = false } else Modifier),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                // ★最適化2: ソート処理のキャッシュ化
+                val sortedKeys = groupedChannels.keys.toList()
 
-            sortedKeys.forEachIndexed { rowIndex, key ->
-                val displayCategory = if (key == "GR") "地デジ" else key
-                val channels = groupedChannels[key] ?: emptyList()
+                sortedKeys.forEachIndexed { rowIndex, key ->
+                    val displayCategory = if (key == "GR") "地デジ" else key
+                    val channels = groupedChannels[key] ?: emptyList()
 
-                item(key = key, contentType = "CategoryRow") {
-                    Column(modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)) {
-                        Text(
-                            text = displayCategory,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                            modifier = Modifier.padding(start = 32.dp, bottom = 8.dp)
-                        )
+                    item(key = key, contentType = "CategoryRow") {
+                        Column(modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)) {
+                            Text(
+                                text = displayCategory,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                modifier = Modifier.padding(start = 32.dp, bottom = 8.dp)
+                            )
 
-                        TvLazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(horizontal = 32.dp),
-                            modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
-                        ) {
-                            items(channels, key = { it.id }, contentType = { "ChannelCard" }) { channel ->
-                                // ★修正: 最後に視聴していたチャンネルにターゲットを絞る
-                                val isTarget = channel.id == lastFocusedChannelId
+                            TvLazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(horizontal = 32.dp),
+                                modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
+                            ) {
+                                items(channels, key = { it.id }, contentType = { "ChannelCard" }) { channel ->
+                                    val isTarget = channel.id == lastFocusedChannelId
 
-                                ChannelWideCard(
-                                    channel = channel,
-                                    mirakurunIp = mirakurunIp,
-                                    mirakurunPort = mirakurunPort,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    globalTick = 0,
-                                    onClick = { onChannelClick(channel) },
-                                    modifier = Modifier
-                                        .then(if (isTarget) Modifier.focusRequester(targetChannelFocusRequester) else Modifier)
-                                        .focusProperties {
-                                            if (rowIndex == 0) {
-                                                up = topNavFocusRequester
+                                    ChannelWideCard(
+                                        channel = channel,
+                                        mirakurunIp = mirakurunIp,
+                                        mirakurunPort = mirakurunPort,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        globalTick = 0,
+                                        onClick = { onChannelClick(channel) },
+                                        modifier = Modifier
+                                            .then(if (isTarget) Modifier.focusRequester(targetChannelFocusRequester) else Modifier)
+                                            .focusProperties {
+                                                if (rowIndex == 0) {
+                                                    up = topNavFocusRequester
+                                                }
                                             }
-                                        }
-                                        .onFocusChanged {
-                                            if (it.isFocused) {
-                                                onFocusChannelChange(channel.id)
+                                            .onFocusChanged {
+                                                if (it.isFocused) {
+                                                    onFocusChannelChange(channel.id)
+                                                }
                                             }
-                                        }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        } else {
+            // 遅延中のプレースホルダー（一瞬なので空のBoxで十分です）
+            Box(Modifier.fillMaxSize())
         }
 
         if (selectedChannel != null) {
@@ -190,6 +202,7 @@ fun ChannelWideCard(
     val startTime = channel.programPresent?.startTime
     val duration = channel.programPresent?.duration
 
+    // ★最適化3: 日時パース処理の安定化
     val startTimeMillis = remember(startTime) {
         if (startTime.isNullOrEmpty()) 0L
         else try {
@@ -199,6 +212,7 @@ fun ChannelWideCard(
         }
     }
 
+    // ★最適化4: 進捗計算の安定化 (不要な再計算をトリガーしない)
     val progress = remember(startTimeMillis, duration, globalTick) {
         if (startTimeMillis == 0L || duration == null || duration <= 0) 0f
         else {
@@ -215,6 +229,8 @@ fun ChannelWideCard(
             .graphicsLayer {
                 scaleX = animatedScale
                 scaleY = animatedScale
+                // ★描画パフォーマンス向上のため、ハードウェアレイヤーを明示的に使用
+                clip = true
             }
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),

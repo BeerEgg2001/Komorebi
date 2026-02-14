@@ -17,19 +17,35 @@ class SettingsViewModel @Inject constructor(
 
     // 接続情報を StateFlow として公開
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "192.168.11.100")
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     val mirakurunPort: StateFlow<String> = settingsRepository.mirakurunPort
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "40772")
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     val konomiIp: StateFlow<String> = settingsRepository.konomiIp
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "https://192-168-11-100.local.konomi.tv")
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "https://192-168-xxx-xxx.local.konomi.tv")
 
     val konomiPort: StateFlow<String> = settingsRepository.konomiPort
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "7000")
 
+    // 実況設定の StateFlow
+    val commentSpeed: StateFlow<String> = settingsRepository.commentSpeed
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0")
+
+    val commentFontSize: StateFlow<String> = settingsRepository.commentFontSize
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0")
+
+    val commentOpacity: StateFlow<String> = settingsRepository.commentOpacity
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0")
+
+    val commentMaxLines: StateFlow<String> = settingsRepository.commentMaxLines
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "0")
+
+    // ★追加: コメント表示のデフォルト設定の StateFlow
+    val commentDefaultDisplay: StateFlow<String> = settingsRepository.commentDefaultDisplay
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
+
     // 設定が初期化済みかどうか
-    // 初期値を true にすることで、起動直後の未読み込み状態でダイアログが一瞬表示されるのを防ぐ
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
