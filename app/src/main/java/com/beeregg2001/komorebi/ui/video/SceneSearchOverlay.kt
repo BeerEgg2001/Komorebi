@@ -3,8 +3,6 @@ package com.beeregg2001.komorebi.ui.video
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.BitmapRegionDecoder
-import android.graphics.Rect
 import android.util.LruCache
 import android.view.KeyEvent
 import androidx.compose.foundation.Image
@@ -32,94 +30,95 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.model.RecordedProgram
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
 import java.security.MessageDigest
-import kotlin.math.max
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
- * 巨大なタイル画像を効率的に扱うための専用ローダー
+ * タイル画像をシート単位で管理し、指定したタイルを確実に切り出して返すローダー
+ * 巨大なシート画像を1枚保持し、そこからcreateBitmapで切り抜きます。
  */
-class TiledImageLoader(private val context: Context) {
+class TileSheetLoader(private val context: Context) {
     private var isReleased = false
 
-    // メモリキャッシュを少し増量 (16MB)
-    // 1920x1080の画像1枚で約8MBなので、余裕を持たせる
-    private val bitmapCache = object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
+    // 同時実行数を制限
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val decodeDispatcher = Dispatchers.IO.limitedParallelism(4)
+
+    // 切り出し済み小タイルのキャッシュ (10MB)
+    // ※元の巨大画像は別途保持するため、こちらは小さめでOK
+    private val tileCache = object : LruCache<String, Bitmap>(10 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
 
-    private val decoderCache = mutableMapOf<String, BitmapRegionDecoder>()
-    private val loadingLocks = mutableMapOf<String, Any>()
+    // 巨大なシート画像そのもの（1番組につき1枚想定）
+    private var fullSheetBitmap: Bitmap? = null
+    private val sheetLoadingMutex = Mutex()
 
     fun release() {
-        synchronized(this) {
-            isReleased = true
-            decoderCache.values.forEach {
-                try { it.recycle() } catch (e: Exception) { e.printStackTrace() }
-            }
-            decoderCache.clear()
-            bitmapCache.evictAll()
-        }
+        isReleased = true
+        tileCache.evictAll()
+        // 巨大画像を解放
+        fullSheetBitmap?.recycle()
+        fullSheetBitmap = null
     }
 
-    suspend fun loadTile(url: String, col: Int, row: Int, columns: Int, targetWidthPx: Int): Bitmap? {
-        synchronized(this) { if (isReleased) return null }
+    /**
+     * 指定されたURLのシートから、指定座標(col, row)のタイル画像を切り出して返す
+     */
+    suspend fun loadTile(
+        url: String,
+        col: Int,
+        row: Int,
+        tileW: Int,
+        tileH: Int
+    ): Bitmap? {
+        if (isReleased) return null
 
-        // キャッシュキー生成（URLと座標）
-        // ※inSampleSizeが変わる可能性は低いのでキーには含めない運用とするが、
-        // 厳密には含めたほうが良い。ここではキャッシュヒット率優先。
-        val key = "$url-$col-$row"
+        val key = "c${col}_r${row}"
 
-        bitmapCache.get(key)?.let { return it }
+        // 1. 小タイルキャッシュにあれば即座に返す
+        synchronized(tileCache) {
+            tileCache.get(key)?.let { return it }
+        }
 
-        return withContext(Dispatchers.IO) {
-            if (!isActive) return@withContext null
+        return withContext(decodeDispatcher) {
+            if (!isActive || isReleased) return@withContext null
 
             try {
-                val decoder = getOrLoadDecoder(url) ?: return@withContext null
-                synchronized(this@TiledImageLoader) { if (isReleased) return@withContext null }
+                // 2. シート画像の準備 (メモリになければロード)
+                val sheet = getOrLoadFullSheet(url) ?: return@withContext null
 
-                val width = decoder.width
-                val height = decoder.height
-                val tileW = width / columns
-                val tileH = (tileW * 9) / 16
+                // 3. 座標計算と切り出し
+                val x = col * tileW
+                val y = row * tileH
 
-                val left = (col * tileW).coerceAtMost(width - 1)
-                val top = (row * tileH).coerceAtMost(height - 1)
-                val right = (left + tileW).coerceAtMost(width)
-                val bottom = (top + tileH).coerceAtMost(height)
-
-                if (left >= right || top >= bottom) return@withContext null
-
-                // ★高速化: ターゲットサイズに合わせて最適な inSampleSize (2の累乗) を計算
-                // 表示サイズより極端に大きな画像を読み込まないようにする
-                val inSampleSize = calculateInSampleSize(tileW, tileH, targetWidthPx, (targetWidthPx * 9 / 16))
-
-                val rect = Rect(left, top, right, bottom)
-                val options = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.RGB_565
-                    this.inSampleSize = inSampleSize
+                // 範囲チェック
+                if (x + tileW > sheet.width || y + tileH > sheet.height) {
+                    return@withContext null
                 }
 
-                val bitmap = try {
-                    if (!decoder.isRecycled) decoder.decodeRegion(rect, options) else null
-                } catch (e: Exception) {
-                    null
+                // 4. 切り出し (CreateBitmap)
+                val tileBitmap = Bitmap.createBitmap(sheet, x, y, tileW, tileH)
+
+                // 5. キャッシュに保存
+                synchronized(tileCache) {
+                    if (!isReleased) tileCache.put(key, tileBitmap)
                 }
 
-                if (bitmap != null) {
-                    synchronized(this@TiledImageLoader) {
-                        if (!isReleased) bitmapCache.put(key, bitmap)
-                    }
-                }
-                bitmap
+                return@withContext tileBitmap
+
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
@@ -127,74 +126,49 @@ class TiledImageLoader(private val context: Context) {
         }
     }
 
-    /**
-     * 表示サイズに合わせて最適な2の累乗の縮小率を計算する
-     */
-    private fun calculateInSampleSize(srcWidth: Int, srcHeight: Int, reqWidth: Int, reqHeight: Int): Int {
-        var inSampleSize = 1
-        if (srcHeight > reqHeight || srcWidth > reqWidth) {
-            val halfHeight: Int = srcHeight / 2
-            val halfWidth: Int = srcWidth / 2
-            // 2の累乗で縮小していく
-            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
-                inSampleSize *= 2
-            }
+    // 巨大シート画像を準備する（ダウンロードまたはファイルロード）
+    private suspend fun getOrLoadFullSheet(url: String): Bitmap? {
+        if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) {
+            return fullSheetBitmap
         }
-        return inSampleSize
-    }
 
-    private fun getOrLoadDecoder(url: String): BitmapRegionDecoder? {
-        synchronized(this) {
+        return sheetLoadingMutex.withLock {
+            // ダブルチェック
+            if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) {
+                return fullSheetBitmap
+            }
             if (isReleased) return null
-            decoderCache[url]?.let { if (!it.isRecycled) return it }
-        }
-
-        val lock = synchronized(loadingLocks) {
-            loadingLocks.computeIfAbsent(url) { Any() }
-        }
-
-        synchronized(lock) {
-            synchronized(this) {
-                if (isReleased) return null
-                decoderCache[url]?.let { if (!it.isRecycled) return it }
-            }
 
             try {
-                val fileName = hashString(url) + ".jpg"
+                val fileName = hashString(url) + ".webp" // WebPとして保存
                 val file = File(context.cacheDir, fileName)
 
-                if (!file.exists()) {
-                    val connection = URL(url).openConnection()
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 10000
-                    connection.getInputStream().use { input ->
-                        FileOutputStream(file).use { output ->
-                            input.copyTo(output)
+                if (!file.exists() || file.length() == 0L) {
+                    // ダウンロード
+                    withContext(Dispatchers.IO) {
+                        URL(url).openStream().use { input ->
+                            FileOutputStream(file).use { output ->
+                                input.copyTo(output)
+                            }
                         }
                     }
                 }
 
-                @Suppress("DEPRECATION")
-                val decoder = BitmapRegionDecoder.newInstance(file.absolutePath, false)
-
-                if (decoder != null) {
-                    synchronized(this) {
-                        if (!isReleased) {
-                            decoderCache[url] = decoder
-                        } else {
-                            decoder.recycle()
-                            return null
-                        }
-                    }
+                // デコード (RGB_565でメモリ節約)
+                val options = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.RGB_565
+                    // メモリ不足対策: 念のためmutableにしておく
+                    inMutable = true
                 }
-                return decoder
+
+                val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
+                if (bitmap != null) {
+                    fullSheetBitmap = bitmap
+                }
+                bitmap
             } catch (e: Exception) {
                 e.printStackTrace()
-                return null
-            } finally {
-                synchronized(loadingLocks) {
-                    loadingLocks.remove(url)
-                }
+                null
             }
         }
     }
@@ -209,8 +183,7 @@ class TiledImageLoader(private val context: Context) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SceneSearchOverlay(
-    videoId: Int,
-    durationMs: Long,
+    program: RecordedProgram,
     currentPositionMs: Long,
     konomiIp: String,
     konomiPort: String,
@@ -218,26 +191,30 @@ fun SceneSearchOverlay(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-    val tiledLoader = remember { TiledImageLoader(context) }
-
-    // サムネイルの表示幅(dp)
-    val thumbWidthDp = 224.dp
-    // ピクセル単位に変換（ImageLoaderに渡すため）
-    val density = LocalDensity.current
-    val thumbWidthPx = remember(density) { with(density) { thumbWidthDp.toPx().roundToInt() } }
+    val loader = remember { TileSheetLoader(context) }
 
     DisposableEffect(Unit) {
-        onDispose {
-            tiledLoader.release()
-        }
+        onDispose { loader.release() }
     }
 
+    // API情報からタイル仕様を取得
+    // 情報がない場合はデフォルト値を入れるが、基本はAPIから来る前提
+    val tileInfo = program.recordedVideo.thumbnailInfo?.tile
+    val tileColumns = tileInfo?.columnCount ?: 1
+    val tileRows = tileInfo?.rowCount ?: 1
+    val tileInterval = tileInfo?.intervalSec ?: 10.0
+    val tileWidth = tileInfo?.tileWidth ?: 320
+    val tileHeight = tileInfo?.tileHeight ?: 180
+
+    // UI設定 (サムネイル間隔)
     val intervals = VideoPlayerConstants.SEARCH_INTERVALS
     var intervalIndex by remember { mutableIntStateOf(1) }
     val currentInterval = intervals[intervalIndex]
 
+    val durationMs = (program.recordedVideo.duration * 1000).toLong()
     var focusedTime by remember { mutableLongStateOf(currentPositionMs / 1000) }
 
+    // リストに表示する時刻ポイント
     val timePoints = remember(currentInterval, durationMs) {
         val totalSec = durationMs / 1000
         (0..totalSec step currentInterval.toLong()).toList()
@@ -246,13 +223,13 @@ fun SceneSearchOverlay(
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
+    // 初期位置計算
     val targetInitialIndex = remember(currentInterval, currentPositionMs) {
         timePoints.indexOfFirst { it >= currentPositionMs / 1000 }.coerceAtLeast(0)
     }
 
     LaunchedEffect(targetInitialIndex, currentInterval) {
         listState.scrollToItem(targetInitialIndex)
-        // 初期フォーカスは少し待つ（UI構築待ち）
         delay(150)
         runCatching { focusRequester.requestFocus() }
     }
@@ -292,13 +269,19 @@ fun SceneSearchOverlay(
                 modifier = Modifier.fillMaxWidth().height(126.dp)
             ) {
                 itemsIndexed(timePoints) { index, time ->
-                    TiledThumbnailItemWithRegionDecoder(
+                    // サムネイルURLは1種類 (パラメータなし)
+                    val tiledUrl = remember(program.recordedVideo.id) {
+                        UrlBuilder.getTiledThumbnailUrl(konomiIp, konomiPort, program.recordedVideo.id)
+                    }
+
+                    TiledThumbnailItem(
                         time = time,
-                        videoId = videoId,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        loader = tiledLoader,
-                        targetWidthPx = thumbWidthPx, // 表示サイズを渡す
+                        imageUrl = tiledUrl,
+                        loader = loader,
+                        tileColumns = tileColumns,
+                        tileInterval = tileInterval,
+                        tileWidth = tileWidth,
+                        tileHeight = tileHeight,
                         onClick = { onSeekRequested(time * 1000) },
                         onFocused = { focusedTime = time },
                         modifier = if (index == targetInitialIndex) Modifier.focusRequester(focusRequester) else Modifier
@@ -306,6 +289,7 @@ fun SceneSearchOverlay(
                 }
             }
 
+            // シークバー表示
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -349,36 +333,32 @@ fun SceneSearchOverlay(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun TiledThumbnailItemWithRegionDecoder(
+fun TiledThumbnailItem(
     time: Long,
-    videoId: Int,
-    konomiIp: String,
-    konomiPort: String,
-    loader: TiledImageLoader,
-    targetWidthPx: Int,
+    imageUrl: String,
+    loader: TileSheetLoader,
+    tileColumns: Int,
+    tileInterval: Double,
+    tileWidth: Int,
+    tileHeight: Int,
     onClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    val columns = 51
-    val sheetDuration = 3600L
-    val tileIndex = ((time % sheetDuration) / 10).toInt()
-    val col = tileIndex % columns
-    val row = tileIndex / columns
+    // タイルのインデックス計算
+    // 例: 5秒間隔なら、10秒地点はインデックス2 (0秒=0, 5秒=1, 10秒=2)
+    val tileIndex = floor(time / tileInterval).toInt()
 
-    val imageUrl = remember(time) {
-        UrlBuilder.getTiledThumbnailUrl(konomiIp, konomiPort, videoId, time)
-    }
+    // 行列計算
+    val col = tileIndex % tileColumns
+    val row = tileIndex / tileColumns
 
     LaunchedEffect(imageUrl, col, row) {
-        // ★修正: デバウンス時間を 50ms に短縮
-        // スクロール停止後の表示レスポンスを向上させる
         delay(50)
-
         if (isActive) {
-            val result = loader.loadTile(imageUrl, col, row, columns, targetWidthPx)
+            val result = loader.loadTile(imageUrl, col, row, tileWidth, tileHeight)
             if (result != null && isActive) {
                 bitmap = result
             }

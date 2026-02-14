@@ -31,7 +31,27 @@ data class RecordedVideo(
     val duration: Double,
     @SerializedName("container_format") val containerFormat: String,
     @SerializedName("video_codec") val videoCodec: String,
-    @SerializedName("audio_codec") val audioCodec: String
+    @SerializedName("audio_codec") val audioCodec: String,
+    // ★追加: サムネイル情報
+    @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
+)
+
+// ★追加: サムネイル情報の詳細構造
+data class ThumbnailInfo(
+    val version: Int,
+    val tile: TileInfo?
+)
+
+// ★追加: タイルサムネイルの仕様
+data class TileInfo(
+    @SerializedName("image_width") val imageWidth: Int,
+    @SerializedName("image_height") val imageHeight: Int,
+    @SerializedName("tile_width") val tileWidth: Int,
+    @SerializedName("tile_height") val tileHeight: Int,
+    @SerializedName("column_count") val columnCount: Int,
+    @SerializedName("row_count") val rowCount: Int,
+    @SerializedName("interval_sec") val intervalSec: Double,
+    @SerializedName("total_tiles") val totalTiles: Int
 )
 
 data class RecordedItemDto(
@@ -45,5 +65,5 @@ data class RecordedItemDto(
 fun getThumbnailUrl(id: String, host: String, port: String): String {
     // KonomiTV APIの仕様に合わせたサムネイルURL
     // 文字列のIDをそのまま利用します
-    return "http://$host:$port/api/video/$id/thumbnail"
+    return "$host:$port/api/video/$id/thumbnail"
 }
