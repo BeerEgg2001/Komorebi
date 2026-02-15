@@ -1,5 +1,9 @@
 package com.beeregg2001.komorebi.common
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.Log
+import androidx.media3.common.util.UnstableApi
+
 object UrlBuilder {
 
     /**
@@ -17,12 +21,14 @@ object UrlBuilder {
     /**
      * Mirakurun形式のStreamID
      */
+    @OptIn(UnstableApi::class)
     fun buildMirakurunStreamId(networkId: Long, serviceId: Long, type: String?): String {
         val networkIdPart = when (type?.uppercase()) {
             "GR" -> networkId.toString()
             "BS", "CS", "SKY", "BS4K" -> "${networkId}00"
             else -> networkId.toString()
         }
+        Log.d("buildMirakurunStreamId", "networkIdPart: $networkIdPart")
         return "$networkIdPart$serviceId"
     }
 

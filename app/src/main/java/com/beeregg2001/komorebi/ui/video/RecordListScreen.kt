@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,12 +158,21 @@ fun RecordListScreen(
                 .fillMaxSize()
                 .focusRequester(gridFocusRequester)
         ) {
-            items(
+            // ★修正: itemsIndexedを使って現在の表示位置を監視し、ページネーションをトリガーする
+            itemsIndexed(
                 items = filteredRecordings,
-                key = { it.id },
-                contentType = { "RecordedCard" }
-            ) { program ->
+                key = { _, item -> item.id }
+            ) { index, program ->
                 var isFocused by remember { mutableStateOf(false) }
+
+                // 追加読み込みのトリガー判定
+                // 検索中はクライアントサイドフィルタリングのため、ページネーションを行わない（またはViewModel側で検索APIのページネーション実装が必要）
+                // ここでは「検索クエリが空」かつ「リストの末尾に近い」場合に次のページを読み込む
+                if (searchQuery.isBlank() && !isLoadingMore && index >= filteredRecordings.size - 4) {
+                    SideEffect {
+                        onLoadMore()
+                    }
+                }
 
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
@@ -171,6 +181,20 @@ fun RecordListScreen(
                         .onFocusChanged { isFocused = it.isFocused }
                         .border(2.dp, if (isFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
                 )
+            }
+
+            // ★追加: 読み込み中のインジケーターを表示（最下部）
+            if (isLoadingMore) {
+                item(span = { TvGridItemSpan(maxLineSpan) }) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
+                }
             }
         }
     }

@@ -56,7 +56,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val categories = listOf(
         Category("接続設定", Icons.Default.CastConnected),
-        Category("表示設定", Icons.Default.Tv),
+        Category("コメント表示設定", Icons.Default.Tv),
         Category("アプリ情報", Icons.Default.Info)
     )
 
@@ -286,7 +286,7 @@ fun AppInfoContent(onShowLicenses: () -> Unit, licenseRequester: FocusRequester,
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "Komorebi", style = MaterialTheme.typography.displayMedium, color = Color.White, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "Version 0.1.0 beta-2", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+        Text(text = "Version 0.2.0 beta", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(modifier = Modifier.height(48.dp))
         SettingItem(title = "オープンソースライセンス", value = "", modifier = Modifier.width(400.dp).focusRequester(licenseRequester), onClick = { onItemClicked(licenseRequester); onShowLicenses() })
         Spacer(modifier = Modifier.height(48.dp))
