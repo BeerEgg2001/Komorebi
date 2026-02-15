@@ -144,7 +144,7 @@ class EpgViewModel @Inject constructor(
     @OptIn(UnstableApi::class)
     fun getLogoUrl(channel: EpgChannel): String {
         return if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.network_id.toLong(), channel.service_id.toLong(), channel.type)
+            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.network_id.toLong(), channel.service_id.toLong())
         } else {
             UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.display_channel_id)
         }

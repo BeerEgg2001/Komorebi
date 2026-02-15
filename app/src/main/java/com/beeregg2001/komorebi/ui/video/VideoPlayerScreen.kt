@@ -48,6 +48,8 @@ import kotlinx.coroutines.delay
 fun VideoPlayerScreen(
     program: RecordedProgram,
     initialPositionMs: Long = 0,
+    // ★追加: 初期画質設定
+    initialQuality: String = "1080p-60fps",
     konomiIp: String,
     konomiPort: String,
     showControls: Boolean,
@@ -68,7 +70,8 @@ fun VideoPlayerScreen(
     // 設定
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
-    var currentQuality by remember { mutableStateOf(StreamQuality.QUALITY_1080P_60) }
+    // ★修正: 初期画質を引数から反映
+    var currentQuality by remember { mutableStateOf(StreamQuality.fromApiParams(initialQuality)) }
     var isSubtitleEnabled by remember { mutableStateOf(true) }
 
     // 画質変更時に新しいセッションIDを発行
@@ -268,7 +271,7 @@ fun VideoPlayerScreen(
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
         ) {
             SceneSearchOverlay(
-                program = program, // ★修正: 番組情報を渡す
+                program = program,
                 currentPositionMs = exoPlayer.currentPosition,
                 konomiIp = konomiIp, konomiPort = konomiPort,
                 onSeekRequested = { time ->
