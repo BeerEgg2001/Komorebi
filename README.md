@@ -15,7 +15,7 @@
 ## 動作環境
 
 以下の環境で動作確認しております。Android 8.0、Fire OS 7以上のOSが必要です。（おおよそ2021年以降の機種であれば利用できると思います）
-機種ごとの確認報告などはX(@tamago0602)へご連絡いただければ、とても嬉しいです
+機種ごとの確認報告などは作者X([@tamago0602](https://x.com/tamago0602)))へご連絡いただければ、とても嬉しいです
 
 * REGZA 55X8900K (Android TV 10)
 * Fire Tv Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
