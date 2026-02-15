@@ -1,5 +1,9 @@
 package com.beeregg2001.komorebi.common
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.Log
+import androidx.media3.common.util.UnstableApi
+
 object UrlBuilder {
 
     /**
@@ -17,19 +21,16 @@ object UrlBuilder {
     /**
      * Mirakurun形式のStreamID
      */
-    fun buildMirakurunStreamId(networkId: Long, serviceId: Long, type: String?): String {
-        val networkIdPart = when (type?.uppercase()) {
-            "GR" -> networkId.toString()
-            "BS", "CS", "SKY", "BS4K" -> "${networkId}00"
-            else -> networkId.toString()
-        }
-        return "$networkIdPart$serviceId"
+    @OptIn(UnstableApi::class)
+    fun buildMirakurunStreamId(networkId: Long, serviceId: Long): String {
+        val mirakurunId: Long = (networkId * 100000) + serviceId
+        return mirakurunId.toString()
     }
 
     // --- ロゴ関連 ---
-    fun getMirakurunLogoUrl(ip: String, port: String, networkId: Long, serviceId: Long, type: String?): String {
+    fun getMirakurunLogoUrl(ip: String, port: String, networkId: Long, serviceId: Long): String {
         val baseUrl = formatBaseUrl(ip, port, "http")
-        val streamId = buildMirakurunStreamId(networkId, serviceId, type)
+        val streamId = buildMirakurunStreamId(networkId, serviceId)
         return "$baseUrl/api/services/$streamId/logo"
     }
 
@@ -45,9 +46,9 @@ object UrlBuilder {
     }
 
     // --- ストリーミング関連 ---
-    fun getMirakurunStreamUrl(ip: String, port: String, networkId: Long, serviceId: Long, type: String?): String {
+    fun getMirakurunStreamUrl(ip: String, port: String, networkId: Long, serviceId: Long): String {
         val baseUrl = formatBaseUrl(ip, port, "http")
-        val streamId = buildMirakurunStreamId(networkId, serviceId, type)
+        val streamId = buildMirakurunStreamId(networkId, serviceId)
         return "$baseUrl/api/services/$streamId/stream"
     }
 

@@ -22,6 +22,6 @@ fun Channel.getLogoUrl(
     return if (isKonomiTvMode(mirakurunIp)) {
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, this.displayChannelId)
     } else {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, this.networkId, this.serviceId, this.type)
+        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, this.networkId, this.serviceId)
     }
 }

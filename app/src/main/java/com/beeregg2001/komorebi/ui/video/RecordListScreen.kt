@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,20 +158,41 @@ fun RecordListScreen(
                 .fillMaxSize()
                 .focusRequester(gridFocusRequester)
         ) {
-            items(
+            itemsIndexed(
                 items = filteredRecordings,
-                key = { it.id },
-                contentType = { "RecordedCard" }
-            ) { program ->
+                key = { _, item -> item.id }
+            ) { index, program ->
                 var isFocused by remember { mutableStateOf(false) }
 
+                if (searchQuery.isBlank() && !isLoadingMore && index >= filteredRecordings.size - 4) {
+                    SideEffect {
+                        onLoadMore()
+                    }
+                }
+
+                // ★修正: 親側で border を追加せず、RecordedCard 内部の枠線実装に任せる
                 RecordedCard(
-                    program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
+                    program = program,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    onClick = { onProgramClick(program) },
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
                         .onFocusChanged { isFocused = it.isFocused }
-                        .border(2.dp, if (isFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
                 )
+            }
+
+            if (isLoadingMore) {
+                item(span = { TvGridItemSpan(maxLineSpan) }) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
+                }
             }
         }
     }

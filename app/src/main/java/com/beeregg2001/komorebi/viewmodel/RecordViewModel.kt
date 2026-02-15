@@ -1,5 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
@@ -11,27 +13,26 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import javax.inject.Inject
 
 @HiltViewModel
 class RecordViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val historyRepository: WatchHistoryRepository // ★追加: 履歴リポジトリを注入
+    private val historyRepository: WatchHistoryRepository
 ) : ViewModel() {
 
-    // 録画リスト（全ページ分を蓄積）
     private val _recentRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
     val recentRecordings: StateFlow<List<RecordedProgram>> = _recentRecordings.asStateFlow()
 
-    // 初回読み込み中フラグ
     private val _isRecordingLoading = MutableStateFlow(true)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
 
-    // 追加読み込み中フラグ（ページネーション用）
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    // ページネーション管理用
     private var currentPage = 1
     private var totalItems = 0
     private var hasMorePages = true
@@ -41,9 +42,6 @@ class RecordViewModel @Inject constructor(
         fetchInitialRecordings()
     }
 
-    /**
-     * 初回ロード（1ページ目）
-     */
     fun fetchRecentRecordings() {
         fetchInitialRecordings()
     }
@@ -57,9 +55,12 @@ class RecordViewModel @Inject constructor(
                 val response = repository.getRecordedPrograms(page = 1)
 
                 totalItems = response.total
-                val initialList = response.recordedPrograms
 
-                // ページネーション終了判定
+                // ★修正: 取得したリストに対して録画中判定を行う
+                val initialList = response.recordedPrograms.map { program ->
+                    program.copy(isRecording = checkIsRecording(program.endTime))
+                }
+
                 if (initialList.size < pageSize || (totalItems > 0 && initialList.size >= totalItems)) {
                     hasMorePages = false
                 }
@@ -74,11 +75,7 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 次のページを読み込む（スクロール時に呼ばれる）
-     */
     fun loadNextPage() {
-        // 読み込み中、またはこれ以上ページがない場合は何もしない
         if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) {
             return
         }
@@ -89,10 +86,12 @@ class RecordViewModel @Inject constructor(
                 val nextPage = currentPage + 1
                 val response = repository.getRecordedPrograms(page = nextPage)
 
-                val newItems = response.recordedPrograms
+                // ★修正: 追加取得したリストに対しても録画中判定を行う
+                val newItems = response.recordedPrograms.map { program ->
+                    program.copy(isRecording = checkIsRecording(program.endTime))
+                }
 
                 if (newItems.isNotEmpty()) {
-                    // 既存のリストに追加
                     val currentList = _recentRecordings.value.toMutableList()
                     currentList.addAll(newItems)
                     _recentRecordings.value = currentList
@@ -100,8 +99,6 @@ class RecordViewModel @Inject constructor(
                     currentPage = nextPage
                 }
 
-                // APIのtotal情報、または取得件数で終了判定
-                // totalが0で定義されている場合も考慮し、取得数がページサイズ未満なら終了とする
                 if (newItems.size < pageSize || (totalItems > 0 && _recentRecordings.value.size >= totalItems)) {
                     hasMorePages = false
                 }
@@ -115,25 +112,44 @@ class RecordViewModel @Inject constructor(
     }
 
     /**
-     * ★追加: 視聴履歴を更新する
+     * ★追加: 終了時刻文字列を現在時刻と比較して録画中かどうかを判定する
+     * ISO 8601形式などを想定 (APIの仕様に合わせて調整してください)
      */
+    private fun checkIsRecording(endTimeStr: String): Boolean {
+        // API Level 26 (Android O) 以上が前提
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                // 多くのJSON APIで使用されるISO形式パーサーを使用
+                // ※フォーマットが特殊な場合はDateTimeFormatter.ofPatternなどで調整してください
+                val endInstant = try {
+                    Instant.parse(endTimeStr)
+                } catch (e: DateTimeParseException) {
+                    // ISO形式でパースできない場合のフォールバック（必要に応じて）
+                    return false
+                }
+
+                // 現在時刻が終了時刻より前であれば「録画中」
+                return Instant.now().isBefore(endInstant)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                return false
+            }
+        }
+        return false
+    }
+
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch {
             historyRepository.saveWatchHistory(program, positionSeconds)
         }
     }
 
-    /**
-     * ★追加: 録画ストリームを維持する
-     */
     @UnstableApi
     fun keepAliveStream(videoId: Int, quality: String, sessionId: String) {
         viewModelScope.launch {
             try {
-                // KonomiRepository経由でApiのkeepAliveを呼ぶように実装してください
                 repository.keepAlive(videoId, quality, sessionId)
             } catch (e: Exception) {
-                // バックグラウンド処理なのでログ出力のみでOK
                 e.printStackTrace()
             }
         }

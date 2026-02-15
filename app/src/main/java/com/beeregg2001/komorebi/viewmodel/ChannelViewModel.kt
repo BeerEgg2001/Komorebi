@@ -1,5 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
@@ -11,6 +13,7 @@ import kotlinx.coroutines.flow.*
 import java.time.OffsetDateTime
 import javax.inject.Inject
 
+@RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
     private val repository: KonomiRepository
@@ -46,6 +49,7 @@ class ChannelViewModel @Inject constructor(
     /**
      * 進行度(Progress)とUI表示用モデルをバックグラウンドで一括生成
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> = withContext(Dispatchers.Default) {
         val now = System.currentTimeMillis()
         grouped.map { (type, channels) ->
@@ -72,6 +76,7 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
@@ -99,6 +104,7 @@ class ChannelViewModel @Inject constructor(
     /**
      * プログレスバーを定期的に更新（UIスレッドを介さず計算）
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun startProgressUpdater() {
         progressUpdateJob?.cancel()
         progressUpdateJob = viewModelScope.launch {
@@ -111,6 +117,7 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun fetchChannels() {
         _isLoading.value = true
         viewModelScope.launch { fetchChannelsInternal() }
@@ -130,6 +137,7 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun startPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
