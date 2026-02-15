@@ -158,32 +158,30 @@ fun RecordListScreen(
                 .fillMaxSize()
                 .focusRequester(gridFocusRequester)
         ) {
-            // ★修正: itemsIndexedを使って現在の表示位置を監視し、ページネーションをトリガーする
             itemsIndexed(
                 items = filteredRecordings,
                 key = { _, item -> item.id }
             ) { index, program ->
                 var isFocused by remember { mutableStateOf(false) }
 
-                // 追加読み込みのトリガー判定
-                // 検索中はクライアントサイドフィルタリングのため、ページネーションを行わない（またはViewModel側で検索APIのページネーション実装が必要）
-                // ここでは「検索クエリが空」かつ「リストの末尾に近い」場合に次のページを読み込む
                 if (searchQuery.isBlank() && !isLoadingMore && index >= filteredRecordings.size - 4) {
                     SideEffect {
                         onLoadMore()
                     }
                 }
 
+                // ★修正: 親側で border を追加せず、RecordedCard 内部の枠線実装に任せる
                 RecordedCard(
-                    program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
+                    program = program,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    onClick = { onProgramClick(program) },
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
                         .onFocusChanged { isFocused = it.isFocused }
-                        .border(2.dp, if (isFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
                 )
             }
 
-            // ★追加: 読み込み中のインジケーターを表示（最下部）
             if (isLoadingMore) {
                 item(span = { TvGridItemSpan(maxLineSpan) }) {
                     Box(

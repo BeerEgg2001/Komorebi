@@ -1,6 +1,5 @@
 package com.beeregg2001.komorebi.data.model
 
-
 import com.google.gson.annotations.SerializedName
 
 // ルートオブジェクト
@@ -18,11 +17,22 @@ data class RecordedProgram(
     @SerializedName("end_time") val endTime: String,
     val duration: Double,
     @SerializedName("is_partially_recorded") val isPartiallyRecorded: Boolean,
+    val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
-    // 必要に応じて detail (出演者など) も追加可能
+
+    // ★追加: 録画中フラグ (APIレスポンスにはないためデフォルトfalse、ViewModelで計算して注入)
+    val isRecording: Boolean = false
 )
 
-// 実際のビデオファイル情報（サムネイルや再生に使用）
+// ... (以下、RecordedChannel, RecordedVideo など変更なしのため省略)
+data class RecordedChannel(
+    val id: String,
+    @SerializedName("display_channel_id") val displayChannelId: String,
+    val type: String,
+    val name: String,
+    @SerializedName("channel_number") val channelNumber: String
+)
+
 data class RecordedVideo(
     val id: Int,
     @SerializedName("file_path") val filePath: String,
@@ -32,17 +42,14 @@ data class RecordedVideo(
     @SerializedName("container_format") val containerFormat: String,
     @SerializedName("video_codec") val videoCodec: String,
     @SerializedName("audio_codec") val audioCodec: String,
-    // ★追加: サムネイル情報
     @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
 )
 
-// ★追加: サムネイル情報の詳細構造
 data class ThumbnailInfo(
     val version: Int,
     val tile: TileInfo?
 )
 
-// ★追加: タイルサムネイルの仕様
 data class TileInfo(
     @SerializedName("image_width") val imageWidth: Int,
     @SerializedName("image_height") val imageHeight: Int,
@@ -53,17 +60,3 @@ data class TileInfo(
     @SerializedName("interval_sec") val intervalSec: Double,
     @SerializedName("total_tiles") val totalTiles: Int
 )
-
-data class RecordedItemDto(
-    val id: String,
-    val title: String,
-    val description: String,
-    @SerializedName("start_time") val startTime: String,
-    @SerializedName("thumbnail_url") val thumbnailUrl: String
-)
-
-fun getThumbnailUrl(id: String, host: String, port: String): String {
-    // KonomiTV APIの仕様に合わせたサムネイルURL
-    // 文字列のIDをそのまま利用します
-    return "$host:$port/api/video/$id/thumbnail"
-}

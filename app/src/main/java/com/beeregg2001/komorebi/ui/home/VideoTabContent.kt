@@ -47,7 +47,6 @@ fun VideoTabContent(
 ) {
     val listState = rememberTvLazyListState()
 
-    // ★ライブタブ同様の段階的描画フラグ
     var isContentReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -69,7 +68,6 @@ fun VideoTabContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .focusRequester(contentFirstItemRequester)
-                    // ★追加: 戻るキーでトップナビにフォーカスを戻す（ライブタブ/番組表と同じ挙動）
                     .onKeyEvent { event ->
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
@@ -166,11 +164,11 @@ fun VideoSectionRow(
                 val isSelected = program.id == selectedProgramId
                 var isFocused by remember { mutableStateOf(false) }
 
+                // ★修正: modifier から .border を削除。RecordedCard 内の枠線のみを使用する
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
                     modifier = Modifier
                         .onFocusChanged { isFocused = it.isFocused }
-                        .then(if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp)) else Modifier)
                         .then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
                         .focusProperties { if (isFirstSection && topNavFocusRequester != null) up = topNavFocusRequester }
                 )
