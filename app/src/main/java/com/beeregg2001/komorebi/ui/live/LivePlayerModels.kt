@@ -1,10 +1,10 @@
 package com.beeregg2001.komorebi.ui.live
 
 enum class AudioMode { MAIN, SUB }
-enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE, QUALITY } // ★QUALITY追加
+enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE, QUALITY, COMMENT } // ★COMMENT追加
 enum class StreamSource { MIRAKURUN, KONOMITV }
 
-// ★今回追加: 画質設定用のEnum
+// 画質設定用のEnum
 enum class StreamQuality(val value: String, val label: String) {
     Q1080P_60FPS("1080p-60fps", "1080p (60fps)"),
     Q1080P("1080p", "1080p"),

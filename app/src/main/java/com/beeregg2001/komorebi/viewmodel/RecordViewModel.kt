@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
@@ -119,6 +120,22 @@ class RecordViewModel @Inject constructor(
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch {
             historyRepository.saveWatchHistory(program, positionSeconds)
+        }
+    }
+
+    /**
+     * ★追加: 録画ストリームを維持する
+     */
+    @UnstableApi
+    fun keepAliveStream(videoId: Int, quality: String, sessionId: String) {
+        viewModelScope.launch {
+            try {
+                // KonomiRepository経由でApiのkeepAliveを呼ぶように実装してください
+                repository.keepAlive(videoId, quality, sessionId)
+            } catch (e: Exception) {
+                // バックグラウンド処理なのでログ出力のみでOK
+                e.printStackTrace()
+            }
         }
     }
 }

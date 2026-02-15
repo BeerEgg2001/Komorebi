@@ -1,9 +1,7 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
-import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
-import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -15,16 +13,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -34,6 +31,7 @@ import androidx.tv.foundation.lazy.grid.*
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
+import kotlinx.coroutines.delay
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -58,16 +56,93 @@ fun RecordListScreen(
     val gridState = rememberTvLazyGridState()
     val searchFocusRequester = remember { FocusRequester() }
     val gridFocusRequester = remember { FocusRequester() }
+    val backButtonFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(isSearchBarVisible) { if (isSearchBarVisible) searchFocusRequester.requestFocus() }
+    LaunchedEffect(isSearchBarVisible) {
+        if (isSearchBarVisible) {
+            delay(150)
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(300)
+        if (!isSearchBarVisible) {
+            runCatching { gridFocusRequester.requestFocus() }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(horizontal = 40.dp, vertical = 20.dp)) {
-        // ヘッダー (省略... 既存通り)
-        Row(modifier = Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White) }
-            Spacer(Modifier.width(16.dp))
-            Text("録画一覧", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = { isSearchBarVisible = true }) { Icon(Icons.Default.Search, "検索", tint = Color.White) }
+
+        if (isSearchBarVisible) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = {
+                    isSearchBarVisible = false
+                    searchQuery = ""
+                    runCatching { gridFocusRequester.requestFocus() }
+                }) {
+                    Icon(Icons.Default.ArrowBack, "閉じる", tint = Color.White)
+                }
+
+                Spacer(Modifier.width(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .focusRequester(searchFocusRequester)
+                            .onKeyEvent {
+                                if (it.key == Key.Back && it.type == KeyEventType.KeyUp) {
+                                    isSearchBarVisible = false
+                                    searchQuery = ""
+                                    runCatching { gridFocusRequester.requestFocus() }
+                                    true
+                                } else if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
+                                    runCatching { gridFocusRequester.requestFocus() }
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        textStyle = TextStyle(color = Color.White, fontSize = 18.sp),
+                        cursorBrush = SolidColor(Color.White),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = {
+                            runCatching { gridFocusRequester.requestFocus() }
+                        })
+                    )
+
+                    if (searchQuery.isEmpty()) {
+                        Text("番組名を検索...", color = Color.Gray, modifier = Modifier.padding(start = 16.dp))
+                    }
+                }
+            }
+        } else {
+            Row(modifier = Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.focusRequester(backButtonFocusRequester)
+                ) {
+                    Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
+                }
+                Spacer(Modifier.width(16.dp))
+                Text("録画一覧", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                IconButton(onClick = { isSearchBarVisible = true }) { Icon(Icons.Default.Search, "検索", tint = Color.White) }
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -78,17 +153,23 @@ fun RecordListScreen(
             contentPadding = PaddingValues(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.fillMaxSize().focusRequester(gridFocusRequester)
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(gridFocusRequester)
         ) {
-            items(filteredRecordings) { program ->
-                var isFocused by remember { mutableStateOf(false) } // ★追加
+            items(
+                items = filteredRecordings,
+                key = { it.id },
+                contentType = { "RecordedCard" }
+            ) { program ->
+                var isFocused by remember { mutableStateOf(false) }
 
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
-                        .onFocusChanged { isFocused = it.isFocused } // ★追加
-                        .then(if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp)) else Modifier) // ★追加: 白枠
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .border(2.dp, if (isFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
                 )
             }
         }

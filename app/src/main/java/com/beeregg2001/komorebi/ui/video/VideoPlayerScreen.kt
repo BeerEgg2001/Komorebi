@@ -3,7 +3,10 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
+import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
+import android.view.ViewGroup
+import android.webkit.WebView
 import androidx.annotation.*
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
@@ -11,15 +14,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.*
 import androidx.media3.common.*
 import androidx.media3.common.audio.*
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -30,6 +37,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import java.util.UUID
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
@@ -39,9 +47,9 @@ import kotlinx.coroutines.delay
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
+    initialPositionMs: Long = 0,
     konomiIp: String,
     konomiPort: String,
-    // ★外部管理される状態
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -49,18 +57,29 @@ fun VideoPlayerScreen(
     isSceneSearchOpen: Boolean,
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
-    onUpdateWatchHistory: (RecordedProgram, Double) -> Unit
+    onUpdateWatchHistory: (RecordedProgram, Double) -> Unit,
+    recordViewModel: RecordViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val sessionId = remember { UUID.randomUUID().toString() }
 
+    // 設定
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
+    var currentQuality by remember { mutableStateOf(StreamQuality.QUALITY_1080P_60) }
+    var isSubtitleEnabled by remember { mutableStateOf(true) }
+
+    // 画質変更時に新しいセッションIDを発行
+    val currentSessionId = remember(currentQuality) { UUID.randomUUID().toString() }
+
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
     var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
     var isPlayerPlaying by remember { mutableStateOf(false) }
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
+    var wasPlayingBeforeSceneSearch by remember { mutableStateOf(false) }
 
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
@@ -81,20 +100,94 @@ fun VideoPlayerScreen(
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory))
             .build().apply {
+                // 初期ロード
                 val mediaItem = MediaItem.Builder()
-                    .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, sessionId))
+                    .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.apiParams))
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
                     .build()
                 setMediaItem(mediaItem)
                 setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(playing: Boolean) { isPlayerPlaying = playing }
+
+                    override fun onCues(cues: CueGroup) {
+                        if (isSubtitleEnabled) {
+                            val text = cues.cues.joinToString("\n") { it.text ?: "" }
+                            webViewRef.value?.evaluateJavascript("showSubtitle('${text.replace("'", "\\'").replace("\n", " ")}')", null)
+                        }
+                    }
                 })
-                prepare(); playWhenReady = true
+
+                if (initialPositionMs > 0) {
+                    seekTo(initialPositionMs)
+                }
+
+                prepare()
+                playWhenReady = true
             }
     }
 
-    // 自動消去タイマー
+    // 画質変更時にプレイヤーを完全に停止してからリロード
+    LaunchedEffect(currentQuality) {
+        val currentPos = exoPlayer.currentPosition
+        val isPlaying = exoPlayer.isPlaying
+
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+
+        val newUrl = UrlBuilder.getVideoPlaylistUrl(
+            konomiIp,
+            konomiPort,
+            program.recordedVideo.id,
+            currentSessionId,
+            currentQuality.apiParams
+        )
+
+        val newMediaItem = MediaItem.Builder()
+            .setUri(newUrl)
+            .setMimeType(MimeTypes.APPLICATION_M3U8)
+            .build()
+
+        exoPlayer.setMediaItem(newMediaItem)
+        exoPlayer.seekTo(currentPos)
+        exoPlayer.prepare()
+
+        if (isPlaying) {
+            exoPlayer.play()
+        }
+    }
+
+    LaunchedEffect(isSceneSearchOpen) {
+        if (isSceneSearchOpen) {
+            if (exoPlayer.isPlaying) {
+                wasPlayingBeforeSceneSearch = true
+                exoPlayer.pause()
+            } else {
+                wasPlayingBeforeSceneSearch = false
+            }
+        } else {
+            if (wasPlayingBeforeSceneSearch) {
+                exoPlayer.play()
+            }
+        }
+    }
+
+    // ストリーム維持
+    LaunchedEffect(isPlayerPlaying, currentQuality) {
+        if (isPlayerPlaying) {
+            while (true) {
+                recordViewModel.keepAliveStream(
+                    videoId = program.recordedVideo.id,
+                    quality = currentQuality.apiParams,
+                    sessionId = currentSessionId
+                )
+                onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
+                delay(20000)
+                Log.d("HEART_BEAT","heart_beat check ok: ${currentQuality.apiParams}")
+            }
+        }
+    }
+
     LaunchedEffect(showControls, isPlayerPlaying, isSubMenuOpen, isSceneSearchOpen) {
         if (showControls && isPlayerPlaying && !isSubMenuOpen && !isSceneSearchOpen) {
             delay(5000)
@@ -144,6 +237,25 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
         )
 
+        val isUiVisible = showControls || isSubMenuOpen || isSceneSearchOpen
+
+        if (isSubtitleEnabled) {
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                        setBackgroundColor(0)
+                        settings.apply { javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false }
+                        loadUrl("file:///android_asset/subtitle_renderer.html")
+                        webViewRef.value = this
+                    }
+                },
+                modifier = Modifier.fillMaxSize().alpha(if (!isUiVisible) 1f else 0f)
+            )
+        } else {
+            webViewRef.value = null
+        }
+
         PlayerControls(
             exoPlayer = exoPlayer,
             title = program.title,
@@ -156,8 +268,7 @@ fun VideoPlayerScreen(
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
         ) {
             SceneSearchOverlay(
-                videoId = program.recordedVideo.id,
-                durationMs = exoPlayer.duration,
+                program = program, // ★修正: 番組情報を渡す
                 currentPositionMs = exoPlayer.currentPosition,
                 konomiIp = konomiIp, konomiPort = konomiPort,
                 onSeekRequested = { time ->
@@ -166,7 +277,6 @@ fun VideoPlayerScreen(
                     mainFocusRequester.requestFocus()
                 },
                 onClose = {
-                    // SceneSearchOverlay内部のBackイベントで呼ばれる
                     onSceneSearchToggle(false)
                     mainFocusRequester.requestFocus()
                 }
@@ -176,6 +286,8 @@ fun VideoPlayerScreen(
         AnimatedVisibility(visible = isSubMenuOpen, enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
             VideoTopSubMenuUI(
                 currentAudioMode = currentAudioMode, currentSpeed = currentSpeed,
+                isSubtitleEnabled = isSubtitleEnabled,
+                currentQuality = currentQuality,
                 focusRequester = subMenuFocusRequester,
                 onAudioToggle = {
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
@@ -194,6 +306,14 @@ fun VideoPlayerScreen(
                     currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]
                     exoPlayer.setPlaybackSpeed(currentSpeed)
                     toastState = "再生速度: ${currentSpeed}x" to System.currentTimeMillis()
+                },
+                onSubtitleToggle = {
+                    isSubtitleEnabled = !isSubtitleEnabled
+                    toastState = "字幕: ${if(isSubtitleEnabled) "ON" else "OFF"}" to System.currentTimeMillis()
+                },
+                onQualitySelect = { newQuality ->
+                    currentQuality = newQuality
+                    toastState = "画質: ${newQuality.label}" to System.currentTimeMillis()
                 }
             )
         }
@@ -214,6 +334,8 @@ fun VideoPlayerScreen(
         onDispose {
             onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
             lifecycleOwner.lifecycle.removeObserver(observer)
+            exoPlayer.stop()
+            exoPlayer.clearVideoSurface()
             exoPlayer.release()
         }
     }
