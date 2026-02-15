@@ -107,7 +107,7 @@ fun HomeContents(
                                         val logoUrl = if (isKonomiTvMode) {
                                             UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
                                         } else {
-                                            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type)
+                                            UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId)
                                         }
 
                                         AsyncImage(
