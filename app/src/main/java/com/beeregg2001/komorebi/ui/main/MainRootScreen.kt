@@ -90,6 +90,10 @@ fun MainRootScreen(
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
 
+    // ★追加: デフォルト画質設定の取得
+    val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState()
+    val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState()
+
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
         isDataReady = false
@@ -147,6 +151,8 @@ fun MainRootScreen(
                         channel = selectedChannel!!,
                         mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
                         konomiIp = konomiIp, konomiPort = konomiPort,
+                        // ★修正: 設定されたデフォルト画質を渡す
+                        initialQuality = defaultLiveQuality,
                         groupedChannels = groupedChannels,
                         isMiniListOpen = isPlayerMiniListOpen,
                         onMiniListToggle = { isPlayerMiniListOpen = it },
@@ -171,6 +177,8 @@ fun MainRootScreen(
                     VideoPlayerScreen(
                         program = selectedProgram!!,
                         initialPositionMs = initialPlaybackPositionMs,
+                        // ★修正: 設定されたデフォルト画質を渡す
+                        initialQuality = defaultVideoQuality,
                         konomiIp = konomiIp, konomiPort = konomiPort,
                         showControls = showPlayerControls,
                         onShowControlsChange = { showPlayerControls = it },
@@ -182,13 +190,11 @@ fun MainRootScreen(
                         onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
                     )
                 } else if (isRecordListOpen) {
-                    // ★追加: 録画一覧画面をここでも呼び出すように修正
                     RecordListScreen(
                         recentRecordings = recentRecordings,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         onProgramClick = { program ->
-                            // 再生処理（詳細画面を挟まず即再生させる例）
                             val history = watchHistory.find { it.program.id == program.id.toString() }
                             val duration = program.recordedVideo.duration
                             initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {

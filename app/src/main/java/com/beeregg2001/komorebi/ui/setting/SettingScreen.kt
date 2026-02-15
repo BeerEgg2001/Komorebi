@@ -2,12 +2,18 @@ package com.beeregg2001.komorebi.ui.setting
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CastConnected
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.*
@@ -31,6 +37,8 @@ import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.ui.settings.OpenSourceLicensesScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.beeregg2001.komorebi.ui.live.StreamQuality as LiveQuality
+import com.beeregg2001.komorebi.ui.video.StreamQuality as VideoQuality
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -50,12 +58,22 @@ fun SettingsScreen(onBack: () -> Unit) {
     val commentMaxLines by repository.commentMaxLines.collectAsState(initial = "0")
     val commentDefaultDisplay by repository.commentDefaultDisplay.collectAsState(initial = "ON")
 
+    // 画質設定
+    val liveQuality by repository.liveQuality.collectAsState(initial = "1080p-60fps")
+    val videoQuality by repository.videoQuality.collectAsState(initial = "1080p-60fps")
+
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var editingItem by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    // ★追加: 画質選択ダイアログの表示状態
+    var showLiveQualitySelection by remember { mutableStateOf(false) }
+    var showVideoQualitySelection by remember { mutableStateOf(false) }
+
     var showLicenses by remember { mutableStateOf(false) }
 
     val categories = listOf(
         Category("接続設定", Icons.Default.CastConnected),
+        Category("再生設定", Icons.Default.PlayCircle),
         Category("コメント表示設定", Icons.Default.Tv),
         Category("アプリ情報", Icons.Default.Info)
     )
@@ -70,6 +88,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     val mIpFocusRequester = remember { FocusRequester() }
     val mPortFocusRequester = remember { FocusRequester() }
 
+    val liveQFocusRequester = remember { FocusRequester() }
+    val videoQFocusRequester = remember { FocusRequester() }
+
     val cDefaultDisplayFocusRequester = remember { FocusRequester() }
     val cSpeedFocusRequester = remember { FocusRequester() }
     val cSizeFocusRequester = remember { FocusRequester() }
@@ -83,8 +104,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     if (showLicenses) {
         OpenSourceLicensesScreen(onBack = { showLicenses = false })
     } else {
-        LaunchedEffect(editingItem) {
-            if (editingItem == null) {
+        // ダイアログが閉じられたときにフォーカスを戻す
+        LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection) {
+            if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection) {
                 if (restoreFocusRequester != null) {
                     delay(50)
                     restoreFocusRequester?.requestFocus()
@@ -143,9 +165,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                         isSelected = selectedCategoryIndex == index,
                         onFocused = { selectedCategoryIndex = index },
                         onClick = {
-                            if (index == 0) kIpFocusRequester.requestFocus()
-                            if (index == 1) cDefaultDisplayFocusRequester.requestFocus()
-                            if (index == 2) appInfoLicenseRequester.requestFocus()
+                            when (index) {
+                                0 -> kIpFocusRequester.requestFocus()
+                                1 -> liveQFocusRequester.requestFocus() // 再生設定
+                                2 -> cDefaultDisplayFocusRequester.requestFocus()
+                                3 -> appInfoLicenseRequester.requestFocus()
+                            }
                         },
                         // カテゴリごとにFocusRequesterを割り当て
                         modifier = Modifier.focusRequester(categoryFocusRequesters[index])
@@ -179,7 +204,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                         mIpRequester = mIpFocusRequester, mPortRequester = mPortFocusRequester,
                         onItemClicked = { requester -> restoreFocusRequester = requester }
                     )
-                    1 -> DisplaySettingsContent(
+                    1 -> PlaybackSettingsContent(
+                        liveQuality = liveQuality,
+                        videoQuality = videoQuality,
+                        liveQRequester = liveQFocusRequester,
+                        videoQRequester = videoQFocusRequester,
+                        // ★修正: トグルではなくダイアログ表示へ変更
+                        onLiveQualityClick = { showLiveQualitySelection = true },
+                        onVideoQualityClick = { showVideoQualitySelection = true },
+                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                    )
+                    2 -> DisplaySettingsContent(
                         defaultDisplay = commentDefaultDisplay,
                         speed = commentSpeed, size = commentFontSize, opacity = commentOpacity, maxLines = commentMaxLines,
                         onEditRequest = { title, currentVal -> editingItem = title to currentVal },
@@ -194,7 +229,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         opacityRequester = cOpacityFocusRequester, maxLinesRequester = cMaxLinesFocusRequester,
                         onItemClicked = { requester -> restoreFocusRequester = requester }
                     )
-                    2 -> AppInfoContent(
+                    3 -> AppInfoContent(
                         onShowLicenses = { showLicenses = true },
                         licenseRequester = appInfoLicenseRequester,
                         onItemClicked = { requester -> restoreFocusRequester = requester }
@@ -203,6 +238,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
 
+        // --- ダイアログ関連 ---
+
+        // テキスト入力ダイアログ
         editingItem?.let { (title, value) ->
             InputDialog(
                 title = title,
@@ -227,6 +265,34 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             )
         }
+
+        // ★追加: ライブ画質選択ダイアログ
+        if (showLiveQualitySelection) {
+            SelectionDialog(
+                title = "ライブ視聴画質を選択",
+                options = LiveQuality.entries.map { it.label to it.value },
+                currentValue = liveQuality,
+                onDismiss = { showLiveQualitySelection = false },
+                onSelect = { newValue ->
+                    scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, newValue) }
+                    showLiveQualitySelection = false
+                }
+            )
+        }
+
+        // ★追加: 録画画質選択ダイアログ
+        if (showVideoQualitySelection) {
+            SelectionDialog(
+                title = "録画視聴画質を選択",
+                options = VideoQuality.entries.map { it.label to it.apiParams },
+                currentValue = videoQuality,
+                onDismiss = { showVideoQualitySelection = false },
+                onSelect = { newValue ->
+                    scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, newValue) }
+                    showVideoQualitySelection = false
+                }
+            )
+        }
     }
 }
 
@@ -248,6 +314,34 @@ fun ConnectionSettingsContent(
         SettingsSection(title = "Mirakurun(オプション)") {
             SettingItem(title = "アドレス", value = mIp, icon = Icons.Default.Dns, modifier = Modifier.focusRequester(mIpRequester), onClick = { onItemClicked(mIpRequester); onEditRequest("Mirakurun IPアドレス", mIp) })
             SettingItem(title = "ポート番号", value = mPort, modifier = Modifier.focusRequester(mPortRequester), onClick = { onItemClicked(mPortRequester); onEditRequest("Mirakurun ポート番号", mPort) })
+        }
+    }
+}
+
+@Composable
+fun PlaybackSettingsContent(
+    liveQuality: String, videoQuality: String,
+    liveQRequester: FocusRequester, videoQRequester: FocusRequester,
+    onLiveQualityClick: () -> Unit, onVideoQualityClick: () -> Unit,
+    onItemClicked: (FocusRequester) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(text = "再生設定", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
+        SettingsSection(title = "デフォルト画質 (KonomiTV)") {
+            SettingItem(
+                title = "ライブ視聴画質",
+                value = LiveQuality.fromValue(liveQuality).label,
+                icon = Icons.Default.HighQuality,
+                modifier = Modifier.focusRequester(liveQRequester),
+                onClick = { onItemClicked(liveQRequester); onLiveQualityClick() }
+            )
+            SettingItem(
+                title = "録画視聴画質",
+                value = VideoQuality.fromApiParams(videoQuality).label,
+                icon = Icons.Default.HighQuality,
+                modifier = Modifier.focusRequester(videoQRequester),
+                onClick = { onItemClicked(videoQRequester); onVideoQualityClick() }
+            )
         }
     }
 }
@@ -286,7 +380,7 @@ fun AppInfoContent(onShowLicenses: () -> Unit, licenseRequester: FocusRequester,
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "Komorebi", style = MaterialTheme.typography.displayMedium, color = Color.White, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "Version 0.2.0 beta", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+        Text(text = "Version 0.2.0 beta2", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(modifier = Modifier.height(48.dp))
         SettingItem(title = "オープンソースライセンス", value = "", modifier = Modifier.width(400.dp).focusRequester(licenseRequester), onClick = { onItemClicked(licenseRequester); onShowLicenses() })
         Spacer(modifier = Modifier.height(48.dp))
@@ -335,6 +429,132 @@ fun SettingItem(title: String, value: String, icon: ImageVector? = null, modifie
                 Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
             }
             Text(text = value, modifier = Modifier.weight(1f), textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge, color = if (isFocused) Color.Black.copy(0.8f) else Color.White.copy(0.6f), fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+// ★追加: 汎用選択ダイアログ
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun SelectionDialog(
+    title: String,
+    options: List<Pair<String, String>>, // Label, Value
+    currentValue: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
+            modifier = Modifier.width(400.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 400.dp)
+                ) {
+                    items(options) { (label, value) ->
+                        val isSelected = value == currentValue
+                        val focusRequester = remember { FocusRequester() }
+
+                        LaunchedEffect(Unit) {
+                            if (isSelected) {
+                                delay(50)
+                                focusRequester.requestFocus()
+                            }
+                        }
+
+                        SelectionDialogItem(
+                            label = label,
+                            isSelected = isSelected,
+                            onClick = { onSelect(value) },
+                            modifier = Modifier.focusRequester(focusRequester)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color.White.copy(alpha = 0.1f),
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("キャンセル")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun SelectionDialogItem(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isFocused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isSelected) Color.White.copy(0.1f) else Color.Transparent,
+            focusedContainerColor = Color.White,
+            contentColor = Color.White,
+            focusedContentColor = Color.Black
+        ),
+        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
+
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = if (isFocused) Color.Black else Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

@@ -41,9 +41,16 @@ class SettingsViewModel @Inject constructor(
     val commentMaxLines: StateFlow<String> = settingsRepository.commentMaxLines
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "0")
 
-    // ★追加: コメント表示のデフォルト設定の StateFlow
+    // コメント表示のデフォルト設定の StateFlow
     val commentDefaultDisplay: StateFlow<String> = settingsRepository.commentDefaultDisplay
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
+
+    // ★追加: 画質設定の StateFlow
+    val liveQuality: StateFlow<String> = settingsRepository.liveQuality
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1080p-60fps")
+
+    val videoQuality: StateFlow<String> = settingsRepository.videoQuality
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1080p-60fps")
 
     // 設定が初期化済みかどうか
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
