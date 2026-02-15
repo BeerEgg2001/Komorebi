@@ -1,32 +1,29 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
-import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.zIndex
-import androidx.tv.material3.*
+import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.beeregg2001.komorebi.data.model.EpgProgram
+//import com.beeregg2001.komorebi.ui.video.ProgramDetailScreen
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
-
-private const val TAG = "EPG_DEBUG_CONTAINER"
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
 @RequiresApi(Build.VERSION_CODES.O)
@@ -34,8 +31,7 @@ private const val TAG = "EPG_DEBUG_CONTAINER"
 fun EpgNavigationContainer(
     uiState: EpgUiState,
     logoUrls: List<String>,
-    mirakurunIp: String,
-    mirakurunPort: String,
+    mirakurunIp: String, mirakurunPort: String,
     mainTabFocusRequester: FocusRequester,
     contentRequester: FocusRequester,
     selectedProgram: EpgProgram?,
@@ -46,117 +42,63 @@ fun EpgNavigationContainer(
     currentType: String,
     onTypeChanged: (String) -> Unit,
     restoreChannelId: String? = null,
-    availableTypes: List<String> = emptyList()
+    availableTypes: List<String> = emptyList(),
+    onJumpStateChanged: (Boolean) -> Unit
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
-    var internalRestoreChannelId by remember { mutableStateOf(restoreChannelId) }
-    var internalRestoreStartTime by remember { mutableStateOf<String?>(null) }
-
     val gridFocusRequester = remember { FocusRequester() }
+    var isInternalJumping by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(restoreChannelId) {
-        internalRestoreChannelId = restoreChannelId
-        if (restoreChannelId == null) {
-            internalRestoreStartTime = null
+    LaunchedEffect(isInternalJumping) { onJumpStateChanged(isInternalJumping) }
+
+    // ★最重要: ジャンプメニューが閉じた際の物理フォーカス吸着ロジック
+    LaunchedEffect(isJumpMenuOpen) {
+        if (!isJumpMenuOpen && isInternalJumping) {
+            // システムのフォーカス逃避を防ぐため、約0.7秒間しつこくリクエストし続ける
+            repeat(15) {
+                runCatching { gridFocusRequester.requestFocus() }
+                delay(48) // リフレッシュレートに合わせた間隔
+            }
+            isInternalJumping = false
         }
     }
 
-    val currentLogoUrls = remember(logoUrls) {
-        if (logoUrls.isNotEmpty()) logoUrls else emptyList()
-    }
-    val displayLogoUrls = if (logoUrls.isNotEmpty()) logoUrls else currentLogoUrls
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .onKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
-                    when (event.key) {
-                        Key.Menu -> {
-                            onJumpMenuStateChanged(!isJumpMenuOpen)
-                            return@onKeyEvent true
-                        }
-                    }
-                }
-                false
-            }
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         ModernEpgCanvasEngine_Smooth(
-            uiState = uiState,
-            logoUrls = displayLogoUrls,
-            topTabFocusRequester = mainTabFocusRequester,
-            headerFocusRequester = contentRequester,
-            gridFocusRequester = gridFocusRequester,
-            onProgramSelected = onProgramSelected,
-            jumpTargetTime = jumpTargetTime,
-            onJumpFinished = { jumpTargetTime = null },
-            onEpgJumpMenuStateChanged = onJumpMenuStateChanged,
-            currentType = currentType,
-            onTypeChanged = onTypeChanged,
-            restoreChannelId = internalRestoreChannelId,
-            restoreProgramStartTime = internalRestoreStartTime,
-            availableTypes = availableTypes
+            uiState = uiState, logoUrls = logoUrls,
+            topTabFocusRequester = mainTabFocusRequester, headerFocusRequester = contentRequester, gridFocusRequester = gridFocusRequester,
+            onProgramSelected = { onProgramSelected(it) }, jumpTargetTime = jumpTargetTime, onJumpFinished = { jumpTargetTime = null },
+            onEpgJumpMenuStateChanged = onJumpMenuStateChanged, currentType = currentType, onTypeChanged = onTypeChanged,
+            availableTypes = availableTypes, restoreChannelId = restoreChannelId
         )
 
         if (selectedProgram != null) {
-            val detailInitialFocusRequester = remember { FocusRequester() }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.8f))
-                    .zIndex(2f)
-            ) {
-                ProgramDetailScreen(
-                    program = selectedProgram,
-                    onPlayClick = { program ->
-                        onNavigateToPlayer(program.channel_id, mirakurunIp, mirakurunPort)
-                    },
-                    onRecordClick = { /* 予約 */ },
-                    onBackClick = {
-                        runCatching { gridFocusRequester.requestFocus() }
-                        internalRestoreChannelId = selectedProgram.channel_id
-                        internalRestoreStartTime = selectedProgram.start_time
-                        onProgramSelected(null)
-                    },
-                    initialFocusRequester = detailInitialFocusRequester
-                )
+            val detailRequester = remember { FocusRequester() }
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).zIndex(2f)) {
+                ProgramDetailScreen(program = selectedProgram, onPlayClick = { onNavigateToPlayer(it.channel_id, mirakurunIp, mirakurunPort) }, onRecordClick = {}, onBackClick = { runCatching { gridFocusRequester.requestFocus() }; onProgramSelected(null) }, initialFocusRequester = detailRequester)
             }
-            LaunchedEffect(selectedProgram) {
-                yield()
-                runCatching { detailInitialFocusRequester.requestFocus() }
-            }
-        }
-
-        LaunchedEffect(internalRestoreChannelId) {
-            if (internalRestoreChannelId != null) {
-                delay(100)
-                runCatching { gridFocusRequester.requestFocus() }
-            }
+            LaunchedEffect(selectedProgram) { yield(); runCatching { detailRequester.requestFocus() } }
         }
 
         AnimatedVisibility(
             visible = isJumpMenuOpen,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.zIndex(10f)
+            modifier = Modifier.zIndex(10f).focusProperties { exit = { gridFocusRequester } }
         ) {
             val now = remember { OffsetDateTime.now() }
-            val dates = remember(now) { List(7) { now.plusDays(it.toLong()) } }
             EpgJumpMenu(
-                dates = dates,
+                dates = remember(now) { List(7) { now.plusDays(it.toLong()) } },
                 onSelect = { selectedTime ->
-                    Log.d(TAG, "Jump action selected")
-
-                    // 1. フォーカスを先にグリッドへ移す
-                    runCatching { gridFocusRequester.requestFocus() }
-
-                    // 2. エンジンにジャンプ指示
-                    jumpTargetTime = selectedTime
-
-                    // 3. メニューを閉じる（HomeLauncherScreenのクールダウンガードが発動する）
-                    onJumpMenuStateChanged(false)
+                    scope.launch {
+                        isInternalJumping = true
+                        jumpTargetTime = selectedTime
+                        // メニューが消える前からターゲットをGridに固定
+                        runCatching { gridFocusRequester.requestFocus() }
+                        delay(100)
+                        onJumpMenuStateChanged(false)
+                    }
                 },
                 onDismiss = {
                     onJumpMenuStateChanged(false)

@@ -16,7 +16,6 @@ import java.time.temporal.ChronoUnit
 
 private const val TAG = "EPG_STATE"
 
-// 描画用の事前計算済みデータクラス
 @RequiresApi(Build.VERSION_CODES.O)
 class UiProgram(
     val program: EpgProgram,
@@ -37,7 +36,6 @@ class UiChannel(
 class EpgState(
     private val config: EpgConfig
 ) {
-    // --- データ ---
     var filledChannelWrappers by mutableStateOf<List<EpgChannelWrapper>>(emptyList())
         private set
     var uiChannels by mutableStateOf<List<UiChannel>>(emptyList())
@@ -47,47 +45,33 @@ class EpgState(
     var limitTime by mutableStateOf(OffsetDateTime.now())
         private set
 
-    val hasData: Boolean
-        get() = uiChannels.isNotEmpty()
-
-    // バックグラウンドでの計算中フラグ
+    val hasData: Boolean get() = uiChannels.isNotEmpty()
     var isCalculating by mutableStateOf(false)
         private set
-
-    // 初期化済みフラグ
     var isInitialized by mutableStateOf(false)
         private set
 
-    // --- 状態 ---
     var focusedCol by mutableIntStateOf(0)
     var focusedMin by mutableIntStateOf(0)
     var currentFocusedProgram by mutableStateOf<EpgProgram?>(null)
 
-    // --- アニメーションターゲット値 ---
     var targetScrollX by mutableFloatStateOf(0f)
     var targetScrollY by mutableFloatStateOf(0f)
     var targetAnimX by mutableFloatStateOf(0f)
     var targetAnimY by mutableFloatStateOf(0f)
     var targetAnimH by mutableFloatStateOf(config.hhPx)
 
-    // --- レイアウトキャッシュ ---
     val textLayoutCache = mutableMapOf<String, TextLayoutResult>()
-
-    // 画面サイズ
     var screenWidthPx by mutableFloatStateOf(0f)
     var screenHeightPx by mutableFloatStateOf(0f)
 
-    private val maxScrollMinutes = 1440 * 14 // 2週間
+    private val maxScrollMinutes = 1440 * 14
 
-    /**
-     * バックグラウンドスレッドで重い座標計算と日時パースを一括で行う
-     */
     suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
         isCalculating = true
         withContext(Dispatchers.Default) {
             try {
                 val now = OffsetDateTime.now()
-                // 現在時刻の2時間前から開始
                 val newBaseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
@@ -101,7 +85,6 @@ class EpgState(
                         val endMs = try {
                             EpgDataConverter.safeParseTime(p.end_time, newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())).toInstant().toEpochMilli()
                         } catch (e: Exception) { 0L }
-
                         UiProgram(p, topY, height, isEmpty, endMs)
                     }
                     UiChannel(wrapper.copy(programs = filled), uiProgs)
@@ -114,12 +97,10 @@ class EpgState(
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
                     textLayoutCache.clear()
 
-                    // 初回またはリセット要求時は「現在時刻へ強制ジャンプ」
                     if (!isInitialized || resetFocus) {
                         jumpToNow()
                         isInitialized = true
                     } else {
-                        // データ更新時は位置を維持しつつ、フォーカス対象を再計算
                         if (uiChannels.isNotEmpty()) {
                             if (focusedCol >= uiChannels.size) {
                                 focusedCol = uiChannels.size - 1
@@ -147,23 +128,10 @@ class EpgState(
         }
     }
 
-    fun getNowMinutes(): Int {
-        val now = OffsetDateTime.now()
-        return try {
-            Duration.between(baseTime, now).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
-        } catch (e: Exception) { 0 }
-    }
-
-    /**
-     * 現在時刻へ強制的にジャンプする
-     */
     fun jumpToNow() {
         jumpToTime(OffsetDateTime.now())
     }
 
-    /**
-     * ★追加: 指定時刻へ強制的にジャンプし、番組がある列にフォーカスを合わせる
-     */
     fun jumpToTime(targetTime: OffsetDateTime) {
         val targetMin = try {
             Duration.between(baseTime, targetTime).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
@@ -171,36 +139,25 @@ class EpgState(
 
         Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
 
-        // ★追加ロジック: その時間に番組が存在する列を探す
-        // デフォルトは一番左(0)だが、空なら右隣へ順に探していく
         var bestCol = 0
         if (uiChannels.isNotEmpty()) {
             val targetY = (targetMin / 60f) * config.hhPx
-
-            // 全列を走査して、そのY座標に番組があるかチェック
             for (i in uiChannels.indices) {
                 val channel = uiChannels[i]
                 val hasProgram = channel.uiPrograms.any {
                     targetY >= it.topY && targetY < it.topY + it.height
                 }
-
                 if (hasProgram) {
                     bestCol = i
-                    break // 見つかったらループ終了（一番左側の有効な列を採用）
+                    break
                 }
             }
         }
 
-        // 1. フォーカス情報の更新（見つけた列を使用）
         updatePositionsInternal(bestCol, targetMin, forceScroll = true)
 
-        // 2. スクロール位置の強制セット
         val targetY = (targetMin / 60f) * config.hhPx
-
-        // 画面上部に合わせる
         val desiredScrollY = -targetY
-
-        // スクロール範囲内に収める
         val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
         val visibleH = (effectiveScreenHeight - config.hhAreaPx).coerceAtLeast(100f)
         val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
@@ -209,18 +166,10 @@ class EpgState(
         targetScrollY = desiredScrollY.coerceIn(maxScrollY, 0f)
     }
 
-    /**
-     * 指定された位置へフォーカスを移動し、必要に応じてスクロールする
-     * 外部公開用
-     */
     fun updatePositions(col: Int, min: Int) {
         updatePositionsInternal(col, min, forceScroll = false)
     }
 
-    /**
-     * 内部ロジック
-     * forceScroll = true の場合はスクロール位置の自動調整を行わない（呼び出し元でセットするため）
-     */
     private fun updatePositionsInternal(col: Int, min: Int, forceScroll: Boolean) {
         if (uiChannels.isEmpty()) return
 
@@ -242,7 +191,6 @@ class EpgState(
             targetAnimY = uiProg.topY
             targetAnimH = if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
         } else {
-            // 番組が見つからない場合もフォーカス枠の座標だけは計算する
             targetAnimY = focusY
             targetAnimH = 30f / 60f * config.hhPx
         }
@@ -250,10 +198,8 @@ class EpgState(
         focusedCol = safeCol
         focusedMin = safeMin
 
-        // 強制スクロールモード（jumpToTimeなど）の場合はここで終了
         if (forceScroll) return
 
-        // --- 通常のスクロール追従ロジック ---
         val effectiveScreenWidth = if (screenWidthPx > 0) screenWidthPx else 1920f
         val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
 

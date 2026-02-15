@@ -1,10 +1,7 @@
-
 @file:OptIn(ExperimentalComposeUiApi::class)
 
 package com.beeregg2001.komorebi.ui.main
 
-import android.app.ActivityManager
-import android.content.Context
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
@@ -20,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -34,6 +30,7 @@ import com.beeregg2001.komorebi.ui.home.LoadingScreen
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
+import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import kotlinx.coroutines.delay
 
@@ -82,6 +79,7 @@ fun MainRootScreen(
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
+    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
@@ -183,6 +181,26 @@ fun MainRootScreen(
                         onBackPressed = { selectedProgram = null; isReturningFromPlayer = true },
                         onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
                     )
+                } else if (isRecordListOpen) {
+                    // ★追加: 録画一覧画面をここでも呼び出すように修正
+                    RecordListScreen(
+                        recentRecordings = recentRecordings,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        onProgramClick = { program ->
+                            // 再生処理（詳細画面を挟まず即再生させる例）
+                            val history = watchHistory.find { it.program.id == program.id.toString() }
+                            val duration = program.recordedVideo.duration
+                            initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
+                                (history.playback_position * 1000).toLong()
+                            } else 0L
+                            selectedProgram = program
+                            lastSelectedProgramId = program.id.toString()
+                        },
+                        onLoadMore = { recordViewModel.loadNextPage() },
+                        isLoadingMore = isRecLoading,
+                        onBack = { isRecordListOpen = false }
+                    )
                 } else {
                     HomeLauncherScreen(
                         channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
@@ -200,23 +218,11 @@ fun MainRootScreen(
                         selectedProgram = selectedProgram,
                         onProgramSelected = { program ->
                             if (program != null) {
-                                // ★修正: 再生開始前に履歴をチェック
                                 val history = watchHistory.find { it.program.id == program.id.toString() }
-                                val duration = program.recordedVideo.duration // 秒単位
-
-                                initialPlaybackPositionMs = if (history != null) {
-                                    val pos = history.playback_position
-                                    // 5秒以上再生しており、かつ終了10秒前より手前であれば「続きから再生」
-                                    // それ以外（最初の方、またはほぼ最後まで視聴済み）は最初から再生
-                                    if (pos > 5 && pos < (duration - 10)) {
-                                        (pos * 1000).toLong()
-                                    } else {
-                                        0L
-                                    }
-                                } else {
-                                    0L
-                                }
-
+                                val duration = program.recordedVideo.duration
+                                initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
+                                    (history.playback_position * 1000).toLong()
+                                } else 0L
                                 selectedProgram = program
                                 lastSelectedProgramId = program.id.toString()
                                 lastSelectedChannelId = null

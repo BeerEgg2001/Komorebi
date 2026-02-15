@@ -56,18 +56,17 @@ fun RecordListScreen(
     val gridState = rememberTvLazyGridState()
     val searchFocusRequester = remember { FocusRequester() }
     val gridFocusRequester = remember { FocusRequester() }
+    val backButtonFocusRequester = remember { FocusRequester() }
 
-    // ★修正: 検索バーが表示されたら少し待ってからフォーカスを移動（クラッシュ対策）
     LaunchedEffect(isSearchBarVisible) {
         if (isSearchBarVisible) {
-            delay(100) // UI構築待ち
+            delay(150)
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
 
-    // 画面が表示されたらグリッドにフォーカスを当てる
     LaunchedEffect(Unit) {
-        delay(50)
+        delay(300)
         if (!isSearchBarVisible) {
             runCatching { gridFocusRequester.requestFocus() }
         }
@@ -75,13 +74,11 @@ fun RecordListScreen(
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(horizontal = 40.dp, vertical = 20.dp)) {
 
-        // ★修正: ヘッダー部分を検索モードと通常モードで切り替え
         if (isSearchBarVisible) {
             Row(
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 検索モード時の戻るボタン（検索を閉じる）
                 IconButton(onClick = {
                     isSearchBarVisible = false
                     searchQuery = ""
@@ -92,7 +89,6 @@ fun RecordListScreen(
 
                 Spacer(Modifier.width(16.dp))
 
-                // 検索入力フィールド
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -107,16 +103,14 @@ fun RecordListScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
-                            .focusRequester(searchFocusRequester) // ★重要: これがないとクラッシュする
+                            .focusRequester(searchFocusRequester)
                             .onKeyEvent {
                                 if (it.key == Key.Back && it.type == KeyEventType.KeyUp) {
-                                    // 戻るキーで検索終了
                                     isSearchBarVisible = false
                                     searchQuery = ""
                                     runCatching { gridFocusRequester.requestFocus() }
                                     true
                                 } else if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
-                                    // 下キーでグリッドへ移動
                                     runCatching { gridFocusRequester.requestFocus() }
                                     true
                                 } else {
@@ -128,7 +122,6 @@ fun RecordListScreen(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = {
-                            // 検索実行（決定キー）時はグリッドへ移動して結果を確認しやすくする
                             runCatching { gridFocusRequester.requestFocus() }
                         })
                     )
@@ -139,9 +132,13 @@ fun RecordListScreen(
                 }
             }
         } else {
-            // 通常ヘッダー
             Row(modifier = Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White) }
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.focusRequester(backButtonFocusRequester)
+                ) {
+                    Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
+                }
                 Spacer(Modifier.width(16.dp))
                 Text("録画一覧", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = { isSearchBarVisible = true }) { Icon(Icons.Default.Search, "検索", tint = Color.White) }
@@ -150,7 +147,6 @@ fun RecordListScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // Grid
         TvLazyVerticalGrid(
             state = gridState,
             columns = TvGridCells.Fixed(4),

@@ -3,22 +3,25 @@ package com.beeregg2001.komorebi.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
-import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
+import java.time.OffsetDateTime
 import javax.inject.Inject
 
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
-    private val repository: KonomiRepository // リポジトリを注入
+    private val repository: KonomiRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
+
+    // UIが購読する最終的な「計算済み」リスト
+    private val _liveRows = MutableStateFlow<List<LiveRowState>>(emptyList())
+    val liveRows: StateFlow<List<LiveRowState>> = _liveRows.asStateFlow()
 
     private val _groupedChannels = MutableStateFlow<Map<String, List<Channel>>>(emptyMap())
     val groupedChannels: StateFlow<Map<String, List<Channel>>> = _groupedChannels
@@ -29,21 +32,49 @@ class ChannelViewModel @Inject constructor(
     private val _isRecordingLoading = MutableStateFlow(true)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading
 
-    // ★追加: 接続エラーフラグ（チャンネルリスト取得失敗時）
     private val _connectionError = MutableStateFlow(false)
     val connectionError: StateFlow<Boolean> = _connectionError.asStateFlow()
 
     private var pollingJob: Job? = null
+    private var progressUpdateJob: Job? = null
 
     init {
         startPolling()
+        startProgressUpdater() // プログレスバー更新タイマー開始
+    }
+
+    /**
+     * 進行度(Progress)とUI表示用モデルをバックグラウンドで一括生成
+     */
+    private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> = withContext(Dispatchers.Default) {
+        val now = System.currentTimeMillis()
+        grouped.map { (type, channels) ->
+            LiveRowState(
+                genreId = type,
+                genreLabel = when(type) { "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> type },
+                channels = channels.map { ch ->
+                    val start = ch.programPresent?.startTime?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() } ?: 0L
+                    val dur = ch.programPresent?.duration ?: 0
+                    val progress = if (start > 0 && dur > 0) {
+                        ((now - start).toFloat() / (dur * 1000).toFloat()).coerceIn(0f, 1f)
+                    } else 0f
+
+                    UiChannelState(
+                        channel = ch,
+                        displayChannelId = ch.displayChannelId,
+                        name = ch.name,
+                        programTitle = ch.programPresent?.title ?: "放送休止中",
+                        progress = progress,
+                        hasProgram = ch.programPresent != null
+                    )
+                }
+            )
+        }
     }
 
     private suspend fun fetchChannelsInternal() {
         try {
-            // 処理開始時はエラーをリセット
             _connectionError.value = false
-
             val response = repository.getChannels()
             val processed = withContext(Dispatchers.Default) {
                 val all = mutableListOf<Channel>()
@@ -55,25 +86,37 @@ class ChannelViewModel @Inject constructor(
                 all.filter { it.isDisplay }.groupBy { it.type }
             }
             _groupedChannels.value = processed
+            // UI用モデルを生成して反映
+            _liveRows.value = transformToUiState(processed)
         } catch (e: Exception) {
             e.printStackTrace()
-            // ★追加: エラー発生時にフラグを立てる
             _connectionError.value = true
         } finally {
             _isLoading.value = false
         }
     }
 
-    fun fetchChannels() {
-        // ★修正: 即座にローディング状態にすることで、MainRootScreenのLaunchedEffectを確実にリセットさせる
-        _isLoading.value = true
-        viewModelScope.launch {
-            fetchChannelsInternal()
+    /**
+     * プログレスバーを定期的に更新（UIスレッドを介さず計算）
+     */
+    private fun startProgressUpdater() {
+        progressUpdateJob?.cancel()
+        progressUpdateJob = viewModelScope.launch {
+            while (isActive) {
+                delay(15_000L) // 15秒に1回更新で十分「リアルタイム」です
+                if (_groupedChannels.value.isNotEmpty()) {
+                    _liveRows.value = transformToUiState(_groupedChannels.value)
+                }
+            }
         }
     }
 
+    fun fetchChannels() {
+        _isLoading.value = true
+        viewModelScope.launch { fetchChannelsInternal() }
+    }
+
     fun fetchRecentRecordings() {
-        // 即座にローディング状態にする
         _isRecordingLoading.value = true
         viewModelScope.launch {
             try {
@@ -87,31 +130,32 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
-    // Polling関係はそのまま維持
     fun startPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
             while (isActive) {
                 fetchChannelsInternal()
-                delay(30_000L) // 30秒間隔
+                delay(60_000L) // チャンネル情報の更新は1分間隔に緩和（負荷軽減）
             }
         }
     }
-    fun stopPolling() { pollingJob?.cancel() }
-    override fun onCleared() { super.onCleared(); stopPolling() }
+
+    fun stopPolling() {
+        pollingJob?.cancel()
+        progressUpdateJob?.cancel()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopPolling()
+    }
 
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
-            // Entityに変換して保存
             val entity = WatchHistoryEntity(
-                id = program.id,
-                title = program.title,
-                description = program.description,
-                startTime = program.startTime,
-                endTime = program.endTime,
-                duration = program.duration,
-                videoId = program.recordedVideo.id,
-                watchedAt = System.currentTimeMillis()
+                id = program.id, title = program.title, description = program.description,
+                startTime = program.startTime, endTime = program.endTime, duration = program.duration,
+                videoId = program.recordedVideo.id, watchedAt = System.currentTimeMillis()
             )
             repository.saveToLocalHistory(entity)
         }
