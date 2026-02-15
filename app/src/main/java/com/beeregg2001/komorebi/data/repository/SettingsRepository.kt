@@ -25,6 +25,14 @@ class SettingsRepository @Inject constructor(
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
+
+        // 実況カスタマイズ用キー
+        val COMMENT_SPEED = stringPreferencesKey("comment_speed")
+        val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
+        val COMMENT_OPACITY = stringPreferencesKey("comment_opacity")
+        val COMMENT_MAX_LINES = stringPreferencesKey("comment_max_lines")
+        // ★追加: コメント表示のデフォルト設定
+        val COMMENT_DEFAULT_DISPLAY = stringPreferencesKey("comment_default_display")
     }
 
     // 値を取得するFlow
@@ -32,6 +40,14 @@ class SettingsRepository @Inject constructor(
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
     val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "" }
+
+    // 実況設定のFlow
+    val commentSpeed: Flow<String> = context.dataStore.data.map { it[COMMENT_SPEED] ?: "1.0" }
+    val commentFontSize: Flow<String> = context.dataStore.data.map { it[COMMENT_FONT_SIZE] ?: "1.0" }
+    val commentOpacity: Flow<String> = context.dataStore.data.map { it[COMMENT_OPACITY] ?: "1.0" }
+    val commentMaxLines: Flow<String> = context.dataStore.data.map { it[COMMENT_MAX_LINES] ?: "0" }
+    // ★追加: コメント表示のデフォルト設定のFlow (デフォルトはON)
+    val commentDefaultDisplay: Flow<String> = context.dataStore.data.map { it[COMMENT_DEFAULT_DISPLAY] ?: "ON" }
 
     // 設定が保存（初期化）されているかチェックするFlow
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -48,7 +64,7 @@ class SettingsRepository @Inject constructor(
     // 現在設定されているベースURLを組み立てて取得する
     suspend fun getBaseUrl(): String {
         val prefs = context.dataStore.data.first()
-        var ip = prefs[KONOMI_IP] ?: "https://192-168-11-100.local.konomi.tv"
+        var ip = prefs[KONOMI_IP] ?: "https://192-168-xxx-xxxxs.local.konomi.tv"
         val port = prefs[KONOMI_PORT] ?: "7000"
 
         // http(s):// が抜けている場合の補完

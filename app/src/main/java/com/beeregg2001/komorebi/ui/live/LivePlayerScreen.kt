@@ -28,6 +28,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.*
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -43,8 +44,9 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
+import com.beeregg2001.komorebi.viewmodel.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -55,6 +57,12 @@ import okhttp3.sse.EventSources
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import android.graphics.Color as AndroidColor
+import master.flame.danmaku.controller.IDanmakuView
+import master.flame.danmaku.danmaku.model.BaseDanmaku
+import android.graphics.Typeface
+import android.os.Build
+import java.util.Collections
 
 @ExperimentalComposeUiApi
 @Composable
@@ -80,54 +88,88 @@ fun LivePlayerScreen(
     onBackPressed: () -> Unit,
 ) {
     val context = LocalContext.current
+    val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
+
+    // ★設定値の収集
+    val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
+    val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
+    val commentOpacityStr by repository.commentOpacity.collectAsState(initial = "1.0")
+    val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
+    val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
+
+    // 数値型への変換
+    val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
+    val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
+    val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
+    val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
+
+    val isEmulator = remember {
+        Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk"
+    }
+
+    var forceSoftwareRendering by remember { mutableStateOf(isEmulator) }
+    val processedCommentIds = remember { Collections.synchronizedSet(LinkedHashSet<String>()) }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
+    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
     val currentChannelItem by remember(channel.id, groupedChannels) {
-        derivedStateOf { groupedChannels.values.flatten().find { it.id == channel.id } ?: channel }
+        derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
     }
 
-    val nativeLib = remember { NativeLib() }
+    val nativeLib = remember { com.beeregg2001.komorebi.NativeLib() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentQuality by remember(initialQuality) { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
     val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
     val isSubtitleEnabled by subtitleEnabledState
+
+    // ★初期表示設定を反映
+    val commentEnabledState = rememberSaveable(commentDefaultDisplayStr) {
+        mutableStateOf(commentDefaultDisplayStr == "ON")
+    }
+    val isCommentEnabled by commentEnabledState
+
     var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val webViewRef = remember { mutableStateOf<android.webkit.WebView?>(null) }
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     var currentStreamSource by remember { mutableStateOf(if (isMirakurunAvailable) StreamSource.MIRAKURUN else StreamSource.KONOMITV) }
 
     var playerError by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
 
-    // KonomiTVのSSEイベント状態管理
     var sseStatus by remember { mutableStateOf("Standby") }
-    var sseDetail by remember { mutableStateOf(AppStrings.SSE_CONNECTING) }
+    var sseDetail by remember { mutableStateOf(com.beeregg2001.komorebi.common.AppStrings.SSE_CONNECTING) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
 
-    val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
-    val extractorsFactory = remember { DefaultExtractorsFactory().apply { setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS) } }
-    val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
+    val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
+
+    val updatedIsManualOverlay by rememberUpdatedState(isManualOverlay)
+    val updatedIsPinnedOverlay by rememberUpdatedState(isPinnedOverlay)
+    val updatedIsSubMenuOpen by rememberUpdatedState(isSubMenuOpen)
+
+    val tsDataSourceFactory = remember { com.beeregg2001.komorebi.util.TsReadExDataSourceFactory(nativeLib, arrayOf()) }
+    val extractorsFactory = remember { androidx.media3.extractor.DefaultExtractorsFactory().apply { setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS) } }
+    val audioProcessor = remember { androidx.media3.common.audio.ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(androidx.media3.common.audio.ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
 
     fun analyzePlayerError(error: PlaybackException): String {
         val cause = error.cause
-        return if (cause is HttpDataSource.InvalidResponseCodeException) {
-            when (cause.responseCode) { 404 -> AppStrings.ERR_CHANNEL_NOT_FOUND; 503 -> AppStrings.ERR_TUNER_FULL; else -> "サーバーエラー (HTTP ${cause.responseCode})" }
-        } else if (cause is HttpDataSource.HttpDataSourceException) {
-            if (cause.cause is java.net.ConnectException) AppStrings.ERR_CONNECTION_REFUSED else if (cause.cause is java.net.SocketTimeoutException) AppStrings.ERR_TIMEOUT else AppStrings.ERR_NETWORK
-        } else if (cause is IOException) { "データ読み込みエラー: ${cause.message}" }
-        else { "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
+        return if (cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+            when (cause.responseCode) { 404 -> com.beeregg2001.komorebi.common.AppStrings.ERR_CHANNEL_NOT_FOUND; 503 -> com.beeregg2001.komorebi.common.AppStrings.ERR_TUNER_FULL; else -> "サーバーエラー (HTTP ${cause.responseCode})" }
+        } else if (cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException) {
+            if (cause.cause is java.net.ConnectException) com.beeregg2001.komorebi.common.AppStrings.ERR_CONNECTION_REFUSED else if (cause.cause is java.net.SocketTimeoutException) com.beeregg2001.komorebi.common.AppStrings.ERR_TIMEOUT else com.beeregg2001.komorebi.common.AppStrings.ERR_NETWORK
+        } else if (cause is java.io.IOException) { "データ読み込みエラー: ${cause.message}" }
+        else { "${com.beeregg2001.komorebi.common.AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
     }
 
     val exoPlayer = remember(currentStreamSource, retryKey, currentQuality) {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? { return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
+        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
+            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): androidx.media3.exoplayer.audio.DefaultAudioSink? { return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
         }
-        ExoPlayer.Builder(context, renderersFactory).apply {
-            if (currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
+        androidx.media3.exoplayer.ExoPlayer.Builder(context, renderersFactory).apply {
+            if (currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
         }.build().apply {
             playWhenReady = true
             addListener(object : Player.Listener {
@@ -139,8 +181,8 @@ fun LivePlayerScreen(
                     if (!subtitleEnabledState.value) return
                     for (i in 0 until metadata.length()) {
                         val entry = metadata.get(i)
-                        if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
-                            val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                        if (entry is androidx.media3.extractor.metadata.id3.PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                            val base64Data = android.util.Base64.encodeToString(entry.privateData, android.util.Base64.NO_WRAP)
                             val ptsMs = currentPosition + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
                             webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }", null) }
                         }
@@ -150,61 +192,63 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★修正: 起動直後の「Offline」を一定時間許容する遅延評価ロジック
     LaunchedEffect(sseStatus, sseDetail) {
         if (sseStatus == "Offline") {
-            // すでに致命的なエラーとして即時判定されている場合は何もしない
             if (playerError != null) return@LaunchedEffect
-
-            delay(6000) // 6秒間猶予を与える（この間にStandbyやONAirに変わればエラーにならない）
+            delay(6000)
             if (sseStatus == "Offline" && playerError == null) {
-                playerError = sseDetail.ifEmpty { AppStrings.SSE_OFFLINE }
+                playerError = sseDetail.ifEmpty { com.beeregg2001.komorebi.common.AppStrings.SSE_OFFLINE }
             }
         }
     }
 
     DisposableEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         if (currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
-
-        val eventUrl = UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
-        val client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
-        val request = Request.Builder().url(eventUrl).build()
-
-        val listener = object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+        val eventUrl = com.beeregg2001.komorebi.common.UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
+        val client = okhttp3.OkHttpClient.Builder().readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+        val request = okhttp3.Request.Builder().url(eventUrl).build()
+        val listener = object : okhttp3.sse.EventSourceListener() {
+            override fun onEvent(eventSource: okhttp3.sse.EventSource, id: String?, type: String?, data: String) {
                 runCatching {
                     val json = JSONObject(data)
                     sseStatus = json.optString("status", "Unknown")
                     sseDetail = json.optString("detail", "読み込み中...")
-
-                    // ★追加: 致命的なエラーや起動失敗が含まれる場合は即座にエラーダイアログを表示し、プレイヤーを停止する
-                    if (sseStatus == "Error" ||
-                        (sseStatus == "Offline" && (sseDetail.contains("失敗") || sseDetail.contains("エラー")))) {
+                    if (sseStatus == "Error" || (sseStatus == "Offline" && (sseDetail.contains("失敗") || sseDetail.contains("エラー")))) {
                         playerError = sseDetail.ifEmpty { "チューナーの起動に失敗しました" }
-                        exoPlayer.stop() // 不要な読み込みを停止させる
+                        exoPlayer.stop()
                         return@runCatching
                     }
-
                     when (sseStatus) {
-                        "Offline" -> { /* LaunchedEffect の遅延評価に任せる */ }
+                        "Offline" -> { }
                         "Standby" -> { if (exoPlayer.isPlaying) exoPlayer.pause() }
                         "ONAir" -> { if (!exoPlayer.isPlaying && playerError == null) exoPlayer.play() }
                     }
                 }
             }
         }
-        val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
+        val eventSource = okhttp3.sse.EventSources.createFactory(client).newEventSource(request, listener)
         onDispose {
             eventSource.cancel()
             client.dispatcher.executorService.shutdown()
         }
     }
 
-    LaunchedEffect(exoPlayer, isSubtitleEnabled) { while(true) { if (isSubtitleEnabled && exoPlayer.isPlaying) { val currentPos = exoPlayer.currentPosition; webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null) } }; delay(100) } }
+    LaunchedEffect(exoPlayer, isSubtitleEnabled) {
+        while(true) {
+            if (isSubtitleEnabled && exoPlayer.isPlaying) {
+                val currentPos = exoPlayer.currentPosition
+                webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null) }
+            }
+            delay(100)
+        }
+    }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop() else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() } }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) exoPlayer.stop()
+            else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
     }
@@ -214,9 +258,8 @@ fun LivePlayerScreen(
         onPinnedOverlayChange(false)
         onShowOverlayChange(true)
         scrollState.scrollTo(0)
-
         delay(4500)
-        if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen && playerError == null) {
+        if (!updatedIsManualOverlay && !updatedIsPinnedOverlay && !updatedIsSubMenuOpen && playerError == null) {
             onShowOverlayChange(false)
         }
     }
@@ -224,84 +267,151 @@ fun LivePlayerScreen(
     LaunchedEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         sseStatus = "Standby"
         sseDetail = AppStrings.SSE_CONNECTING
-
         val streamUrl = if (currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
             tsDataSourceFactory.tsArgs = arrayOf("-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(), "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13")
             UrlBuilder.getMirakurunStreamUrl(mirakurunIp ?: "", mirakurunPort ?: "", currentChannelItem.networkId, currentChannelItem.serviceId, currentChannelItem.type)
         } else {
             UrlBuilder.getKonomiTvLiveStreamUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
         }
-        exoPlayer.stop(); exoPlayer.clearMediaItems()
-        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
-        exoPlayer.prepare(); exoPlayer.play()
-
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(streamUrl))
+        exoPlayer.prepare()
+        exoPlayer.play()
         if (playerError == null) { mainFocusRequester.requestFocus() }
     }
 
+    DisposableEffect(currentChannelItem.id, isCommentEnabled) {
+        processedCommentIds.clear()
+        if (!isCommentEnabled) {
+            danmakuViewRef.value?.removeAllDanmakus(true)
+            return@DisposableEffect onDispose { }
+        }
+
+        danmakuViewRef.value?.removeAllDanmakus(true)
+        val jikkyoClient = JikkyoClient(konomiIp, konomiPort, currentChannelItem.displayChannelId)
+
+        jikkyoClient.start { jsonText ->
+            try {
+                val json = JSONObject(jsonText)
+                val chat = json.optJSONObject("chat")
+                if (chat != null) {
+                    val commentId = chat.optString("no", "") + "_" + chat.optString("content", "")
+
+                    if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) {
+                        return@start
+                    }
+
+                    if (processedCommentIds.size > 200) {
+                        val first = processedCommentIds.iterator().next()
+                        processedCommentIds.remove(first)
+                    }
+
+                    val content = chat.optString("content")
+                    if (content.isNotEmpty()) {
+                        danmakuViewRef.value?.let { view ->
+                            (view as? android.view.View)?.post {
+                                if (!view.isPrepared) return@post
+                                val danmaku = view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL)
+                                if (danmaku != null) {
+                                    danmaku.text = content
+                                    danmaku.padding = 5
+                                    val density = view.context.resources.displayMetrics.density
+
+                                    // ★設定された倍率(commentFontSizeScale)を適用
+                                    danmaku.textSize = (32f * commentFontSizeScale) * density
+
+                                    danmaku.textColor = AndroidColor.WHITE
+                                    danmaku.textShadowColor = AndroidColor.BLACK
+                                    danmaku.setTime(view.currentTime + 10)
+                                    view.addDanmaku(danmaku)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) { android.util.Log.e("LivePlayerScreen", "Parse Error", e) }
+        }
+        onDispose { jikkyoClient.stop() }
+    }
+
     LaunchedEffect(isMiniListOpen) { if (isMiniListOpen) { delay(100); listFocusRequester.requestFocus() } else if (!isManualOverlay) { mainFocusRequester.requestFocus() } }
+    LaunchedEffect(isSubMenuOpen) { if (isSubMenuOpen) { delay(100); subMenuFocusRequester.requestFocus() } }
     LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black).onKeyEvent { keyEvent ->
-        if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
-        val keyCode = keyEvent.nativeKeyEvent.keyCode
-        if (playerError != null) return@onKeyEvent false
-
-        when (keyCode) {
-            NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                if (!isSubMenuOpen && !isMiniListOpen) {
-                    when {
-                        showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
-                        isPinnedOverlay -> onPinnedOverlayChange(false)
-                        else -> { onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(false) }
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black)
+        .onKeyEvent { keyEvent ->
+            if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+            if (playerError != null) return@onKeyEvent false
+            if (isSubMenuOpen) return@onKeyEvent false
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+            if (!isMiniListOpen) {
+                val currentGroupList = groupedChannels.values.find { list -> list.any { it.id == currentChannelItem.id } }
+                if (currentGroupList != null) {
+                    val currentIndex = currentGroupList.indexOfFirst { it.id == currentChannelItem.id }
+                    if (currentIndex != -1) {
+                        when (keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1])
+                                return@onKeyEvent true
+                            }
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0])
+                                return@onKeyEvent true
+                            }
+                        }
                     }
-                    return@onKeyEvent true
                 }
             }
-            NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                if (showOverlay && isManualOverlay) {
-                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
-                    return@onKeyEvent true
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
+                    if (!isSubMenuOpen && !isMiniListOpen) {
+                        when {
+                            showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
+                            isPinnedOverlay -> onPinnedOverlayChange(false)
+                            else -> { onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(false) }
+                        }
+                        return@onKeyEvent true
+                    }
                 }
-                if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onSubMenuToggle(true); return@onKeyEvent true }
-            }
-            NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (showOverlay && isManualOverlay) {
-                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
-                    return@onKeyEvent true
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (showOverlay && isManualOverlay) { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; return@onKeyEvent true }
+                    if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onSubMenuToggle(true); return@onKeyEvent true }
                 }
-                if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (showOverlay && isManualOverlay) { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; return@onKeyEvent true }
+                    if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) { onMiniListToggle(true); return@onKeyEvent true }
+                }
             }
+            false
         }
-        false
-    }) {
+    ) {
         AndroidView(
-            factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
+            factory = { androidx.media3.ui.PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
             modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
         )
 
-        // 読み込み中表示
-        AnimatedVisibility(
-            visible = currentStreamSource == StreamSource.KONOMITV && (sseStatus == "Standby" || sseStatus == "Offline") && playerError == null,
-            enter = fadeIn(), exit = fadeOut()
-        ) {
+        if (isCommentEnabled) {
+            LiveCommentOverlay(
+                modifier = Modifier.fillMaxSize(),
+                useSoftwareRendering = forceSoftwareRendering,
+                // ★設定値を Overlay に渡す
+                speed = commentSpeed,
+                opacity = commentOpacity,
+                maxLines = commentMaxLines,
+                onViewCreated = { view -> danmakuViewRef.value = view }
+            )
+        }
+
+        AnimatedVisibility(visible = currentStreamSource == StreamSource.KONOMITV && (sseStatus == "Standby" || sseStatus == "Offline") && playerError == null, enter = fadeIn(), exit = fadeOut()) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                Row(
-                    modifier = Modifier.align(Alignment.TopStart).padding(32.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 3.dp
-                    )
+                Row(modifier = Modifier.align(Alignment.TopStart).padding(32.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
                     Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = sseDetail,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = sseDetail, color = Color.White, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -309,20 +419,14 @@ fun LivePlayerScreen(
         AnimatedVisibility(visible = isPinnedOverlay && playerError == null, enter = fadeIn(), exit = fadeOut()) { StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort) }
 
         AnimatedVisibility(visible = showOverlay && playerError == null && !isMiniListOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
-            LiveOverlayUI(
-                channel = currentChannelItem,
-                programTitle = currentChannelItem.programPresent?.title ?: "番組情報なし",
-                mirakurunIp = mirakurunIp ?: "",
-                mirakurunPort = mirakurunPort ?: "",
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                showDesc = isManualOverlay,
-                scrollState = scrollState
-            )
+            LiveOverlayUI(currentChannelItem, currentChannelItem.programPresent?.title ?: "番組情報なし", mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, isManualOverlay, scrollState)
         }
+
         AnimatedVisibility(visible = isMiniListOpen && playerError == null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            ChannelListOverlay(groupedChannels = groupedChannels, currentChannelId = currentChannelItem.id, onChannelSelect = { onChannelSelect(it); onMiniListToggle(false); mainFocusRequester.requestFocus() }, mirakurunIp = mirakurunIp ?: "", mirakurunPort = mirakurunPort ?: "", konomiIp = konomiIp, konomiPort = konomiPort, focusRequester = listFocusRequester)
+            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); runCatching { mainFocusRequester.requestFocus() } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
         }
+
+        // ★修正: サブメニュー呼び出し
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
@@ -330,15 +434,35 @@ fun LivePlayerScreen(
                 currentQuality = currentQuality,
                 isMirakurunAvailable = isMirakurunAvailable,
                 isSubtitleEnabled = isSubtitleEnabled,
+                isSubtitleSupported = currentStreamSource != StreamSource.MIRAKURUN,
+                isCommentEnabled = isCommentEnabled,
                 focusRequester = subMenuFocusRequester,
-                onAudioToggle = { currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN; val tracks = exoPlayer.currentTracks; val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (audioGroups.size >= 2) { exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build() }; toastState = ("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}") to System.currentTimeMillis() },
-                onSourceToggle = { if (isMirakurunAvailable) { currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN; toastState = ("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}") to System.currentTimeMillis() } },
-                onSubtitleToggle = { subtitleEnabledState.value = !subtitleEnabledState.value; toastState = ("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis() },
-                onQualitySelect = { selectedQuality ->
-                    if (currentQuality != selectedQuality) {
-                        currentQuality = selectedQuality
+                onAudioToggle = {
+                    currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                    val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build()
+                    toastState = ("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}") to System.currentTimeMillis()
+                },
+                onSourceToggle = {
+                    if (isMirakurunAvailable) {
+                        currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN
+                        toastState = ("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}") to System.currentTimeMillis()
+                        onSubMenuToggle(false)
+                    }
+                },
+                onSubtitleToggle = {
+                    subtitleEnabledState.value = !subtitleEnabledState.value
+                    toastState = ("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis()
+                },
+                onCommentToggle = {
+                    commentEnabledState.value = !commentEnabledState.value
+                    toastState = ("コメント: ${if(commentEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis()
+                },
+                onQualitySelect = {
+                    if (currentQuality != it) {
+                        currentQuality = it
                         retryKey++
-                        toastState = ("画質: ${selectedQuality.label}") to System.currentTimeMillis()
+                        toastState = ("画質: ${it.label}") to System.currentTimeMillis()
                     }
                     onSubMenuToggle(false)
                 },
@@ -347,12 +471,17 @@ fun LivePlayerScreen(
         }
 
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
-        AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f))
+        AndroidView(factory = { ctx ->
+            WebView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                setBackgroundColor(0)
+                settings.apply { javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false }
+                loadUrl("file:///android_asset/subtitle_renderer.html")
+                webViewRef.value = this
+            }
+        }, modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f))
 
         LiveToast(message = toastState?.first)
-
-        if (playerError != null) {
-            LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)
-        }
+        if (playerError != null) LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)
     }
 }

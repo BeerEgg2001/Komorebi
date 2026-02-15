@@ -142,4 +142,12 @@ dependencies {
     implementation("androidx.paging:paging-compose:3.3.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("com.google.android.material:material:1.12.0")
+
+    // Maven Central版の正しいID (DanmakuFlameMaster -> dfm)
+    implementation("com.github.ctiao:dfm:0.9.25")
+
+    // NDK Bitmap (バージョンは 0.9.21 を指定する必要があります)
+    implementation("com.github.ctiao:ndkbitmap-armv7a:0.9.21")
+    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
+    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
 }

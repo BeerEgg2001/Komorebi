@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.epg.engine
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextLayoutResult
@@ -13,7 +14,8 @@ import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 
-// 描画用の事前計算済みデータクラス
+private const val TAG = "EPG_STATE"
+
 @RequiresApi(Build.VERSION_CODES.O)
 class UiProgram(
     val program: EpgProgram,
@@ -34,7 +36,6 @@ class UiChannel(
 class EpgState(
     private val config: EpgConfig
 ) {
-    // --- データ ---
     var filledChannelWrappers by mutableStateOf<List<EpgChannelWrapper>>(emptyList())
         private set
     var uiChannels by mutableStateOf<List<UiChannel>>(emptyList())
@@ -44,40 +45,30 @@ class EpgState(
     var limitTime by mutableStateOf(OffsetDateTime.now())
         private set
 
-    val hasData: Boolean
-        get() = uiChannels.isNotEmpty()
-
-    // バックグラウンドでの計算中フラグ
+    val hasData: Boolean get() = uiChannels.isNotEmpty()
     var isCalculating by mutableStateOf(false)
         private set
+    var isInitialized by mutableStateOf(false)
+        private set
 
-    // --- 状態 ---
     var focusedCol by mutableIntStateOf(0)
     var focusedMin by mutableIntStateOf(0)
     var currentFocusedProgram by mutableStateOf<EpgProgram?>(null)
 
-    // --- アニメーションターゲット値 ---
     var targetScrollX by mutableFloatStateOf(0f)
     var targetScrollY by mutableFloatStateOf(0f)
     var targetAnimX by mutableFloatStateOf(0f)
     var targetAnimY by mutableFloatStateOf(0f)
     var targetAnimH by mutableFloatStateOf(config.hhPx)
 
-    // --- レイアウトキャッシュ ---
     val textLayoutCache = mutableMapOf<String, TextLayoutResult>()
-
-    // 画面サイズ
     var screenWidthPx by mutableFloatStateOf(0f)
     var screenHeightPx by mutableFloatStateOf(0f)
 
-    private val maxScrollMinutes = 1440 * 14 // 2週間
+    private val maxScrollMinutes = 1440 * 14
 
-    /**
-     * バックグラウンドスレッドで重い座標計算と日時パースを一括で行う
-     * ★修正: resetFocusフラグを追加し、タブ切り替え時にフォーカスをリセットできるようにしました
-     */
     suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
-        isCalculating = true // 計算開始
+        isCalculating = true
         withContext(Dispatchers.Default) {
             try {
                 val now = OffsetDateTime.now()
@@ -94,7 +85,6 @@ class EpgState(
                         val endMs = try {
                             EpgDataConverter.safeParseTime(p.end_time, newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())).toInstant().toEpochMilli()
                         } catch (e: Exception) { 0L }
-
                         UiProgram(p, topY, height, isEmpty, endMs)
                     }
                     UiChannel(wrapper.copy(programs = filled), uiProgs)
@@ -107,23 +97,18 @@ class EpgState(
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
                     textLayoutCache.clear()
 
-                    // ★修正: 初回読み込み、またはタブ切り替え(resetFocus)の時に位置をリセット
-                    if (targetScrollY == 0f || resetFocus) {
-                        val nowMin = getNowMinutes()
-                        val justHourMin = (nowMin / 60) * 60
-
-                        targetScrollX = 0f
-                        targetScrollY = -(justHourMin / 60f * config.hhPx)
-
-                        // 一番左(0)かつ現在時刻でフォーカスをセット
-                        updatePositions(0, nowMin)
+                    if (!isInitialized || resetFocus) {
+                        jumpToNow()
+                        isInitialized = true
                     } else {
-                        // データ更新（裏でのポーリングなど）の場合は現在のフォーカスを維持
                         if (uiChannels.isNotEmpty()) {
+                            if (focusedCol >= uiChannels.size) {
+                                focusedCol = uiChannels.size - 1
+                            }
                             updatePositions(focusedCol, focusedMin)
                         }
                     }
-                    isCalculating = false // 計算終了
+                    isCalculating = false
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -143,14 +128,49 @@ class EpgState(
         }
     }
 
-    fun getNowMinutes(): Int {
-        val now = OffsetDateTime.now()
-        return try {
-            Duration.between(baseTime, now).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
+    fun jumpToNow() {
+        jumpToTime(OffsetDateTime.now())
+    }
+
+    fun jumpToTime(targetTime: OffsetDateTime) {
+        val targetMin = try {
+            Duration.between(baseTime, targetTime).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
         } catch (e: Exception) { 0 }
+
+        Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
+
+        var bestCol = 0
+        if (uiChannels.isNotEmpty()) {
+            val targetY = (targetMin / 60f) * config.hhPx
+            for (i in uiChannels.indices) {
+                val channel = uiChannels[i]
+                val hasProgram = channel.uiPrograms.any {
+                    targetY >= it.topY && targetY < it.topY + it.height
+                }
+                if (hasProgram) {
+                    bestCol = i
+                    break
+                }
+            }
+        }
+
+        updatePositionsInternal(bestCol, targetMin, forceScroll = true)
+
+        val targetY = (targetMin / 60f) * config.hhPx
+        val desiredScrollY = -targetY
+        val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
+        val visibleH = (effectiveScreenHeight - config.hhAreaPx).coerceAtLeast(100f)
+        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+
+        targetScrollX = 0f
+        targetScrollY = desiredScrollY.coerceIn(maxScrollY, 0f)
     }
 
     fun updatePositions(col: Int, min: Int) {
+        updatePositionsInternal(col, min, forceScroll = false)
+    }
+
+    private fun updatePositionsInternal(col: Int, min: Int, forceScroll: Boolean) {
         if (uiChannels.isEmpty()) return
 
         val columns = uiChannels.size
@@ -175,9 +195,17 @@ class EpgState(
             targetAnimH = 30f / 60f * config.hhPx
         }
 
-        val visibleW = (screenWidthPx - config.twPx).coerceAtLeast(100f)
+        focusedCol = safeCol
+        focusedMin = safeMin
+
+        if (forceScroll) return
+
+        val effectiveScreenWidth = if (screenWidthPx > 0) screenWidthPx else 1920f
+        val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
+
+        val visibleW = (effectiveScreenWidth - config.twPx).coerceAtLeast(100f)
         val topOffset = config.hhAreaPx
-        val visibleH = (screenHeightPx - topOffset).coerceAtLeast(100f)
+        val visibleH = (effectiveScreenHeight - topOffset).coerceAtLeast(100f)
 
         var nextTargetX = targetScrollX
         if (targetAnimX < -targetScrollX) nextTargetX = -targetAnimX
@@ -192,8 +220,5 @@ class EpgState(
 
         targetScrollX = nextTargetX.coerceIn(maxScrollX, 0f)
         targetScrollY = nextTargetY.coerceIn(maxScrollY, 0f)
-
-        focusedCol = safeCol
-        focusedMin = safeMin
     }
 }

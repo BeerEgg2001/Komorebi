@@ -17,7 +17,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
-import com.beeregg2001.komorebi.data.util.EpgUtils // ★追加: ジャンルカラー取得のためインポート
+import com.beeregg2001.komorebi.data.util.EpgUtils
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.format.TextStyle as JavaTextStyle
@@ -40,17 +40,17 @@ class EpgDrawer(
         drawScope: DrawScope,
         state: EpgState,
         animValues: EpgAnimValues,
-        logoPainters: List<Painter>
+        logoPainters: List<Painter>,
+        isGridFocused: Boolean // ★追加: グリッド自体にフォーカスがあるかどうかのフラグ
     ) {
         with(drawScope) {
             val curX = animValues.scrollX
             val curY = animValues.scrollY
             val nowTime = OffsetDateTime.now()
-            val nowMs = System.currentTimeMillis() // 描画ループ内の日時判定を高速化するための一括取得
+            val nowMs = System.currentTimeMillis()
 
             // 1. 番組表メインエリア
             clipRect(left = config.twPx, top = config.hhAreaPx) {
-                // 表示範囲内の列（チャンネル）のみを計算
                 val startCol = ((-curX) / config.cwPx).toInt().coerceAtLeast(0)
                 val endCol = ((-curX + size.width - config.twPx) / config.cwPx).toInt().coerceAtMost(state.uiChannels.lastIndex)
 
@@ -63,9 +63,8 @@ class EpgDrawer(
                         val x = config.twPx + curX + (c * config.cwPx)
 
                         for (uiProg in uiChannel.uiPrograms) {
-                            // 画面外の番組は描画も判定もスキップ
                             if (uiProg.topY + uiProg.height < visibleTopY) continue
-                            if (uiProg.topY > visibleBottomY) break // 時間順にソートされているため、これ以降は全て画面外
+                            if (uiProg.topY > visibleBottomY) break
 
                             val py = config.hhAreaPx + curY + uiProg.topY
                             val ph = uiProg.height
@@ -74,16 +73,13 @@ class EpgDrawer(
                             val p = uiProg.program
 
                             clipRect(left = x, top = config.hhAreaPx, right = x + config.cwPx, bottom = size.height) {
-                                // セルの背景を描画
                                 drawRect(
                                     color = if (isEmpty) config.colorProgramEmpty else if (isPast) config.colorProgramPast else config.colorProgramNormal,
                                     topLeft = Offset(x + 1f, py + 1f),
                                     size = Size(config.cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
                                 )
 
-                                // ★追加: ジャンルカラーのバーを描画 (幅6pxで左端に配置)
                                 if (!isEmpty) {
-                                    // ※もし EpgProgram のジャンルプロパティ名が異なる場合は適宜変更してください
                                     val majorGenre = p.genres?.firstOrNull()?.major
                                     val genreColor = EpgUtils.getGenreColor(majorGenre)
                                     drawRect(
@@ -119,10 +115,9 @@ class EpgDrawer(
                                         descH = descLayout.size.height.toFloat()
                                     }
 
-                                    // Sticky Text 処理 (見切れ防止のため画面上端に合わせてテキストを押し下げる)
                                     val textTotalH = titleH + if (descLayout != null) descH + 2f else 0f
                                     val baseShiftY = maxOf(0f, config.hhAreaPx - py)
-                                    val maxShiftY = maxOf(0f, ph - 16f - textTotalH) // 下端を突き抜けないように制限
+                                    val maxShiftY = maxOf(0f, ph - 16f - textTotalH)
                                     val shiftY = minOf(baseShiftY, maxShiftY)
 
                                     val titleY = py + 8f + shiftY
@@ -154,18 +149,17 @@ class EpgDrawer(
             }
 
             // 3. フォーカス枠
-            if (state.currentFocusedProgram != null) {
+            // ★修正: グリッドにフォーカスがある場合のみ描画する条件を追加
+            if (state.currentFocusedProgram != null && isGridFocused) {
                 val fx = config.twPx + curX + animValues.animX
                 val fy = config.hhAreaPx + curY + animValues.animY
                 val fh = animValues.animH
 
                 clipRect(left = 0f, top = config.hhAreaPx, right = size.width, bottom = size.height) {
-                    // フォーカス背景
                     drawRect(config.colorFocusBg, Offset(fx + 1f, fy + 1f), Size(config.cwPx - 2f, fh - 2f))
 
                     val p = state.currentFocusedProgram!!
 
-                    // ★追加: フォーカス枠にもジャンルカラーのバーを描画
                     if (p.title != "（番組情報なし）") {
                         val majorGenre = p.genres?.firstOrNull()?.major
                         val genreColor = EpgUtils.getGenreColor(majorGenre)
@@ -197,7 +191,6 @@ class EpgDrawer(
                         descH = descLayout.size.height.toFloat()
                     }
 
-                    // フォーカス枠のテキストも Sticky Text に対応
                     val textTotalH = titleH + if (descLayout != null) descH + 4f else 0f
                     val baseShiftY = maxOf(0f, config.hhAreaPx - fy)
                     val maxShiftY = maxOf(0f, fh - 16f - textTotalH)
@@ -215,7 +208,7 @@ class EpgDrawer(
                 }
             }
 
-            // 4. 時間軸 (画面に映っている範囲の時間帯だけを描画するように最適化)
+            // 4. 時間軸
             clipRect(left = 0f, top = config.hhAreaPx, right = config.twPx, bottom = size.height) {
                 val totalHours = 24 * 14
                 val startHour = (-curY / config.hhPx).toInt().coerceAtLeast(0)
@@ -236,7 +229,7 @@ class EpgDrawer(
                 }
             }
 
-            // 5. チャンネルヘッダー (表示中のチャンネル列だけを描画)
+            // 5. チャンネルヘッダー
             clipRect(left = config.twPx, top = 0f, right = size.width, bottom = config.hhAreaPx) {
                 drawRect(config.colorHeaderBg, Offset(config.twPx, 0f), Size(size.width, config.hhAreaPx))
 
@@ -264,9 +257,7 @@ class EpgDrawer(
                                     val dx = (logoW - scaledW) / 2
                                     val dy = (logoH - scaledH) / 2
                                     clipRect(0f, 0f, logoW, logoH) {
-                                        translate(dx, dy) {
-                                            with(painter) { draw(Size(scaledW, scaledH)) }
-                                        }
+                                        translate(dx, dy) { with(painter) { draw(Size(scaledW, scaledH)) } }
                                     }
                                 } else {
                                     with(painter) { draw(Size(logoW, logoH)) }

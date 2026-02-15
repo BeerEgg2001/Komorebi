@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat // ★追加
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.PlayArrow
@@ -37,10 +38,15 @@ fun TopSubMenuUI(
     currentQuality: StreamQuality,
     isMirakurunAvailable: Boolean,
     isSubtitleEnabled: Boolean,
+    isSubtitleSupported: Boolean,
+    // ★追加: コメント有効フラグ
+    isCommentEnabled: Boolean,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSourceToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    // ★追加: コメント切り替え
+    onCommentToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCloseMenu: () -> Unit
 ) {
@@ -53,10 +59,10 @@ fun TopSubMenuUI(
         try { focusRequester.requestFocus() } catch (e: Exception) {}
     }
 
-    // 画質選択モードになった際、2階層目の選択中アイテムへフォーカスを自動移動
+    // 画質選択モードになった際
     LaunchedEffect(isQualityMode) {
         if (isQualityMode) {
-            delay(100) // 展開アニメーションを待つ
+            delay(100)
             try { qualityFocusRequester.requestFocus() } catch (e: Exception) {}
         }
     }
@@ -68,16 +74,15 @@ fun TopSubMenuUI(
             .background(Brush.verticalGradient(listOf(Color.Black.copy(0.9f), Color.Transparent)))
             .padding(top = 24.dp, bottom = 60.dp)
             .onKeyEvent { keyEvent ->
-                // テレビのリモコンの「戻る」ボタン制御
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
                             keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
                     if (isQualityMode) {
-                        isQualityMode = false // 画質選択中なら2階層目を閉じて1階層目に戻る
+                        isQualityMode = false
                         try { mainQualityButtonRequester.requestFocus() } catch (e: Exception) {}
                         true
                     } else {
-                        onCloseMenu() // メインメニューならサブメニュー自体を閉じる
+                        onCloseMenu()
                         true
                     }
                 } else {
@@ -90,9 +95,6 @@ fun TopSubMenuUI(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // ==========================================
-            // 1階層目 (メインメニュー)
-            // ==========================================
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -106,7 +108,23 @@ fun TopSubMenuUI(
                     onClick = onAudioToggle,
                     modifier = Modifier
                         .focusRequester(focusRequester)
-                        .focusProperties { down = FocusRequester.Cancel } // 下にフォーカスが逃げないように制限
+                        .focusProperties { down = FocusRequester.Cancel }
+                )
+                Spacer(Modifier.width(16.dp))
+                MenuTileItem(
+                    title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
+                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
+                    onClick = onSubtitleToggle,
+                    enabled = isSubtitleSupported,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                )
+                // ★追加: コメントON/OFF
+                Spacer(Modifier.width(16.dp))
+                MenuTileItem(
+                    title = AppStrings.MENU_COMMENT, icon = Icons.Default.Chat,
+                    subtitle = if(isCommentEnabled) "表示" else "非表示",
+                    onClick = onCommentToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
                 Spacer(Modifier.width(16.dp))
                 MenuTileItem(
@@ -127,26 +145,14 @@ fun TopSubMenuUI(
                     modifier = Modifier
                         .focusRequester(mainQualityButtonRequester)
                         .focusProperties {
-                            // もし2階層目が開いていなければ下移動をキャンセル
                             if (!isQualityMode) down = FocusRequester.Cancel
                         }
                 )
-                Spacer(Modifier.width(16.dp))
-                MenuTileItem(
-                    title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
-                    subtitle = if(isSubtitleEnabled) "表示" else "非表示",
-                    onClick = onSubtitleToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
-                )
             }
 
-            // ==========================================
-            // 2階層目 (画質サブメニューの子要素)
-            // ==========================================
             AnimatedVisibility(visible = isQualityMode) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Spacer(Modifier.height(16.dp))
-                    // 親子関係を視覚的に分かりやすくするための境界線
                     Box(modifier = Modifier.width(400.dp).height(2.dp).background(Color.White.copy(0.2f)))
                     Spacer(Modifier.height(16.dp))
 
@@ -164,16 +170,16 @@ fun TopSubMenuUI(
                                 subtitle = if (currentQuality == quality) "選択中" else "",
                                 onClick = {
                                     onQualitySelect(quality)
-                                    isQualityMode = false // 選んだら自動で閉じる
+                                    isQualityMode = false
                                     try { mainQualityButtonRequester.requestFocus() } catch (e: Exception) {}
                                 },
                                 modifier = Modifier
                                     .then(if (currentQuality == quality) Modifier.focusRequester(qualityFocusRequester) else Modifier)
                                     .focusProperties {
-                                        up = mainQualityButtonRequester // 上キーで親要素に確実に戻る
+                                        up = mainQualityButtonRequester
                                         down = FocusRequester.Cancel
                                     },
-                                width = 140.dp,  // 子要素であることを強調するため少し小さく
+                                width = 140.dp,
                                 height = 90.dp
                             )
                             if (index < StreamQuality.entries.size - 1) {

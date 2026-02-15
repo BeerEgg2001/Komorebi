@@ -152,7 +152,6 @@ fun LiveOverlayUI(
                 modifier = Modifier.padding(vertical = 16.dp)
             )
 
-            // ★変更: 親側でスクロールを制御するため .focusable() を除去し、UI表示のみに専念
             if (showDesc && program != null) {
                 Box(
                     modifier = Modifier
