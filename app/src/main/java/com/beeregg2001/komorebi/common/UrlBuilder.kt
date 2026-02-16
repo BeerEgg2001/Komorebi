@@ -1,5 +1,9 @@
 package com.beeregg2001.komorebi.common
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.Log
+import androidx.media3.common.util.UnstableApi
+
 object UrlBuilder {
 
     /**
@@ -61,8 +65,10 @@ object UrlBuilder {
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/events"
     }
 
+    @OptIn(UnstableApi::class)
     fun getVideoPlaylistUrl(ip: String, port: String, videoId: Int, sessionId: String, quality: String = "1080p-60fps"): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
+        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
     }
 

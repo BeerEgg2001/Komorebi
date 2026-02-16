@@ -34,7 +34,6 @@ data class RecordedChannel(
 
 data class RecordedVideo(
     val id: Int,
-    // ★追加: 録画ステータス ("Recording", "Recorded" など)
     val status: String,
     @SerializedName("file_path") val filePath: String,
     @SerializedName("recording_start_time") val recordingStartTime: String,
@@ -43,6 +42,8 @@ data class RecordedVideo(
     @SerializedName("container_format") val containerFormat: String,
     @SerializedName("video_codec") val videoCodec: String,
     @SerializedName("audio_codec") val audioCodec: String,
+    // ★追加: メタデータ解析状態
+    @SerializedName("has_key_frames") val hasKeyFrames: Boolean = true,
     @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
 )
 

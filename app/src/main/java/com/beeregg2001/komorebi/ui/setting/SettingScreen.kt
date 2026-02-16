@@ -34,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.ui.settings.OpenSourceLicensesScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.beeregg2001.komorebi.ui.live.StreamQuality as LiveQuality
@@ -96,24 +95,46 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val appInfoLicenseRequester = remember { FocusRequester() }
 
+    // フォーカスを戻すべき場所と、その時のカテゴリIDを記憶する変数
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
+    var restoreCategoryIndex by remember { mutableIntStateOf(-1) }
 
     if (showLicenses) {
-        OpenSourceLicensesScreen(onBack = { showLicenses = false })
+        // ★修正: ライセンス画面から戻る際は、設定画面自体を閉じてホーム画面へ戻る(onBack)ように変更
+        // これにより、設定画面への複雑なフォーカス復帰処理を回避します
+        OpenSourceLicensesScreen(onBack = onBack)
     } else {
-        // ★修正: ダイアログ終了時のフォーカス復旧ロジックの改善
+        // 画面表示時のフォーカス制御
+        LaunchedEffect(Unit) {
+            delay(300) // UI構築待機
+
+            // 復帰すべきフォーカスがない（初期表示など）場合のみ、サイドバーへフォーカス
+            if (restoreFocusRequester == null) {
+                runCatching {
+                    categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.requestFocus()
+                }
+            }
+        }
+
+        // ダイアログ終了時のフォーカス復旧ロジック
         LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection) {
-            // ダイアログがすべて閉じた状態を確認
             if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection) {
-                // UIの状態が確定するのを待つ（少し長めに設定）
                 delay(200)
                 runCatching {
                     if (restoreFocusRequester != null) {
-                        // 1. 直前に選択していた具体的な項目へ復帰
+                        // サイドバーにフォーカスが奪われてカテゴリが変わってしまっている場合、修正
+                        if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) {
+                            selectedCategoryIndex = restoreCategoryIndex
+                            delay(50)
+                        }
+
+                        // 目的の項目へフォーカス
                         restoreFocusRequester?.requestFocus()
+
+                        // 使用後はクリア
                         restoreFocusRequester = null
-                    } else {
-                        // 2. 復旧先が不明な場合は、現在のサイドバー項目へ
+                        restoreCategoryIndex = -1
+                    } else if (isSidebarFocused) {
                         categoryFocusRequesters[selectedCategoryIndex].requestFocus()
                     }
                 }
@@ -201,7 +222,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onEditRequest = { title, currentVal -> editingItem = title to currentVal },
                         kIpRequester = kIpFocusRequester, kPortRequester = kPortFocusRequester,
                         mIpRequester = mIpFocusRequester, mPortRequester = mPortFocusRequester,
-                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                        onItemClicked = { requester ->
+                            restoreFocusRequester = requester
+                            restoreCategoryIndex = selectedCategoryIndex
+                        }
                     )
                     1 -> PlaybackSettingsContent(
                         liveQuality = liveQuality,
@@ -210,7 +234,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                         videoQRequester = videoQFocusRequester,
                         onLiveQualityClick = { showLiveQualitySelection = true },
                         onVideoQualityClick = { showVideoQualitySelection = true },
-                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                        onItemClicked = { requester ->
+                            restoreFocusRequester = requester
+                            restoreCategoryIndex = selectedCategoryIndex
+                        }
                     )
                     2 -> DisplaySettingsContent(
                         defaultDisplay = commentDefaultDisplay,
@@ -225,12 +252,23 @@ fun SettingsScreen(onBack: () -> Unit) {
                         defaultDisplayRequester = cDefaultDisplayFocusRequester,
                         speedRequester = cSpeedFocusRequester, sizeRequester = cSizeFocusRequester,
                         opacityRequester = cOpacityFocusRequester, maxLinesRequester = cMaxLinesFocusRequester,
-                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                        onItemClicked = { requester ->
+                            restoreFocusRequester = requester
+                            restoreCategoryIndex = selectedCategoryIndex
+                        }
                     )
                     3 -> AppInfoContent(
-                        onShowLicenses = { showLicenses = true },
+                        onShowLicenses = {
+                            // ライセンス画面を表示
+                            showLicenses = true
+                        },
                         licenseRequester = appInfoLicenseRequester,
-                        onItemClicked = { requester -> restoreFocusRequester = requester }
+                        onItemClicked = { requester ->
+                            // ダイアログ等ではないので、ここは特にrestore情報をセットしなくても
+                            // 今回の修正（ホームへ戻る）なら問題ありませんが、念のため残しておきます
+                            restoreFocusRequester = requester
+                            restoreCategoryIndex = selectedCategoryIndex
+                        }
                     )
                 }
             }

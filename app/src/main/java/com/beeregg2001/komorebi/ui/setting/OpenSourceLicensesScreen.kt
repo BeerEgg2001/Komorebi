@@ -383,6 +383,16 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     selectedLib = lib
                                 }
                             }
+                            // ★追加: 戻るキーで設定画面に戻る処理を追加
+                            .onKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown &&
+                                    (event.key == Key.Back || event.key == Key.Escape)) {
+                                    onBack()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                             // 最初の項目にリスト全体のFocusRequesterを割り当て（初期フォーカス用）
                             .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
                         colors = ClickableSurfaceDefaults.colors(
@@ -435,11 +445,6 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     true
                                 }
                                 Key.DirectionLeft -> {
-                                    // リストへフォーカスを戻す際は、現在の選択項目へ戻るようにリスト自体へリクエスト
-                                    // TvLazyListは前回のフォーカス位置を覚えているため、listFocusRequesterでなくとも
-                                    // コンテナ側へのフォーカス移動で十分な場合が多いが、明示的に一番上に戻したい場合は
-                                    // リストの状態制御が必要。ここではシンプルにリストのFocusRequesterを呼ぶ。
-                                    // ※ただしリスト項目が画面外にある場合のスクロールはTvLazyListが処理する
                                     listFocusRequester.requestFocus()
                                     true
                                 }

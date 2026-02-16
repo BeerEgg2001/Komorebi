@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -35,35 +36,49 @@ fun RecordedCard(
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
-    // UrlBuilderを使用してサムネイルURLを生成
+    // ★追加: メタデータ解析完了フラグ
+    val isAnalyzed = program.recordedVideo.hasKeyFrames
+
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
-    // チャンネル種別と表示色の決定
     val (channelLabel, channelColor) = when (program.channel?.type) {
-        "GR" -> "地デジ" to Color(0xFF1E88E5) // 青系
-        "BS" -> "BS" to Color(0xFFE53935)     // 赤系
-        "CS" -> "CS" to Color(0xFFFB8C00)     // オレンジ系
+        "GR" -> "地デジ" to Color(0xFF1E88E5)
+        "BS" -> "BS" to Color(0xFFE53935)
+        "CS" -> "CS" to Color(0xFFFB8C00)
         else -> (program.channel?.type ?: "") to Color.Gray
     }
 
-    // 放送局名
     val stationName = program.channel?.name ?: ""
 
+    val totalSeconds = program.recordedVideo.duration.toLong()
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+
+    val durationText = if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%d:%02d", minutes, seconds)
+    }
+
     Surface(
-        onClick = onClick,
+        // ★修正: 解析中ならクリックを無効化
+        onClick = { if (isAnalyzed) onClick() },
+        enabled = isAnalyzed,
         modifier = modifier
             .width(185.dp)
             .height(104.dp)
-            .onFocusChanged { isFocused = it.isFocused },
+            .onFocusChanged { isFocused = it.isFocused }
+            // ★追加: 解析中なら少し暗くする
+            .alpha(if (isAnalyzed) 1f else 0.5f),
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = if (isAnalyzed) 1.05f else 1.0f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.DarkGray,
-            focusedContainerColor = Color.Transparent, // 背景画像を見せるため透過
+            focusedContainerColor = Color.Transparent,
             contentColor = Color.White,
-            focusedContentColor = Color.White // ★フォーカス時も白文字を維持
+            focusedContentColor = Color.White
         ),
-        // ★フォーカス時の枠線を「白」に変更し、太さを2.dpに調整
         border = ClickableSurfaceDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(width = 2.dp, color = Color.White),
@@ -79,54 +94,47 @@ fun RecordedCard(
                 contentScale = ContentScale.Crop
             )
 
-            // フォーカス時に画像を少し見やすくするためのオーバーレイ調整
             val overlayAlpha = if (isFocused) 0.1f else 0.5f
 
-            // 背景を暗くするオーバーレイ
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = overlayAlpha))
             )
 
-            // ★録画中インジケータ (右上)
-            if (program.isRecording) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd) // 右上に配置
-                        .padding(4.dp)
-                        .background(
-                            color = Color.Black.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(4.dp)
-                        )
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
+            // ★録画中 または 解析中インジケータ (右上)
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                if (program.isRecording) {
+                    Row(
                         modifier = Modifier
-                            .size(6.dp)
-                            .background(Color.Red, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "録画中",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 8.sp,
-                        color = Color.White
-                    )
+                            .background(color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(6.dp).background(Color.Red, CircleShape))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "録画中", style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, color = Color.White)
+                    }
+                } else if (!isAnalyzed) {
+                    // ★解析中バッジの表示
+                    Row(
+                        modifier = Modifier
+                            .background(color = Color(0xFFE65100).copy(alpha = 0.8f), shape = RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "メタデータ解析中", style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, color = Color.White)
+                    }
                 }
             }
 
-            // 番組情報エリア (下部)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    // フォーカス時も背景を少し暗くして白文字の可読性を確保
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                // ★番組名 (フォーカス時にマーキー、常に白文字)
                 Text(
                     text = program.title,
                     style = MaterialTheme.typography.labelMedium,
@@ -136,11 +144,7 @@ fun RecordedCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.then(
                         if (isFocused) {
-                            Modifier.basicMarquee(
-                                iterations = Int.MAX_VALUE,
-                                repeatDelayMillis = 1000,
-                                velocity = 30.dp
-                            )
+                            Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1000, velocity = 30.dp)
                         } else {
                             Modifier
                         }
@@ -149,30 +153,21 @@ fun RecordedCard(
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                // ★放送波アイコン + 放送局名 + 時間(右揃え)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // 放送波アイコン (GR/BS等)
                     if (channelLabel.isNotEmpty()) {
                         Box(
                             modifier = Modifier
                                 .background(channelColor, RoundedCornerShape(2.dp))
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         ) {
-                            Text(
-                                text = channelLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                            Text(text = channelLabel, style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
 
-                    // 放送局名
                     Text(
                         text = stationName,
                         style = MaterialTheme.typography.labelSmall,
@@ -184,14 +179,13 @@ fun RecordedCard(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // ★時間 (右揃え)
                     Text(
-                        text = "${(program.duration / 60).toInt()}分",
+                        text = durationText,
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 10.sp,
                         color = Color.White.copy(alpha = 0.8f),
                         textAlign = TextAlign.End,
-                        modifier = Modifier.weight(1f) // 残りのスペースを埋めて右端に寄せる
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }

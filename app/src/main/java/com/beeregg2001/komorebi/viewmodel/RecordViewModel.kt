@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
-import android.os.Build
+import android.content.Context
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,16 +10,23 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import javax.inject.Inject
+
+private const val TAG = "Komorebi_RecordVM"
+private const val PREF_NAME = "search_history_pref"
+private const val KEY_HISTORY = "history_list"
 
 @HiltViewModel
 class RecordViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val historyRepository: WatchHistoryRepository
+    private val historyRepository: WatchHistoryRepository,
+    @ApplicationContext private val context: Context // 履歴保存用にContextを注入
 ) : ViewModel() {
 
     private val _recentRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
@@ -30,27 +38,36 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
+    // ★追加: 検索履歴のFlow
+    private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
+    val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
+
     private var currentPage = 1
     private var totalItems = 0
     private var hasMorePages = true
     private val pageSize = 30
 
-    // ★追加: 現在の検索キーワード（空文字の場合は通常の一覧表示）
     private var currentSearchQuery: String = ""
 
     init {
         fetchInitialRecordings()
+        loadSearchHistory() // ★追加: 初期化時に履歴を読み込む
     }
 
     fun fetchRecentRecordings() {
-        // 通常更新時は検索をクリアする
         currentSearchQuery = ""
         fetchInitialRecordings()
     }
 
-    // ★追加: 番組検索を実行する関数
     fun searchRecordings(query: String) {
+        Log.d(TAG, "searchRecordings called. query: '$query'")
         currentSearchQuery = query
+
+        // ★追加: 検索実行時に履歴に保存 (空文字以外)
+        if (query.isNotBlank()) {
+            addSearchHistory(query)
+        }
+
         fetchInitialRecordings()
     }
 
@@ -61,7 +78,8 @@ class RecordViewModel @Inject constructor(
                 currentPage = 1
                 hasMorePages = true
 
-                // ★修正: 検索キーワードの有無でAPIを切り替え
+                Log.d(TAG, "Fetching initial recordings. Query: '$currentSearchQuery'")
+
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
                 } else {
@@ -69,8 +87,8 @@ class RecordViewModel @Inject constructor(
                 }
 
                 totalItems = response.total
+                Log.d(TAG, "Fetch success. Total items: $totalItems, Returned: ${response.recordedPrograms.size}")
 
-                // JSONのstatusフィールドを使って録画中判定を行う
                 val initialList = response.recordedPrograms.map { program ->
                     program.copy(isRecording = program.recordedVideo.status == "Recording")
                 }
@@ -82,6 +100,7 @@ class RecordViewModel @Inject constructor(
                 _recentRecordings.value = initialList
 
             } catch (e: Exception) {
+                Log.e(TAG, "Error fetching recordings", e)
                 e.printStackTrace()
             } finally {
                 _isRecordingLoading.value = false
@@ -98,8 +117,8 @@ class RecordViewModel @Inject constructor(
             _isLoadingMore.value = true
             try {
                 val nextPage = currentPage + 1
+                Log.d(TAG, "Loading page $nextPage. Query: '$currentSearchQuery'")
 
-                // ★修正: 検索キーワードの有無でAPIを切り替え
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = nextPage)
                 } else {
@@ -123,12 +142,66 @@ class RecordViewModel @Inject constructor(
                 }
 
             } catch (e: Exception) {
+                Log.e(TAG, "Error loading next page", e)
                 e.printStackTrace()
             } finally {
                 _isLoadingMore.value = false
             }
         }
     }
+
+    // --- 検索履歴管理ロジック ---
+
+    private fun loadSearchHistory() {
+        try {
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val jsonString = prefs.getString(KEY_HISTORY, "[]")
+            val jsonArray = JSONArray(jsonString)
+            val list = ArrayList<String>()
+            for (i in 0 until jsonArray.length()) {
+                list.add(jsonArray.getString(i))
+            }
+            _searchHistory.value = list
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _searchHistory.value = emptyList()
+        }
+    }
+
+    private fun addSearchHistory(query: String) {
+        val currentList = _searchHistory.value.toMutableList()
+        currentList.remove(query)
+        currentList.add(0, query)
+        // ★修正: 保存件数を5件に制限
+        if (currentList.size > 5) {
+            currentList.removeAt(currentList.lastIndex)
+        }
+        _searchHistory.value = currentList
+        saveSearchHistory(currentList)
+    }
+
+    // 必要であればUIから呼び出して個別に削除する用
+    fun removeSearchHistory(query: String) {
+        val currentList = _searchHistory.value.toMutableList()
+        if (currentList.remove(query)) {
+            _searchHistory.value = currentList
+            saveSearchHistory(currentList)
+        }
+    }
+
+    private fun saveSearchHistory(list: List<String>) {
+        viewModelScope.launch {
+            try {
+                val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                val jsonArray = JSONArray(list)
+                prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // -------------------------
 
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch {

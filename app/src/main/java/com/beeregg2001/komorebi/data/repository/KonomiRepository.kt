@@ -1,7 +1,7 @@
 package com.beeregg2001.komorebi.data.repository
 
+import android.util.Log
 import androidx.annotation.OptIn
-import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "Komorebi_Repo"
 
 @Singleton
 class KonomiRepository @Inject constructor(
@@ -36,19 +38,21 @@ class KonomiRepository @Inject constructor(
 
     // --- チャンネル・録画 (API) ---
     suspend fun getChannels() = apiService.getChannels()
+
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
 
     // 録画番組検索
-    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) =
+    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) = run {
+        Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
         apiService.searchVideos(keyword = keyword, page = page)
+    }
 
-    // ★修正: 戻り値の型変更に合わせ、成功判定を追加
     @UnstableApi
     suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
         runCatching {
             val response = apiService.keepAlive(videoId, quality, sessionId)
             if (!response.isSuccessful) {
-                Log.w("KEEP_ALIVE", "Failed: ${response.code()}")
+                Log.w(TAG, "KeepAlive Failed: ${response.code()}")
             }
         }.onFailure {
             it.printStackTrace()
@@ -74,10 +78,9 @@ class KonomiRepository @Inject constructor(
     @OptIn(UnstableApi::class)
     suspend fun saveLastChannel(entity: LastChannelEntity) {
         lastChannelDao.insertOrUpdate(entity)
-        Log.d("DEBUG", "Channel saved: ${entity.name}")
+        Log.d(TAG, "Channel saved: ${entity.name}")
     }
 
-    // ★追加: 実況APIを呼び出す関数
     suspend fun getJikkyoInfo(channelId: String) = runCatching {
         apiService.getJikkyoInfo(channelId)
     }
@@ -85,14 +88,5 @@ class KonomiRepository @Inject constructor(
     // 視聴位置同期 (API)
     suspend fun syncPlaybackPosition(programId: String, position: Double) {
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }
-    }
-
-    fun buildStreamId(channel: Channel): String {
-        val networkIdPart = when (channel.type) {
-            "GR" -> channel.networkId.toString()
-            "BS", "CS", "SKY", "BS4K" -> "${channel.networkId}00"
-            else -> channel.networkId.toString()
-        }
-        return "${networkIdPart}${channel.serviceId}"
     }
 }
