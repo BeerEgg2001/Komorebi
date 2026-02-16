@@ -79,7 +79,8 @@ fun WatchHistoryEntity.toRecordedProgram(): RecordedProgram {
             duration = this.duration,
             containerFormat = "",
             videoCodec = "",
-            audioCodec = ""
+            audioCodec = "",
+            status = "Recorded", // ★追加: 視聴履歴なら通常は録画済み
         )
     )
 }
