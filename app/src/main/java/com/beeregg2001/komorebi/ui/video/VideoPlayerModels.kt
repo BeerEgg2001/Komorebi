@@ -1,6 +1,8 @@
 package com.beeregg2001.komorebi.ui.video
 
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.beeregg2001.komorebi.ui.live.StreamQuality.Q1080P_60FPS
+import com.beeregg2001.komorebi.ui.live.StreamQuality.entries
 
 enum class AudioMode { MAIN, SUB }
 enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY }
@@ -14,7 +16,17 @@ enum class StreamQuality(val label: String, val apiParams: String) {
     QUALITY_540P("540p", "540p"),
     QUALITY_480P("480p", "480p"),
     QUALITY_360P("360p", "360p"),
-    QUALITY_240P("240p", "240p")
+    QUALITY_240P("240p", "240p");
+
+    companion object {
+        fun next(current: StreamQuality): StreamQuality {
+            val values = entries.toTypedArray()
+            return values[(current.ordinal + 1) % values.size]
+        }
+        fun fromValue(value: String): StreamQuality {
+            return entries.find { it.apiParams == value } ?: QUALITY_1080P_60
+        }
+    }
 }
 
 data class IndicatorState(

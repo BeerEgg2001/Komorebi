@@ -65,7 +65,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var editingItem by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    // ★追加: 画質選択ダイアログの表示状態
     var showLiveQualitySelection by remember { mutableStateOf(false) }
     var showVideoQualitySelection by remember { mutableStateOf(false) }
 
@@ -78,9 +77,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Category("アプリ情報", Icons.Default.Info)
     )
 
-    // サイドバー項目のFocusRequesterをリスト化
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
-    // サイドバーにフォーカスがあるかを管理するフラグ
     var isSidebarFocused by remember { mutableStateOf(true) }
 
     val kIpFocusRequester = remember { FocusRequester() }
@@ -104,15 +101,21 @@ fun SettingsScreen(onBack: () -> Unit) {
     if (showLicenses) {
         OpenSourceLicensesScreen(onBack = { showLicenses = false })
     } else {
-        // ダイアログが閉じられたときにフォーカスを戻す
+        // ★修正: ダイアログ終了時のフォーカス復旧ロジックの改善
         LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection) {
+            // ダイアログがすべて閉じた状態を確認
             if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection) {
-                if (restoreFocusRequester != null) {
-                    delay(50)
-                    restoreFocusRequester?.requestFocus()
-                } else {
-                    delay(50)
-                    categoryFocusRequesters[selectedCategoryIndex].requestFocus()
+                // UIの状態が確定するのを待つ（少し長めに設定）
+                delay(200)
+                runCatching {
+                    if (restoreFocusRequester != null) {
+                        // 1. 直前に選択していた具体的な項目へ復帰
+                        restoreFocusRequester?.requestFocus()
+                        restoreFocusRequester = null
+                    } else {
+                        // 2. 復旧先が不明な場合は、現在のサイドバー項目へ
+                        categoryFocusRequesters[selectedCategoryIndex].requestFocus()
+                    }
                 }
             }
         }
@@ -122,19 +125,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .background(Color(0xFF111111))
                 .onKeyEvent { keyEvent ->
-                    // 戻るボタンの制御
                     if (keyEvent.type == KeyEventType.KeyDown &&
                         (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
                                 keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
-
-                        // サイドバーにフォーカスがない（第2階層にいる）場合
+                        // サイドバーにフォーカスがない場合に限り、サイドバーへ戻す
                         if (!isSidebarFocused) {
-                            // サイドバーの現在のカテゴリにフォーカスを戻す
-                            categoryFocusRequesters[selectedCategoryIndex].requestFocus()
-                            return@onKeyEvent true // イベントを消費して第2階層内移動として扱う
+                            runCatching { categoryFocusRequesters[selectedCategoryIndex].requestFocus() }
+                            return@onKeyEvent true
                         }
                     }
-                    // サイドバーにフォーカスがある場合は false を返し、MainRootScreen の BackHandler に任せる
                     false
                 }
         ) {
@@ -145,7 +144,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                     .fillMaxHeight()
                     .background(Color(0xFF0A0A0A))
                     .padding(vertical = 48.dp, horizontal = 24.dp)
-                    // Column内（サイドバー内）にフォーカスがあるか監視
                     .onFocusChanged { isSidebarFocused = it.hasFocus },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -165,14 +163,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                         isSelected = selectedCategoryIndex == index,
                         onFocused = { selectedCategoryIndex = index },
                         onClick = {
-                            when (index) {
-                                0 -> kIpFocusRequester.requestFocus()
-                                1 -> liveQFocusRequester.requestFocus() // 再生設定
-                                2 -> cDefaultDisplayFocusRequester.requestFocus()
-                                3 -> appInfoLicenseRequester.requestFocus()
+                            runCatching {
+                                when (index) {
+                                    0 -> kIpFocusRequester.requestFocus()
+                                    1 -> liveQFocusRequester.requestFocus()
+                                    2 -> cDefaultDisplayFocusRequester.requestFocus()
+                                    3 -> appInfoLicenseRequester.requestFocus()
+                                }
                             }
                         },
-                        // カテゴリごとにFocusRequesterを割り当て
                         modifier = Modifier.focusRequester(categoryFocusRequesters[index])
                     )
                 }
@@ -209,7 +208,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                         videoQuality = videoQuality,
                         liveQRequester = liveQFocusRequester,
                         videoQRequester = videoQFocusRequester,
-                        // ★修正: トグルではなくダイアログ表示へ変更
                         onLiveQualityClick = { showLiveQualitySelection = true },
                         onVideoQualityClick = { showVideoQualitySelection = true },
                         onItemClicked = { requester -> restoreFocusRequester = requester }
@@ -240,7 +238,6 @@ fun SettingsScreen(onBack: () -> Unit) {
 
         // --- ダイアログ関連 ---
 
-        // テキスト入力ダイアログ
         editingItem?.let { (title, value) ->
             InputDialog(
                 title = title,
@@ -266,7 +263,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
         }
 
-        // ★追加: ライブ画質選択ダイアログ
         if (showLiveQualitySelection) {
             SelectionDialog(
                 title = "ライブ視聴画質を選択",
@@ -280,7 +276,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
         }
 
-        // ★追加: 録画画質選択ダイアログ
         if (showVideoQualitySelection) {
             SelectionDialog(
                 title = "録画視聴画質を選択",
@@ -337,7 +332,7 @@ fun PlaybackSettingsContent(
             )
             SettingItem(
                 title = "録画視聴画質",
-                value = VideoQuality.fromApiParams(videoQuality).label,
+                value = VideoQuality.fromValue(videoQuality).label,
                 icon = Icons.Default.HighQuality,
                 modifier = Modifier.focusRequester(videoQRequester),
                 onClick = { onItemClicked(videoQRequester); onVideoQualityClick() }
@@ -433,12 +428,11 @@ fun SettingItem(title: String, value: String, icon: ImageVector? = null, modifie
     }
 }
 
-// ★追加: 汎用選択ダイアログ
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SelectionDialog(
     title: String,
-    options: List<Pair<String, String>>, // Label, Value
+    options: List<Pair<String, String>>,
     currentValue: String,
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit
@@ -479,10 +473,10 @@ fun SelectionDialog(
                         val isSelected = value == currentValue
                         val focusRequester = remember { FocusRequester() }
 
-                        LaunchedEffect(Unit) {
+                        LaunchedEffect(isSelected) {
                             if (isSelected) {
-                                delay(50)
-                                focusRequester.requestFocus()
+                                delay(100)
+                                runCatching { focusRequester.requestFocus() }
                             }
                         }
 

@@ -20,11 +20,10 @@ data class RecordedProgram(
     val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
 
-    // ★追加: 録画中フラグ (APIレスポンスにはないためデフォルトfalse、ViewModelで計算して注入)
+    // ViewModelで注入する録画中フラグ
     val isRecording: Boolean = false
 )
 
-// ... (以下、RecordedChannel, RecordedVideo など変更なしのため省略)
 data class RecordedChannel(
     val id: String,
     @SerializedName("display_channel_id") val displayChannelId: String,
@@ -35,6 +34,8 @@ data class RecordedChannel(
 
 data class RecordedVideo(
     val id: Int,
+    // ★追加: 録画ステータス ("Recording", "Recorded" など)
+    val status: String,
     @SerializedName("file_path") val filePath: String,
     @SerializedName("recording_start_time") val recordingStartTime: String,
     @SerializedName("recording_end_time") val recordingEndTime: String,

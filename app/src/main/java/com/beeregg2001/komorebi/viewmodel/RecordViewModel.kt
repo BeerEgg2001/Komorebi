@@ -13,9 +13,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -38,11 +35,22 @@ class RecordViewModel @Inject constructor(
     private var hasMorePages = true
     private val pageSize = 30
 
+    // ★追加: 現在の検索キーワード（空文字の場合は通常の一覧表示）
+    private var currentSearchQuery: String = ""
+
     init {
         fetchInitialRecordings()
     }
 
     fun fetchRecentRecordings() {
+        // 通常更新時は検索をクリアする
+        currentSearchQuery = ""
+        fetchInitialRecordings()
+    }
+
+    // ★追加: 番組検索を実行する関数
+    fun searchRecordings(query: String) {
+        currentSearchQuery = query
         fetchInitialRecordings()
     }
 
@@ -52,13 +60,19 @@ class RecordViewModel @Inject constructor(
             try {
                 currentPage = 1
                 hasMorePages = true
-                val response = repository.getRecordedPrograms(page = 1)
+
+                // ★修正: 検索キーワードの有無でAPIを切り替え
+                val response = if (currentSearchQuery.isNotBlank()) {
+                    repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
+                } else {
+                    repository.getRecordedPrograms(page = 1)
+                }
 
                 totalItems = response.total
 
-                // ★修正: 取得したリストに対して録画中判定を行う
+                // JSONのstatusフィールドを使って録画中判定を行う
                 val initialList = response.recordedPrograms.map { program ->
-                    program.copy(isRecording = checkIsRecording(program.endTime))
+                    program.copy(isRecording = program.recordedVideo.status == "Recording")
                 }
 
                 if (initialList.size < pageSize || (totalItems > 0 && initialList.size >= totalItems)) {
@@ -84,11 +98,16 @@ class RecordViewModel @Inject constructor(
             _isLoadingMore.value = true
             try {
                 val nextPage = currentPage + 1
-                val response = repository.getRecordedPrograms(page = nextPage)
 
-                // ★修正: 追加取得したリストに対しても録画中判定を行う
+                // ★修正: 検索キーワードの有無でAPIを切り替え
+                val response = if (currentSearchQuery.isNotBlank()) {
+                    repository.searchRecordedPrograms(keyword = currentSearchQuery, page = nextPage)
+                } else {
+                    repository.getRecordedPrograms(page = nextPage)
+                }
+
                 val newItems = response.recordedPrograms.map { program ->
-                    program.copy(isRecording = checkIsRecording(program.endTime))
+                    program.copy(isRecording = program.recordedVideo.status == "Recording")
                 }
 
                 if (newItems.isNotEmpty()) {
@@ -109,33 +128,6 @@ class RecordViewModel @Inject constructor(
                 _isLoadingMore.value = false
             }
         }
-    }
-
-    /**
-     * ★追加: 終了時刻文字列を現在時刻と比較して録画中かどうかを判定する
-     * ISO 8601形式などを想定 (APIの仕様に合わせて調整してください)
-     */
-    private fun checkIsRecording(endTimeStr: String): Boolean {
-        // API Level 26 (Android O) 以上が前提
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                // 多くのJSON APIで使用されるISO形式パーサーを使用
-                // ※フォーマットが特殊な場合はDateTimeFormatter.ofPatternなどで調整してください
-                val endInstant = try {
-                    Instant.parse(endTimeStr)
-                } catch (e: DateTimeParseException) {
-                    // ISO形式でパースできない場合のフォールバック（必要に応じて）
-                    return false
-                }
-
-                // 現在時刻が終了時刻より前であれば「録画中」
-                return Instant.now().isBefore(endInstant)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                return false
-            }
-        }
-        return false
     }
 
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {

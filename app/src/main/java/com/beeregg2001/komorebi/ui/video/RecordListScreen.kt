@@ -11,7 +11,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
@@ -44,15 +43,16 @@ fun RecordListScreen(
     onProgramClick: (RecordedProgram) -> Unit,
     onLoadMore: () -> Unit,
     isLoadingMore: Boolean,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    // ★追加: 検索実行時のコールバック
+    onSearch: (String) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchBarVisible by remember { mutableStateOf(false) }
 
-    val filteredRecordings = remember(searchQuery, recentRecordings) {
-        if (searchQuery.isBlank()) recentRecordings
-        else recentRecordings.filter { it.title.contains(searchQuery, ignoreCase = true) }
-    }
+    // ★削除: ローカルフィルタリングを廃止し、ViewModelからのリストをそのまま使用
+    // 検索処理はViewModel(サーバーサイド)で行われるため
+    val displayRecordings = recentRecordings
 
     val gridState = rememberTvLazyGridState()
     val searchFocusRequester = remember { FocusRequester() }
@@ -73,16 +73,24 @@ fun RecordListScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(horizontal = 40.dp, vertical = 20.dp)) {
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+            .padding(horizontal = 40.dp, vertical = 20.dp)
+    ) {
+        // ヘッダー部分
         if (isSearchBarVisible) {
             Row(
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = {
                     isSearchBarVisible = false
                     searchQuery = ""
+                    onSearch("") // ★追加: 検索終了時に全件表示に戻す
                     runCatching { gridFocusRequester.requestFocus() }
                 }) {
                     Icon(Icons.Default.ArrowBack, "閉じる", tint = Color.White)
@@ -93,7 +101,7 @@ fun RecordListScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
+                        .height(40.dp)
                         .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
                         .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.CenterStart
@@ -109,6 +117,7 @@ fun RecordListScreen(
                                 if (it.key == Key.Back && it.type == KeyEventType.KeyUp) {
                                     isSearchBarVisible = false
                                     searchQuery = ""
+                                    onSearch("") // ★追加: 戻るキーで検索解除
                                     runCatching { gridFocusRequester.requestFocus() }
                                     true
                                 } else if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
@@ -118,22 +127,29 @@ fun RecordListScreen(
                                     false
                                 }
                             },
-                        textStyle = TextStyle(color = Color.White, fontSize = 18.sp),
+                        textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
                         cursorBrush = SolidColor(Color.White),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = {
+                            // ★修正: 決定時に検索APIを叩く
+                            onSearch(searchQuery)
                             runCatching { gridFocusRequester.requestFocus() }
                         })
                     )
 
                     if (searchQuery.isEmpty()) {
-                        Text("番組名を検索...", color = Color.Gray, modifier = Modifier.padding(start = 16.dp))
+                        Text("番組名を検索...", color = Color.Gray, modifier = Modifier.padding(start = 16.dp), fontSize = 14.sp)
                     }
                 }
             }
         } else {
-            Row(modifier = Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(
                     onClick = onBack,
                     modifier = Modifier.focusRequester(backButtonFocusRequester)
@@ -141,17 +157,26 @@ fun RecordListScreen(
                     Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
                 }
                 Spacer(Modifier.width(16.dp))
-                Text("録画一覧", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                IconButton(onClick = { isSearchBarVisible = true }) { Icon(Icons.Default.Search, "検索", tint = Color.White) }
+                Text(
+                    text = "録画一覧",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontSize = 20.sp,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { isSearchBarVisible = true }) {
+                    Icon(Icons.Default.Search, "検索", tint = Color.White)
+                }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(8.dp))
 
         TvLazyVerticalGrid(
             state = gridState,
             columns = TvGridCells.Fixed(4),
-            contentPadding = PaddingValues(bottom = 32.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier
@@ -159,18 +184,16 @@ fun RecordListScreen(
                 .focusRequester(gridFocusRequester)
         ) {
             itemsIndexed(
-                items = filteredRecordings,
+                items = displayRecordings,
                 key = { _, item -> item.id }
             ) { index, program ->
-                var isFocused by remember { mutableStateOf(false) }
-
-                if (searchQuery.isBlank() && !isLoadingMore && index >= filteredRecordings.size - 4) {
+                // 追加読み込み (検索時も動作するように条件を緩和)
+                if (!isLoadingMore && index >= displayRecordings.size - 4) {
                     SideEffect {
                         onLoadMore()
                     }
                 }
 
-                // ★修正: 親側で border を追加せず、RecordedCard 内部の枠線実装に任せる
                 RecordedCard(
                     program = program,
                     konomiIp = konomiIp,
@@ -178,7 +201,6 @@ fun RecordListScreen(
                     onClick = { onProgramClick(program) },
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
-                        .onFocusChanged { isFocused = it.isFocused }
                 )
             }
 
