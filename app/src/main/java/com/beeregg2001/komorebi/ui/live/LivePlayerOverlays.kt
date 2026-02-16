@@ -46,7 +46,7 @@ fun StatusOverlay(
 
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId, channel.type)
+        UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId)
     } else {
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
@@ -102,7 +102,7 @@ fun LiveOverlayUI(
     var progress by remember { mutableFloatStateOf(-1f) }
     val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId, channel.type)
+        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId)
     } else {
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }

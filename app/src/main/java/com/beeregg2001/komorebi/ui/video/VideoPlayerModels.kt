@@ -7,7 +7,7 @@ import com.beeregg2001.komorebi.ui.live.StreamQuality.entries
 enum class AudioMode { MAIN, SUB }
 enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY }
 
-// ★追加: 画質定義 (表示名とAPIパラメータを一元管理)
+// 画質定義 (表示名とAPIパラメータを一元管理)
 enum class StreamQuality(val label: String, val apiParams: String) {
     QUALITY_1080P_60("1080p (60fps)", "1080p-60fps"),
     QUALITY_1080P("1080p", "1080p"),

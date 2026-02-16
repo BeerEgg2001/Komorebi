@@ -170,6 +170,7 @@ fun VideoSectionRow(
                 val isSelected = program.id == selectedProgramId
                 var isFocused by remember { mutableStateOf(false) }
 
+                // ★修正: modifier から .border を削除。RecordedCard 内の枠線のみを使用する
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
                     modifier = Modifier

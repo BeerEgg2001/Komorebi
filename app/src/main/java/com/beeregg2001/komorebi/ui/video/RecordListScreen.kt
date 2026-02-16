@@ -286,6 +286,19 @@ fun RecordListScreen(
                     }
                 }
             }
+
+            if (isLoadingMore) {
+                item(span = { TvGridItemSpan(maxLineSpan) }) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
+                }
+            }
         }
     }
 }

@@ -128,6 +128,7 @@ fun RecordedCard(
                 }
             }
 
+            // 番組情報エリア (下部)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -135,6 +136,7 @@ fun RecordedCard(
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
+                // ★番組名 (フォーカス時にマーキー、常に白文字)
                 Text(
                     text = program.title,
                     style = MaterialTheme.typography.labelMedium,
