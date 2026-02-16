@@ -62,7 +62,8 @@ data class KonomiHistoryProgram(
                 duration = 0.0,
                 containerFormat = "",
                 videoCodec = "",
-                audioCodec = ""
+                audioCodec = "",
+                status = "Recorded", // ★追加
             )
         )
     }

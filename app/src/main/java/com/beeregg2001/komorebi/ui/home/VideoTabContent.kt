@@ -2,9 +2,7 @@ package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,13 +41,18 @@ fun VideoTabContent(
     onProgramClick: (RecordedProgram) -> Unit,
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
-    onShowAllRecordings: () -> Unit = {}
+    onShowAllRecordings: () -> Unit = {},
+    // 検索状態を操作するためのコールバック
+    onSearch: (String) -> Unit = {}
 ) {
     val listState = rememberTvLazyListState()
 
     var isContentReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        // 画面表示時に検索キーワードを空にして、最新の録画リストを取得し直す
+        onSearch("")
+
         yield()
         delay(300)
         isContentReady = true
@@ -98,7 +101,10 @@ fun VideoTabContent(
                 // 2. 最近の録画
                 item {
                     VideoSectionRow(
-                        title = "最近の録画", items = recentRecordings, selectedProgramId = selectedProgram?.id,
+                        title = "最近の録画",
+                        // ★修正: 表示を10件に制限
+                        items = recentRecordings.take(10),
+                        selectedProgramId = selectedProgram?.id,
                         konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = onProgramClick,
                         isFirstSection = watchHistory.isEmpty(),
                         topNavFocusRequester = if (watchHistory.isEmpty()) topNavFocusRequester else null

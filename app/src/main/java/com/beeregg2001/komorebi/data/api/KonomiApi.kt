@@ -29,10 +29,10 @@ interface KonomiApi {
     // ★追加: 録画番組検索API
     @GET("api/videos/search")
     suspend fun searchVideos(
-        @Query("keyword") keyword: String,
+        @Query("query") keyword: String,
         @Query("order") sort: String = "desc",
         @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 30 // デフォルト30件と想定
+//        @Query("limit") limit: Int = 30 // デフォルト30件と想定
     ): RecordedApiResponse
 
     // --- ユーザー設定（ピン留めチャンネル等） ---

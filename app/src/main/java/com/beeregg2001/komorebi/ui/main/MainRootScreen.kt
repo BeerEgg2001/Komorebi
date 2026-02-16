@@ -80,6 +80,7 @@ fun MainRootScreen(
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
+    val searchHistory by recordViewModel.searchHistory.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
@@ -192,10 +193,15 @@ fun MainRootScreen(
                 } else if (isRecordListOpen) {
                     RecordListScreen(
                         recentRecordings = recentRecordings,
+                        searchHistory = searchHistory,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         onProgramClick = { program ->
-                            val history = watchHistory.find { it.program.id == program.id.toString() }
+                            // ★追加: 解析中なら何もしない (RecordedCardでもガードしているが念のため)
+                            if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
+
+                            // ★修正: ID比較を文字列に統一して確実にレジュームさせる
+                            val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
                             val duration = program.recordedVideo.duration
                             initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
                                 (history.playback_position * 1000).toLong()
@@ -205,7 +211,8 @@ fun MainRootScreen(
                         },
                         onLoadMore = { recordViewModel.loadNextPage() },
                         isLoadingMore = isRecLoading,
-                        onBack = { isRecordListOpen = false }
+                        onBack = { isRecordListOpen = false },
+                        onSearch = { query -> recordViewModel.searchRecordings(query) }
                     )
                 } else {
                     HomeLauncherScreen(
@@ -224,7 +231,11 @@ fun MainRootScreen(
                         selectedProgram = selectedProgram,
                         onProgramSelected = { program ->
                             if (program != null) {
-                                val history = watchHistory.find { it.program.id == program.id.toString() }
+                                // ★追加: 解析中なら何もしない
+                                if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
+
+                                // ★修正: ID比較を文字列に統一して確実にレジュームさせる
+                                val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
                                 val duration = program.recordedVideo.duration
                                 initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
                                     (history.playback_position * 1000).toLong()
