@@ -220,11 +220,30 @@ class EpgDrawer(
                     val bgColor = when (hour) { in 4..10 -> config.colorTimeHourEven; in 11..17 -> config.colorTimeHourOdd; else -> config.colorTimeHourNight }
                     drawRect(bgColor, Offset(0f, fy), Size(config.twPx, config.hhPx))
 
+                    // テキストのメジャー（計測）
                     val amPmLayout = textMeasurer.measure(if (hour < 12) "AM" else "PM", config.styleAmPm)
-                    drawText(amPmLayout, topLeft = Offset((config.twPx - amPmLayout.size.width) / 2, fy + (config.hhPx / 4) - (amPmLayout.size.height / 2)))
-
                     val hourLayout = textMeasurer.measure(hour.toString(), config.styleTime)
-                    drawText(hourLayout, topLeft = Offset((config.twPx - hourLayout.size.width) / 2, fy + (config.hhPx / 2) + ((config.hhPx / 2) - hourLayout.size.height) / 2))
+
+                    // 2つのテキスト間の隙間（お好みで調整してください）
+                    val spacing = 2f
+                    // 2つのテキストを合わせた合計の高さ
+                    val totalTextHeight = amPmLayout.size.height + hourLayout.size.height + spacing
+
+                    // 全体の開始Y座標（セルの中心から合計高さの半分を引く）
+                    val startY = fy + (config.hhPx - totalTextHeight) / 2
+
+                    // AM/PM の描画
+                    drawText(
+                        amPmLayout,
+                        topLeft = Offset((config.twPx - amPmLayout.size.width) / 2, startY)
+                    )
+
+                    // 時刻 の描画（AM/PMの下に配置）
+                    drawText(
+                        hourLayout,
+                        topLeft = Offset((config.twPx - hourLayout.size.width) / 2, startY + amPmLayout.size.height + spacing)
+                    )
+
                     drawLine(config.colorGridLine, Offset(0f, fy), Offset(config.twPx, fy), 3f)
                 }
             }
