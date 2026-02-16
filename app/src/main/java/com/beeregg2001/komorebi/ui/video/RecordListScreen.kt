@@ -58,7 +58,7 @@ fun RecordListScreen(
     var activeSearchQuery by remember { mutableStateOf("") }
     var isSearchBarVisible by remember { mutableStateOf(false) }
     var isKeyboardActive by remember { mutableStateOf(false) }
-    var isBackButtonFocused by remember { mutableStateOf(false) } // ★追加: 戻るボタンのフォーカス状態
+    var isBackButtonFocused by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val limitedHistory = remember(searchHistory) { searchHistory.take(5) }
@@ -83,11 +83,9 @@ fun RecordListScreen(
         onSearch(query)
         keyboardController?.hide()
         isSearchBarVisible = false
-        // ★引き算: 検索後、カードへの自動フォーカスを廃止。戻るボタンへ。
         scope.launch { runCatching { backButtonFocusRequester.requestFocus() } }
     }
 
-    // ★引き算の戻るロジック
     val handleBackPress: () -> Unit = {
         when {
             isKeyboardActive -> {
@@ -96,7 +94,6 @@ fun RecordListScreen(
                 runCatching { searchBoxContainerFocusRequester.requestFocus() }
             }
             isSearchBarVisible || activeSearchQuery.isNotEmpty() -> {
-                // 検索リセット
                 isSearchBarVisible = false
                 searchQuery = ""
                 activeSearchQuery = ""
@@ -105,7 +102,6 @@ fun RecordListScreen(
                 runCatching { backButtonFocusRequester.requestFocus() }
             }
             else -> {
-                // 通常時：戻るボタンにフォーカスがあれば終了、なければフォーカスを戻す
                 if (isBackButtonFocused) {
                     onBack()
                 } else {
@@ -117,7 +113,6 @@ fun RecordListScreen(
 
     BackHandler(enabled = true) { handleBackPress() }
 
-    // 初回・状態変化時のフォーカス（基準点へ）
     LaunchedEffect(isSearchBarVisible) {
         if (isSearchBarVisible) {
             runCatching { searchBoxContainerFocusRequester.requestFocus() }
@@ -202,7 +197,7 @@ fun RecordListScreen(
                         onClick = { handleBackPress() },
                         modifier = Modifier
                             .focusRequester(backButtonFocusRequester)
-                            .onFocusChanged { isBackButtonFocused = it.isFocused } // 状態監視
+                            .onFocusChanged { isBackButtonFocused = it.isFocused }
                             .focusProperties { down = firstItemFocusRequester }
                     ) {
                         Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
@@ -236,7 +231,6 @@ fun RecordListScreen(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier.fillMaxSize()
                     .focusProperties {
-                        // ★引き算：検索バー表示中、またはIMEアクティブ時はGridへのフォーカス移動を遮断
                         canFocus = !isSearchBarVisible && !isKeyboardActive
                     }
             ) {
@@ -250,9 +244,16 @@ fun RecordListScreen(
                             .focusProperties { if (index < 4) { up = backButtonFocusRequester } }
                     )
                 }
+
+                // ★修正箇所: Gridスコープ内へ移動
                 if (isLoadingMore) {
                     item(span = { TvGridItemSpan(maxLineSpan) }) {
-                        Box(modifier = Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(80.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
                             CircularProgressIndicator(color = Color.White)
                         }
                     }
@@ -283,19 +284,6 @@ fun RecordListScreen(
                                 }
                             }
                         }
-                    }
-                }
-            }
-
-            if (isLoadingMore) {
-                item(span = { TvGridItemSpan(maxLineSpan) }) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(80.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = Color.White)
                     }
                 }
             }

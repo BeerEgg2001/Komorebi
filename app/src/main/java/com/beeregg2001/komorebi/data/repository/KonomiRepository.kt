@@ -8,6 +8,7 @@ import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
+import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.HistoryUpdateRequest
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
 import com.beeregg2001.komorebi.data.model.KonomiProgram
@@ -88,5 +89,11 @@ class KonomiRepository @Inject constructor(
     // 視聴位置同期 (API)
     suspend fun syncPlaybackPosition(programId: String, position: Double) {
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }
+    }
+
+    // ★追加: アーカイブ実況取得
+    suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> = runCatching {
+        val response = apiService.getArchivedJikkyo(videoId)
+        if (response.is_success) response.comments else emptyList()
     }
 }

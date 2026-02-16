@@ -41,6 +41,12 @@ import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import java.util.UUID
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import com.beeregg2001.komorebi.ui.live.LiveCommentOverlay
+import com.beeregg2001.komorebi.data.model.ArchivedComment
+import master.flame.danmaku.controller.IDanmakuView
+import master.flame.danmaku.danmaku.model.BaseDanmaku
+import android.graphics.Color as AndroidColor
 
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
@@ -48,7 +54,6 @@ import kotlinx.coroutines.delay
 fun VideoPlayerScreen(
     program: RecordedProgram,
     initialPositionMs: Long = 0,
-    // ★追加: 初期画質設定
     initialQuality: String = "1080p-60fps",
     konomiIp: String,
     konomiPort: String,
@@ -67,12 +72,33 @@ fun VideoPlayerScreen(
     val subMenuFocusRequester = remember { FocusRequester() }
     val sessionId = remember { UUID.randomUUID().toString() }
 
+    // SettingsRepository から設定値を読み込む
+    val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
+    val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
+    val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
+    val commentOpacityStr by repository.commentOpacity.collectAsState(initial = "1.0")
+    val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
+    val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
+
+    // 数値変換
+    val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
+    val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
+    val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
+    val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
+
     // 設定
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
-    // ★修正: 初期画質を引数から反映
-    var currentQuality by remember { mutableStateOf(StreamQuality.fromApiParams(initialQuality)) }
+
+    // ★修正: VideoPlayerModelsのStreamQuality.fromValueを使用
+    var currentQuality by remember { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
     var isSubtitleEnabled by remember { mutableStateOf(true) }
+
+    // コメント機能の状態管理
+    var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) { mutableStateOf(commentDefaultDisplayStr == "ON") }
+    val allComments = remember { mutableStateListOf<ArchivedComment>() }
+    val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
+    val isEmulator = remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
 
     // 画質変更時に新しいセッションIDを発行
     val currentSessionId = remember(currentQuality) { UUID.randomUUID().toString() }
@@ -83,6 +109,13 @@ fun VideoPlayerScreen(
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     var wasPlayingBeforeSceneSearch by remember { mutableStateOf(false) }
+
+    // コメントデータの取得 (ViewModel経由)
+    LaunchedEffect(program.recordedVideo.id) {
+        val fetchedComments = recordViewModel.getArchivedComments(program.recordedVideo.id)
+        allComments.clear()
+        allComments.addAll(fetchedComments)
+    }
 
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
@@ -103,7 +136,6 @@ fun VideoPlayerScreen(
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory))
             .build().apply {
-                // 初期ロード
                 val mediaItem = MediaItem.Builder()
                     .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.apiParams))
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -128,6 +160,56 @@ fun VideoPlayerScreen(
                 prepare()
                 playWhenReady = true
             }
+    }
+
+    // コメント同期・表示ロジック
+    LaunchedEffect(isPlayerPlaying, isCommentEnabled, allComments.size) {
+        var lastEmittedTime = 0.0
+        while (isActive) {
+            if (isPlayerPlaying && isCommentEnabled && allComments.isNotEmpty()) {
+                val currentSec = exoPlayer.currentPosition / 1000.0
+
+                // シーク判定: 急に時間が飛んだら、過去のコメントを大量に流さないように基準時間をリセット
+                if (Math.abs(currentSec - lastEmittedTime) > 3.0 || currentSec < lastEmittedTime) {
+                    lastEmittedTime = currentSec
+                } else {
+                    // 前回チェック時から現在までのコメントを抽出
+                    val commentsToEmit = allComments.filter { it.time > lastEmittedTime && it.time <= currentSec }
+
+                    commentsToEmit.forEach { comment ->
+                        danmakuViewRef.value?.let { view ->
+                            (view as? android.view.View)?.post {
+                                if (!view.isPrepared) return@post
+                                val danmaku = view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL)
+                                if (danmaku != null) {
+                                    danmaku.text = comment.text
+                                    danmaku.padding = 5
+
+                                    // 設定値の反映
+                                    val density = view.context.resources.displayMetrics.density
+                                    danmaku.textSize = (32f * commentFontSizeScale) * density
+
+                                    try {
+                                        danmaku.textColor = AndroidColor.parseColor(comment.color)
+                                    } catch (e: Exception) {
+                                        danmaku.textColor = AndroidColor.WHITE
+                                    }
+                                    danmaku.textShadowColor = AndroidColor.BLACK
+                                    danmaku.setTime(view.currentTime + 10)
+                                    view.addDanmaku(danmaku)
+                                }
+                            }
+                        }
+                    }
+                    lastEmittedTime = currentSec
+                }
+            } else {
+                if (exoPlayer.isPlaying) {
+                    lastEmittedTime = exoPlayer.currentPosition / 1000.0
+                }
+            }
+            delay(200) // 0.2秒間隔でチェック
+        }
     }
 
     // 画質変更時にプレイヤーを完全に停止してからリロード
@@ -186,7 +268,6 @@ fun VideoPlayerScreen(
                 )
                 onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
                 delay(20000)
-                Log.d("HEART_BEAT","heart_beat check ok: ${currentQuality.apiParams}")
             }
         }
     }
@@ -242,6 +323,18 @@ fun VideoPlayerScreen(
 
         val isUiVisible = showControls || isSubMenuOpen || isSceneSearchOpen
 
+        // コメントオーバーレイ
+        if (isCommentEnabled) {
+            LiveCommentOverlay(
+                modifier = Modifier.fillMaxSize(),
+                useSoftwareRendering = isEmulator,
+                speed = commentSpeed,
+                opacity = commentOpacity,
+                maxLines = commentMaxLines,
+                onViewCreated = { view -> danmakuViewRef.value = view }
+            )
+        }
+
         if (isSubtitleEnabled) {
             AndroidView(
                 factory = { ctx ->
@@ -291,6 +384,7 @@ fun VideoPlayerScreen(
                 currentAudioMode = currentAudioMode, currentSpeed = currentSpeed,
                 isSubtitleEnabled = isSubtitleEnabled,
                 currentQuality = currentQuality,
+                isCommentEnabled = isCommentEnabled,
                 focusRequester = subMenuFocusRequester,
                 onAudioToggle = {
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
@@ -317,6 +411,10 @@ fun VideoPlayerScreen(
                 onQualitySelect = { newQuality ->
                     currentQuality = newQuality
                     toastState = "画質: ${newQuality.label}" to System.currentTimeMillis()
+                },
+                onCommentToggle = {
+                    isCommentEnabled = !isCommentEnabled
+                    toastState = "コメント: ${if(isCommentEnabled) "表示" else "非表示"}" to System.currentTimeMillis()
                 }
             )
         }

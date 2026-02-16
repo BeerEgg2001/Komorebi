@@ -1,11 +1,11 @@
 package com.beeregg2001.komorebi.ui.video
 
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.beeregg2001.komorebi.ui.live.StreamQuality.Q1080P_60FPS
-import com.beeregg2001.komorebi.ui.live.StreamQuality.entries
 
 enum class AudioMode { MAIN, SUB }
-enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY }
+
+// ★修正: COMMENT を追加
+enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY, COMMENT }
 
 // 画質定義 (表示名とAPIパラメータを一元管理)
 enum class StreamQuality(val label: String, val apiParams: String) {
@@ -23,8 +23,15 @@ enum class StreamQuality(val label: String, val apiParams: String) {
             val values = entries.toTypedArray()
             return values[(current.ordinal + 1) % values.size]
         }
+
+        // ★追加: VideoPlayerScreenで使用されるメソッド
+        fun fromApiParams(params: String): StreamQuality {
+            return entries.find { it.apiParams == params } ?: QUALITY_1080P_60
+        }
+
+        // 既存のメソッド（fromApiParamsに委譲）
         fun fromValue(value: String): StreamQuality {
-            return entries.find { it.apiParams == value } ?: QUALITY_1080P_60
+            return fromApiParams(value)
         }
     }
 }

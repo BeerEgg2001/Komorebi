@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.data.api
 
+import com.beeregg2001.komorebi.data.model.ArchivedJikkyoResponse
 import com.beeregg2001.komorebi.data.model.HistoryUpdateRequest
 import com.beeregg2001.komorebi.data.model.JikkyoResponse
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
@@ -70,4 +71,10 @@ interface KonomiApi {
     suspend fun getJikkyoInfo(
         @Path("channel_id") channelId: String
     ): JikkyoResponse
+
+    // ★追加: 過去ログコメント取得API
+    @GET("api/videos/{video_id}/jikkyo")
+    suspend fun getArchivedJikkyo(
+        @Path("video_id") videoId: Int
+    ): ArchivedJikkyoResponse
 }
