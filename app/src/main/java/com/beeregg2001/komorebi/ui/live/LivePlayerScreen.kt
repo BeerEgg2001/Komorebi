@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -47,6 +48,8 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -63,6 +66,8 @@ import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Typeface
 import android.os.Build
 import java.util.Collections
+
+private const val TAG = "LivePlayerScreen"
 
 @ExperimentalComposeUiApi
 @Composable
@@ -88,16 +93,16 @@ fun LivePlayerScreen(
     onBackPressed: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope() // ★追加：CoroutineScopeの定義
     val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
 
-    // ★設定値の収集
+    // 設定値の収集
     val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
     val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
     val commentOpacityStr by repository.commentOpacity.collectAsState(initial = "1.0")
     val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
     val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
 
-    // 数値型への変換
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -123,7 +128,6 @@ fun LivePlayerScreen(
     val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
     val isSubtitleEnabled by subtitleEnabledState
 
-    // ★初期表示設定を反映
     val commentEnabledState = rememberSaveable(commentDefaultDisplayStr) {
         mutableStateOf(commentDefaultDisplayStr == "ON")
     }
@@ -278,7 +282,10 @@ fun LivePlayerScreen(
         exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(streamUrl))
         exoPlayer.prepare()
         exoPlayer.play()
-        if (playerError == null) { mainFocusRequester.requestFocus() }
+        if (playerError == null) {
+            delay(300)
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
     }
 
     DisposableEffect(currentChannelItem.id, isCommentEnabled) {
@@ -297,16 +304,11 @@ fun LivePlayerScreen(
                 val chat = json.optJSONObject("chat")
                 if (chat != null) {
                     val commentId = chat.optString("no", "") + "_" + chat.optString("content", "")
-
-                    if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) {
-                        return@start
-                    }
-
+                    if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) return@start
                     if (processedCommentIds.size > 200) {
                         val first = processedCommentIds.iterator().next()
                         processedCommentIds.remove(first)
                     }
-
                     val content = chat.optString("content")
                     if (content.isNotEmpty()) {
                         danmakuViewRef.value?.let { view ->
@@ -317,10 +319,7 @@ fun LivePlayerScreen(
                                     danmaku.text = content
                                     danmaku.padding = 5
                                     val density = view.context.resources.displayMetrics.density
-
-                                    // ★設定された倍率(commentFontSizeScale)を適用
                                     danmaku.textSize = (32f * commentFontSizeScale) * density
-
                                     danmaku.textColor = AndroidColor.WHITE
                                     danmaku.textShadowColor = AndroidColor.BLACK
                                     danmaku.setTime(view.currentTime + 10)
@@ -335,8 +334,23 @@ fun LivePlayerScreen(
         onDispose { jikkyoClient.stop() }
     }
 
-    LaunchedEffect(isMiniListOpen) { if (isMiniListOpen) { delay(100); listFocusRequester.requestFocus() } else if (!isManualOverlay) { mainFocusRequester.requestFocus() } }
-    LaunchedEffect(isSubMenuOpen) { if (isSubMenuOpen) { delay(100); subMenuFocusRequester.requestFocus() } }
+    LaunchedEffect(isMiniListOpen) {
+        if (isMiniListOpen) {
+            delay(150)
+            listFocusRequester.safeRequestFocus(TAG)
+        } else if (!isManualOverlay && !isSubMenuOpen) {
+            delay(100)
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
+    }
+
+    LaunchedEffect(isSubMenuOpen) {
+        if (isSubMenuOpen) {
+            delay(150)
+            subMenuFocusRequester.safeRequestFocus(TAG)
+        }
+    }
+
     LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
 
     Box(modifier = Modifier
@@ -391,14 +405,13 @@ fun LivePlayerScreen(
         AndroidView(
             factory = { androidx.media3.ui.PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
-            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
+            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.MIRAKURUN) 1f else 0f)
         )
 
         if (isCommentEnabled) {
             LiveCommentOverlay(
                 modifier = Modifier.fillMaxSize(),
                 useSoftwareRendering = forceSoftwareRendering,
-                // ★設定値を Overlay に渡す
                 speed = commentSpeed,
                 opacity = commentOpacity,
                 maxLines = commentMaxLines,
@@ -423,10 +436,9 @@ fun LivePlayerScreen(
         }
 
         AnimatedVisibility(visible = isMiniListOpen && playerError == null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); runCatching { mainFocusRequester.requestFocus() } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
+            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
         }
 
-        // ★修正: サブメニュー呼び出し
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,

@@ -20,6 +20,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import javax.inject.Inject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private const val TAG = "Komorebi_RecordVM"
 private const val PREF_NAME = "search_history_pref"
@@ -29,7 +32,7 @@ private const val KEY_HISTORY = "history_list"
 class RecordViewModel @Inject constructor(
     private val repository: KonomiRepository,
     private val historyRepository: WatchHistoryRepository,
-    @ApplicationContext private val context: Context // 履歴保存用にContextを注入
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _recentRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
@@ -41,7 +44,6 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    // ★追加: 検索履歴のFlow
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
 
@@ -51,10 +53,11 @@ class RecordViewModel @Inject constructor(
     private val pageSize = 30
 
     private var currentSearchQuery: String = ""
+    private var maintenanceJob: Job? = null
 
     init {
         fetchInitialRecordings()
-        loadSearchHistory() // ★追加: 初期化時に履歴を読み込む
+        loadSearchHistory()
     }
 
     fun fetchRecentRecordings() {
@@ -63,14 +66,10 @@ class RecordViewModel @Inject constructor(
     }
 
     fun searchRecordings(query: String) {
-        Log.d(TAG, "searchRecordings called. query: '$query'")
         currentSearchQuery = query
-
-        // ★追加: 検索実行時に履歴に保存 (空文字以外)
         if (query.isNotBlank()) {
             addSearchHistory(query)
         }
-
         fetchInitialRecordings()
     }
 
@@ -81,7 +80,7 @@ class RecordViewModel @Inject constructor(
                 currentPage = 1
                 hasMorePages = true
 
-                Log.d(TAG, "Fetching initial recordings. Query: '$currentSearchQuery'")
+                Log.i(TAG, "Fetching initial recordings...")
 
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
@@ -90,7 +89,14 @@ class RecordViewModel @Inject constructor(
                 }
 
                 totalItems = response.total
-                Log.d(TAG, "Fetch success. Total items: $totalItems, Returned: ${response.recordedPrograms.size}")
+
+                // ★追加: 取得したリストにサムネイル情報が含まれているか確認
+                if (response.recordedPrograms.isNotEmpty()) {
+                    val sample = response.recordedPrograms.first()
+                    Log.i(TAG, "API Sample: ID=${sample.id}, HasTileInfo=${sample.recordedVideo.thumbnailInfo?.tile != null}")
+                } else {
+                    Log.i(TAG, "API returned empty list")
+                }
 
                 val initialList = response.recordedPrograms.map { program ->
                     program.copy(isRecording = program.recordedVideo.status == "Recording")
@@ -120,7 +126,6 @@ class RecordViewModel @Inject constructor(
             _isLoadingMore.value = true
             try {
                 val nextPage = currentPage + 1
-                Log.d(TAG, "Loading page $nextPage. Query: '$currentSearchQuery'")
 
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = nextPage)
@@ -136,7 +141,6 @@ class RecordViewModel @Inject constructor(
                     val currentList = _recentRecordings.value.toMutableList()
                     currentList.addAll(newItems)
                     _recentRecordings.value = currentList
-
                     currentPage = nextPage
                 }
 
@@ -145,15 +149,12 @@ class RecordViewModel @Inject constructor(
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading next page", e)
                 e.printStackTrace()
             } finally {
                 _isLoadingMore.value = false
             }
         }
     }
-
-    // --- 検索履歴管理ロジック ---
 
     private fun loadSearchHistory() {
         try {
@@ -175,7 +176,6 @@ class RecordViewModel @Inject constructor(
         val currentList = _searchHistory.value.toMutableList()
         currentList.remove(query)
         currentList.add(0, query)
-        // ★修正: 保存件数を5件に制限
         if (currentList.size > 5) {
             currentList.removeAt(currentList.lastIndex)
         }
@@ -183,7 +183,6 @@ class RecordViewModel @Inject constructor(
         saveSearchHistory(currentList)
     }
 
-    // 必要であればUIから呼び出して個別に削除する用
     fun removeSearchHistory(query: String) {
         val currentList = _searchHistory.value.toMutableList()
         if (currentList.remove(query)) {
@@ -204,8 +203,6 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // -------------------------
-
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch {
             historyRepository.saveWatchHistory(program, positionSeconds)
@@ -213,17 +210,42 @@ class RecordViewModel @Inject constructor(
     }
 
     @UnstableApi
-    fun keepAliveStream(videoId: Int, quality: String, sessionId: String) {
-        viewModelScope.launch {
-            try {
-                repository.keepAlive(videoId, quality, sessionId)
-            } catch (e: Exception) {
-                e.printStackTrace()
+    fun startStreamMaintenance(
+        program: RecordedProgram,
+        quality: String,
+        sessionId: String,
+        getPositionSeconds: () -> Double
+    ) {
+        stopStreamMaintenance()
+
+        // ★追加: 保存しようとしているデータにタイル情報があるかログ出力
+        val hasTile = program.recordedVideo.thumbnailInfo?.tile != null
+        Log.i(TAG, "Start maintenance for ID=${program.id}. Has Tile Info? $hasTile")
+
+        maintenanceJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val currentPos = getPositionSeconds()
+                    repository.keepAlive(program.recordedVideo.id, quality, sessionId)
+                    historyRepository.saveWatchHistory(program, currentPos)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to maintain stream", e)
+                }
+                delay(20000)
             }
         }
     }
 
-    // ★追加: アーカイブコメント取得
+    fun stopStreamMaintenance() {
+        maintenanceJob?.cancel()
+        maintenanceJob = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopStreamMaintenance()
+    }
+
     suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {
         return withContext(Dispatchers.IO) {
             repository.getArchivedJikkyo(videoId)

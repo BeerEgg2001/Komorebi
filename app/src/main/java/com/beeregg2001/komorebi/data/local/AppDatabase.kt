@@ -12,7 +12,7 @@ import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
         WatchHistoryEntity::class,
         LastChannelEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

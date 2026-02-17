@@ -22,6 +22,7 @@ import androidx.tv.foundation.lazy.list.TvLazyRow
 import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import kotlinx.coroutines.delay
@@ -34,6 +35,8 @@ fun VideoTabContent(
     recentRecordings: List<RecordedProgram>,
     watchHistory: List<RecordedProgram>,
     selectedProgram: RecordedProgram?,
+    // ★追加: 戻ってきたときにフォーカスすべき番組ID
+    restoreProgramId: Int? = null,
     konomiIp: String,
     konomiPort: String,
     topNavFocusRequester: FocusRequester,
@@ -42,17 +45,13 @@ fun VideoTabContent(
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
     onShowAllRecordings: () -> Unit = {},
-    // 検索状態を操作するためのコールバック
     onSearch: (String) -> Unit = {}
 ) {
     val listState = rememberTvLazyListState()
-
     var isContentReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // 画面表示時に検索キーワードを空にして、最新の録画リストを取得し直す
         onSearch("")
-
         yield()
         delay(300)
         isContentReady = true
@@ -75,7 +74,7 @@ fun VideoTabContent(
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                             if (event.type == KeyEventType.KeyUp) {
-                                topNavFocusRequester.requestFocus()
+                                topNavFocusRequester.safeRequestFocus()
                                 return@onKeyEvent true
                             }
                         }
@@ -86,7 +85,9 @@ fun VideoTabContent(
                 item {
                     if (watchHistory.isNotEmpty()) {
                         VideoSectionRow(
-                            title = "視聴履歴", items = watchHistory, selectedProgramId = selectedProgram?.id,
+                            title = "視聴履歴", items = watchHistory,
+                            // selectedProgram が null (戻り時) なら restoreProgramId を使用
+                            selectedProgramId = selectedProgram?.id ?: restoreProgramId,
                             konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = onProgramClick,
                             isFirstSection = true, topNavFocusRequester = topNavFocusRequester
                         )
@@ -102,9 +103,9 @@ fun VideoTabContent(
                 item {
                     VideoSectionRow(
                         title = "最近の録画",
-                        // ★修正: 表示を10件に制限
                         items = recentRecordings.take(10),
-                        selectedProgramId = selectedProgram?.id,
+                        // こちらも同様にIDをチェック
+                        selectedProgramId = selectedProgram?.id ?: restoreProgramId,
                         konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = onProgramClick,
                         isFirstSection = watchHistory.isEmpty(),
                         topNavFocusRequester = if (watchHistory.isEmpty()) topNavFocusRequester else null
@@ -124,7 +125,12 @@ fun VideoTabContent(
                                 containerColor = Color.White.copy(alpha = 0.15f), contentColor = Color.White,
                                 focusedContainerColor = Color.White, focusedContentColor = Color.Black
                             ),
-                            modifier = Modifier.width(260.dp)
+                            modifier = Modifier
+                                .width(260.dp)
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                }
                         ) {
                             Icon(Icons.Default.List, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp))
                             Text("すべての録画を表示", style = MaterialTheme.typography.labelLarge)
@@ -153,7 +159,8 @@ fun VideoSectionRow(
 
     LaunchedEffect(selectedProgramId) {
         if (selectedProgramId != null && items.any { it.id == selectedProgramId }) {
-            delay(150); runCatching { watchedProgramFocusRequester.requestFocus() }
+            delay(300) // リストの描画待ちを少し長めに
+            runCatching { watchedProgramFocusRequester.requestFocus() }
         }
     }
 
@@ -170,7 +177,6 @@ fun VideoSectionRow(
                 val isSelected = program.id == selectedProgramId
                 var isFocused by remember { mutableStateOf(false) }
 
-                // ★修正: modifier から .border を削除。RecordedCard 内の枠線のみを使用する
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
                     modifier = Modifier

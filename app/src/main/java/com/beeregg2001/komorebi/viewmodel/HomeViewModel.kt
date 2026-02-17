@@ -5,8 +5,8 @@ import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
-import com.beeregg2001.komorebi.data.local.entity.toEntity
-import com.beeregg2001.komorebi.data.local.entity.toKonomiHistoryProgram
+import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
+import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
@@ -25,17 +25,13 @@ class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository
 ) : ViewModel() {
 
-    // 読み込み状態の管理
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-    /**
-     * 単一の真実のソース (Single Source of Truth)
-     * ローカルDBを監視し、常に最新の履歴（API由来 + ローカル由来）をUIへ流します。
-     */
+
     @RequiresApi(Build.VERSION_CODES.O)
     val watchHistory: StateFlow<List<KonomiHistoryProgram>> = repository.getLocalWatchHistory()
-        .map { entities ->
-            entities.map { it.toKonomiHistoryProgram() }
+        .map { entities: List<WatchHistoryEntity> ->
+            entities.map { KonomiDataMapper.toUiModel(it) }
         }
         .stateIn(
             scope = viewModelScope,
@@ -44,15 +40,13 @@ class HomeViewModel @Inject constructor(
         )
 
     val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
-        .map { entities: List<LastChannelEntity> -> // ★ ここが「List」であることを明示
-            // リスト全体を map して、個々の Entity を Channel に変換する
+        .map { entities: List<LastChannelEntity> ->
             entities.map { entity ->
                 Channel(
                     id = entity.channelId,
                     name = entity.name,
                     type = entity.type,
-                    channelNumber = entity.channelNumber?: "",
-                    // 以下、Channelクラスの必須パラメータを埋める
+                    channelNumber = entity.channelNumber ?: "",
                     displayChannelId = entity.channelId,
                     networkId = entity.networkId,
                     serviceId = entity.serviceId,
@@ -67,47 +61,52 @@ class HomeViewModel @Inject constructor(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList() // ★ 初期値も空リストに変更
+            initialValue = emptyList()
         )
 
     init {
-        // 初回起動時にデータを同期
         refreshHomeData()
     }
 
-    /**
-     * サーバーから最新の履歴を取得し、ローカルDBを更新する
-     * DBが更新されると、上記の watchHistory Flow が自動的に発火してUIが変わります。
-     */
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
 
-            // APIから履歴を取得
             repository.getWatchHistory().onSuccess { apiHistoryList ->
-                // APIから取得できた場合、それらをローカルDBに保存（API優先の同期）
                 apiHistoryList.forEach { history ->
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        repository.saveToLocalHistory(history.toEntity())
+                        val programId = history.program.id.toIntOrNull() ?: return@forEach
+
+                        // ★修正: 既存データを取得してメタデータ（タイル情報など）を引き継ぐ
+                        // これを行わないと、API同期のたびにタイル情報がデフォルト(1x1)に上書きされてしまう
+                        val existingEntity = repository.getHistoryEntityById(programId)
+
+                        var newEntity = KonomiDataMapper.toEntity(history)
+
+                        if (existingEntity != null) {
+                            newEntity = newEntity.copy(
+                                videoId = existingEntity.videoId, // 正しいVideoIDを維持
+                                tileColumns = existingEntity.tileColumns,
+                                tileRows = existingEntity.tileRows,
+                                tileInterval = existingEntity.tileInterval,
+                                tileWidth = existingEntity.tileWidth,
+                                tileHeight = existingEntity.tileHeight
+                            )
+                        }
+
+                        repository.saveToLocalHistory(newEntity)
                     }
                 }
-            }.onFailure {
-                // APIエラー時はDBにある既存のデータがそのまま使われるため、何もしなくてOK
             }
 
-            // ユーザー設定の更新
             repository.refreshUser()
-
             _isLoading.value = false
         }
     }
 
-    /**
-     * 番組視聴時にローカルDBへ保存する
-     */
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
-            repository.saveToLocalHistory(program.toEntity())
+            repository.saveToLocalHistory(KonomiDataMapper.toEntity(program))
         }
     }
 

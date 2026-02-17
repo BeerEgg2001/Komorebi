@@ -1,21 +1,13 @@
 package com.beeregg2001.komorebi.ui.setting
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CastConnected
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PlayCircle
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,10 +26,10 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.beeregg2001.komorebi.ui.live.StreamQuality as LiveQuality
-import com.beeregg2001.komorebi.ui.video.StreamQuality as VideoQuality
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -57,7 +49,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val commentMaxLines by repository.commentMaxLines.collectAsState(initial = "0")
     val commentDefaultDisplay by repository.commentDefaultDisplay.collectAsState(initial = "ON")
 
-    // 画質設定
+    // 画質設定 (共通の型を使用しつつ、保持する値は独立)
     val liveQuality by repository.liveQuality.collectAsState(initial = "1080p-60fps")
     val videoQuality by repository.videoQuality.collectAsState(initial = "1080p-60fps")
 
@@ -66,7 +58,6 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     var showLiveQualitySelection by remember { mutableStateOf(false) }
     var showVideoQualitySelection by remember { mutableStateOf(false) }
-
     var showLicenses by remember { mutableStateOf(false) }
 
     val categories = listOf(
@@ -95,48 +86,32 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val appInfoLicenseRequester = remember { FocusRequester() }
 
-    // フォーカスを戻すべき場所と、その時のカテゴリIDを記憶する変数
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreCategoryIndex by remember { mutableIntStateOf(-1) }
 
     if (showLicenses) {
-        // ★修正: ライセンス画面から戻る際は、設定画面自体を閉じてホーム画面へ戻る(onBack)ように変更
-        // これにより、設定画面への複雑なフォーカス復帰処理を回避します
         OpenSourceLicensesScreen(onBack = onBack)
     } else {
-        // 画面表示時のフォーカス制御
         LaunchedEffect(Unit) {
-            delay(300) // UI構築待機
-
-            // 復帰すべきフォーカスがない（初期表示など）場合のみ、サイドバーへフォーカス
+            delay(300)
             if (restoreFocusRequester == null) {
-                runCatching {
-                    categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.requestFocus()
-                }
+                categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus()
             }
         }
 
-        // ダイアログ終了時のフォーカス復旧ロジック
         LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection) {
             if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection) {
-                delay(200)
-                runCatching {
-                    if (restoreFocusRequester != null) {
-                        // サイドバーにフォーカスが奪われてカテゴリが変わってしまっている場合、修正
-                        if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) {
-                            selectedCategoryIndex = restoreCategoryIndex
-                            delay(50)
-                        }
-
-                        // 目的の項目へフォーカス
-                        restoreFocusRequester?.requestFocus()
-
-                        // 使用後はクリア
-                        restoreFocusRequester = null
-                        restoreCategoryIndex = -1
-                    } else if (isSidebarFocused) {
-                        categoryFocusRequesters[selectedCategoryIndex].requestFocus()
+                delay(250)
+                if (restoreFocusRequester != null) {
+                    if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) {
+                        selectedCategoryIndex = restoreCategoryIndex
+                        delay(50)
                     }
+                    restoreFocusRequester?.safeRequestFocus()
+                    restoreFocusRequester = null
+                    restoreCategoryIndex = -1
+                } else if (isSidebarFocused) {
+                    categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus()
                 }
             }
         }
@@ -149,16 +124,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                     if (keyEvent.type == KeyEventType.KeyDown &&
                         (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
                                 keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
-                        // サイドバーにフォーカスがない場合に限り、サイドバーへ戻す
                         if (!isSidebarFocused) {
-                            runCatching { categoryFocusRequesters[selectedCategoryIndex].requestFocus() }
+                            categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus()
                             return@onKeyEvent true
                         }
                     }
                     false
                 }
         ) {
-            // --- 左側：サイドバーメニュー (第1階層) ---
+            // --- 左側：サイドバーメニュー ---
             Column(
                 modifier = Modifier
                     .width(280.dp)
@@ -184,13 +158,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                         isSelected = selectedCategoryIndex == index,
                         onFocused = { selectedCategoryIndex = index },
                         onClick = {
-                            runCatching {
-                                when (index) {
-                                    0 -> kIpFocusRequester.requestFocus()
-                                    1 -> liveQFocusRequester.requestFocus()
-                                    2 -> cDefaultDisplayFocusRequester.requestFocus()
-                                    3 -> appInfoLicenseRequester.requestFocus()
-                                }
+                            when (index) {
+                                0 -> kIpFocusRequester.safeRequestFocus()
+                                1 -> liveQFocusRequester.safeRequestFocus()
+                                2 -> cDefaultDisplayFocusRequester.safeRequestFocus()
+                                3 -> appInfoLicenseRequester.safeRequestFocus()
                             }
                         },
                         modifier = Modifier.focusRequester(categoryFocusRequesters[index])
@@ -209,7 +181,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
 
-            // --- 右側：詳細コンテンツエリア (第2階層) ---
+            // --- 右側：詳細コンテンツエリア ---
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -258,14 +230,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                     )
                     3 -> AppInfoContent(
-                        onShowLicenses = {
-                            // ライセンス画面を表示
-                            showLicenses = true
-                        },
+                        onShowLicenses = { showLicenses = true },
                         licenseRequester = appInfoLicenseRequester,
                         onItemClicked = { requester ->
-                            // ダイアログ等ではないので、ここは特にrestore情報をセットしなくても
-                            // 今回の修正（ホームへ戻る）なら問題ありませんが、念のため残しておきます
                             restoreFocusRequester = requester
                             restoreCategoryIndex = selectedCategoryIndex
                         }
@@ -304,7 +271,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (showLiveQualitySelection) {
             SelectionDialog(
                 title = "ライブ視聴画質を選択",
-                options = LiveQuality.entries.map { it.label to it.value },
+                options = StreamQuality.entries.map { it.label to it.value },
                 currentValue = liveQuality,
                 onDismiss = { showLiveQualitySelection = false },
                 onSelect = { newValue ->
@@ -317,7 +284,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (showVideoQualitySelection) {
             SelectionDialog(
                 title = "録画視聴画質を選択",
-                options = VideoQuality.entries.map { it.label to it.apiParams },
+                options = StreamQuality.entries.map { it.label to it.value },
                 currentValue = videoQuality,
                 onDismiss = { showVideoQualitySelection = false },
                 onSelect = { newValue ->
@@ -335,7 +302,8 @@ data class Category(val name: String, val icon: ImageVector)
 fun ConnectionSettingsContent(
     kIp: String, kPort: String, mIp: String, mPort: String,
     onEditRequest: (String, String) -> Unit,
-    kIpRequester: FocusRequester, kPortRequester: FocusRequester, mIpRequester: FocusRequester, mPortRequester: FocusRequester,
+    kIpRequester: FocusRequester, kPortRequester: FocusRequester,
+    mIpRequester: FocusRequester, mPortRequester: FocusRequester,
     onItemClicked: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -353,9 +321,12 @@ fun ConnectionSettingsContent(
 
 @Composable
 fun PlaybackSettingsContent(
-    liveQuality: String, videoQuality: String,
-    liveQRequester: FocusRequester, videoQRequester: FocusRequester,
-    onLiveQualityClick: () -> Unit, onVideoQualityClick: () -> Unit,
+    liveQuality: String,
+    videoQuality: String,
+    liveQRequester: FocusRequester,
+    videoQRequester: FocusRequester,
+    onLiveQualityClick: () -> Unit,
+    onVideoQualityClick: () -> Unit,
     onItemClicked: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -363,14 +334,14 @@ fun PlaybackSettingsContent(
         SettingsSection(title = "デフォルト画質 (KonomiTV)") {
             SettingItem(
                 title = "ライブ視聴画質",
-                value = LiveQuality.fromValue(liveQuality).label,
+                value = StreamQuality.fromValue(liveQuality).label,
                 icon = Icons.Default.HighQuality,
                 modifier = Modifier.focusRequester(liveQRequester),
                 onClick = { onItemClicked(liveQRequester); onLiveQualityClick() }
             )
             SettingItem(
                 title = "録画視聴画質",
-                value = VideoQuality.fromValue(videoQuality).label,
+                value = StreamQuality.fromValue(videoQuality).label,
                 icon = Icons.Default.HighQuality,
                 modifier = Modifier.focusRequester(videoQRequester),
                 onClick = { onItemClicked(videoQRequester); onVideoQualityClick() }
@@ -384,8 +355,8 @@ fun DisplaySettingsContent(
     defaultDisplay: String, speed: String, size: String, opacity: String, maxLines: String,
     onEditRequest: (String, String) -> Unit,
     onToggleDefaultDisplay: () -> Unit,
-    defaultDisplayRequester: FocusRequester, speedRequester: FocusRequester, sizeRequester: FocusRequester,
-    opacityRequester: FocusRequester, maxLinesRequester: FocusRequester,
+    defaultDisplayRequester: FocusRequester, speedRequester: FocusRequester,
+    sizeRequester: FocusRequester, opacityRequester: FocusRequester, maxLinesRequester: FocusRequester,
     onItemClicked: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -413,7 +384,7 @@ fun AppInfoContent(onShowLicenses: () -> Unit, licenseRequester: FocusRequester,
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "Komorebi", style = MaterialTheme.typography.displayMedium, color = Color.White, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "Version 0.2.0 beta2", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+        Text(text = "Version 0.3.0 beta", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(modifier = Modifier.height(48.dp))
         SettingItem(title = "オープンソースライセンス", value = "", modifier = Modifier.width(400.dp).focusRequester(licenseRequester), onClick = { onItemClicked(licenseRequester); onShowLicenses() })
         Spacer(modifier = Modifier.height(48.dp))
@@ -514,7 +485,7 @@ fun SelectionDialog(
                         LaunchedEffect(isSelected) {
                             if (isSelected) {
                                 delay(100)
-                                runCatching { focusRequester.requestFocus() }
+                                focusRequester.safeRequestFocus()
                             }
                         }
 

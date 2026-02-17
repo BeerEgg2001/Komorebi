@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTvMaterial3Api::class)
+
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
@@ -32,6 +34,7 @@ import coil.compose.rememberAsyncImagePainter
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
@@ -40,7 +43,6 @@ import kotlinx.coroutines.delay
 private const val TAG = "EPG_DEBUG_ENGINE"
 
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ModernEpgCanvasEngine_Smooth(
     uiState: EpgUiState,
@@ -77,7 +79,6 @@ fun ModernEpgCanvasEngine_Smooth(
     var hasRenderedFirstFrame by remember { mutableStateOf(false) }
     var isJumping by remember { mutableStateOf(false) }
 
-    // ★修正: 長押し判定用フラグ
     var isLongPressHandled by remember { mutableStateOf(false) }
 
     // 初期配置
@@ -85,11 +86,16 @@ fun ModernEpgCanvasEngine_Smooth(
         if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
     }
 
+    // ヘッダー表示時のフォーカス制御
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
-            if (index == -2) topTabFocusRequester.requestFocus()
-            else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].requestFocus()
+            delay(50) // 再構築を待機
+            if (index == -2) {
+                topTabFocusRequester.safeRequestFocus(TAG)
+            } else if (index in subTabFocusRequesters.indices) {
+                subTabFocusRequesters[index].safeRequestFocus(TAG)
+            }
             pendingHeaderFocusIndex = null
         }
     }
@@ -152,27 +158,20 @@ fun ModernEpgCanvasEngine_Smooth(
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) {
                                 if (event.nativeKeyEvent.isLongPress) {
-                                    // ★長押し処理実行
                                     isJumping = true
-                                    isLongPressHandled = true // フラグを立てる
-
+                                    isLongPressHandled = true
                                     epgState.jumpToNow()
-                                    // 確実に一番左(0)の現在時刻列へフォーカスを更新
                                     epgState.updatePositions(0, ChronoUnit.MINUTES.between(epgState.baseTime, OffsetDateTime.now()).toInt())
-
                                     return@onKeyEvent true
                                 }
-                                return@onKeyEvent true // 通常のKeyDownは消費するだけ
+                                return@onKeyEvent true
                             }
                             if (event.type == KeyEventType.KeyUp) {
-                                // ★KeyUp時の判定分岐
                                 if (isLongPressHandled) {
-                                    // 長押し直後のKeyUpなら、ヘッダー移動せずフラグをリセットして終了
                                     isLongPressHandled = false
                                     isJumping = false
                                     return@onKeyEvent true
                                 } else {
-                                    // 通常の短押しKeyUpならヘッダーへ移動
                                     isJumping = false
                                     isHeaderVisible = true
                                     pendingHeaderFocusIndex = visibleTabs.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
@@ -265,12 +264,11 @@ fun EpgHeaderSection(
                             up = topTabFocusRequester
                         }
                         .onKeyEvent { event ->
-                            // ★修正：戻るキーのハンドリング（Header -> Top Nav）
                             if (event.key == Key.Back) {
                                 if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                                 if (event.type == KeyEventType.KeyUp) {
-                                    topTabFocusRequester.requestFocus()
-                                    return@onKeyEvent true // トップナビへ戻る
+                                    topTabFocusRequester.safeRequestFocus("EpgHeader")
+                                    return@onKeyEvent true
                                 }
                             }
                             if (event.type == KeyEventType.KeyDown && (event.key == Key.DirectionCenter || event.key == Key.Enter)) {
@@ -299,11 +297,10 @@ fun EpgHeaderSection(
                     up = topTabFocusRequester
                 }
                 .onKeyEvent { event ->
-                    // ★修正：戻るキーのハンドリング（日時指定ボタン -> Top Nav）
                     if (event.key == Key.Back) {
                         if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                         if (event.type == KeyEventType.KeyUp) {
-                            topTabFocusRequester.requestFocus()
+                            topTabFocusRequester.safeRequestFocus("EpgJumpBtn")
                             return@onKeyEvent true
                         }
                     }

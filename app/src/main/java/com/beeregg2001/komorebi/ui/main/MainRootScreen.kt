@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.main
 
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
@@ -16,6 +17,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,7 +35,10 @@ import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.viewmodel.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
+
+private const val TAG = "MainRootScreen"
 
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
@@ -45,6 +51,7 @@ fun MainRootScreen(
     recordViewModel: RecordViewModel,
     onExitApp: () -> Unit
 ) {
+    // --- 状態管理 ---
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
 
     var selectedChannel by remember { mutableStateOf<Channel?>(null) }
@@ -57,21 +64,24 @@ fun MainRootScreen(
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var isRecordListOpen by remember { mutableStateOf(false) }
 
+    // プレイヤー用オーバーレイ状態
     var isPlayerMiniListOpen by remember { mutableStateOf(false) }
     var playerShowOverlay by remember { mutableStateOf(true) }
     var playerIsManualOverlay by remember { mutableStateOf(false) }
     var playerIsPinnedOverlay by remember { mutableStateOf(false) }
     var playerIsSubMenuOpen by remember { mutableStateOf(false) }
 
+    // 録画プレイヤー用状態
     var showPlayerControls by remember { mutableStateOf(true) }
     var isPlayerSubMenuOpen by remember { mutableStateOf(false) }
     var isPlayerSceneSearchOpen by remember { mutableStateOf(false) }
 
+    // 復帰用メモリ
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
     var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
-
     var isReturningFromPlayer by remember { mutableStateOf(false) }
 
+    // ViewModel データの購読
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
     val isHomeLoading by homeViewModel.isLoading.collectAsState()
@@ -82,19 +92,20 @@ fun MainRootScreen(
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val searchHistory by recordViewModel.searchHistory.collectAsState()
 
+    // 起動シーケンス
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
     var showConnectionErrorDialog by remember { mutableStateOf(false) }
 
-    val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "192.168.100.60")
-    val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "40772")
-    val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "https://192-168-100-60.local.konomi.tv")
-    val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "7000")
+    // 設定値
+    val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
+    val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
+    val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "")
+    val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "")
+    val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
+    val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
-    // ★追加: デフォルト画質設定の取得
-    val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState()
-    val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState()
-
+    // 設定画面を閉じてリフレッシュ
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
         isDataReady = false
@@ -105,6 +116,7 @@ fun MainRootScreen(
         recordViewModel.fetchRecentRecordings()
     }
 
+    // --- 戻るボタンハンドリング ---
     BackHandler(enabled = true) {
         when {
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
@@ -122,6 +134,7 @@ fun MainRootScreen(
         }
     }
 
+    // データロード状態の監視
     LaunchedEffect(isChannelLoading, isHomeLoading, isRecLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading && !isRecLoading) {
@@ -135,6 +148,7 @@ fun MainRootScreen(
         }
     }
 
+    // スプラッシュ表示時間
     LaunchedEffect(Unit) {
         delay(2000)
         isSplashFinished = true
@@ -147,94 +161,57 @@ fun MainRootScreen(
 
         AnimatedVisibility(visible = showMainContent, enter = fadeIn(), exit = fadeOut()) {
             Box(modifier = Modifier.fillMaxSize()) {
-                if (selectedChannel != null) {
-                    LivePlayerScreen(
-                        channel = selectedChannel!!,
-                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp, konomiPort = konomiPort,
-                        // ★修正: 設定されたデフォルト画質を渡す
-                        initialQuality = defaultLiveQuality,
-                        groupedChannels = groupedChannels,
-                        isMiniListOpen = isPlayerMiniListOpen,
-                        onMiniListToggle = { isPlayerMiniListOpen = it },
-                        showOverlay = playerShowOverlay,
-                        onShowOverlayChange = { playerShowOverlay = it },
-                        isManualOverlay = playerIsManualOverlay,
-                        onManualOverlayChange = { playerIsManualOverlay = it },
-                        isPinnedOverlay = playerIsPinnedOverlay,
-                        onPinnedOverlayChange = { playerIsPinnedOverlay = it },
-                        isSubMenuOpen = playerIsSubMenuOpen,
-                        onSubMenuToggle = { playerIsSubMenuOpen = it },
-                        onChannelSelect = { newChannel ->
-                            selectedChannel = newChannel
-                            lastSelectedChannelId = newChannel.id
-                            lastSelectedProgramId = null
-                            homeViewModel.saveLastChannel(newChannel)
-                            isReturningFromPlayer = false
-                        },
-                        onBackPressed = { selectedChannel = null; isReturningFromPlayer = true }
-                    )
-                } else if (selectedProgram != null) {
-                    VideoPlayerScreen(
-                        program = selectedProgram!!,
-                        initialPositionMs = initialPlaybackPositionMs,
-                        // ★修正: 設定されたデフォルト画質を渡す
-                        initialQuality = defaultVideoQuality,
-                        konomiIp = konomiIp, konomiPort = konomiPort,
-                        showControls = showPlayerControls,
-                        onShowControlsChange = { showPlayerControls = it },
-                        isSubMenuOpen = isPlayerSubMenuOpen,
-                        onSubMenuToggle = { isPlayerSubMenuOpen = it },
-                        isSceneSearchOpen = isPlayerSceneSearchOpen,
-                        onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
-                        onBackPressed = { selectedProgram = null; isReturningFromPlayer = true },
-                        onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
-                    )
-                } else if (isRecordListOpen) {
-                    RecordListScreen(
-                        recentRecordings = recentRecordings,
-                        searchHistory = searchHistory,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        onProgramClick = { program ->
-                            // ★追加: 解析中なら何もしない (RecordedCardでもガードしているが念のため)
-                            if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
-
-                            // ★修正: ID比較を文字列に統一して確実にレジュームさせる
-                            val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
-                            val duration = program.recordedVideo.duration
-                            initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
-                                (history.playback_position * 1000).toLong()
-                            } else 0L
-                            selectedProgram = program
-                            lastSelectedProgramId = program.id.toString()
-                        },
-                        onLoadMore = { recordViewModel.loadNextPage() },
-                        isLoadingMore = isRecLoading,
-                        onBack = { isRecordListOpen = false },
-                        onSearch = { query -> recordViewModel.searchRecordings(query) }
-                    )
-                } else {
-                    HomeLauncherScreen(
-                        channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
-                        groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort,
-                        initialTabIndex = currentTabIndex, onTabChange = { currentTabIndex = it },
-                        selectedChannel = selectedChannel,
-                        onChannelClick = { channel ->
-                            selectedChannel = channel
-                            if (channel != null) {
-                                lastSelectedChannelId = channel.id; lastSelectedProgramId = null
-                                homeViewModel.saveLastChannel(channel)
+                when {
+                    selectedChannel != null -> {
+                        LivePlayerScreen(
+                            channel = selectedChannel!!,
+                            mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                            konomiIp = konomiIp, konomiPort = konomiPort,
+                            initialQuality = defaultLiveQuality,
+                            groupedChannels = groupedChannels,
+                            isMiniListOpen = isPlayerMiniListOpen,
+                            onMiniListToggle = { isPlayerMiniListOpen = it },
+                            showOverlay = playerShowOverlay,
+                            onShowOverlayChange = { playerShowOverlay = it },
+                            isManualOverlay = playerIsManualOverlay,
+                            onManualOverlayChange = { playerIsManualOverlay = it },
+                            isPinnedOverlay = playerIsPinnedOverlay,
+                            onPinnedOverlayChange = { playerIsPinnedOverlay = it },
+                            isSubMenuOpen = playerIsSubMenuOpen,
+                            onSubMenuToggle = { playerIsSubMenuOpen = it },
+                            onChannelSelect = { newChannel ->
+                                selectedChannel = newChannel
+                                lastSelectedChannelId = newChannel.id
+                                lastSelectedProgramId = null
+                                homeViewModel.saveLastChannel(newChannel)
                                 isReturningFromPlayer = false
-                            }
-                        },
-                        selectedProgram = selectedProgram,
-                        onProgramSelected = { program ->
-                            if (program != null) {
-                                // ★追加: 解析中なら何もしない
-                                if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
-
-                                // ★修正: ID比較を文字列に統一して確実にレジュームさせる
+                            },
+                            onBackPressed = { selectedChannel = null; isReturningFromPlayer = true }
+                        )
+                    }
+                    selectedProgram != null -> {
+                        VideoPlayerScreen(
+                            program = selectedProgram!!,
+                            initialPositionMs = initialPlaybackPositionMs,
+                            initialQuality = defaultVideoQuality,
+                            konomiIp = konomiIp, konomiPort = konomiPort,
+                            showControls = showPlayerControls,
+                            onShowControlsChange = { showPlayerControls = it },
+                            isSubMenuOpen = isPlayerSubMenuOpen,
+                            onSubMenuToggle = { isPlayerSubMenuOpen = it },
+                            isSceneSearchOpen = isPlayerSceneSearchOpen,
+                            onSceneSearchToggle = { isPlayerSceneSearchOpen = it },
+                            onBackPressed = { selectedProgram = null; isReturningFromPlayer = true },
+                            onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
+                        )
+                    }
+                    isRecordListOpen -> {
+                        RecordListScreen(
+                            recentRecordings = recentRecordings,
+                            searchHistory = searchHistory,
+                            konomiIp = konomiIp, konomiPort = konomiPort,
+                            onProgramClick = { program ->
+                                if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
                                 val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
                                 val duration = program.recordedVideo.duration
                                 initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
@@ -242,32 +219,70 @@ fun MainRootScreen(
                                 } else 0L
                                 selectedProgram = program
                                 lastSelectedProgramId = program.id.toString()
-                                lastSelectedChannelId = null
-                                showPlayerControls = true
-                                isReturningFromPlayer = false
-                            } else {
-                                selectedProgram = null
-                            }
-                        },
-                        epgSelectedProgram = epgSelectedProgram, onEpgProgramSelected = { epgSelectedProgram = it },
-                        isEpgJumpMenuOpen = isEpgJumpMenuOpen, onEpgJumpMenuStateChanged = { isEpgJumpMenuOpen = it },
-                        triggerBack = triggerHomeBack, onBackTriggered = { triggerHomeBack = false }, onFinalBack = onExitApp, onUiReady = { },
-                        onNavigateToPlayer = { channelId, _, _ ->
-                            val channel = groupedChannels.values.flatten().find { it.id == channelId }
-                            if (channel != null) {
-                                selectedChannel = channel; lastSelectedChannelId = channelId; lastSelectedProgramId = null
-                                homeViewModel.saveLastChannel(channel); epgSelectedProgram = null; isEpgJumpMenuOpen = false; isReturningFromPlayer = false
-                            }
-                        },
-                        lastPlayerChannelId = lastSelectedChannelId, lastPlayerProgramId = lastSelectedProgramId,
-                        isSettingsOpen = isSettingsOpen, onSettingsToggle = { isSettingsOpen = it },
-                        isRecordListOpen = isRecordListOpen, onShowAllRecordings = { isRecordListOpen = true }, onCloseRecordList = { isRecordListOpen = false },
-                        isReturningFromPlayer = isReturningFromPlayer, onReturnFocusConsumed = { isReturningFromPlayer = false }
-                    )
+                            },
+                            onLoadMore = { recordViewModel.loadNextPage() },
+                            isLoadingMore = isRecLoading,
+                            onBack = { isRecordListOpen = false },
+                            onSearch = { query -> recordViewModel.searchRecordings(query) }
+                        )
+                    }
+                    else -> {
+                        HomeLauncherScreen(
+                            channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
+                            groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort,
+                            initialTabIndex = currentTabIndex, onTabChange = { currentTabIndex = it },
+                            selectedChannel = selectedChannel,
+                            onChannelClick = { channel ->
+                                selectedChannel = channel
+                                if (channel != null) {
+                                    lastSelectedChannelId = channel.id; lastSelectedProgramId = null
+                                    homeViewModel.saveLastChannel(channel)
+                                    isReturningFromPlayer = false
+                                }
+                            },
+                            selectedProgram = selectedProgram,
+                            onProgramSelected = { program ->
+                                if (program != null) {
+                                    if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
+
+                                    val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
+                                    val duration = program.recordedVideo.duration
+
+                                    // duration が 0 の場合や NaN の場合をガードしつつ、1000倍して Long に変換
+                                    initialPlaybackPositionMs = if (history != null &&
+                                        history.playback_position > 5.0 &&
+                                        (duration <= 0.0 || history.playback_position < (duration - 10.0))) {
+                                        (history.playback_position * 1000).toLong()
+                                    } else 0L
+
+                                    selectedProgram = program
+                                    lastSelectedProgramId = program.id.toString()
+                                    lastSelectedChannelId = null
+                                    showPlayerControls = true
+                                    isReturningFromPlayer = false
+                                }
+                            },
+                            epgSelectedProgram = epgSelectedProgram, onEpgProgramSelected = { epgSelectedProgram = it },
+                            isEpgJumpMenuOpen = isEpgJumpMenuOpen, onEpgJumpMenuStateChanged = { isEpgJumpMenuOpen = it },
+                            triggerBack = triggerHomeBack, onBackTriggered = { triggerHomeBack = false }, onFinalBack = onExitApp, onUiReady = { },
+                            onNavigateToPlayer = { channelId, _, _ ->
+                                val channel = groupedChannels.values.flatten().find { it.id == channelId }
+                                if (channel != null) {
+                                    selectedChannel = channel; lastSelectedChannelId = channelId; lastSelectedProgramId = null
+                                    homeViewModel.saveLastChannel(channel); epgSelectedProgram = null; isEpgJumpMenuOpen = false; isReturningFromPlayer = false
+                                }
+                            },
+                            lastPlayerChannelId = lastSelectedChannelId, lastPlayerProgramId = lastSelectedProgramId,
+                            isSettingsOpen = isSettingsOpen, onSettingsToggle = { isSettingsOpen = it },
+                            isRecordListOpen = isRecordListOpen, onShowAllRecordings = { isRecordListOpen = true }, onCloseRecordList = { isRecordListOpen = false },
+                            isReturningFromPlayer = isReturningFromPlayer, onReturnFocusConsumed = { isReturningFromPlayer = false }
+                        )
+                    }
                 }
             }
         }
 
+        // --- オーバーレイ・ダイアログ ---
         if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) {
             InitialSetupDialog(onConfirm = { isSettingsOpen = true })
         }
@@ -286,16 +301,23 @@ fun MainRootScreen(
     }
 }
 
+// --- サブコンポーネント (安全性向上版) ---
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.safeRequestFocus("InitialSetup")
+    }
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
-            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
+            colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
             modifier = Modifier.width(400.dp)
         ) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -303,7 +325,11 @@ fun InitialSetupDialog(onConfirm: () -> Unit) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(text = AppStrings.SETUP_REQUIRED_MESSAGE, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                 Spacer(modifier = Modifier.height(32.dp))
-                Button(onClick = onConfirm, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onConfirm,
+                    colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                ) {
                     Text(AppStrings.GO_TO_SETTINGS)
                 }
             }
@@ -314,13 +340,18 @@ fun InitialSetupDialog(onConfirm: () -> Unit) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.safeRequestFocus("ConnectionError")
+    }
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
-            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
+            colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
             modifier = Modifier.width(420.dp)
         ) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -332,7 +363,11 @@ fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
                     Button(onClick = onExit, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.weight(1f)) {
                         Text(AppStrings.EXIT_APP)
                     }
-                    Button(onClick = onGoToSettings, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.weight(1f)) {
+                    Button(
+                        onClick = onGoToSettings,
+                        colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester)
+                    ) {
                         Text(AppStrings.GO_TO_SETTINGS_SHORT)
                     }
                 }
@@ -344,36 +379,32 @@ fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun IncompatibleOsDialog(onExit: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.safeRequestFocus("IncompatibleOS")
+    }
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
-            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
+            colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
             modifier = Modifier.width(420.dp)
         ) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "非対応のOSバージョン",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color(0xFFFF5252),
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = "非対応のOSバージョン", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     text = "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API ${Build.VERSION.SDK_INT}) は現在サポートされていません。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.LightGray
+                    style = MaterialTheme.typography.bodyMedium, color = Color.LightGray
                 )
                 Spacer(modifier = Modifier.height(32.dp))
                 Button(
                     onClick = onExit,
-                    colors = ButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.1f),
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
                 ) {
                     Text("アプリを終了する")
                 }

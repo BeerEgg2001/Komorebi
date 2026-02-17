@@ -69,6 +69,11 @@ class KonomiRepository @Inject constructor(
     // --- 視聴履歴 (Room: ローカルDB) ---
     fun getLocalWatchHistory() = watchHistoryDao.getAllHistory()
 
+    // ★追加: ID指定でEntityを取得
+    suspend fun getHistoryEntityById(id: Int): WatchHistoryEntity? {
+        return watchHistoryDao.getById(id)
+    }
+
     suspend fun saveToLocalHistory(entity: WatchHistoryEntity) {
         watchHistoryDao.insertOrUpdate(entity)
     }

@@ -2,13 +2,11 @@ package com.beeregg2001.komorebi.data.model
 
 import com.google.gson.annotations.SerializedName
 
-// ルートオブジェクト
 data class RecordedApiResponse(
     val total: Int,
     @SerializedName("recorded_programs") val recordedPrograms: List<RecordedProgram>
 )
 
-// 各録画番組の情報
 data class RecordedProgram(
     val id: Int,
     val title: String,
@@ -19,9 +17,8 @@ data class RecordedProgram(
     @SerializedName("is_partially_recorded") val isPartiallyRecorded: Boolean,
     val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
-
-    // ViewModelで注入する録画中フラグ
-    val isRecording: Boolean = false
+    val isRecording: Boolean = false,
+    val playbackPosition: Double = 0.0 // ★追加
 )
 
 data class RecordedChannel(
@@ -42,7 +39,6 @@ data class RecordedVideo(
     @SerializedName("container_format") val containerFormat: String,
     @SerializedName("video_codec") val videoCodec: String,
     @SerializedName("audio_codec") val audioCodec: String,
-    // ★追加: メタデータ解析状態
     @SerializedName("has_key_frames") val hasKeyFrames: Boolean = true,
     @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
 )

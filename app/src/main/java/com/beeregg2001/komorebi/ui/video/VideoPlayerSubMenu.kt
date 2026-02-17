@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.data.model.StreamQuality
 
 @Composable
 fun VideoTopSubMenuUI(
@@ -126,7 +127,7 @@ fun VideoTopSubMenuUI(
                 VideoMenuTileItem(
                     title = "字幕",
                     icon = Icons.Default.Subtitles,
-                    subtitle = if (isSubtitleEnabled) "ON" else "OFF",
+                    subtitle = if (isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
@@ -134,7 +135,7 @@ fun VideoTopSubMenuUI(
                 VideoMenuTileItem(
                     title = "コメント",
                     icon = Icons.Default.Chat,
-                    subtitle = if (isCommentEnabled) "ON" else "OFF",
+                    subtitle = if (isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )

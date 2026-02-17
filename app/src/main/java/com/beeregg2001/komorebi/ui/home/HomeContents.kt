@@ -1,6 +1,9 @@
+@file:OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -26,11 +29,13 @@ import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.components.isKonomiTvMode
 import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import java.time.Instant
 import kotlinx.coroutines.delay
 
+private const val TAG = "HomeContents"
+
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun HomeContents(
     lastWatchedChannels: List<Channel>,
@@ -50,14 +55,45 @@ fun HomeContents(
     val isKonomiTvMode = mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
     val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
 
+    // フォーカス復旧用のレジスタ
+    val channelItemRequester = remember { FocusRequester() }
+    val historyItemRequester = remember { FocusRequester() }
+
+    // リストの状態を保持
+    val lazyListState = rememberTvLazyListState()
+
+    // プレイヤーや詳細画面から戻ってきた際のフォーカス復旧ロジック
+    // データ（lastWatchedChannelsやwatchHistory）が変更された後にも再評価するようにキーを追加
+    LaunchedEffect(lastFocusedChannelId, lastFocusedProgramId, lastWatchedChannels.size, watchHistory.size) {
+        if (lastFocusedChannelId != null || lastFocusedProgramId != null) {
+            // UIの描画完了を少し待つ (長めに設定して確実性を高める)
+            delay(300)
+
+            if (lastFocusedChannelId != null) {
+                // 対象アイテムが表示範囲外にある場合に備えてスクロール (オプション)
+                // lazyListState.scrollToItem(...) などを検討しても良いが、TvLazyColumnはフォーカスで自動スクロールする
+                channelItemRequester.safeRequestFocus(TAG)
+            } else if (lastFocusedProgramId != null) {
+                // 履歴セクションまでスクロールしてからフォーカス
+                if (lastWatchedChannels.isNotEmpty()) {
+                    // 履歴は2番目のセクションなのでインデックス1へスクロール
+                    lazyListState.scrollToItem(1)
+                    delay(100)
+                }
+                historyItemRequester.safeRequestFocus(TAG)
+            }
+        }
+    }
+
     TvLazyColumn(
+        state = lazyListState,
         modifier = modifier
             .fillMaxSize()
             .focusRequester(externalFocusRequester),
         contentPadding = PaddingValues(top = 24.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(32.dp)
     ) {
-        // 前回視聴したチャンネル
+        // --- 前回視聴したチャンネル ---
         item {
             Column {
                 SectionHeader(title = "前回視聴したチャンネル", modifier = Modifier.padding(horizontal = 32.dp))
@@ -68,23 +104,17 @@ fun HomeContents(
                         contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        itemsIndexed(lastWatchedChannels) { index, channel ->
+                        itemsIndexed(lastWatchedChannels, key = { _, ch -> "ch_${ch.id}" }) { index, channel ->
                             var isFocused by remember { mutableStateOf(false) }
-
-                            val itemRequester = remember { FocusRequester() }
                             val isTarget = channel.id == lastFocusedChannelId
-
-                            // ★修正: 自動でフォーカスを奪うロジックを削除（トップナビに留まるようにするため）
 
                             Surface(
                                 onClick = { onChannelClick(channel) },
                                 modifier = Modifier
                                     .width(220.dp).height(100.dp)
                                     .onFocusChanged { isFocused = it.isFocused }
-                                    .then(
-                                        if (isTarget) Modifier.focusRequester(itemRequester)
-                                        else Modifier
-                                    )
+                                    // ターゲットならFocusRequesterを割り当てる
+                                    .then(if (isTarget) Modifier.focusRequester(channelItemRequester) else Modifier)
                                     .focusProperties {
                                         up = tabFocusRequester
                                         if (index == 0) left = FocusRequester.Cancel
@@ -92,7 +122,7 @@ fun HomeContents(
                                     },
                                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
                                 colors = ClickableSurfaceDefaults.colors(
-                                    containerColor = Color.White.copy(0.1f),
+                                    containerColor = Color.White.copy(alpha = 0.1f),
                                     focusedContainerColor = Color.White
                                 ),
                                 shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
@@ -119,20 +149,31 @@ fun HomeContents(
                                     }
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(channel.name, style = MaterialTheme.typography.titleSmall, color = if (isFocused) Color.Black else Color.White, maxLines = 2, fontWeight = FontWeight.Bold)
-                                        Text("${typeLabels[channel.type] ?: channel.type} ${channel.channelNumber ?: ""}", style = MaterialTheme.typography.labelSmall, color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.7f))
+                                        Text(
+                                            text = channel.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = if (isFocused) Color.Black else Color.White,
+                                            maxLines = 2,
+                                            fontWeight = FontWeight.Bold,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${typeLabels[channel.type] ?: channel.type} ${channel.channelNumber ?: ""}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.7f)
+                                        )
                                     }
                                 }
                             }
                         }
                     }
                 } else {
-                    EmptyPlaceholder("最近視聴した番組はありません")
+                    EmptyPlaceholder("最近視聴したチャンネルはありません")
                 }
             }
         }
 
-        // 録画の視聴履歴
+        // --- 録画の視聴履歴 ---
         item {
             Column {
                 SectionHeader(title = "録画の視聴履歴", modifier = Modifier.padding(start = 32.dp, bottom = 12.dp))
@@ -142,11 +183,8 @@ fun HomeContents(
                         contentPadding = PaddingValues(horizontal = 32.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        itemsIndexed(watchHistory) { index, history ->
-                            val itemRequester = remember { FocusRequester() }
-                            val isTarget = history.program.id == lastFocusedProgramId
-
-                            // ★修正: 自動でフォーカスを奪うロジックを削除
+                        itemsIndexed(watchHistory, key = { _, hist -> "hist_${hist.program.id}" }) { index, history ->
+                            val isTarget = history.program.id.toString() == lastFocusedProgramId
 
                             WatchHistoryCard(
                                 history = history,
@@ -154,10 +192,8 @@ fun HomeContents(
                                 konomiPort = konomiPort,
                                 onClick = { onHistoryClick(history) },
                                 modifier = Modifier
-                                    .then(
-                                        if (isTarget) Modifier.focusRequester(itemRequester)
-                                        else Modifier
-                                    )
+                                    // ターゲットならFocusRequesterを割り当てる
+                                    .then(if (isTarget) Modifier.focusRequester(historyItemRequester) else Modifier)
                                     .focusProperties {
                                         if (index == 0) left = FocusRequester.Cancel
                                         if (index == watchHistory.lastIndex) right = FocusRequester.Cancel
@@ -173,7 +209,6 @@ fun HomeContents(
     }
 }
 
-// 以下の Composable 関数は既存のまま維持
 @Composable
 fun EmptyPlaceholder(message: String, modifier: Modifier = Modifier) {
     Box(modifier = modifier.padding(horizontal = 32.dp)) {
