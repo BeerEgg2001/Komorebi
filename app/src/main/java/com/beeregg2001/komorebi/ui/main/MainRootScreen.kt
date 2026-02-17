@@ -4,6 +4,7 @@ package com.beeregg2001.komorebi.ui.main
 
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
@@ -20,14 +21,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.data.mapper.ReserveMapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.data.model.ReserveItem
+import com.beeregg2001.komorebi.ui.epg.ProgramDetailMode
+import com.beeregg2001.komorebi.ui.epg.ProgramDetailScreen
 import com.beeregg2001.komorebi.ui.home.HomeLauncherScreen
 import com.beeregg2001.komorebi.ui.home.LoadingScreen
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
@@ -49,8 +55,11 @@ fun MainRootScreen(
     homeViewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     recordViewModel: RecordViewModel,
+    reserveViewModel: ReserveViewModel = hiltViewModel(),
     onExitApp: () -> Unit
 ) {
+    val context = LocalContext.current
+
     // --- 状態管理 ---
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
 
@@ -59,29 +68,28 @@ fun MainRootScreen(
     var initialPlaybackPositionMs by remember { mutableLongStateOf(0L) }
 
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
+    var selectedReserve by remember { mutableStateOf<ReserveItem?>(null) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+
     var isEpgJumpMenuOpen by remember { mutableStateOf(false) }
     var triggerHomeBack by remember { mutableStateOf(false) }
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var isRecordListOpen by remember { mutableStateOf(false) }
 
-    // プレイヤー用オーバーレイ状態
     var isPlayerMiniListOpen by remember { mutableStateOf(false) }
     var playerShowOverlay by remember { mutableStateOf(true) }
     var playerIsManualOverlay by remember { mutableStateOf(false) }
     var playerIsPinnedOverlay by remember { mutableStateOf(false) }
     var playerIsSubMenuOpen by remember { mutableStateOf(false) }
 
-    // 録画プレイヤー用状態
     var showPlayerControls by remember { mutableStateOf(true) }
     var isPlayerSubMenuOpen by remember { mutableStateOf(false) }
     var isPlayerSceneSearchOpen by remember { mutableStateOf(false) }
 
-    // 復帰用メモリ
     var lastSelectedChannelId by remember { mutableStateOf<String?>(null) }
     var lastSelectedProgramId by remember { mutableStateOf<String?>(null) }
     var isReturningFromPlayer by remember { mutableStateOf(false) }
 
-    // ViewModel データの購読
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
     val isHomeLoading by homeViewModel.isLoading.collectAsState()
@@ -92,12 +100,10 @@ fun MainRootScreen(
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val searchHistory by recordViewModel.searchHistory.collectAsState()
 
-    // 起動シーケンス
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
     var showConnectionErrorDialog by remember { mutableStateOf(false) }
 
-    // 設定値
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "")
@@ -105,7 +111,6 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
-    // 設定画面を閉じてリフレッシュ
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
         isDataReady = false
@@ -114,11 +119,12 @@ fun MainRootScreen(
         epgViewModel.preloadAllEpgData()
         homeViewModel.refreshHomeData()
         recordViewModel.fetchRecentRecordings()
+        reserveViewModel.fetchReserves()
     }
 
-    // --- 戻るボタンハンドリング ---
     BackHandler(enabled = true) {
         when {
+            showDeleteConfirmDialog -> showDeleteConfirmDialog = false
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
             playerIsSubMenuOpen -> playerIsSubMenuOpen = false
             isPlayerSubMenuOpen -> isPlayerSubMenuOpen = false
@@ -127,6 +133,7 @@ fun MainRootScreen(
             selectedProgram != null -> { selectedProgram = null; showPlayerControls = true; isReturningFromPlayer = true }
             isSettingsOpen -> closeSettingsAndRefresh()
             epgSelectedProgram != null -> epgSelectedProgram = null
+            selectedReserve != null -> selectedReserve = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
             isRecordListOpen -> isRecordListOpen = false
             showConnectionErrorDialog -> onExitApp()
@@ -134,7 +141,6 @@ fun MainRootScreen(
         }
     }
 
-    // データロード状態の監視
     LaunchedEffect(isChannelLoading, isHomeLoading, isRecLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading && !isRecLoading) {
@@ -148,7 +154,6 @@ fun MainRootScreen(
         }
     }
 
-    // スプラッシュ表示時間
     LaunchedEffect(Unit) {
         delay(2000)
         isSplashFinished = true
@@ -229,6 +234,8 @@ fun MainRootScreen(
                     else -> {
                         HomeLauncherScreen(
                             channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
+                            // ★追加: 予約ViewModelを渡す
+                            reserveViewModel = reserveViewModel,
                             groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort,
                             initialTabIndex = currentTabIndex, onTabChange = { currentTabIndex = it },
                             selectedChannel = selectedChannel,
@@ -244,17 +251,11 @@ fun MainRootScreen(
                             onProgramSelected = { program ->
                                 if (program != null) {
                                     if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
-
                                     val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
                                     val duration = program.recordedVideo.duration
-
-                                    // duration が 0 の場合や NaN の場合をガードしつつ、1000倍して Long に変換
-                                    initialPlaybackPositionMs = if (history != null &&
-                                        history.playback_position > 5.0 &&
-                                        (duration <= 0.0 || history.playback_position < (duration - 10.0))) {
+                                    initialPlaybackPositionMs = if (history != null && history.playback_position > 5.0 && (duration <= 0.0 || history.playback_position < (duration - 10.0))) {
                                         (history.playback_position * 1000).toLong()
                                     } else 0L
-
                                     selectedProgram = program
                                     lastSelectedProgramId = program.id.toString()
                                     lastSelectedChannelId = null
@@ -262,7 +263,12 @@ fun MainRootScreen(
                                     isReturningFromPlayer = false
                                 }
                             },
-                            epgSelectedProgram = epgSelectedProgram, onEpgProgramSelected = { epgSelectedProgram = it },
+                            onReserveSelected = { reserveItem ->
+                                selectedReserve = reserveItem
+                            },
+                            isReserveOverlayOpen = selectedReserve != null,
+                            epgSelectedProgram = epgSelectedProgram,
+                            onEpgProgramSelected = { epgSelectedProgram = it },
                             isEpgJumpMenuOpen = isEpgJumpMenuOpen, onEpgJumpMenuStateChanged = { isEpgJumpMenuOpen = it },
                             triggerBack = triggerHomeBack, onBackTriggered = { triggerHomeBack = false }, onFinalBack = onExitApp, onUiReady = { },
                             onNavigateToPlayer = { channelId, _, _ ->
@@ -282,7 +288,53 @@ fun MainRootScreen(
             }
         }
 
-        // --- オーバーレイ・ダイアログ ---
+        if (selectedReserve != null) {
+            val focusRequester = remember { FocusRequester() }
+            ProgramDetailScreen(
+                program = ReserveMapper.toEpgProgram(selectedReserve!!),
+                mode = ProgramDetailMode.RESERVE,
+                onBackClick = { selectedReserve = null },
+                onDeleteReserveClick = { _ ->
+                    showDeleteConfirmDialog = true
+                },
+                initialFocusRequester = focusRequester
+            )
+        }
+
+        if (showDeleteConfirmDialog && selectedReserve != null) {
+            DeleteConfirmationDialog(
+                title = "予約の削除",
+                message = "この予約を削除してもよろしいですか？\n${selectedReserve?.program?.title ?: ""}",
+                onConfirm = {
+                    val id = selectedReserve!!.id
+                    reserveViewModel.deleteReservation(id) {
+                        showDeleteConfirmDialog = false
+                        selectedReserve = null
+                        Toast.makeText(context, "予約を削除しました", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onCancel = { showDeleteConfirmDialog = false }
+            )
+        }
+
+        if (epgSelectedProgram != null) {
+            val focusRequester = remember { FocusRequester() }
+            ProgramDetailScreen(
+                program = epgSelectedProgram!!,
+                mode = ProgramDetailMode.EPG,
+                onPlayClick = {
+                    val channel = groupedChannels.values.flatten().find { ch -> ch.id == it.channel_id }
+                    if (channel != null) {
+                        selectedChannel = channel; lastSelectedChannelId = channel.id; lastSelectedProgramId = null
+                        homeViewModel.saveLastChannel(channel); epgSelectedProgram = null; isReturningFromPlayer = false
+                    }
+                },
+                onRecordClick = { },
+                onBackClick = { epgSelectedProgram = null },
+                initialFocusRequester = focusRequester
+            )
+        }
+
         if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) {
             InitialSetupDialog(onConfirm = { isSettingsOpen = true })
         }
@@ -301,8 +353,56 @@ fun MainRootScreen(
     }
 }
 
-// --- サブコンポーネント (安全性向上版) ---
+// Dialog components (DeleteConfirmationDialog, etc.) omitted for brevity as they are unchanged from previous full version
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun DeleteConfirmationDialog(
+    title: String,
+    message: String,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.safeRequestFocus("DeleteConfirm")
+    }
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = title, style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(text = message, style = MaterialTheme.typography.bodyMedium, color = Color.LightGray)
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Button(
+                        onClick = onCancel,
+                        colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("キャンセル")
+                    }
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.colors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester)
+                    ) {
+                        Text("削除する")
+                    }
+                }
+            }
+        }
+    }
+}
 
+// ... InitialSetupDialog, ConnectionErrorDialog, IncompatibleOsDialog are same as before ...
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {

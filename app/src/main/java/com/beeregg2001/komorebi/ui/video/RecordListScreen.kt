@@ -132,7 +132,8 @@ fun RecordListScreen(
     LaunchedEffect(isSearchBarVisible) {
         if (isSearchBarVisible) {
             delay(150)
-            searchCloseButtonFocusRequester.safeRequestFocus(TAG)
+            // ★修正: 検索ボタンを押した後は、戻る(閉じる)ボタンではなく検索バーにフォーカスする
+            searchInputFocusRequester.safeRequestFocus(TAG)
         }
     }
 
@@ -199,7 +200,8 @@ fun RecordListScreen(
                             focusedBorder = Border(BorderStroke(2.dp, Color.White))
                         )
                     ) {
-                        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.padding(horizontal = 16.dp)) {
+                        // ★修正: fillMaxSize を追加し、decorationBox を使ってテキストの垂直配置を完全に揃える
+                        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                             BasicTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -210,16 +212,23 @@ fun RecordListScreen(
                                 cursorBrush = SolidColor(Color.White),
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) })
+                                keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) }),
+                                decorationBox = { innerTextField ->
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "番組名を検索...",
+                                                color = Color.Gray,
+                                                fontSize = 18.sp
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
                             )
-                            if (searchQuery.isEmpty()) {
-                                Text(
-                                    text = "番組名を検索...",
-                                    color = Color.Gray,
-                                    fontSize = 20.sp,
-                                    modifier = Modifier.align(Alignment.CenterStart)
-                                )
-                            }
                         }
                     }
                     Spacer(Modifier.width(16.dp))

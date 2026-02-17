@@ -25,7 +25,9 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.epg.EpgNavigationContainer
+import com.beeregg2001.komorebi.ui.reserve.ReserveListScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
@@ -59,6 +61,8 @@ fun HomeLauncherScreen(
     homeViewModel: HomeViewModel,
     epgViewModel: EpgViewModel,
     recordViewModel: RecordViewModel,
+    // ★追加: 予約データリフレッシュ用にViewModelを受け取る
+    reserveViewModel: ReserveViewModel,
     groupedChannels: Map<String, List<Channel>>,
     mirakurunIp: String, mirakurunPort: String,
     konomiIp: String, konomiPort: String,
@@ -70,6 +74,8 @@ fun HomeLauncherScreen(
     onProgramSelected: (RecordedProgram?) -> Unit,
     epgSelectedProgram: EpgProgram?,
     onEpgProgramSelected: (EpgProgram?) -> Unit,
+    onReserveSelected: (ReserveItem) -> Unit = {},
+    isReserveOverlayOpen: Boolean = false,
     isEpgJumpMenuOpen: Boolean,
     onEpgJumpMenuStateChanged: (Boolean) -> Unit,
     triggerBack: Boolean,
@@ -87,7 +93,7 @@ fun HomeLauncherScreen(
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {}
 ) {
-    val tabs = listOf("ホーム", "ライブ", "番組表", "ビデオ")
+    val tabs = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
 
     val epgUiState = epgViewModel.uiState
@@ -113,18 +119,37 @@ fun HomeLauncherScreen(
     var isEpgJumping by remember { mutableStateOf(false) }
     var topNavHasFocus by remember { mutableStateOf(false) }
 
-    // ビデオタブ復帰用のID変換
     val restoreProgramIdInt = remember(lastPlayerProgramId) { lastPlayerProgramId?.toIntOrNull() }
 
-    val isFullScreenMode = selectedChannel != null || selectedProgram != null || epgSelectedProgram != null || isSettingsOpen || isRecordListOpen
+    val isFullScreenMode = selectedChannel != null || selectedProgram != null || epgSelectedProgram != null || isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
+
+    // ★追加: タブ切り替え時にデータを再取得（フェッチ）する
+    LaunchedEffect(selectedTabIndex) {
+        when (selectedTabIndex) {
+            0 -> homeViewModel.refreshHomeData() // ホーム
+            1 -> channelViewModel.fetchChannels() // ライブ（チャンネルリスト）
+            2 -> recordViewModel.fetchRecentRecordings() // ビデオ（録画リスト）
+            // 3 (番組表) はデータ量が多いため、頻繁な全リロードは避ける運用とします
+            4 -> reserveViewModel.fetchReserves() // 録画予約
+        }
+    }
 
     LaunchedEffect(Unit) {
-        // ★修正（引き算）: プレイヤーから戻ってきた場合(isReturningFromPlayer)は、
-        // コンテンツ側がフォーカス復帰処理を行うため、ここではタブへのフォーカス強制を行わない。
-        // これにより「一瞬カードに合うがすぐにタブへ飛んでしまう」現象を防ぐ。
         if (!isReturningFromPlayer) {
             delay(500)
             if (!isFullScreenMode) {
+                tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
+            }
+        }
+    }
+
+    // 詳細画面から戻った時のフォーカス復帰ロジック
+    LaunchedEffect(isFullScreenMode) {
+        if (!isFullScreenMode) {
+            delay(200)
+            if (selectedTabIndex == 4) {
+                contentFirstItemRequesters[4].safeRequestFocus(TAG)
+            } else {
                 tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
             }
         }
@@ -185,7 +210,7 @@ fun HomeLauncherScreen(
                                     .focusRequester(tabFocusRequesters[index])
                                     .focusProperties {
                                         down = contentFirstItemRequesters[index]
-                                        canFocus = !(selectedTabIndex == 2 && isEpgJumping)
+                                        canFocus = !(selectedTabIndex == 3 && isEpgJumping)
                                     }
                             ) {
                                 Text(
@@ -203,7 +228,7 @@ fun HomeLauncherScreen(
                             .focusRequester(settingsFocusRequester)
                             .focusProperties {
                                 left = tabFocusRequesters.last()
-                                canFocus = !(selectedTabIndex == 2 && isEpgJumping)
+                                canFocus = !(selectedTabIndex == 3 && isEpgJumping)
                             }
                     ) {
                         Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.Gray)
@@ -252,32 +277,14 @@ fun HomeLauncherScreen(
                         isReturningFromPlayer = isReturningFromPlayer && selectedTabIndex == 1,
                         onReturnFocusConsumed = onReturnFocusConsumed
                     )
-                    2 -> EpgNavigationContainer(
-                        uiState = epgUiState,
-                        logoUrls = logoUrls,
-                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        mainTabFocusRequester = tabFocusRequesters[2],
-                        contentRequester = contentFirstItemRequesters[2],
-                        selectedProgram = epgSelectedProgram,
-                        onProgramSelected = onEpgProgramSelected,
-                        isJumpMenuOpen = isEpgJumpMenuOpen,
-                        onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                        onNavigateToPlayer = onNavigateToPlayer,
-                        currentType = currentBroadcastingType,
-                        onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
-                        restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 2) lastPlayerChannelId else null,
-                        availableTypes = groupedChannels.keys.toList(),
-                        onJumpStateChanged = { isEpgJumping = it }
-                    )
-                    3 -> VideoTabContent(
+                    2 -> VideoTabContent(
                         recentRecordings = recentRecordings,
                         watchHistory = watchHistoryPrograms,
                         selectedProgram = selectedProgram,
-                        // ★修正: ビデオタブにも復帰用IDを渡す
-                        restoreProgramId = if (isReturningFromPlayer && selectedTabIndex == 3) restoreProgramIdInt else null,
+                        restoreProgramId = if (isReturningFromPlayer && selectedTabIndex == 2) restoreProgramIdInt else null,
                         konomiIp = konomiIp, konomiPort = konomiPort,
-                        topNavFocusRequester = tabFocusRequesters[3],
-                        contentFirstItemRequester = contentFirstItemRequesters[3],
+                        topNavFocusRequester = tabFocusRequesters[2],
+                        contentFirstItemRequester = contentFirstItemRequesters[2],
                         onProgramClick = { program ->
                             val betterProgram = recentRecordings.find { it.id == program.id }
 
@@ -293,6 +300,30 @@ fun HomeLauncherScreen(
                         onLoadMore = { recordViewModel.loadNextPage() },
                         isLoadingMore = isRecordingLoadingMore,
                         onShowAllRecordings = onShowAllRecordings
+                    )
+                    3 -> EpgNavigationContainer(
+                        uiState = epgUiState,
+                        logoUrls = logoUrls,
+                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                        mainTabFocusRequester = tabFocusRequesters[3],
+                        contentRequester = contentFirstItemRequesters[3],
+                        selectedProgram = epgSelectedProgram,
+                        onProgramSelected = onEpgProgramSelected,
+                        isJumpMenuOpen = isEpgJumpMenuOpen,
+                        onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
+                        onNavigateToPlayer = onNavigateToPlayer,
+                        currentType = currentBroadcastingType,
+                        onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
+                        restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 3) lastPlayerChannelId else null,
+                        availableTypes = groupedChannels.keys.toList(),
+                        onJumpStateChanged = { isEpgJumping = it }
+                    )
+                    4 -> ReserveListScreen(
+                        onBack = { tabFocusRequesters[4].safeRequestFocus(TAG) },
+                        onProgramClick = onReserveSelected,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        contentFirstItemRequester = contentFirstItemRequesters[4]
                     )
                 }
             }

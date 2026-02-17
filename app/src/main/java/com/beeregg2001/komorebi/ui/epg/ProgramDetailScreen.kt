@@ -36,19 +36,28 @@ import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
+enum class ProgramDetailMode {
+    EPG, // 通常の番組表詳細
+    RESERVE // 予約確認・削除モード
+}
+
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ProgramDetailScreen(
     program: EpgProgram,
-    onPlayClick: (EpgProgram) -> Unit,
-    onRecordClick: (EpgProgram) -> Unit,
+    // モード指定 (デフォルトはEPG)
+    mode: ProgramDetailMode = ProgramDetailMode.EPG,
+    onPlayClick: (EpgProgram) -> Unit = {},
+    onRecordClick: (EpgProgram) -> Unit = {},
+    // 予約削除時のアクション
+    onDeleteReserveClick: (EpgProgram) -> Unit = {},
     onBackClick: () -> Unit,
     initialFocusRequester: FocusRequester
 ) {
     val now = OffsetDateTime.now()
-    val startTime = OffsetDateTime.parse(program.start_time)
-    val endTime = OffsetDateTime.parse(program.end_time)
+    val startTime = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }
+    val endTime = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }
 
     val isPast = endTime.isBefore(now)
     val isBroadcasting = now.isAfter(startTime) && now.isBefore(endTime)
@@ -85,27 +94,40 @@ fun ProgramDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.Start
             ) {
-                if (isBroadcasting) {
+                // --- モードによるボタンの出し分け ---
+                if (mode == ProgramDetailMode.RESERVE) {
+                    // 予約削除モード
                     Button(
-                        onClick = { if (isClickEnabled) onPlayClick(program) },
+                        onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                        colors = ButtonDefaults.colors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
                         modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
                     ) {
-                        Text("視聴する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                        Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                     }
-                } else if (isFuture) {
-                    Button(
-                        onClick = { onRecordClick(program) },
-                        enabled = false,
-                        modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
-                    ) {
-                        Text("録画予約（実装中）", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                } else {
+                    // 通常EPGモード
+                    if (isBroadcasting) {
+                        Button(
+                            onClick = { if (isClickEnabled) onPlayClick(program) },
+                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                        ) {
+                            Text("視聴する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                        }
+                    } else if (isFuture) {
+                        Button(
+                            onClick = { onRecordClick(program) },
+                            enabled = false, // EPGからの予約は別途実装
+                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                        ) {
+                            Text("録画予約（実装中）", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 
                 OutlinedButton(
                     onClick = { if (isClickEnabled) onBackClick() },
                     modifier = Modifier.fillMaxWidth()
-                        .then(if (isPast) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                        .then(if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(initialFocusRequester) else Modifier)
                 ) {
                     Text("戻る", fontFamily = NotoSansJP)
                 }
