@@ -31,7 +31,6 @@ import java.time.format.DateTimeFormatter
 
 private const val TAG = "HomeLauncher"
 
-// ★復元: DigitalClock
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun DigitalClock(modifier: Modifier = Modifier) {
@@ -97,7 +96,6 @@ fun HomeLauncherScreen(
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val lastChannels by homeViewModel.lastWatchedChannelFlow.collectAsState()
     val pickupGenre by homeViewModel.pickupGenreLabel.collectAsState()
-    // ★追加: 全放送波を対象としたピックアップデータ
     val genrePickup by homeViewModel.genrePickupPrograms.collectAsState()
 
     val hotChannels by remember { derivedStateOf { homeViewModel.getHotChannels(liveRows) } }
@@ -117,7 +115,6 @@ fun HomeLauncherScreen(
                 Row(modifier = Modifier.fillMaxWidth().height(80.dp).padding(top = 8.dp, start = 40.dp, end = 40.dp), verticalAlignment = Alignment.CenterVertically) {
                     DigitalClock()
                     Spacer(modifier = Modifier.width(32.dp))
-                    // ★復元: 下線タイプのTabRow
                     TabRow(
                         selectedTabIndex = selectedTabIndex,
                         modifier = Modifier.weight(1f).focusGroup(),
@@ -146,17 +143,26 @@ fun HomeLauncherScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when (selectedTabIndex) {
                     0 -> HomeContents(
-                        lastWatchedChannels = lastChannels, watchHistory = watchHistory,
-                        hotChannels = hotChannels, upcomingReserves = upcomingReserves,
-                        genrePickup = genrePickup, pickupGenreName = pickupGenre,
+                        lastWatchedChannels = lastChannels,
+                        watchHistory = watchHistory,
+                        hotChannels = hotChannels,
+                        upcomingReserves = upcomingReserves,
+                        genrePickup = genrePickup,
+                        pickupGenreName = pickupGenre,
                         onChannelClick = { onChannelClick(it) },
                         onHistoryClick = { onProgramSelected(KonomiDataMapper.toDomainModel(it)) },
                         onReserveClick = onReserveSelected,
                         onProgramClick = { onEpgProgramSelected(it) },
+                        onNavigateToTab = { index ->
+                            selectedTabIndex = index
+                            onTabChange(index)
+                        },
                         konomiIp = konomiIp, konomiPort = konomiPort,
                         mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        tabFocusRequester = tabFocusRequesters[0], externalFocusRequester = contentFirstItemRequesters[0],
-                        lastFocusedChannelId = internalLastPlayerChannelId, lastFocusedProgramId = lastPlayerProgramId
+                        tabFocusRequester = tabFocusRequesters[0],
+                        externalFocusRequester = contentFirstItemRequesters[0],
+                        lastFocusedChannelId = internalLastPlayerChannelId,
+                        lastFocusedProgramId = lastPlayerProgramId
                     )
                     1 -> LiveContent(
                         channelViewModel = channelViewModel, epgViewModel = epgViewModel, groupedChannels = groupedChannels,
@@ -181,15 +187,19 @@ fun HomeLauncherScreen(
                         uiState = epgUiState,
                         logoUrls = epgUiState.let { if (it is EpgUiState.Success) it.data.map { wrap -> epgViewModel.getLogoUrl(wrap.channel) } else emptyList() },
                         mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        mainTabFocusRequester = tabFocusRequesters[3], contentRequester = contentFirstItemRequesters[3],
-                        selectedProgram = epgSelectedProgram, onProgramSelected = onEpgProgramSelected,
+                        mainTabFocusRequester = tabFocusRequesters[3],
+                        contentRequester = contentFirstItemRequesters[3],
+                        selectedProgram = epgSelectedProgram,
+                        onProgramSelected = onEpgProgramSelected,
                         isJumpMenuOpen = isEpgJumpMenuOpen,
-                        // ★修正: HomeLauncherScreenの引数名に合わせる
                         onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                        onNavigateToPlayer = onNavigateToPlayer, currentType = epgViewModel.selectedBroadcastingType.collectAsState().value,
+                        onNavigateToPlayer = onNavigateToPlayer,
+                        currentType = epgViewModel.selectedBroadcastingType.collectAsState().value,
                         onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
                         restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 3) lastPlayerChannelId else null,
-                        availableTypes = groupedChannels.keys.toList(), onJumpStateChanged = { isEpgJumping = it }, reserves = reserves
+                        availableTypes = groupedChannels.keys.toList(),
+                        onJumpStateChanged = { isEpgJumping = it },
+                        reserves = reserves
                     )
                     4 -> ReserveListScreen(
                         onBack = { tabFocusRequesters[4].safeRequestFocus(TAG) },

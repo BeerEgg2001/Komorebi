@@ -50,6 +50,7 @@ fun HomeContents(
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
     onProgramClick: (EpgProgram) -> Unit,
+    onNavigateToTab: (Int) -> Unit,
     konomiIp: String,
     konomiPort: String,
     mirakurunIp: String,
@@ -75,10 +76,10 @@ fun HomeContents(
     TvLazyColumn(
         state = lazyListState,
         modifier = modifier.fillMaxSize().focusRequester(externalFocusRequester),
-        contentPadding = PaddingValues(top = 24.dp, bottom = 48.dp),
+        contentPadding = PaddingValues(top = 24.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(40.dp)
     ) {
-        // 1. 前回視聴したチャンネル (既存 + ロゴクロップ)
+        // 1. 前回視聴したチャンネル
         if (lastWatchedChannels.isNotEmpty()) {
             item {
                 Column {
@@ -99,7 +100,6 @@ fun HomeContents(
                                     Box(modifier = Modifier.size(72.dp, 40.dp).background(Color.Black.copy(0.2f)), contentAlignment = Alignment.Center) {
                                         val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
                                         else UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId)
-                                        // ★KonomiTVソースなら上下をカットして16:9にする
                                         AsyncImage(model = logoUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = if (isKonomiTvMode) ContentScale.Crop else ContentScale.Fit)
                                     }
                                     Spacer(modifier = Modifier.width(12.dp))
@@ -115,31 +115,14 @@ fun HomeContents(
             }
         }
 
-        // 2. 今、盛り上がっているチャンネル
+        // 2. 今、盛り上がっているチャンネル (放送中サムネイル表示)
         if (hotChannels.isNotEmpty()) {
             item {
                 Column {
                     SectionHeader("今、盛り上がっているチャンネル", Icons.Default.TrendingUp, Modifier.padding(horizontal = 32.dp))
                     TvLazyRow(contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(hotChannels) { uiState ->
-                            var isFocused by remember { mutableStateOf(false) }
-                            Surface(
-                                onClick = { onChannelClick(uiState.channel) },
-                                modifier = Modifier.width(280.dp).height(120.dp).onFocusChanged { isFocused = it.isFocused },
-                                colors = ClickableSurfaceDefaults.colors(containerColor = Color.White.copy(0.05f), focusedContainerColor = Color.White),
-                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
-                            ) {
-                                Column(Modifier.padding(16.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(8.dp).background(Color(0xFFD32F2F), CircleShape))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("${uiState.jikkyoForce ?: 0} コメント/分", color = if(isFocused) Color.Black else Color(0xFFD32F2F), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                    }
-                                    Spacer(Modifier.weight(1f))
-                                    Text(uiState.name, style = MaterialTheme.typography.labelMedium, color = if(isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.5f))
-                                    Text(uiState.programTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, color = if(isFocused) Color.Black else Color.White)
-                                }
-                            }
+                            HotChannelCard(uiState, konomiIp, konomiPort, onClick = { onChannelClick(uiState.channel) })
                         }
                     }
                 }
@@ -153,62 +136,32 @@ fun HomeContents(
                     SectionHeader("これからの録画予約", Icons.Default.RadioButtonChecked, Modifier.padding(horizontal = 32.dp))
                     TvLazyRow(contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(upcomingReserves) { reserve ->
-                            var isFocused by remember { mutableStateOf(false) }
-                            val start = OffsetDateTime.parse(reserve.program.startTime)
-                            Surface(
-                                onClick = { onReserveClick(reserve) },
-                                modifier = Modifier.width(240.dp).height(110.dp).onFocusChanged { isFocused = it.isFocused },
-                                colors = ClickableSurfaceDefaults.colors(containerColor = Color.White.copy(0.05f), focusedContainerColor = Color.White),
-                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
-                            ) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(start.format(DateTimeFormatter.ofPattern("HH:mm")), style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.6f) else Color.LightGray)
-                                        Spacer(Modifier.weight(1f))
-                                        Box(Modifier.background(if(isFocused) Color.Black else Color.White.copy(0.2f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                                            Text("P${reserve.recordSettings.priority}", fontSize = 10.sp, color = if(isFocused) Color.White else Color.White.copy(0.8f))
-                                        }
-                                    }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(reserve.program.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 2, color = if(isFocused) Color.Black else Color.White)
-                                    Spacer(Modifier.weight(1f))
-                                    Text(reserve.channel.name, style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.5f) else Color.White.copy(0.4f))
-                                }
-                            }
+                            UpcomingReserveCard(reserve, onClick = { onReserveClick(reserve) })
                         }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    NavigationLinkButton("録画予約リストを表示", Icons.Default.List, onClick = { onNavigateToTab(4) })
                 }
             }
         }
 
-        // 4. ジャンル別ピックアップ
+        // 4. ジャンル別ピックアップ (リッチデザイン)
         if (genrePickup.isNotEmpty()) {
             item {
                 Column {
                     SectionHeader("今夜の${pickupGenreName}ピックアップ", Icons.Default.Star, Modifier.padding(horizontal = 32.dp))
                     TvLazyRow(contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(genrePickup) { (program, channelName) ->
-                            var isFocused by remember { mutableStateOf(false) }
-                            val start = OffsetDateTime.parse(program.start_time)
-                            Surface(
-                                onClick = { onProgramClick(program) },
-                                modifier = Modifier.width(220.dp).height(100.dp).onFocusChanged { isFocused = it.isFocused },
-                                colors = ClickableSurfaceDefaults.colors(containerColor = Color.White.copy(0.05f), focusedContainerColor = Color.White),
-                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
-                            ) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Text("${start.format(DateTimeFormatter.ofPattern("MM/dd HH:mm"))} - $channelName", style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.6f) else Color.Cyan.copy(0.7f))
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(program.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 2, color = if(isFocused) Color.Black else Color.White)
-                                }
-                            }
+                            GenrePickupCard(program, channelName, onClick = { onProgramClick(program) })
                         }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    NavigationLinkButton("番組表を開く", Icons.Default.CalendarToday, onClick = { onNavigateToTab(3) })
                 }
             }
         }
 
-        // 5. 録画の視聴履歴 (既存)
+        // 5. 録画の視聴履歴
         if (watchHistory.isNotEmpty()) {
             item {
                 Column {
@@ -219,6 +172,158 @@ fun HomeContents(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 勢いのあるチャンネルカード (ライブサムネイル対応)
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    // KonomiTVのライブサムネイルURL
+    val liveThumbnailUrl = "http://$konomiIp:$konomiPort/api/streams/live/${uiState.displayChannelId}/thumbnail"
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.width(300.dp).height(168.dp).onFocusChanged { isFocused = it.isFocused },
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        colors = ClickableSurfaceDefaults.colors(containerColor = Color.DarkGray, focusedContainerColor = Color.White),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 背景にライブ映像のサムネイルを表示
+            AsyncImage(
+                model = liveThumbnailUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            // グラデーションオーバーレイ
+            Box(modifier = Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Transparent, if (isFocused) Color.White.copy(0.9f) else Color.Black.copy(0.85f)))
+            ))
+
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(Color(0xFFD32F2F), CircleShape))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "${uiState.jikkyoForce ?: 0} コメント/分",
+                        color = if(isFocused) Color.Black else Color(0xFFFF5252),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Text(uiState.name, style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.6f))
+                Text(uiState.programTitle, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, maxLines = 1, color = if(isFocused) Color.Black else Color.White)
+            }
+        }
+    }
+}
+
+/**
+ * ジャンル別ピックアップカード (局ロゴ + グラデーション背景)
+ */
+@RequiresApi(Build.VERSION_CODES.O)
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun GenrePickupCard(program: EpgProgram, channelName: String, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val start = OffsetDateTime.parse(program.start_time)
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.width(260.dp).height(120.dp).onFocusChanged { isFocused = it.isFocused },
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Color.White.copy(0.05f),
+            focusedContainerColor = Color.White
+        ),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
+    ) {
+        // アニメっぽさを出すための青系グラデーション
+        Box(Modifier.fillMaxSize().background(
+            Brush.horizontalGradient(listOf(Color(0xFF1A237E).copy(0.3f), Color.Transparent))
+        )) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    text = "${start.format(DateTimeFormatter.ofPattern("MM/dd HH:mm"))} - $channelName",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if(isFocused) Color.Black.copy(0.6f) else Color(0xFF81D4FA),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = program.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    color = if(isFocused) Color.Black else Color.White,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 予約カード
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun UpcomingReserveCard(reserve: ReserveItem, onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val start = OffsetDateTime.parse(reserve.program.startTime)
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.width(240.dp).height(110.dp).onFocusChanged { isFocused = it.isFocused },
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        colors = ClickableSurfaceDefaults.colors(containerColor = Color.White.copy(0.05f), focusedContainerColor = Color.White),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(start.format(DateTimeFormatter.ofPattern("HH:mm")), style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.6f) else Color.LightGray)
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.background(if(isFocused) Color.Black else Color.White.copy(0.2f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                    Text("P${reserve.recordSettings.priority}", fontSize = 10.sp, color = if(isFocused) Color.White else Color.White.copy(0.8f))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(reserve.program.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 2, color = if(isFocused) Color.Black else Color.White)
+            Spacer(Modifier.weight(1f))
+            Text(reserve.channel.name, style = MaterialTheme.typography.labelSmall, color = if(isFocused) Color.Black.copy(0.5f) else Color.White.copy(0.4f))
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun NavigationLinkButton(label: String, icon: ImageVector, onClick: () -> Unit) {
+    Box(modifier = Modifier.padding(start = 32.dp)) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.colors(
+                containerColor = Color.White.copy(0.05f),
+                contentColor = Color.White.copy(0.7f),
+                focusedContainerColor = Color.White,
+                focusedContentColor = Color.Black
+            ),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            modifier = Modifier.height(40.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(text = label, style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(14.dp))
             }
         }
     }
