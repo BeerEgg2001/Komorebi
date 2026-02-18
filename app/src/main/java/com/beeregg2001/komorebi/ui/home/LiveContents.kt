@@ -35,8 +35,7 @@ import com.beeregg2001.komorebi.data.model.UiChannelState
 import com.beeregg2001.komorebi.data.model.LiveRowState
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
-import com.beeregg2001.komorebi.viewmodel.Channel
-import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
+import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
@@ -48,6 +47,8 @@ private const val TAG = "LiveContent"
 fun LiveContent(
     modifier: Modifier = Modifier,
     channelViewModel: ChannelViewModel,
+    // ★追加
+    epgViewModel: EpgViewModel,
     groupedChannels: Map<String, List<Channel>>,
     selectedChannel: Channel?,
     onChannelClick: (Channel?) -> Unit,
@@ -59,39 +60,35 @@ fun LiveContent(
     onPlayerStateChanged: (Boolean) -> Unit,
     lastFocusedChannelId: String? = null,
     isReturningFromPlayer: Boolean = false,
-    onReturnFocusConsumed: () -> Unit = {}
+    onReturnFocusConsumed: () -> Unit = {},
+    reserveViewModel: ReserveViewModel
 ) {
     val liveRows by channelViewModel.liveRows.collectAsState()
     val listState = rememberLazyListState()
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
 
-    // コンテンツ準備完了フラグ
     var isContentReady by remember { mutableStateOf(false) }
 
-    // プレイヤー状態保持
     var isMiniListOpen by remember { mutableStateOf(false) }
     var showOverlay by remember { mutableStateOf(true) }
     var isManualOverlay by remember { mutableStateOf(false) }
     var isPinnedOverlay by remember { mutableStateOf(false) }
     var isSubMenuOpen by remember { mutableStateOf(false) }
 
-    // 1. 初期描画の安定化
     LaunchedEffect(Unit) {
         yield()
         delay(300)
         isContentReady = true
     }
 
-    // 2. プレイヤーのアクティブ状態通知
     LaunchedEffect(isPlayerActive) {
         onPlayerStateChanged(isPlayerActive)
     }
 
-    // 3. プレイヤーから戻った際のフォーカス復旧 (safeRequestFocus適用)
     LaunchedEffect(isReturningFromPlayer, isContentReady) {
         if (isReturningFromPlayer && isContentReady) {
-            delay(200) // 確実にUIがアタッチされるのを待機
+            delay(200)
             targetChannelFocusRequester.safeRequestFocus(TAG)
             onReturnFocusConsumed()
         }
@@ -99,18 +96,15 @@ fun LiveContent(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (!isContentReady) {
-            // ロード中表示
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White.copy(alpha = 0.1f))
             }
         } else {
-            // メインコンテンツ（チャンネルリスト）
             LazyColumn(
                 state = listState,
                 modifier = modifier
                     .fillMaxSize()
                     .focusRequester(contentFirstItemRequester)
-                    // プレイヤー表示中はリストのフォーカスを無効化
                     .then(if (isPlayerActive) Modifier.focusProperties { canFocus = false } else Modifier),
                 contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -130,7 +124,6 @@ fun LiveContent(
                             modifier = Modifier.fillMaxWidth().graphicsLayer(clip = false)
                         ) {
                             items(row.channels, key = { it.channel.id }) { uiState ->
-                                // 前回復帰ポイントの判定
                                 val isTarget = uiState.channel.id == lastFocusedChannelId
 
                                 ChannelWideCard(
@@ -141,7 +134,6 @@ fun LiveContent(
                                     modifier = Modifier
                                         .then(if (isTarget) Modifier.focusRequester(targetChannelFocusRequester) else Modifier)
                                         .focusProperties {
-                                            // 最初の行の場合、上キーでナビゲーションへ
                                             if (row.genreId == liveRows.firstOrNull()?.genreId) {
                                                 up = topNavFocusRequester
                                             }
@@ -157,7 +149,6 @@ fun LiveContent(
             }
         }
 
-        // 4. プレイヤーのオーバーレイ表示
         if (selectedChannel != null) {
             LivePlayerScreen(
                 channel = selectedChannel,
@@ -175,11 +166,17 @@ fun LiveContent(
                 isPinnedOverlay = isPinnedOverlay,
                 onPinnedOverlayChange = { isPinnedOverlay = it },
                 isSubMenuOpen = isSubMenuOpen,
-                onSubMenuToggle = { isSubMenuOpen = it }
+                onSubMenuToggle = { isSubMenuOpen = it },
+                reserveViewModel = reserveViewModel,
+                // ★追加
+                epgViewModel = epgViewModel,
+                onShowToast = { }
             )
         }
     }
 }
+
+// ... ChannelWideCard 等は変更なし
 
 /**
  * チャンネルカード（横長）コンポーネント

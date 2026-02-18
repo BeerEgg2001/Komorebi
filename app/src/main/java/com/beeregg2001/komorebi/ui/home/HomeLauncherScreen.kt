@@ -278,7 +278,12 @@ fun HomeLauncherScreen(
                         onPlayerStateChanged = { },
                         lastFocusedChannelId = internalLastPlayerChannelId,
                         isReturningFromPlayer = isReturningFromPlayer && selectedTabIndex == 1,
-                        onReturnFocusConsumed = onReturnFocusConsumed
+                        onReturnFocusConsumed = onReturnFocusConsumed,
+                        // ★追加: ViewModelを渡す
+                        reserveViewModel = reserveViewModel,
+                        // ★修正: epgViewModel を追加
+                        epgViewModel = epgViewModel
+
                     )
                     2 -> VideoTabContent(
                         recentRecordings = recentRecordings,

@@ -5,8 +5,6 @@ import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,7 +30,7 @@ private const val TAG = "ReserveListScreen"
 @Composable
 fun ReserveListScreen(
     onBack: () -> Unit,
-    // 予約詳細を開くためのコールバック
+    // ★修正: クリック時は詳細画面へ遷移する（MainRootでハンドリング）
     onProgramClick: (ReserveItem) -> Unit,
     konomiIp: String,
     konomiPort: String,
@@ -76,16 +74,14 @@ fun ReserveListScreen(
                 CircularProgressIndicator(color = Color.White)
             }
         } else if (reserves.isEmpty()) {
-            // ★修正: リストが空の場合は Box に FocusRequester を割り当ててフォーカス可能にする
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .weight(1f) // ヘッダー以外の領域を埋める
-                    // これにより、タブから下キーを押したときにこのBoxにフォーカスが当たるようになります
+                    .weight(1f)
                     .then(
                         if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
                     )
-                    .focusable(), // ★重要: Box自体をフォーカス可能にする
+                    .focusable(),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -101,7 +97,7 @@ fun ReserveListScreen(
                 contentPadding = PaddingValues(bottom = 40.dp),
                 modifier = Modifier
                     .fillMaxSize()
-                    .weight(1f) // ヘッダー以外の領域を埋める
+                    .weight(1f)
                     .then(
                         if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
                     )
@@ -111,7 +107,7 @@ fun ReserveListScreen(
                         item = program,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
-                        // クリック時に親へ通知
+                        // クリック時に詳細画面へ
                         onClick = { onProgramClick(program) }
                     )
                 }

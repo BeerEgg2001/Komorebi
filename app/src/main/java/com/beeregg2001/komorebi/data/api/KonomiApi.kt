@@ -67,6 +67,13 @@ interface KonomiApi {
     @POST("api/recording/reservations")
     suspend fun addReserve(@Body request: ReserveRequest): Response<Unit>
 
+    // ★追加: 予約更新 (ID指定でPUT)
+    @PUT("api/recording/reservations/{reservation_id}")
+    suspend fun updateReserve(
+        @Path("reservation_id") reservationId: Int,
+        @Body request: ReserveRequest
+    ): Response<Unit>
+
     // 予約削除
     @DELETE("api/recording/reservations/{reservation_id}")
     suspend fun deleteReservation(@Path("reservation_id") reservationId: Int): Response<Unit>

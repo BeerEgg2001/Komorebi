@@ -105,6 +105,14 @@ class KonomiRepository @Inject constructor(
         if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
     }
 
+    // ★追加: 予約更新の実装
+    suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> = runCatching {
+        val response = apiService.updateReserve(reservationId, request)
+        if (!response.isSuccessful) {
+            throw Exception("Update reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+        }
+    }
+
     suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {
         val response = apiService.deleteReservation(reservationId)
         if (!response.isSuccessful) {

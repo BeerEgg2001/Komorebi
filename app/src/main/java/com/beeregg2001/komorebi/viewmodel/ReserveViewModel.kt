@@ -45,35 +45,75 @@ class ReserveViewModel @Inject constructor(
         }
     }
 
-    // ★修正: 予約追加機能 (新しいRequestモデルを使用)
+    // 予約追加機能（簡易版：デフォルト設定を使用）
     fun addReserve(programId: String, onSuccess: () -> Unit) {
+        // デフォルト設定を作成して詳細版を呼ぶ
+        val defaultSettings = ReserveRecordSettings(
+            isEnabled = true,
+            priority = 3,
+            recordingMode = "SpecifiedService",
+            isEventRelayFollowEnabled = true
+        )
+        addReserveWithSettings(programId, defaultSettings, onSuccess)
+    }
+
+    // ★追加: 設定を指定して予約追加
+    fun addReserveWithSettings(programId: String, settings: ReserveRecordSettings, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
-
-            // デフォルトの予約設定を作成
-            val defaultSettings = ReserveRecordSettings(
-                isEnabled = true,
-                priority = 3,
-                recordingMode = "SpecifiedService"
-            )
-
-            // リクエストオブジェクトを作成
             val request = ReserveRequest(
                 programId = programId,
-                recordSettings = defaultSettings
+                recordSettings = settings
             )
 
             repository.addReserve(request)
                 .onSuccess {
-                    Log.i(TAG, "Added reservation for $programId")
+                    Log.i(TAG, "Added reservation for $programId with settings")
                     fetchReserves() // リスト更新
                     onSuccess()
                 }
                 .onFailure { e ->
                     Log.e(TAG, "Failed to add reservation", e)
-                    // 必要に応じてエラー通知処理を追加
                 }
             _isLoading.value = false
+        }
+    }
+
+    // 予約情報更新機能
+    fun updateReservation(item: ReserveItem, newSettings: ReserveRecordSettings, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true
+
+            val request = ReserveRequest(
+                programId = item.program.id,
+                recordSettings = newSettings
+            )
+
+            repository.updateReserve(item.id, request)
+                .onSuccess {
+                    Log.i(TAG, "Updated reservation ${item.id}")
+                    fetchReserves() // リスト更新
+                    onSuccess()
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to update reservation ${item.id}", e)
+                }
+            _isLoading.value = false
+        }
+    }
+
+    // ★追加: 最新の予約情報を1件再取得する
+    fun refreshReserveItem(reservationId: Int, onComplete: (ReserveItem?) -> Unit) {
+        viewModelScope.launch {
+            repository.getReserves()
+                .onSuccess { list ->
+                    val latest = list.find { it.id == reservationId }
+                    _reserves.value = list.sortedBy { it.program.startTime }
+                    onComplete(latest)
+                }
+                .onFailure {
+                    onComplete(null)
+                }
         }
     }
 
@@ -89,7 +129,6 @@ class ReserveViewModel @Inject constructor(
                 }
                 .onFailure { e ->
                     Log.e(TAG, "Failed to delete reservation $reservationId", e)
-                    // 404 (Not Found) の場合もリストを更新してダイアログを閉じる
                     if (e.message?.contains("not found", ignoreCase = true) == true) {
                         fetchReserves()
                         onSuccess()

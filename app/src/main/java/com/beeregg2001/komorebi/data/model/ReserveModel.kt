@@ -24,7 +24,7 @@ data class ReserveItem(
     val estimatedRecordingFileSize: Long,
 
     @SerializedName("record_settings")
-    val recordSettings: ReserveSettings
+    val recordSettings: ReserveRecordSettings
 )
 
 data class ReserveProgramDetail(
@@ -57,38 +57,32 @@ data class ReserveGenre(
     val middle: String
 )
 
-data class ReserveSettings(
-    @SerializedName("is_enabled") val isEnabled: Boolean,
-    val priority: Int
-)
+// --- リクエスト用モデル (登録・更新・ReserveItem内包用) ---
 
-// --- リクエスト用モデル (登録) ---
-
-/**
- * 予約追加時のルートリクエスト
- */
 data class ReserveRequest(
     @SerializedName("program_id") val programId: String,
     @SerializedName("record_settings") val recordSettings: ReserveRecordSettings
 )
 
 /**
- * 予約追加時の設定詳細
- * KonomiTVの仕様に合わせてデフォルト値を設定
+ * 予約設定詳細
+ * ★修正: APIからnullが返る可能性のあるフィールドをNullableに変更してクラッシュを回避
  */
 data class ReserveRecordSettings(
     @SerializedName("is_enabled") val isEnabled: Boolean = true,
     @SerializedName("priority") val priority: Int = 3,
-    @SerializedName("recording_mode") val recordingMode: String = "SpecifiedService",
+    @SerializedName("recording_folders") val recordingFolders: List<String>? = emptyList(),
     @SerializedName("recording_start_margin") val startMargin: Int = 0,
     @SerializedName("recording_end_margin") val endMargin: Int = 0,
+    @SerializedName("recording_mode") val recordingMode: String = "SpecifiedService",
+    @SerializedName("caption_recording_mode") val captionMode: String = "Default",
+    @SerializedName("data_broadcasting_recording_mode") val dataMode: String = "Default",
+    @SerializedName("post_recording_mode") val postRecordingMode: String = "Default",
+    // ★修正: ここがnullで落ちていたため Nullable に変更
+    @SerializedName("post_recording_bat_file_path") val postRecordingBatFilePath: String? = null,
     @SerializedName("is_event_relay_follow_enabled") val isEventRelayFollowEnabled: Boolean = true,
     @SerializedName("is_exact_recording_enabled") val isExactRecordingEnabled: Boolean = false,
     @SerializedName("is_oneseg_separate_output_enabled") val isOnesegSeparateOutputEnabled: Boolean = false,
     @SerializedName("is_sequential_recording_in_single_file_enabled") val isSequentialRecordingEnabled: Boolean = false,
-    @SerializedName("caption_recording_mode") val captionMode: String = "Default",
-    @SerializedName("data_broadcasting_recording_mode") val dataMode: String = "Default",
-    @SerializedName("post_recording_mode") val postRecordingMode: String = "Default",
-    @SerializedName("recording_folders") val recordingFolders: List<String> = emptyList(),
     @SerializedName("forced_tuner_id") val forcedTunerId: Int = 0
 )
