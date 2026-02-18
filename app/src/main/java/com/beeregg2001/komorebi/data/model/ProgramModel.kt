@@ -4,27 +4,24 @@ import com.beeregg2001.komorebi.viewmodel.Channel
 
 /**
  * UI表示に特化した、計算済みのチャンネル状態。
- * Composable内での計算を排除するために使用。
  */
 data class UiChannelState(
     val channel: Channel,
     val displayChannelId: String,
     val name: String,
     val programTitle: String,
-    val progress: Float, // 0.0f ~ 1.0f (ViewModel側で計算済み)
-    val hasProgram: Boolean
+    val progress: Float,
+    val hasProgram: Boolean,
+    val jikkyoForce: Int? = null // ★勢い情報を追加
 )
 
-/**
- * ライブタブの1行分（ジャンル）を表現するモデル。
- */
 data class LiveRowState(
     val genreId: String,
     val genreLabel: String,
     val channels: List<UiChannelState>
 )
 
-// --- 以下は既存のモデルをそのまま維持 ---
+// --- 以下、既存のモデル定義 ---
 data class EpgChannelResponse(val channels: List<EpgChannelWrapper>)
 data class EpgChannelWrapper(val channel: EpgChannel, val programs: List<EpgProgram>)
 data class EpgChannel(
@@ -39,7 +36,5 @@ data class EpgProgram(
     val detail: Map<String, String>?, val start_time: String, val end_time: String,
     val duration: Int, val is_free: Boolean, val genres: List<EpgGenre>?, val video_type: String?,
     val audio_type: String?, val audio_sampling_rate: String?
-) {
-    val majorGenre: String? get() = genres?.firstOrNull()?.major
-}
+)
 data class EpgGenre(val major: String, val middle: String)

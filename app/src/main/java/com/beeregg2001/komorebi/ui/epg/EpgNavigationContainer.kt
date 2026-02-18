@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
+
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
@@ -26,7 +28,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun EpgNavigationContainer(
@@ -45,7 +46,6 @@ fun EpgNavigationContainer(
     restoreChannelId: String? = null,
     availableTypes: List<String> = emptyList(),
     onJumpStateChanged: (Boolean) -> Unit,
-    // ★追加: 予約リストを受け取る
     reserves: List<ReserveItem> = emptyList()
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
@@ -55,23 +55,17 @@ fun EpgNavigationContainer(
 
     LaunchedEffect(isInternalJumping) { onJumpStateChanged(isInternalJumping) }
 
-    // ジャンプメニューが閉じた際の物理フォーカス吸着ロジック
     LaunchedEffect(isJumpMenuOpen) {
         if (!isJumpMenuOpen && isInternalJumping) {
-            repeat(15) {
-                runCatching { gridFocusRequester.requestFocus() }
-                delay(48)
-            }
+            repeat(15) { runCatching { gridFocusRequester.requestFocus() }; delay(48) }
             isInternalJumping = false
         }
     }
 
-    // 詳細画面から戻った時のフォーカス復帰ロジック（ハードウェアキー対応）
     var previousProgram by remember { mutableStateOf<EpgProgram?>(null) }
     LaunchedEffect(selectedProgram) {
         if (previousProgram != null && selectedProgram == null) {
-            delay(50)
-            gridFocusRequester.safeRequestFocus("EpgNav_Restore")
+            delay(50); gridFocusRequester.safeRequestFocus("EpgNav_Restore")
         }
         previousProgram = selectedProgram
     }
@@ -83,7 +77,6 @@ fun EpgNavigationContainer(
             onProgramSelected = { onProgramSelected(it) }, jumpTargetTime = jumpTargetTime, onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged, currentType = currentType, onTypeChanged = onTypeChanged,
             availableTypes = availableTypes, restoreChannelId = restoreChannelId,
-            // ★追加: 予約リストをエンジンに渡す
             reserves = reserves
         )
 
@@ -95,7 +88,6 @@ fun EpgNavigationContainer(
                     onPlayClick = { onNavigateToPlayer(it.channel_id, mirakurunIp, mirakurunPort) },
                     onRecordClick = {},
                     onBackClick = {
-                        // UIボタンでの戻る操作
                         gridFocusRequester.safeRequestFocus("EpgNav_UIBack")
                         onProgramSelected(null)
                     },
@@ -106,9 +98,7 @@ fun EpgNavigationContainer(
         }
 
         AnimatedVisibility(
-            visible = isJumpMenuOpen,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            visible = isJumpMenuOpen, enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier.zIndex(10f).focusProperties { exit = { gridFocusRequester } }
         ) {
             val now = remember { OffsetDateTime.now() }
@@ -116,16 +106,13 @@ fun EpgNavigationContainer(
                 dates = remember(now) { List(7) { now.plusDays(it.toLong()) } },
                 onSelect = { selectedTime ->
                     scope.launch {
-                        isInternalJumping = true
-                        jumpTargetTime = selectedTime
+                        isInternalJumping = true; jumpTargetTime = selectedTime
                         gridFocusRequester.safeRequestFocus("EpgNav_JumpSelect")
-                        delay(100)
-                        onJumpMenuStateChanged(false)
+                        delay(100); onJumpMenuStateChanged(false)
                     }
                 },
                 onDismiss = {
-                    onJumpMenuStateChanged(false)
-                    contentRequester.safeRequestFocus("EpgNav_JumpDismiss")
+                    onJumpMenuStateChanged(false); contentRequester.safeRequestFocus("EpgNav_JumpDismiss")
                 }
             )
         }
