@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,7 +52,6 @@ fun ReserveCard(
     val settings = item.recordSettings
 
     // --- 配色定義 (モノトーンベース) ---
-    val backgroundColor = if (isFocused) Color.White else Color(0xFF202020)
     val contentColor = if (isFocused) Color.Black else Color.White
     val subTextColor = if (isFocused) Color.DarkGray else Color.LightGray
 
@@ -59,19 +59,25 @@ fun ReserveCard(
     val badgeBgColor = if (isFocused) Color.Black else Color.White
     val badgeTextColor = if (isFocused) Color.White else Color.Black
 
-    // 録画中ステータス色 (赤)
-    val recordingRed = Color(0xFFE53935)
+    // ステータスカラー定義
+    val recordingRed = Color(0xFFE53935)   // 録画中 (鮮やかな赤)
+    // ★追加: 録画重複用の暗めの赤
+    val errorRed = Color(0xFFC62828)
+    val warningYellow = Color(0xFFFFCA28) // 一部のみ (黄色)
+    val normalGreen = contentColor        // 正常
 
     // --- ステータス表示ロジック ---
     val isRecording = item.isRecordingInProgress
-    val statusColor = if (isRecording) recordingRed else contentColor
-    val statusText = if (isRecording) {
-        "録画中"
-    } else {
-        when (item.recordingAvailability) {
-            "Full" -> "録画可能"
-            else -> item.recordingAvailability
-        }
+
+    // ステータスの判定
+    val (statusText, statusColor, statusIcon) = when {
+        isRecording -> Triple("録画中", recordingRed, null) // 録画中はアイコンなしで赤丸
+        item.recordingAvailability == "Full" -> Triple("録画可能", normalGreen, Icons.Default.Check)
+        item.recordingAvailability == "Partial" -> Triple("一部のみ録画", warningYellow, Icons.Default.Warning)
+        // ★修正: 録画重複を新しい赤色(errorRed)に変更
+        item.recordingAvailability == "None" || item.recordingAvailability.equals("unavailable", ignoreCase = true) ->
+            Triple("録画重複", errorRed, Icons.Default.Warning)
+        else -> Triple(item.recordingAvailability, warningYellow, Icons.Default.Warning) // その他は警告
     }
 
     // --- 時刻フォーマット (OffsetDateTime使用) ---
@@ -132,7 +138,7 @@ fun ReserveCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // --- 左側: 優先度と有効スイッチ ---
+            // --- 左側: 優先度 ---
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.width(60.dp)
@@ -223,12 +229,13 @@ fun ReserveCard(
                 verticalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxHeight()
             ) {
-                // ステータスバッジ
+                // ステータスバッジ (色とアイコンを動的に変更)
                 Box(
                     modifier = Modifier
                         .border(
                             1.dp,
-                            if (isFocused && !isRecording) Color.Black else statusColor,
+                            // フォーカス中でかつ警告・録画中でない場合は黒枠(反転)、それ以外はステータスカラー
+                            if (isFocused && statusColor == normalGreen) Color.Black else statusColor,
                             RoundedCornerShape(16.dp)
                         )
                         .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -240,10 +247,10 @@ fun ReserveCard(
                                     .size(10.dp)
                                     .background(statusColor, CircleShape)
                             )
-                        } else {
+                        } else if (statusIcon != null) {
                             Icon(
-                                Icons.Default.Check,
-                                null,
+                                imageVector = statusIcon,
+                                contentDescription = null,
                                 tint = statusColor,
                                 modifier = Modifier.size(12.dp)
                             )

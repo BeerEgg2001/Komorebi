@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.model.ReserveItem
+import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
+import com.beeregg2001.komorebi.data.model.ReserveRequest
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,38 @@ class ReserveViewModel @Inject constructor(
                 }
                 .onFailure {
                     it.printStackTrace()
+                }
+            _isLoading.value = false
+        }
+    }
+
+    // ★修正: 予約追加機能 (新しいRequestモデルを使用)
+    fun addReserve(programId: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true
+
+            // デフォルトの予約設定を作成
+            val defaultSettings = ReserveRecordSettings(
+                isEnabled = true,
+                priority = 3,
+                recordingMode = "SpecifiedService"
+            )
+
+            // リクエストオブジェクトを作成
+            val request = ReserveRequest(
+                programId = programId,
+                recordSettings = defaultSettings
+            )
+
+            repository.addReserve(request)
+                .onSuccess {
+                    Log.i(TAG, "Added reservation for $programId")
+                    fetchReserves() // リスト更新
+                    onSuccess()
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to add reservation", e)
+                    // 必要に応じてエラー通知処理を追加
                 }
             _isLoading.value = false
         }

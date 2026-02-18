@@ -7,6 +7,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -16,7 +19,9 @@ import androidx.compose.ui.text.*
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.data.util.EpgUtils
 import java.time.Duration
 import java.time.OffsetDateTime
@@ -41,7 +46,9 @@ class EpgDrawer(
         state: EpgState,
         animValues: EpgAnimValues,
         logoPainters: List<Painter>,
-        isGridFocused: Boolean // ★追加: グリッド自体にフォーカスがあるかどうかのフラグ
+        isGridFocused: Boolean,
+        reserveMap: Map<String, ReserveItem>,
+        clockPainter: Painter
     ) {
         with(drawScope) {
             val curX = animValues.scrollX
@@ -72,9 +79,28 @@ class EpgDrawer(
                             val isEmpty = uiProg.isEmpty
                             val p = uiProg.program
 
+                            val reserve = reserveMap[p.id]
+
+                            val isPartial = reserve != null && (
+                                    reserve.recordingAvailability == "Partial" ||
+                                            reserve.recordingAvailability == "Partially"
+                                    )
+                            val isDuplicated = reserve != null && (
+                                    reserve.recordingAvailability == "None" ||
+                                            reserve.recordingAvailability.equals("unavailable", ignoreCase = true)
+                                    )
+
                             clipRect(left = x, top = config.hhAreaPx, right = x + config.cwPx, bottom = size.height) {
+                                val bgColor = when {
+                                    isPartial -> config.colorReserveBorderPartial.copy(alpha = 0.2f)
+                                    isDuplicated -> config.colorReserveBgDuplicated
+                                    isEmpty -> config.colorProgramEmpty
+                                    isPast -> config.colorProgramPast
+                                    else -> config.colorProgramNormal
+                                }
+
                                 drawRect(
-                                    color = if (isEmpty) config.colorProgramEmpty else if (isPast) config.colorProgramPast else config.colorProgramNormal,
+                                    color = bgColor,
                                     topLeft = Offset(x + 1f, py + 1f),
                                     size = Size(config.cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
                                 )
@@ -90,11 +116,15 @@ class EpgDrawer(
                                 }
 
                                 if (ph > 20f) {
+                                    val iconSize = 12.sp.toPx()
+                                    val iconPadding = 2.dp.toPx()
+                                    val iconOffset = if (reserve != null) iconSize + iconPadding else 0f
+
                                     val titleLayout = state.textLayoutCache.getOrPut(p.id) {
                                         textMeasurer.measure(
                                             text = p.title,
                                             style = config.styleTitle.copy(color = if (isPast || isEmpty) Color.Gray else Color.White),
-                                            constraints = Constraints(maxWidth = (config.cwPx - 16f).toInt(), maxHeight = (ph - 12f).toInt().coerceAtLeast(0)),
+                                            constraints = Constraints(maxWidth = (config.cwPx - 16f - iconOffset).toInt().coerceAtLeast(0), maxHeight = (ph - 12f).toInt().coerceAtLeast(0)),
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
@@ -121,8 +151,29 @@ class EpgDrawer(
                                     val shiftY = minOf(baseShiftY, maxShiftY)
 
                                     val titleY = py + 8f + shiftY
+
+                                    if (reserve != null) {
+                                        val iconY = titleY + (titleH - iconSize) / 2
+
+                                        // ★修正: 録画中は赤丸、それ以外は時計
+                                        if (reserve.isRecordingInProgress) {
+                                            drawCircle(
+                                                color = Color(0xFFE53935), // 鮮やかな赤
+                                                radius = iconSize / 2,
+                                                center = Offset(x + 10f + iconSize / 2, iconY + iconSize / 2)
+                                            )
+                                        } else {
+                                            val clockColor = if (isPartial) config.colorReserveBorderPartial else Color.Red
+                                            translate(left = x + 10f, top = iconY) {
+                                                with(clockPainter) {
+                                                    draw(size = Size(iconSize, iconSize), colorFilter = ColorFilter.tint(clockColor))
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     if (titleY + titleH > config.hhAreaPx) {
-                                        drawText(titleLayout, topLeft = Offset(x + 10f, titleY))
+                                        drawText(titleLayout, topLeft = Offset(x + 10f + iconOffset, titleY))
                                     }
 
                                     if (descLayout != null) {
@@ -131,6 +182,24 @@ class EpgDrawer(
                                             drawText(descLayout, topLeft = Offset(x + 10f, descY))
                                         }
                                     }
+                                }
+
+                                if (reserve != null) {
+                                    val borderColor = if (isPartial) {
+                                        config.colorReserveBorderPartial
+                                    } else {
+                                        config.colorReserveBorder
+                                    }
+
+                                    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f)
+
+                                    drawRoundRect(
+                                        color = borderColor,
+                                        topLeft = Offset(x + 2f, py + 2f),
+                                        size = Size(config.cwPx - 4f, (ph - 4f).coerceAtLeast(0f)),
+                                        cornerRadius = CornerRadius(4f),
+                                        style = Stroke(width = 5f, pathEffect = dashEffect)
+                                    )
                                 }
                             }
                         }
@@ -149,16 +218,32 @@ class EpgDrawer(
             }
 
             // 3. フォーカス枠
-            // ★修正: グリッドにフォーカスがある場合のみ描画する条件を追加
             if (state.currentFocusedProgram != null && isGridFocused) {
                 val fx = config.twPx + curX + animValues.animX
                 val fy = config.hhAreaPx + curY + animValues.animY
                 val fh = animValues.animH
 
                 clipRect(left = 0f, top = config.hhAreaPx, right = size.width, bottom = size.height) {
-                    drawRect(config.colorFocusBg, Offset(fx + 1f, fy + 1f), Size(config.cwPx - 2f, fh - 2f))
-
                     val p = state.currentFocusedProgram!!
+                    val reserve = reserveMap[p.id]
+
+                    val isPartial = reserve != null && (
+                            reserve.recordingAvailability == "Partial" ||
+                                    reserve.recordingAvailability == "Partially"
+                            )
+                    val isDuplicated = reserve != null && (
+                            reserve.recordingAvailability == "None" ||
+                                    reserve.recordingAvailability.equals("unavailable", ignoreCase = true)
+                            )
+
+                    // 背景色決定 (不透明色を合成)
+                    val focusBgColor = when {
+                        isPartial -> config.colorReserveBorderPartial.copy(alpha = 0.2f).compositeOver(Color.Black)
+                        isDuplicated -> config.colorReserveBgDuplicated
+                        else -> config.colorFocusBg
+                    }
+
+                    drawRect(focusBgColor, Offset(fx + 1f, fy + 1f), Size(config.cwPx - 2f, fh - 2f))
 
                     if (p.title != "（番組情報なし）") {
                         val majorGenre = p.genres?.firstOrNull()?.major
@@ -170,9 +255,17 @@ class EpgDrawer(
                         )
                     }
 
+                    val iconSize = 12.sp.toPx()
+                    val iconPadding = 2.dp.toPx()
+                    val iconOffset = if (reserve != null) iconSize + iconPadding else 0f
+
                     val cacheKeyF = p.id + "f"
                     val titleLayout = state.textLayoutCache.getOrPut(cacheKeyF) {
-                        textMeasurer.measure(text = p.title, style = config.styleTitle, constraints = Constraints(maxWidth = (config.cwPx - 20f).toInt()))
+                        textMeasurer.measure(
+                            text = p.title,
+                            style = config.styleTitle,
+                            constraints = Constraints(maxWidth = (config.cwPx - 20f - iconOffset).toInt().coerceAtLeast(0))
+                        )
                     }
                     val titleH = titleLayout.size.height.toFloat()
 
@@ -197,18 +290,56 @@ class EpgDrawer(
                     val shiftY = minOf(baseShiftY, maxShiftY)
 
                     val titleY = fy + 8f + shiftY
-                    drawText(titleLayout, topLeft = Offset(fx + 10f, titleY))
+
+                    if (reserve != null) {
+                        val iconY = titleY + (titleH - iconSize) / 2
+
+                        // ★修正: 録画中は赤丸、それ以外は時計
+                        if (reserve.isRecordingInProgress) {
+                            drawCircle(
+                                color = Color(0xFFE53935),
+                                radius = iconSize / 2,
+                                center = Offset(fx + 10f + iconSize / 2, iconY + iconSize / 2)
+                            )
+                        } else {
+                            val clockColor = if (isPartial) config.colorReserveBorderPartial else Color.Red
+                            translate(left = fx + 10f, top = iconY) {
+                                with(clockPainter) {
+                                    draw(size = Size(iconSize, iconSize), colorFilter = ColorFilter.tint(clockColor))
+                                }
+                            }
+                        }
+                    }
+
+                    drawText(titleLayout, topLeft = Offset(fx + 10f + iconOffset, titleY))
 
                     if (descLayout != null) {
                         val descY = titleY + titleH + 4f
                         drawText(descLayout, topLeft = Offset(fx + 10f, descY))
                     }
 
+                    if (reserve != null) {
+                        val borderColor = if (isPartial) {
+                            config.colorReserveBorderPartial
+                        } else {
+                            config.colorReserveBorder
+                        }
+                        val dashEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f)
+
+                        drawRoundRect(
+                            color = borderColor,
+                            topLeft = Offset(fx + 2f, fy + 2f),
+                            size = Size(config.cwPx - 4f, (fh - 4f).coerceAtLeast(0f)),
+                            cornerRadius = CornerRadius(4f),
+                            style = Stroke(width = 5f, pathEffect = dashEffect)
+                        )
+                    }
+
                     drawRoundRect(config.colorFocusBorder, Offset(fx - 1f, fy - 1f), Size(config.cwPx + 2f, fh + 2f), CornerRadius(2f), Stroke(4f))
                 }
             }
 
-            // 4. 時間軸
+            // 4. 時間軸 & 5. チャンネルヘッダー & 6. 日付ラベル (変更なし)
             clipRect(left = 0f, top = config.hhAreaPx, right = config.twPx, bottom = size.height) {
                 val totalHours = 24 * 14
                 val startHour = (-curY / config.hhPx).toInt().coerceAtLeast(0)
@@ -220,35 +351,18 @@ class EpgDrawer(
                     val bgColor = when (hour) { in 4..10 -> config.colorTimeHourEven; in 11..17 -> config.colorTimeHourOdd; else -> config.colorTimeHourNight }
                     drawRect(bgColor, Offset(0f, fy), Size(config.twPx, config.hhPx))
 
-                    // テキストのメジャー（計測）
                     val amPmLayout = textMeasurer.measure(if (hour < 12) "AM" else "PM", config.styleAmPm)
                     val hourLayout = textMeasurer.measure(hour.toString(), config.styleTime)
-
-                    // 2つのテキスト間の隙間（お好みで調整してください）
                     val spacing = 2f
-                    // 2つのテキストを合わせた合計の高さ
                     val totalTextHeight = amPmLayout.size.height + hourLayout.size.height + spacing
-
-                    // 全体の開始Y座標（セルの中心から合計高さの半分を引く）
                     val startY = fy + (config.hhPx - totalTextHeight) / 2
 
-                    // AM/PM の描画
-                    drawText(
-                        amPmLayout,
-                        topLeft = Offset((config.twPx - amPmLayout.size.width) / 2, startY)
-                    )
-
-                    // 時刻 の描画（AM/PMの下に配置）
-                    drawText(
-                        hourLayout,
-                        topLeft = Offset((config.twPx - hourLayout.size.width) / 2, startY + amPmLayout.size.height + spacing)
-                    )
-
+                    drawText(amPmLayout, topLeft = Offset((config.twPx - amPmLayout.size.width) / 2, startY))
+                    drawText(hourLayout, topLeft = Offset((config.twPx - hourLayout.size.width) / 2, startY + amPmLayout.size.height + spacing))
                     drawLine(config.colorGridLine, Offset(0f, fy), Offset(config.twPx, fy), 3f)
                 }
             }
 
-            // 5. チャンネルヘッダー
             clipRect(left = config.twPx, top = 0f, right = size.width, bottom = config.hhAreaPx) {
                 drawRect(config.colorHeaderBg, Offset(config.twPx, 0f), Size(size.width, config.hhAreaPx))
 
@@ -292,7 +406,6 @@ class EpgDrawer(
                 }
             }
 
-            // 6. 日付ラベル
             drawRect(config.colorBg, Offset.Zero, Size(config.twPx, config.hhAreaPx))
             val disp = state.baseTime.plusMinutes((-curY / config.hhPx * 60).toLong().coerceAtLeast(0))
             val dateStr = "${disp.monthValue}/${disp.dayOfMonth}"

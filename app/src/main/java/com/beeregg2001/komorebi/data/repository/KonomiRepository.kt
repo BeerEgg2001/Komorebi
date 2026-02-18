@@ -99,10 +99,10 @@ class KonomiRepository @Inject constructor(
         apiService.getReserves().reservations
     }
 
-    suspend fun addReserve(programId: String): Result<Unit> = runCatching {
-        val request = ReserveRequest(programId = programId)
+    // ★修正: リクエストオブジェクトを受け取るように変更
+    suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.addReserve(request)
-        if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()}")
+        if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
     }
 
     suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {

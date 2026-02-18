@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.reserve
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -22,6 +23,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.components.ReserveCard
 import com.beeregg2001.komorebi.viewmodel.ReserveViewModel
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 private const val TAG = "ReserveListScreen"
 
@@ -73,12 +75,33 @@ fun ReserveListScreen(
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White)
             }
+        } else if (reserves.isEmpty()) {
+            // ★修正: リストが空の場合は Box に FocusRequester を割り当ててフォーカス可能にする
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f) // ヘッダー以外の領域を埋める
+                    // これにより、タブから下キーを押したときにこのBoxにフォーカスが当たるようになります
+                    .then(
+                        if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
+                    )
+                    .focusable(), // ★重要: Box自体をフォーカス可能にする
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "現在、予約されている番組はありません。",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
         } else {
+            // リストがある場合
             TvLazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 40.dp),
                 modifier = Modifier
                     .fillMaxSize()
+                    .weight(1f) // ヘッダー以外の領域を埋める
                     .then(
                         if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
                     )
@@ -91,16 +114,6 @@ fun ReserveListScreen(
                         // クリック時に親へ通知
                         onClick = { onProgramClick(program) }
                     )
-                }
-
-                if (reserves.isEmpty()) {
-                    item {
-                        Text(
-                            text = "現在、予約されている番組はありません。",
-                            color = Color.Gray,
-                            modifier = Modifier.padding(top = 120.dp)
-                        )
-                    }
                 }
             }
         }

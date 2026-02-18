@@ -11,7 +11,6 @@ interface KonomiApi {
     suspend fun getCurrentUser(): KonomiUser
 
     // --- チャンネル ---
-    // ★修正: List<ChannelApiResponse> ではなく ChannelApiResponse (オブジェクト) を返す
     @GET("api/channels")
     suspend fun getChannels(): ChannelApiResponse
 
@@ -64,6 +63,7 @@ interface KonomiApi {
     @GET("api/recording/reservations")
     suspend fun getReserves(): ReserveApiResponse
 
+    // 予約追加 (新しいリクエストボディに対応)
     @POST("api/recording/reservations")
     suspend fun addReserve(@Body request: ReserveRequest): Response<Unit>
 

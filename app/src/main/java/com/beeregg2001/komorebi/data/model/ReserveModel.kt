@@ -2,15 +2,15 @@ package com.beeregg2001.komorebi.data.model
 
 import com.google.gson.annotations.SerializedName
 
-// ルートレスポンス
+// --- レスポンス用モデル (取得) ---
+
 data class ReserveApiResponse(
     val total: Int,
     val reservations: List<ReserveItem>
 )
 
-// 予約アイテム (JSONの配列要素)
 data class ReserveItem(
-    val id: Int, // 予約ID
+    val id: Int,
     val channel: ReserveChannel,
     val program: ReserveProgramDetail,
 
@@ -27,7 +27,6 @@ data class ReserveItem(
     val recordSettings: ReserveSettings
 )
 
-// 番組詳細情報
 data class ReserveProgramDetail(
     val id: String,
     val title: String,
@@ -37,15 +36,12 @@ data class ReserveProgramDetail(
     val duration: Int,
     val genres: List<ReserveGenre>? = null,
     val detail: Map<String, String>? = null,
-
-    // ★追加: EpgProgramへの変換に必要なフィールド
     @SerializedName("is_free") val isFree: Boolean = true,
     @SerializedName("video_type") val videoType: String? = null,
     @SerializedName("primary_audio_type") val audioType: String? = null,
     @SerializedName("primary_audio_sampling_rate") val audioSamplingRate: String? = null
 )
 
-// チャンネル情報
 data class ReserveChannel(
     val id: String,
     @SerializedName("network_id") val network_Id: Int,
@@ -61,19 +57,38 @@ data class ReserveGenre(
     val middle: String
 )
 
-// 録画設定
 data class ReserveSettings(
     @SerializedName("is_enabled") val isEnabled: Boolean,
     val priority: Int
 )
 
-// 予約追加リクエスト用
+// --- リクエスト用モデル (登録) ---
+
+/**
+ * 予約追加時のルートリクエスト
+ */
 data class ReserveRequest(
     @SerializedName("program_id") val programId: String,
-    val option: ReserveOption? = null
+    @SerializedName("record_settings") val recordSettings: ReserveRecordSettings
 )
 
-data class ReserveOption(
-    val enable: Boolean = true,
-    val priority: Int = 1
+/**
+ * 予約追加時の設定詳細
+ * KonomiTVの仕様に合わせてデフォルト値を設定
+ */
+data class ReserveRecordSettings(
+    @SerializedName("is_enabled") val isEnabled: Boolean = true,
+    @SerializedName("priority") val priority: Int = 3,
+    @SerializedName("recording_mode") val recordingMode: String = "SpecifiedService",
+    @SerializedName("recording_start_margin") val startMargin: Int = 0,
+    @SerializedName("recording_end_margin") val endMargin: Int = 0,
+    @SerializedName("is_event_relay_follow_enabled") val isEventRelayFollowEnabled: Boolean = true,
+    @SerializedName("is_exact_recording_enabled") val isExactRecordingEnabled: Boolean = false,
+    @SerializedName("is_oneseg_separate_output_enabled") val isOnesegSeparateOutputEnabled: Boolean = false,
+    @SerializedName("is_sequential_recording_in_single_file_enabled") val isSequentialRecordingEnabled: Boolean = false,
+    @SerializedName("caption_recording_mode") val captionMode: String = "Default",
+    @SerializedName("data_broadcasting_recording_mode") val dataMode: String = "Default",
+    @SerializedName("post_recording_mode") val postRecordingMode: String = "Default",
+    @SerializedName("recording_folders") val recordingFolders: List<String> = emptyList(),
+    @SerializedName("forced_tuner_id") val forcedTunerId: Int = 0
 )

@@ -33,6 +33,11 @@ class EpgConfig(density: Density) {
     val colorProgramPast = Color(0xFF161616)
     val colorProgramEmpty = Color(0xFF0C0C0C)
 
+    // ★追加: 予約関連の色
+    val colorReserveBorder = Color(0xFFFF5252)        // 通常予約（赤）
+    val colorReserveBorderPartial = Color(0xFFFFCA28) // 一部のみ（黄）
+    val colorReserveBgDuplicated = Color(0xFF4A1818)  // 重複時の背景（薄い赤）
+
     // テキストスタイル
     val styleTitle = TextStyle(fontFamily = NotoSansJP, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = 14.sp)
     val styleDesc = TextStyle(fontFamily = NotoSansJP, color = Color.LightGray, fontSize = 10.sp, fontWeight = FontWeight.Normal, lineHeight = 13.sp)

@@ -10,6 +10,8 @@ import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
@@ -32,6 +35,7 @@ import com.beeregg2001.komorebi.data.mapper.ReserveMapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.model.ReserveItem
+import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailMode
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailScreen
 import com.beeregg2001.komorebi.ui.home.HomeLauncherScreen
@@ -43,6 +47,8 @@ import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.time.OffsetDateTime // 追加
 
 private const val TAG = "MainRootScreen"
 
@@ -59,6 +65,7 @@ fun MainRootScreen(
     onExitApp: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // --- 状態管理 ---
     var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -70,6 +77,9 @@ fun MainRootScreen(
     var epgSelectedProgram by remember { mutableStateOf<EpgProgram?>(null) }
     var selectedReserve by remember { mutableStateOf<ReserveItem?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var reserveToDelete by remember { mutableStateOf<ReserveItem?>(null) }
+
+    var toastMessage by remember { mutableStateOf<String?>(null) }
 
     var isEpgJumpMenuOpen by remember { mutableStateOf(false) }
     var triggerHomeBack by remember { mutableStateOf(false) }
@@ -100,6 +110,8 @@ fun MainRootScreen(
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val searchHistory by recordViewModel.searchHistory.collectAsState()
 
+    val reserves by reserveViewModel.reserves.collectAsState()
+
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
     var showConnectionErrorDialog by remember { mutableStateOf(false) }
@@ -122,8 +134,16 @@ fun MainRootScreen(
         reserveViewModel.fetchReserves()
     }
 
+    LaunchedEffect(toastMessage) {
+        if (toastMessage != null) {
+            delay(3000)
+            toastMessage = null
+        }
+    }
+
     BackHandler(enabled = true) {
         when {
+            reserveToDelete != null -> reserveToDelete = null
             showDeleteConfirmDialog -> showDeleteConfirmDialog = false
             isPlayerMiniListOpen -> isPlayerMiniListOpen = false
             playerIsSubMenuOpen -> playerIsSubMenuOpen = false
@@ -234,7 +254,6 @@ fun MainRootScreen(
                     else -> {
                         HomeLauncherScreen(
                             channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel,
-                            // ★追加: 予約ViewModelを渡す
                             reserveViewModel = reserveViewModel,
                             groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort,
                             initialTabIndex = currentTabIndex, onTabChange = { currentTabIndex = it },
@@ -294,34 +313,20 @@ fun MainRootScreen(
                 program = ReserveMapper.toEpgProgram(selectedReserve!!),
                 mode = ProgramDetailMode.RESERVE,
                 onBackClick = { selectedReserve = null },
-                onDeleteReserveClick = { _ ->
-                    showDeleteConfirmDialog = true
-                },
+                onDeleteReserveClick = { _ -> reserveToDelete = selectedReserve },
                 initialFocusRequester = focusRequester
-            )
-        }
-
-        if (showDeleteConfirmDialog && selectedReserve != null) {
-            DeleteConfirmationDialog(
-                title = "予約の削除",
-                message = "この予約を削除してもよろしいですか？\n${selectedReserve?.program?.title ?: ""}",
-                onConfirm = {
-                    val id = selectedReserve!!.id
-                    reserveViewModel.deleteReservation(id) {
-                        showDeleteConfirmDialog = false
-                        selectedReserve = null
-                        Toast.makeText(context, "予約を削除しました", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onCancel = { showDeleteConfirmDialog = false }
             )
         }
 
         if (epgSelectedProgram != null) {
             val focusRequester = remember { FocusRequester() }
+            val relatedReserve = reserves.find { it.program.id == epgSelectedProgram!!.id }
+            val isReserved = relatedReserve != null
+
             ProgramDetailScreen(
                 program = epgSelectedProgram!!,
                 mode = ProgramDetailMode.EPG,
+                isReserved = isReserved,
                 onPlayClick = {
                     val channel = groupedChannels.values.flatten().find { ch -> ch.id == it.channel_id }
                     if (channel != null) {
@@ -329,9 +334,50 @@ fun MainRootScreen(
                         homeViewModel.saveLastChannel(channel); epgSelectedProgram = null; isReturningFromPlayer = false
                     }
                 },
-                onRecordClick = { },
+                // ★修正: 予約実行 (トースト出し分け)
+                onRecordClick = { program ->
+                    reserveViewModel.addReserve(program.id) {
+                        scope.launch {
+                            epgSelectedProgram = null
+                            delay(300)
+
+                            // 放送中かどうか判定
+                            val now = OffsetDateTime.now()
+                            val start = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }
+                            val end = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }
+                            val isBroadcasting = now.isAfter(start) && now.isBefore(end)
+
+                            toastMessage = if (isBroadcasting) "録画を開始しました" else "予約しました"
+                        }
+                    }
+                },
+                onDeleteReserveClick = { _ ->
+                    if (relatedReserve != null) {
+                        reserveToDelete = relatedReserve
+                    }
+                },
                 onBackClick = { epgSelectedProgram = null },
                 initialFocusRequester = focusRequester
+            )
+        }
+
+        if (reserveToDelete != null) {
+            DeleteConfirmationDialog(
+                title = "予約の削除",
+                message = "この予約を削除してもよろしいですか？\n${reserveToDelete?.program?.title ?: ""}",
+                onConfirm = {
+                    val id = reserveToDelete!!.id
+                    reserveViewModel.deleteReservation(id) {
+                        scope.launch {
+                            reserveToDelete = null
+                            if (selectedReserve != null) selectedReserve = null
+                            if (epgSelectedProgram != null) epgSelectedProgram = null
+                            delay(300)
+                            toastMessage = "予約を削除しました"
+                        }
+                    }
+                },
+                onCancel = { reserveToDelete = null }
             )
         }
 
@@ -350,10 +396,12 @@ fun MainRootScreen(
         AnimatedVisibility(visible = !isAppReady && isSettingsInitialized && !isSettingsOpen && !showConnectionErrorDialog, enter = fadeIn(), exit = fadeOut()) {
             LoadingScreen()
         }
+
+        GlobalToast(message = toastMessage)
     }
 }
 
-// Dialog components (DeleteConfirmationDialog, etc.) omitted for brevity as they are unchanged from previous full version
+// Dialogs ... (以下変更なし)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DeleteConfirmationDialog(
@@ -402,7 +450,6 @@ fun DeleteConfirmationDialog(
     }
 }
 
-// ... InitialSetupDialog, ConnectionErrorDialog, IncompatibleOsDialog are same as before ...
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {

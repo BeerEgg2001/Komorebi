@@ -12,6 +12,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +25,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.rememberAsyncImagePainter
 import com.beeregg2001.komorebi.data.model.EpgProgram
+import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -58,7 +62,8 @@ fun ModernEpgCanvasEngine_Smooth(
     onTypeChanged: (String) -> Unit,
     restoreChannelId: String? = null,
     restoreProgramStartTime: String? = null,
-    availableTypes: List<String> = emptyList()
+    availableTypes: List<String> = emptyList(),
+    reserves: List<ReserveItem> = emptyList()
 ) {
     val density = LocalDensity.current
     val config = remember(density) { EpgConfig(density) }
@@ -66,6 +71,11 @@ fun ModernEpgCanvasEngine_Smooth(
     val textMeasurer = rememberTextMeasurer()
     val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
+
+    // ★追加: 時計アイコンのPainterを生成
+    val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
+
+    val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
 
     val visibleTabs = remember(availableTypes) {
         val all = listOf("地デジ" to "GR", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "SKY")
@@ -213,7 +223,15 @@ fun ModernEpgCanvasEngine_Smooth(
                 if (epgState.hasData) {
                     Spacer(modifier = Modifier.fillMaxSize().drawWithCache {
                         onDrawBehind {
-                            drawer.draw(this, epgState, animValues, logoPainters, isGridFocused = isContentFocused || epgState.hasData)
+                            drawer.draw(
+                                drawScope = this,
+                                state = epgState,
+                                animValues = animValues,
+                                logoPainters = logoPainters,
+                                isGridFocused = isContentFocused || epgState.hasData,
+                                reserveMap = reserveMap,
+                                clockPainter = clockPainter // ★追加: 時計アイコンを渡す
+                            )
                             hasRenderedFirstFrame = true
                         }
                     })

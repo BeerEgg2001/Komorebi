@@ -61,7 +61,6 @@ fun HomeLauncherScreen(
     homeViewModel: HomeViewModel,
     epgViewModel: EpgViewModel,
     recordViewModel: RecordViewModel,
-    // ★追加: 予約データリフレッシュ用にViewModelを受け取る
     reserveViewModel: ReserveViewModel,
     groupedChannels: Map<String, List<Channel>>,
     mirakurunIp: String, mirakurunPort: String,
@@ -103,6 +102,9 @@ fun HomeLauncherScreen(
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val isRecordingLoadingMore by recordViewModel.isLoadingMore.collectAsState()
 
+    // ★追加: 予約リストを収集
+    val reserves by reserveViewModel.reserves.collectAsState()
+
     val watchHistoryPrograms = remember(watchHistory) {
         watchHistory.map { KonomiDataMapper.toDomainModel(it) }
     }
@@ -123,14 +125,13 @@ fun HomeLauncherScreen(
 
     val isFullScreenMode = selectedChannel != null || selectedProgram != null || epgSelectedProgram != null || isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
 
-    // ★追加: タブ切り替え時にデータを再取得（フェッチ）する
     LaunchedEffect(selectedTabIndex) {
         when (selectedTabIndex) {
-            0 -> homeViewModel.refreshHomeData() // ホーム
-            1 -> channelViewModel.fetchChannels() // ライブ（チャンネルリスト）
-            2 -> recordViewModel.fetchRecentRecordings() // ビデオ（録画リスト）
+            0 -> homeViewModel.refreshHomeData()
+            1 -> channelViewModel.fetchChannels()
+            2 -> recordViewModel.fetchRecentRecordings()
             // 3 (番組表) はデータ量が多いため、頻繁な全リロードは避ける運用とします
-            4 -> reserveViewModel.fetchReserves() // 録画予約
+            4 -> reserveViewModel.fetchReserves()
         }
     }
 
@@ -149,6 +150,8 @@ fun HomeLauncherScreen(
             delay(200)
             if (selectedTabIndex == 4) {
                 contentFirstItemRequesters[4].safeRequestFocus(TAG)
+            } else if (selectedTabIndex == 3) {
+                // EPG(Index 3)の場合は、EpgNavigationContainer側でグリッドへのフォーカス復帰を行う
             } else {
                 tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
             }
@@ -316,7 +319,9 @@ fun HomeLauncherScreen(
                         onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
                         restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 3) lastPlayerChannelId else null,
                         availableTypes = groupedChannels.keys.toList(),
-                        onJumpStateChanged = { isEpgJumping = it }
+                        onJumpStateChanged = { isEpgJumping = it },
+                        // ★追加: 予約リストを渡す
+                        reserves = reserves
                     )
                     4 -> ReserveListScreen(
                         onBack = { tabFocusRequesters[4].safeRequestFocus(TAG) },
