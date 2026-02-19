@@ -1,6 +1,9 @@
+@file:OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -32,17 +35,20 @@ import com.beeregg2001.komorebi.data.model.UiChannelState
 import com.beeregg2001.komorebi.data.model.LiveRowState
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
-import com.beeregg2001.komorebi.viewmodel.Channel
-import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
+import com.beeregg2001.komorebi.viewmodel.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 
+private const val TAG = "LiveContent"
+
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun LiveContent(
     modifier: Modifier = Modifier,
     channelViewModel: ChannelViewModel,
+    // ★追加
+    epgViewModel: EpgViewModel,
     groupedChannels: Map<String, List<Channel>>,
     selectedChannel: Channel?,
     onChannelClick: (Channel?) -> Unit,
@@ -54,14 +60,14 @@ fun LiveContent(
     onPlayerStateChanged: (Boolean) -> Unit,
     lastFocusedChannelId: String? = null,
     isReturningFromPlayer: Boolean = false,
-    onReturnFocusConsumed: () -> Unit = {}
+    onReturnFocusConsumed: () -> Unit = {},
+    reserveViewModel: ReserveViewModel
 ) {
     val liveRows by channelViewModel.liveRows.collectAsState()
     val listState = rememberLazyListState()
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
 
-    // ★段階的描画フラグ：切り替え直後の重い処理を分散
     var isContentReady by remember { mutableStateOf(false) }
 
     var isMiniListOpen by remember { mutableStateOf(false) }
@@ -70,19 +76,20 @@ fun LiveContent(
     var isPinnedOverlay by remember { mutableStateOf(false) }
     var isSubMenuOpen by remember { mutableStateOf(false) }
 
-    // タブ移動が完了するのを少し待ってから中身を描画
     LaunchedEffect(Unit) {
         yield()
         delay(300)
         isContentReady = true
     }
 
-    LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
+    LaunchedEffect(isPlayerActive) {
+        onPlayerStateChanged(isPlayerActive)
+    }
 
     LaunchedEffect(isReturningFromPlayer, isContentReady) {
         if (isReturningFromPlayer && isContentReady) {
-            delay(150)
-            runCatching { targetChannelFocusRequester.requestFocus() }
+            delay(200)
+            targetChannelFocusRequester.safeRequestFocus(TAG)
             onReturnFocusConsumed()
         }
     }
@@ -159,12 +166,21 @@ fun LiveContent(
                 isPinnedOverlay = isPinnedOverlay,
                 onPinnedOverlayChange = { isPinnedOverlay = it },
                 isSubMenuOpen = isSubMenuOpen,
-                onSubMenuToggle = { isSubMenuOpen = it }
+                onSubMenuToggle = { isSubMenuOpen = it },
+                reserveViewModel = reserveViewModel,
+                // ★追加
+                epgViewModel = epgViewModel,
+                onShowToast = { }
             )
         }
     }
 }
 
+// ... ChannelWideCard 等は変更なし
+
+/**
+ * チャンネルカード（横長）コンポーネント
+ */
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -176,6 +192,8 @@ fun ChannelWideCard(
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
+
+    // カードの拡大アニメーション
     val animatedScale by animateFloatAsState(
         targetValue = if (isFocused) 1.05f else 1.0f,
         animationSpec = tween(durationMillis = 150), label = "cardScale"
@@ -185,13 +203,18 @@ fun ChannelWideCard(
         onClick = onClick,
         modifier = modifier
             .width(160.dp).height(72.dp)
-            .graphicsLayer { scaleX = animatedScale; scaleY = animatedScale }
+            .graphicsLayer {
+                scaleX = animatedScale
+                scaleY = animatedScale
+            }
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f), // 手動スケールを使うため1.0固定
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(alpha = 0.06f), focusedContainerColor = Color.White,
-            contentColor = Color.White, focusedContentColor = Color.Black
+            containerColor = Color.White.copy(alpha = 0.06f),
+            focusedContainerColor = Color.White,
+            contentColor = Color.White,
+            focusedContentColor = Color.Black
         )
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -199,34 +222,52 @@ fun ChannelWideCard(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // チャンネルロゴ
                 ChannelLogo(
-                    channel = uiState.channel, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp, konomiPort = konomiPort, modifier = Modifier.size(36.dp, 22.dp),
+                    channel = uiState.channel,
+                    mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                    konomiIp = konomiIp, konomiPort = konomiPort,
+                    modifier = Modifier.size(36.dp, 22.dp),
                     backgroundColor = Color.Black.copy(0.2f)
                 )
+
                 Spacer(modifier = Modifier.width(6.dp))
+
+                // チャンネル名と番組タイトル
                 Column(modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.Center) {
                     Text(
-                        text = uiState.name, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp,
-                        maxLines = 1, color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.5f),
+                        text = uiState.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        color = if (isFocused) Color.Black.copy(0.7f) else Color.White.copy(0.5f),
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = uiState.programTitle,
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                        fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.then(
                             if (isFocused) Modifier.basicMarquee(
-                                iterations = Int.MAX_VALUE, initialDelayMillis = 1000, spacing = MarqueeSpacing(40.dp)
+                                iterations = Int.MAX_VALUE,
+                                initialDelayMillis = 1000,
+                                spacing = MarqueeSpacing(40.dp)
                             ) else Modifier
                         )
                     )
                 }
             }
+
+            // 番組の進捗バー
             if (uiState.hasProgram) {
                 Box(modifier = Modifier.fillMaxWidth().height(2.5.dp).background(Color.Gray.copy(0.1f))) {
-                    Box(modifier = Modifier.fillMaxWidth(uiState.progress).fillMaxHeight()
-                        .background(if (isFocused) Color(0xFFD32F2F) else Color.White.copy(0.9f)))
+                    Box(modifier = Modifier
+                        .fillMaxWidth(uiState.progress)
+                        .fillMaxHeight()
+                        .background(if (isFocused) Color(0xFFD32F2F) else Color.White.copy(0.9f))
+                    )
                 }
             }
         }

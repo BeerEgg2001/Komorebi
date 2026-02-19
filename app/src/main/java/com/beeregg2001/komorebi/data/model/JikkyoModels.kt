@@ -8,3 +8,18 @@ data class JikkyoResponse(
     @SerializedName("nicolive_watch_session_url") val nicoliveWatchSessionUrl: String?,
     @SerializedName("is_nxjikkyo_exclusive") val isNxJikkyoExclusive: Boolean
 )
+
+// ★追加: アーカイブコメント用データモデル
+data class ArchivedJikkyoResponse(
+    val is_success: Boolean,
+    val comments: List<ArchivedComment>
+)
+
+data class ArchivedComment(
+    val time: Double,      // 動画開始からの秒数
+    val text: String,
+    val color: String,
+    val author: String,
+    val type: String,
+    val size: String
+)

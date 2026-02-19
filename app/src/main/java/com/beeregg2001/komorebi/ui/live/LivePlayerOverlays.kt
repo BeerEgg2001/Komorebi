@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.live
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
@@ -94,6 +95,7 @@ fun LiveOverlayUI(
     konomiIp: String,
     konomiPort: String,
     showDesc: Boolean,
+    isRecording: Boolean, // ★追加
     scrollState: ScrollState
 ) {
     val program = channel.programPresent
@@ -131,7 +133,10 @@ fun LiveOverlayUI(
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(0.95f))))
                 .padding(horizontal = 64.dp, vertical = 48.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 AsyncImage(
                     model = logoUrl,
                     contentDescription = null,
@@ -142,8 +147,14 @@ fun LiveOverlayUI(
                 Text(
                     text = "${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}",
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White.copy(0.8f)
+                    color = Color.White.copy(0.8f),
+                    modifier = Modifier.weight(1f) // 放送局名を左に寄せる
                 )
+
+                // ★追加: 🔴 録画中インジケーター
+                if (isRecording) {
+                    RecordingIndicator()
+                }
             }
             Text(
                 text = programTitle,
@@ -223,6 +234,33 @@ fun LiveOverlayUI(
     }
 }
 
+// ★追加: 録画中インジケーター用コンポーネント
+@Composable
+fun RecordingIndicator() {
+    Box(
+        modifier = Modifier
+            .background(Color.Black.copy(0.5f), RoundedCornerShape(16.dp))
+            .border(1.dp, Color(0xFFFF5252).copy(0.5f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(Color(0xFFFF5252), CircleShape)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "録画中",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+// ... 以下のコンポーネントは変更なし
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Unit) {

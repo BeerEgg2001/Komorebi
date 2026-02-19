@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
+import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,7 +23,7 @@ object DatabaseModule {
         @ApplicationContext context: Context
     ): AppDatabase {
         return Room.databaseBuilder(context, AppDatabase::class.java, "komorebi.db")
-            .fallbackToDestructiveMigration(dropAllTables = true) // ← これを追加するとスキーマ変更時にDBを自動で作り直してくれます
+            .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }
 
@@ -34,5 +35,11 @@ object DatabaseModule {
     @Provides
     fun provideLastChannelDao(database: AppDatabase): LastChannelDao {
         return database.lastChannelDao()
+    }
+
+    // ★追加: キャッシュ用DaoのProvide
+    @Provides
+    fun provideEpgCacheDao(database: AppDatabase): EpgCacheDao {
+        return database.epgCacheDao()
     }
 }

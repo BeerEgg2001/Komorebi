@@ -9,12 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Chat // ★追加
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ClosedCaption
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.alpha
@@ -30,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.data.model.StreamQuality
 
 @Composable
 fun TopSubMenuUI(
@@ -39,13 +35,13 @@ fun TopSubMenuUI(
     isMirakurunAvailable: Boolean,
     isSubtitleEnabled: Boolean,
     isSubtitleSupported: Boolean,
-    // ★追加: コメント有効フラグ
     isCommentEnabled: Boolean,
+    isRecording: Boolean,
+    onRecordToggle: () -> Unit,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSourceToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
-    // ★追加: コメント切り替え
     onCommentToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCloseMenu: () -> Unit
@@ -54,12 +50,11 @@ fun TopSubMenuUI(
     val qualityFocusRequester = remember { FocusRequester() }
     val mainQualityButtonRequester = remember { FocusRequester() }
 
-    // メニューを開いた際の初期フォーカス
     LaunchedEffect(Unit) {
+        delay(100)
         try { focusRequester.requestFocus() } catch (e: Exception) {}
     }
 
-    // 画質選択モードになった際
     LaunchedEffect(isQualityMode) {
         if (isQualityMode) {
             delay(100)
@@ -102,15 +97,29 @@ fun TopSubMenuUI(
                     .padding(horizontal = 32.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
+                // ★修正: 録画ボタンに focusRequester を付与して初期フォーカスにする
+                MenuTileItem(
+                    title = if (isRecording) "録画停止" else "録画開始",
+                    icon = if (isRecording) Icons.Default.StopCircle else Icons.Default.RadioButtonChecked,
+                    subtitle = if (isRecording) "録画中" else "番組を録画",
+                    onClick = onRecordToggle,
+                    modifier = Modifier
+                        .focusRequester(focusRequester) // 初期フォーカス位置
+                        .focusProperties { down = FocusRequester.Cancel },
+                    contentColor = if (isRecording) Color(0xFFFF5252) else Color.White
+                )
+                Spacer(Modifier.width(16.dp))
+
+                // 音声切り替え
                 MenuTileItem(
                     title = AppStrings.MENU_AUDIO, icon = Icons.Default.PlayArrow,
                     subtitle = if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
                     onClick = onAudioToggle,
-                    modifier = Modifier
-                        .focusRequester(focusRequester)
-                        .focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
                 Spacer(Modifier.width(16.dp))
+
+                // 字幕
                 MenuTileItem(
                     title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
                     subtitle = if(isSubtitleEnabled) "表示" else "非表示",
@@ -118,8 +127,9 @@ fun TopSubMenuUI(
                     enabled = isSubtitleSupported,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
-                // ★追加: コメントON/OFF
                 Spacer(Modifier.width(16.dp))
+
+                // コメント
                 MenuTileItem(
                     title = AppStrings.MENU_COMMENT, icon = Icons.Default.Chat,
                     subtitle = if(isCommentEnabled) "表示" else "非表示",
@@ -127,26 +137,28 @@ fun TopSubMenuUI(
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
                 Spacer(Modifier.width(16.dp))
-                MenuTileItem(
-                    title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
-                    subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
-                    onClick = onSourceToggle,
-                    enabled = isMirakurunAvailable,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
-                )
-                Spacer(Modifier.width(16.dp))
+
+                // 画質
                 MenuTileItem(
                     title = AppStrings.MENU_QUALITY, icon = Icons.Default.Settings,
                     subtitle = currentQuality.label,
-                    onClick = {
-                        isQualityMode = !isQualityMode
-                    },
+                    onClick = { isQualityMode = !isQualityMode },
                     enabled = currentSource == StreamSource.KONOMITV,
                     modifier = Modifier
                         .focusRequester(mainQualityButtonRequester)
                         .focusProperties {
                             if (!isQualityMode) down = FocusRequester.Cancel
                         }
+                )
+                Spacer(Modifier.width(16.dp))
+
+                // ソース
+                MenuTileItem(
+                    title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
+                    subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
+                    onClick = { onSourceToggle(); onCloseMenu() },
+                    enabled = isMirakurunAvailable,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
             }
 
@@ -163,7 +175,7 @@ fun TopSubMenuUI(
                             .padding(horizontal = 32.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        StreamQuality.entries.forEachIndexed { index, quality ->
+                        StreamQuality.entries.forEach { quality ->
                             MenuTileItem(
                                 title = quality.label,
                                 icon = if (currentQuality == quality) Icons.Default.CheckCircle else Icons.Default.Settings,
@@ -182,9 +194,7 @@ fun TopSubMenuUI(
                                 width = 140.dp,
                                 height = 90.dp
                             )
-                            if (index < StreamQuality.entries.size - 1) {
-                                Spacer(Modifier.width(16.dp))
-                            }
+                            Spacer(Modifier.width(16.dp))
                         }
                     }
                 }
@@ -198,7 +208,8 @@ fun MenuTileItem(
     title: String, icon: ImageVector, subtitle: String,
     onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
     width: Dp = 160.dp,
-    height: Dp = 100.dp
+    height: Dp = 100.dp,
+    contentColor: Color = Color.White // ★追加: 文字色指定用
 ) {
     Surface(
         onClick = onClick,
@@ -206,7 +217,7 @@ fun MenuTileItem(
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.White.copy(0.1f),
-            contentColor = if (enabled) Color.White else Color.White.copy(0.3f),
+            contentColor = if (enabled) contentColor else Color.White.copy(0.3f),
             focusedContainerColor = Color.White,
             focusedContentColor = Color.Black
         ),
