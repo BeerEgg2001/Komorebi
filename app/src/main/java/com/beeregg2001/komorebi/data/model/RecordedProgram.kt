@@ -2,13 +2,11 @@ package com.beeregg2001.komorebi.data.model
 
 import com.google.gson.annotations.SerializedName
 
-// ルートオブジェクト
 data class RecordedApiResponse(
     val total: Int,
     @SerializedName("recorded_programs") val recordedPrograms: List<RecordedProgram>
 )
 
-// 各録画番組の情報
 data class RecordedProgram(
     val id: Int,
     val title: String,
@@ -19,12 +17,11 @@ data class RecordedProgram(
     @SerializedName("is_partially_recorded") val isPartiallyRecorded: Boolean,
     val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
-
-    // ★追加: 録画中フラグ (APIレスポンスにはないためデフォルトfalse、ViewModelで計算して注入)
-    val isRecording: Boolean = false
+    val genres: List<EpgGenre>? = null, // ★追加: 番組表と同じジャンル情報
+    val isRecording: Boolean = false,
+    val playbackPosition: Double = 0.0
 )
 
-// ... (以下、RecordedChannel, RecordedVideo など変更なしのため省略)
 data class RecordedChannel(
     val id: String,
     @SerializedName("display_channel_id") val displayChannelId: String,
@@ -35,6 +32,7 @@ data class RecordedChannel(
 
 data class RecordedVideo(
     val id: Int,
+    val status: String,
     @SerializedName("file_path") val filePath: String,
     @SerializedName("recording_start_time") val recordingStartTime: String,
     @SerializedName("recording_end_time") val recordingEndTime: String,
@@ -42,6 +40,7 @@ data class RecordedVideo(
     @SerializedName("container_format") val containerFormat: String,
     @SerializedName("video_codec") val videoCodec: String,
     @SerializedName("audio_codec") val audioCodec: String,
+    @SerializedName("has_key_frames") val hasKeyFrames: Boolean = true,
     @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
 )
 

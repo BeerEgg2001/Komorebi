@@ -1,73 +1,78 @@
 package com.beeregg2001.komorebi.data.api
 
-import com.beeregg2001.komorebi.data.model.HistoryUpdateRequest
-import com.beeregg2001.komorebi.data.model.JikkyoResponse
-import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
-import com.beeregg2001.komorebi.data.model.KonomiProgram
-import com.beeregg2001.komorebi.data.model.KonomiUser
-import com.beeregg2001.komorebi.data.model.RecordedApiResponse
+import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.viewmodel.ChannelApiResponse
 import retrofit2.Response
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
+import retrofit2.http.*
 
 interface KonomiApi {
-    @GET("api/channels")
-    suspend fun getChannels(): ChannelApiResponse
-
-    @GET("api/videos")
-    suspend fun getRecordedPrograms(
-        @Query("order") sort: String = "desc",
-        @Query("page") page: Int = 1,
-    ): RecordedApiResponse
-
-    // ★追加: 録画番組検索API
-    @GET("api/videos/search")
-    suspend fun searchVideos(
-        @Query("keyword") keyword: String,
-        @Query("order") sort: String = "desc",
-        @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 30 // デフォルト30件と想定
-    ): RecordedApiResponse
-
-    // --- ユーザー設定（ピン留めチャンネル等） ---
+    // --- ユーザー ---
     @GET("api/users/me")
     suspend fun getCurrentUser(): KonomiUser
 
-    // --- 視聴履歴 ---
-    @GET("api/programs/history")
-    suspend fun getWatchHistory(): List<KonomiHistoryProgram>
+    // --- チャンネル ---
+    @GET("api/channels")
+    suspend fun getChannels(): ChannelApiResponse
 
-    // 視聴位置の更新（30秒以上視聴時などに叩く）
-    @POST("api/programs/history")
-    suspend fun updateWatchHistory(@Body request: HistoryUpdateRequest)
+    // --- 録画番組 ---
+    @GET("api/videos")
+    suspend fun getRecordedPrograms(
+        @Query("limit") limit: Int = 24,
+        @Query("offset") offset: Int = 0,
+        @Query("page") page: Int = 1,
+        @Query("sort") sort: String = "recorded_start_at",
+        @Query("order") order: String = "desc"
+    ): RecordedApiResponse
 
-    // --- マイリスト（ブックマーク） ---
-    @GET("api/programs/bookmarks")
-    suspend fun getBookmarks(): List<KonomiProgram>
+    @GET("api/videos/search")
+    suspend fun searchVideos(
+        @Query("query") keyword: String,
+        @Query("page") page: Int = 1,
+        @Query("order") order: String = "desc"
+    ): RecordedApiResponse
 
-    @POST("api/programs/bookmarks/{program_id}")
-    suspend fun addBookmark(@Path("program_id") programId: String)
-
-    @DELETE("api/programs/bookmarks/{program_id}")
-    suspend fun removeBookmark(@Path("program_id") programId: String)
-
-//    録画ストリームの生存確認（ハートビート）
-    @PUT("api/streams/video/{video_id}/{quality}/keep-alive")
+    // --- 視聴維持 ---
+    @POST("api/videos/{videoId}/keep-alive")
     suspend fun keepAlive(
-        @Path("video_id") videoId: Int,
-        @Path("quality") quality: String,
+        @Path("videoId") videoId: Int,
+        @Query("quality") quality: String,
         @Query("session_id") sessionId: String
     ): Response<Unit>
 
-    // ★追加: 実況接続情報取得API
-    @GET("api/channels/{channel_id}/jikkyo")
-    suspend fun getJikkyoInfo(
-        @Path("channel_id") channelId: String
-    ): JikkyoResponse
+    // --- マイリスト ---
+    @GET("api/mylists")
+    suspend fun getBookmarks(): List<KonomiProgram>
+
+    // --- 視聴履歴 ---
+    @GET("api/histories")
+    suspend fun getWatchHistory(): List<KonomiHistoryProgram>
+
+    @POST("api/histories")
+    suspend fun updateWatchHistory(@Body request: HistoryUpdateRequest): Response<Unit>
+
+    // --- 実況 ---
+    @GET("api/jikkyo/{channelId}")
+    suspend fun getJikkyoInfo(@Path("channelId") channelId: String): JikkyoResponse
+
+    @GET("api/videos/{videoId}/comments")
+    suspend fun getArchivedJikkyo(@Path("videoId") videoId: Int): ArchivedJikkyoResponse
+
+    // --- 予約関連 ---
+    @GET("api/recording/reservations")
+    suspend fun getReserves(): ReserveApiResponse
+
+    // 予約追加 (新しいリクエストボディに対応)
+    @POST("api/recording/reservations")
+    suspend fun addReserve(@Body request: ReserveRequest): Response<Unit>
+
+    // ★追加: 予約更新 (ID指定でPUT)
+    @PUT("api/recording/reservations/{reservation_id}")
+    suspend fun updateReserve(
+        @Path("reservation_id") reservationId: Int,
+        @Body request: ReserveRequest
+    ): Response<Unit>
+
+    // 予約削除
+    @DELETE("api/recording/reservations/{reservation_id}")
+    suspend fun deleteReservation(@Path("reservation_id") reservationId: Int): Response<Unit>
 }

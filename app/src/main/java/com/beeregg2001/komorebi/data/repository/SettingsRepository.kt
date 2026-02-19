@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
-// Contextの拡張プロパティとしてDataStoreを定義
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
 @Singleton
@@ -20,65 +19,61 @@ class SettingsRepository @Inject constructor(
 ) {
 
     companion object {
-        // キーの定義
         val KONOMI_IP = stringPreferencesKey("konomi_ip")
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
 
-        // 実況カスタマイズ用キー
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
         val COMMENT_OPACITY = stringPreferencesKey("comment_opacity")
         val COMMENT_MAX_LINES = stringPreferencesKey("comment_max_lines")
         val COMMENT_DEFAULT_DISPLAY = stringPreferencesKey("comment_default_display")
 
-        // ★追加: デフォルト画質設定キー
         val LIVE_QUALITY = stringPreferencesKey("live_quality")
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
+
+        val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
+        val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
+        // ★追加: ピックアップの時間帯設定（自動、朝、昼、夜）
+        val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
     }
 
-    // 値を取得するFlow
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
     val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "" }
 
-    // 実況設定のFlow
     val commentSpeed: Flow<String> = context.dataStore.data.map { it[COMMENT_SPEED] ?: "1.0" }
     val commentFontSize: Flow<String> = context.dataStore.data.map { it[COMMENT_FONT_SIZE] ?: "1.0" }
     val commentOpacity: Flow<String> = context.dataStore.data.map { it[COMMENT_OPACITY] ?: "1.0" }
     val commentMaxLines: Flow<String> = context.dataStore.data.map { it[COMMENT_MAX_LINES] ?: "0" }
     val commentDefaultDisplay: Flow<String> = context.dataStore.data.map { it[COMMENT_DEFAULT_DISPLAY] ?: "ON" }
 
-    // ★追加: デフォルト画質設定のFlow (デフォルトは1080p-60fps)
     val liveQuality: Flow<String> = context.dataStore.data.map { it[LIVE_QUALITY] ?: "1080p-60fps" }
     val videoQuality: Flow<String> = context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
 
-    // 設定が保存（初期化）されているかチェックするFlow
+    val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
+    val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
+
+    // ★追加: デフォルトは「自動」（現在の時間帯）
+    val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
+
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
     }
 
-    // 値を保存するサスペンド関数
     suspend fun saveString(key: androidx.datastore.preferences.core.Preferences.Key<String>, value: String) {
         context.dataStore.edit { settings ->
             settings[key] = value
         }
     }
 
-    // 現在設定されているベースURLを組み立てて取得する
     suspend fun getBaseUrl(): String {
         val prefs = context.dataStore.data.first()
         var ip = prefs[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv"
         val port = prefs[KONOMI_PORT] ?: "7000"
-
-        // http(s):// が抜けている場合の補完
-        if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
-            ip = "https://$ip"
-        }
-
-        // 末尾のスラッシュを一旦削除して整形
+        if (!ip.startsWith("http://") && !ip.startsWith("https://")) { ip = "https://$ip" }
         val base = ip.removeSuffix("/")
         return "$base:$port/"
     }

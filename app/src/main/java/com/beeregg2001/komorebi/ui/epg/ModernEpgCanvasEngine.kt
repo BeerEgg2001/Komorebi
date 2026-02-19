@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalTvMaterial3Api::class)
+
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
@@ -10,6 +12,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +25,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -30,8 +35,10 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.rememberAsyncImagePainter
 import com.beeregg2001.komorebi.data.model.EpgProgram
+import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
@@ -40,7 +47,6 @@ import kotlinx.coroutines.delay
 private const val TAG = "EPG_DEBUG_ENGINE"
 
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ModernEpgCanvasEngine_Smooth(
     uiState: EpgUiState,
@@ -56,7 +62,8 @@ fun ModernEpgCanvasEngine_Smooth(
     onTypeChanged: (String) -> Unit,
     restoreChannelId: String? = null,
     restoreProgramStartTime: String? = null,
-    availableTypes: List<String> = emptyList()
+    availableTypes: List<String> = emptyList(),
+    reserves: List<ReserveItem> = emptyList()
 ) {
     val density = LocalDensity.current
     val config = remember(density) { EpgConfig(density) }
@@ -64,6 +71,11 @@ fun ModernEpgCanvasEngine_Smooth(
     val textMeasurer = rememberTextMeasurer()
     val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
+
+    // ★追加: 時計アイコンのPainterを生成
+    val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
+
+    val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
 
     val visibleTabs = remember(availableTypes) {
         val all = listOf("地デジ" to "GR", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "SKY")
@@ -77,7 +89,6 @@ fun ModernEpgCanvasEngine_Smooth(
     var hasRenderedFirstFrame by remember { mutableStateOf(false) }
     var isJumping by remember { mutableStateOf(false) }
 
-    // ★修正: 長押し判定用フラグ
     var isLongPressHandled by remember { mutableStateOf(false) }
 
     // 初期配置
@@ -85,11 +96,16 @@ fun ModernEpgCanvasEngine_Smooth(
         if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
     }
 
+    // ヘッダー表示時のフォーカス制御
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
-            if (index == -2) topTabFocusRequester.requestFocus()
-            else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].requestFocus()
+            delay(50) // 再構築を待機
+            if (index == -2) {
+                topTabFocusRequester.safeRequestFocus(TAG)
+            } else if (index in subTabFocusRequesters.indices) {
+                subTabFocusRequesters[index].safeRequestFocus(TAG)
+            }
             pendingHeaderFocusIndex = null
         }
     }
@@ -152,27 +168,20 @@ fun ModernEpgCanvasEngine_Smooth(
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) {
                                 if (event.nativeKeyEvent.isLongPress) {
-                                    // ★長押し処理実行
                                     isJumping = true
-                                    isLongPressHandled = true // フラグを立てる
-
+                                    isLongPressHandled = true
                                     epgState.jumpToNow()
-                                    // 確実に一番左(0)の現在時刻列へフォーカスを更新
                                     epgState.updatePositions(0, ChronoUnit.MINUTES.between(epgState.baseTime, OffsetDateTime.now()).toInt())
-
                                     return@onKeyEvent true
                                 }
-                                return@onKeyEvent true // 通常のKeyDownは消費するだけ
+                                return@onKeyEvent true
                             }
                             if (event.type == KeyEventType.KeyUp) {
-                                // ★KeyUp時の判定分岐
                                 if (isLongPressHandled) {
-                                    // 長押し直後のKeyUpなら、ヘッダー移動せずフラグをリセットして終了
                                     isLongPressHandled = false
                                     isJumping = false
                                     return@onKeyEvent true
                                 } else {
-                                    // 通常の短押しKeyUpならヘッダーへ移動
                                     isJumping = false
                                     isHeaderVisible = true
                                     pendingHeaderFocusIndex = visibleTabs.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
@@ -214,7 +223,15 @@ fun ModernEpgCanvasEngine_Smooth(
                 if (epgState.hasData) {
                     Spacer(modifier = Modifier.fillMaxSize().drawWithCache {
                         onDrawBehind {
-                            drawer.draw(this, epgState, animValues, logoPainters, isGridFocused = isContentFocused || epgState.hasData)
+                            drawer.draw(
+                                drawScope = this,
+                                state = epgState,
+                                animValues = animValues,
+                                logoPainters = logoPainters,
+                                isGridFocused = isContentFocused || epgState.hasData,
+                                reserveMap = reserveMap,
+                                clockPainter = clockPainter // ★追加: 時計アイコンを渡す
+                            )
                             hasRenderedFirstFrame = true
                         }
                     })
@@ -265,12 +282,11 @@ fun EpgHeaderSection(
                             up = topTabFocusRequester
                         }
                         .onKeyEvent { event ->
-                            // ★修正：戻るキーのハンドリング（Header -> Top Nav）
                             if (event.key == Key.Back) {
                                 if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                                 if (event.type == KeyEventType.KeyUp) {
-                                    topTabFocusRequester.requestFocus()
-                                    return@onKeyEvent true // トップナビへ戻る
+                                    topTabFocusRequester.safeRequestFocus("EpgHeader")
+                                    return@onKeyEvent true
                                 }
                             }
                             if (event.type == KeyEventType.KeyDown && (event.key == Key.DirectionCenter || event.key == Key.Enter)) {
@@ -299,11 +315,10 @@ fun EpgHeaderSection(
                     up = topTabFocusRequester
                 }
                 .onKeyEvent { event ->
-                    // ★修正：戻るキーのハンドリング（日時指定ボタン -> Top Nav）
                     if (event.key == Key.Back) {
                         if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                         if (event.type == KeyEventType.KeyUp) {
-                            topTabFocusRequester.requestFocus()
+                            topTabFocusRequester.safeRequestFocus("EpgJumpBtn")
                             return@onKeyEvent true
                         }
                     }

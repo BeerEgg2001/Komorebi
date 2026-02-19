@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.settings
+package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
 import androidx.annotation.RequiresApi
@@ -20,8 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.items
+import androidx.tv.foundation.lazy.list.itemsIndexed
+import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class OssLibrary(
@@ -336,7 +338,15 @@ third-party archives.
    See the License for the specific language governing permissions and
    limitations under the License.
         """.trimIndent()
-    )
+    ),
+    OssLibrary(
+        name = "SCRename.py",
+        author = "rigaya",
+        licenseName = "",
+        licenseText = """
+            素晴らしいソフトを公開いただいたSCRename.vbsの作者様並びに、Python対応していただいたrigaya様に心より感謝申し上げます。
+        """.trimIndent()
+),
 )
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -345,6 +355,13 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     var selectedLib by remember { mutableStateOf(ossLibraries.first()) }
     val listFocusRequester = remember { FocusRequester() }
     val textFocusRequester = remember { FocusRequester() }
+    val listState = rememberTvLazyListState()
+
+    // 初期フォーカス設定
+    LaunchedEffect(Unit) {
+        delay(100) // UI描画待ち
+        runCatching { listFocusRequester.requestFocus() }
+    }
 
     Row(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(48.dp)) {
         // 左ペイン：ライブラリ一覧
@@ -358,10 +375,11 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             )
 
             TvLazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(ossLibraries) { lib ->
+                itemsIndexed(ossLibraries) { index, lib ->
                     var isFocused by remember { mutableStateOf(false) }
                     Surface(
                         onClick = { textFocusRequester.requestFocus() },
@@ -369,9 +387,22 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                             .fillMaxWidth()
                             .onFocusChanged {
                                 isFocused = it.isFocused
-                                if (it.isFocused) selectedLib = lib
+                                if (it.isFocused) {
+                                    selectedLib = lib
+                                }
                             }
-                            .then(if (lib == ossLibraries.first()) Modifier.focusRequester(listFocusRequester) else Modifier),
+                            // ★追加: 戻るキーで設定画面に戻る処理を追加
+                            .onKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown &&
+                                    (event.key == Key.Back || event.key == Key.Escape)) {
+                                    onBack()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            // 最初の項目にリスト全体のFocusRequesterを割り当て（初期フォーカス用）
+                            .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = Color.Transparent,
                             focusedContainerColor = Color.White,
@@ -391,10 +422,11 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.width(48.dp))
 
-        // 右ペイン：ライセンス本文（リモコンの上下でスクロール可能）
+        // 右ペイン：ライセンス本文
         val scrollState = rememberScrollState()
         val coroutineScope = rememberCoroutineScope()
 
+        // ライブラリが切り替わったらスクロールを先頭に戻す
         LaunchedEffect(selectedLib) {
             scrollState.scrollTo(0)
         }
@@ -455,7 +487,6 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                     lineHeight = 28.sp
                 )
 
-                // スクロール限界時の余白
                 Spacer(modifier = Modifier.height(60.dp))
             }
         }

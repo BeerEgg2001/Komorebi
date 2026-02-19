@@ -62,8 +62,10 @@ object UrlBuilder {
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/events"
     }
 
+    @OptIn(UnstableApi::class)
     fun getVideoPlaylistUrl(ip: String, port: String, videoId: Int, sessionId: String, quality: String = "1080p-60fps"): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
+        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
     }
 
@@ -75,5 +77,11 @@ object UrlBuilder {
     fun getTiledThumbnailUrl(ip: String, port: String, videoId: Int): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/videos/$videoId/thumbnail/tiled"
+    }
+
+    // ★追加: アーカイブ実況コメントAPIのURL
+    fun getArchivedJikkyoUrl(ip: String, port: String, videoId: Int): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/videos/$videoId/jikkyo"
     }
 }

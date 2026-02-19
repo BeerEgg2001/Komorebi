@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -46,7 +47,9 @@ import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.viewmodel.*
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -62,7 +65,10 @@ import master.flame.danmaku.controller.IDanmakuView
 import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Typeface
 import android.os.Build
+import java.time.OffsetDateTime
 import java.util.Collections
+
+private const val TAG = "LivePlayerScreen"
 
 @ExperimentalComposeUiApi
 @Composable
@@ -86,18 +92,56 @@ fun LivePlayerScreen(
     onSubMenuToggle: (Boolean) -> Unit,
     onChannelSelect: (Channel) -> Unit,
     onBackPressed: () -> Unit,
+    reserveViewModel: ReserveViewModel,
+    // ★追加: 引数の不整合を解消
+    epgViewModel: EpgViewModel,
+    onShowToast: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
 
-    // ★設定値の収集
+    // 現在のチャンネル・番組情報の特定
+    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
+    val currentChannelItem by remember(channel.id, groupedChannels) {
+        derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
+    }
+
+    // --- 番組 ID 特権取得ロジック ---
+    // 1. チャンネル情報から取得
+    // 2. 取得できない場合、EpgViewModel の uiState 内から現在放送中の番組を探す
+    val currentProgramId by remember(currentChannelItem.programPresent, epgViewModel.uiState) {
+        derivedStateOf {
+            currentChannelItem.programPresent?.id ?: run {
+                val state = epgViewModel.uiState
+                if (state is EpgUiState.Success) {
+                    val now = OffsetDateTime.now()
+                    // 該当チャンネルの番組リストから、現在時刻が含まれるものを探す
+                    state.data.find { it.channel.id == currentChannelItem.id }
+                        ?.programs?.find { prog ->
+                            val start = try { OffsetDateTime.parse(prog.start_time) } catch(e: Exception) { null }
+                            val end = try { OffsetDateTime.parse(prog.end_time) } catch(e: Exception) { null }
+                            start != null && end != null && now.isAfter(start) && now.isBefore(end)
+                        }?.id
+                } else null
+            }
+        }
+    }
+
+    // 録画状態の監視
+    val reserves by reserveViewModel.reserves.collectAsState()
+    val activeReserve = remember(reserves, currentProgramId) {
+        reserves.find { it.program.id == currentProgramId }
+    }
+    val isRecording = activeReserve != null
+
+    // ... (以下、既存の設定値収集ロジック)
     val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
     val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
     val commentOpacityStr by repository.commentOpacity.collectAsState(initial = "1.0")
     val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
     val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
 
-    // 数値型への変換
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -112,24 +156,17 @@ fun LivePlayerScreen(
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
-    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
-    val currentChannelItem by remember(channel.id, groupedChannels) {
-        derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
-    }
-
     val nativeLib = remember { com.beeregg2001.komorebi.NativeLib() }
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentQuality by remember(initialQuality) { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
     val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
     val isSubtitleEnabled by subtitleEnabledState
 
-    // ★初期表示設定を反映
     val commentEnabledState = rememberSaveable(commentDefaultDisplayStr) {
         mutableStateOf(commentDefaultDisplayStr == "ON")
     }
     val isCommentEnabled by commentEnabledState
 
-    var toastState by remember { mutableStateOf<Pair<String, Long>?>(null) }
     val webViewRef = remember { mutableStateOf<android.webkit.WebView?>(null) }
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     var currentStreamSource by remember { mutableStateOf(if (isMirakurunAvailable) StreamSource.MIRAKURUN else StreamSource.KONOMITV) }
@@ -204,11 +241,11 @@ fun LivePlayerScreen(
 
     DisposableEffect(currentChannelItem.id, currentStreamSource, retryKey, currentQuality) {
         if (currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
-        val eventUrl = com.beeregg2001.komorebi.common.UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
-        val client = okhttp3.OkHttpClient.Builder().readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS).build()
-        val request = okhttp3.Request.Builder().url(eventUrl).build()
-        val listener = object : okhttp3.sse.EventSourceListener() {
-            override fun onEvent(eventSource: okhttp3.sse.EventSource, id: String?, type: String?, data: String) {
+        val eventUrl = UrlBuilder.getKonomiTvLiveEventsUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
+        val client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+        val request = Request.Builder().url(eventUrl).build()
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 runCatching {
                     val json = JSONObject(data)
                     sseStatus = json.optString("status", "Unknown")
@@ -226,7 +263,7 @@ fun LivePlayerScreen(
                 }
             }
         }
-        val eventSource = okhttp3.sse.EventSources.createFactory(client).newEventSource(request, listener)
+        val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
         onDispose {
             eventSource.cancel()
             client.dispatcher.executorService.shutdown()
@@ -243,11 +280,11 @@ fun LivePlayerScreen(
         }
     }
 
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) exoPlayer.stop()
-            else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop()
+            else if (event == Lifecycle.Event.ON_START) { exoPlayer.prepare(); exoPlayer.play() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
@@ -275,10 +312,13 @@ fun LivePlayerScreen(
         }
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
-        exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(streamUrl))
+        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.prepare()
         exoPlayer.play()
-        if (playerError == null) { mainFocusRequester.requestFocus() }
+        if (playerError == null) {
+            delay(300)
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
     }
 
     DisposableEffect(currentChannelItem.id, isCommentEnabled) {
@@ -297,16 +337,11 @@ fun LivePlayerScreen(
                 val chat = json.optJSONObject("chat")
                 if (chat != null) {
                     val commentId = chat.optString("no", "") + "_" + chat.optString("content", "")
-
-                    if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) {
-                        return@start
-                    }
-
+                    if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) return@start
                     if (processedCommentIds.size > 200) {
                         val first = processedCommentIds.iterator().next()
                         processedCommentIds.remove(first)
                     }
-
                     val content = chat.optString("content")
                     if (content.isNotEmpty()) {
                         danmakuViewRef.value?.let { view ->
@@ -317,10 +352,7 @@ fun LivePlayerScreen(
                                     danmaku.text = content
                                     danmaku.padding = 5
                                     val density = view.context.resources.displayMetrics.density
-
-                                    // ★設定された倍率(commentFontSizeScale)を適用
                                     danmaku.textSize = (32f * commentFontSizeScale) * density
-
                                     danmaku.textColor = AndroidColor.WHITE
                                     danmaku.textShadowColor = AndroidColor.BLACK
                                     danmaku.setTime(view.currentTime + 10)
@@ -335,9 +367,22 @@ fun LivePlayerScreen(
         onDispose { jikkyoClient.stop() }
     }
 
-    LaunchedEffect(isMiniListOpen) { if (isMiniListOpen) { delay(100); listFocusRequester.requestFocus() } else if (!isManualOverlay) { mainFocusRequester.requestFocus() } }
-    LaunchedEffect(isSubMenuOpen) { if (isSubMenuOpen) { delay(100); subMenuFocusRequester.requestFocus() } }
-    LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
+    LaunchedEffect(isMiniListOpen) {
+        if (isMiniListOpen) {
+            delay(150)
+            listFocusRequester.safeRequestFocus(TAG)
+        } else if (!isManualOverlay && !isSubMenuOpen) {
+            delay(100)
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
+    }
+
+    LaunchedEffect(isSubMenuOpen) {
+        if (isSubMenuOpen) {
+            delay(150)
+            subMenuFocusRequester.safeRequestFocus(TAG)
+        }
+    }
 
     Box(modifier = Modifier
         .fillMaxSize()
@@ -391,14 +436,13 @@ fun LivePlayerScreen(
         AndroidView(
             factory = { androidx.media3.ui.PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
-            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.KONOMITV) 1f else 0f)
+            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable().alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.MIRAKURUN) 1f else 0f)
         )
 
         if (isCommentEnabled) {
             LiveCommentOverlay(
                 modifier = Modifier.fillMaxSize(),
                 useSoftwareRendering = forceSoftwareRendering,
-                // ★設定値を Overlay に渡す
                 speed = commentSpeed,
                 opacity = commentOpacity,
                 maxLines = commentMaxLines,
@@ -418,15 +462,17 @@ fun LivePlayerScreen(
 
         AnimatedVisibility(visible = isPinnedOverlay && playerError == null, enter = fadeIn(), exit = fadeOut()) { StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort) }
 
+        // 番組情報のタイトルを決定
+        val displayTitle = currentChannelItem.programPresent?.title ?: "番組情報なし"
+
         AnimatedVisibility(visible = showOverlay && playerError == null && !isMiniListOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
-            LiveOverlayUI(currentChannelItem, currentChannelItem.programPresent?.title ?: "番組情報なし", mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, isManualOverlay, scrollState)
+            LiveOverlayUI(currentChannelItem, displayTitle, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, isManualOverlay, isRecording, scrollState)
         }
 
         AnimatedVisibility(visible = isMiniListOpen && playerError == null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); runCatching { mainFocusRequester.requestFocus() } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
+            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
         }
 
-        // ★修正: サブメニュー呼び出し
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
                 currentAudioMode = currentAudioMode,
@@ -436,33 +482,53 @@ fun LivePlayerScreen(
                 isSubtitleEnabled = isSubtitleEnabled,
                 isSubtitleSupported = currentStreamSource != StreamSource.MIRAKURUN,
                 isCommentEnabled = isCommentEnabled,
+                isRecording = isRecording,
+                onRecordToggle = {
+                    if (isRecording) {
+                        activeReserve?.let { reserve ->
+                            reserveViewModel.deleteReservation(reserve.id) {
+                                onShowToast("録画を停止しました")
+                            }
+                        }
+                    } else {
+                        // ★強化: 確実に番組IDを取得して録画
+                        currentProgramId?.let { progId ->
+                            reserveViewModel.addReserve(progId) {
+                                onShowToast("録画を開始します")
+                            }
+                        } ?: run {
+                            onShowToast("番組情報を取得できないため録画できません")
+                        }
+                    }
+                    onSubMenuToggle(false)
+                },
                 focusRequester = subMenuFocusRequester,
                 onAudioToggle = {
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                     val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                     if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build()
-                    toastState = ("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}") to System.currentTimeMillis()
+                    onShowToast("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 onSourceToggle = {
                     if (isMirakurunAvailable) {
                         currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN
-                        toastState = ("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}") to System.currentTimeMillis()
+                        onShowToast("ソース: ${if(currentStreamSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV"}")
                         onSubMenuToggle(false)
                     }
                 },
                 onSubtitleToggle = {
                     subtitleEnabledState.value = !subtitleEnabledState.value
-                    toastState = ("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis()
+                    onShowToast("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}")
                 },
                 onCommentToggle = {
                     commentEnabledState.value = !commentEnabledState.value
-                    toastState = ("コメント: ${if(commentEnabledState.value) "表示" else "非表示"}") to System.currentTimeMillis()
+                    onShowToast("コメント: ${if(commentEnabledState.value) "表示" else "非表示"}")
                 },
                 onQualitySelect = {
                     if (currentQuality != it) {
                         currentQuality = it
                         retryKey++
-                        toastState = ("画質: ${it.label}") to System.currentTimeMillis()
+                        onShowToast("画質: ${it.label}")
                     }
                     onSubMenuToggle(false)
                 },
@@ -481,7 +547,6 @@ fun LivePlayerScreen(
             }
         }, modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled && !isUiVisible) 1f else 0f))
 
-        LiveToast(message = toastState?.first)
         if (playerError != null) LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)
     }
 }

@@ -52,7 +52,15 @@ class ChannelViewModel @Inject constructor(
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> = withContext(Dispatchers.Default) {
         val now = System.currentTimeMillis()
-        grouped.map { (type, channels) ->
+        val orderedTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
+
+        val sortedKeys = grouped.keys.sortedBy { key ->
+            val index = orderedTypes.indexOf(key)
+            if (index >= 0) index else Int.MAX_VALUE
+        }
+
+        sortedKeys.mapNotNull { type ->
+            val channels = grouped[type] ?: return@mapNotNull null
             LiveRowState(
                 genreId = type,
                 genreLabel = when(type) { "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> type },
@@ -80,18 +88,40 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
+            // ★修正: 単一の ChannelApiResponse オブジェクトを取得
             val response = repository.getChannels()
+
             val processed = withContext(Dispatchers.Default) {
-                val all = mutableListOf<Channel>()
-                response.terrestrial?.let { all.addAll(it) }
-                response.bs?.let { all.addAll(it) }
-                response.cs?.let { all.addAll(it) }
-                response.sky?.let { all.addAll(it) }
-                response.bs4k?.let { all.addAll(it) }
-                all.filter { it.isDisplay }.groupBy { it.type }
+                // ★修正: 各放送波のリストを結合して1つのリストにする
+                val rawChannels = listOfNotNull(
+                    response.terrestrial,
+                    response.bs,
+                    response.cs,
+                    response.sky,
+                    response.bs4k
+                ).flatten()
+
+                // Domainモデル(Channel)に変換
+                val allChannels = rawChannels.map { apiChannel ->
+                    Channel(
+                        id = apiChannel.id,
+                        name = apiChannel.name,
+                        type = apiChannel.type,
+                        channelNumber = apiChannel.channelNumber,
+                        networkId = apiChannel.networkId,
+                        serviceId = apiChannel.serviceId,
+                        displayChannelId = apiChannel.displayChannelId ?: apiChannel.id,
+                        isWatchable = apiChannel.isWatchable,
+                        isDisplay = apiChannel.isDisplay,
+                        programPresent = apiChannel.programPresent,
+                        programFollowing = apiChannel.programFollowing,
+                        remocon_Id = apiChannel.remocon_Id
+                    )
+                }
+                // タイプ別にグループ化
+                allChannels.filter { it.isDisplay }.groupBy { it.type }
             }
             _groupedChannels.value = processed
-            // UI用モデルを生成して反映
             _liveRows.value = transformToUiState(processed)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -101,15 +131,12 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
-    /**
-     * プログレスバーを定期的に更新（UIスレッドを介さず計算）
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     private fun startProgressUpdater() {
         progressUpdateJob?.cancel()
         progressUpdateJob = viewModelScope.launch {
             while (isActive) {
-                delay(15_000L) // 15秒に1回更新で十分「リアルタイム」です
+                delay(15_000L)
                 if (_groupedChannels.value.isNotEmpty()) {
                     _liveRows.value = transformToUiState(_groupedChannels.value)
                 }
@@ -143,7 +170,7 @@ class ChannelViewModel @Inject constructor(
         pollingJob = viewModelScope.launch {
             while (isActive) {
                 fetchChannelsInternal()
-                delay(60_000L) // チャンネル情報の更新は1分間隔に緩和（負荷軽減）
+                delay(60_000L)
             }
         }
     }

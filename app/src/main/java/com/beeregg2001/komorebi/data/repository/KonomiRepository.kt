@@ -1,23 +1,22 @@
 package com.beeregg2001.komorebi.data.repository
 
+import android.util.Log
 import androidx.annotation.OptIn
-import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
-import com.beeregg2001.komorebi.data.model.HistoryUpdateRequest
-import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
-import com.beeregg2001.komorebi.data.model.KonomiProgram
-import com.beeregg2001.komorebi.data.model.KonomiUser
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.*
+import com.beeregg2001.komorebi.viewmodel.ChannelApiResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "Komorebi_Repo"
 
 @Singleton
 class KonomiRepository @Inject constructor(
@@ -25,7 +24,7 @@ class KonomiRepository @Inject constructor(
     private val watchHistoryDao: WatchHistoryDao,
     private val lastChannelDao: LastChannelDao
 ) {
-    // --- ユーザー設定 (API) ---
+    // --- ユーザー設定 ---
     private val _currentUser = MutableStateFlow<KonomiUser?>(null)
     val currentUser: StateFlow<KonomiUser?> = _currentUser.asStateFlow()
 
@@ -34,65 +33,101 @@ class KonomiRepository @Inject constructor(
             .onSuccess { _currentUser.value = it }
     }
 
-    // --- チャンネル・録画 (API) ---
-    suspend fun getChannels() = apiService.getChannels()
+    // --- チャンネル・録画 ---
+    suspend fun getChannels(): ChannelApiResponse = apiService.getChannels()
+
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
 
-    // 録画番組検索
-    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) =
+    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) = run {
+        Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
         apiService.searchVideos(keyword = keyword, page = page)
+    }
 
-    // ★修正: 戻り値の型変更に合わせ、成功判定を追加
     @UnstableApi
     suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
         runCatching {
             val response = apiService.keepAlive(videoId, quality, sessionId)
             if (!response.isSuccessful) {
-                Log.w("KEEP_ALIVE", "Failed: ${response.code()}")
+                Log.w(TAG, "KeepAlive Failed: ${response.code()}")
             }
         }.onFailure {
             it.printStackTrace()
         }
     }
 
-    // --- マイリスト (API) ---
+    // --- マイリスト ---
     suspend fun getBookmarks(): Result<List<KonomiProgram>> = runCatching { apiService.getBookmarks() }
 
-    // --- 視聴履歴 (API: 将来用) ---
+    // --- 視聴履歴 ---
     suspend fun getWatchHistory(): Result<List<KonomiHistoryProgram>> = runCatching { apiService.getWatchHistory() }
 
-    // --- 視聴履歴 (Room: ローカルDB) ---
     fun getLocalWatchHistory() = watchHistoryDao.getAllHistory()
+
+    suspend fun getHistoryEntityById(id: Int): WatchHistoryEntity? {
+        return watchHistoryDao.getById(id)
+    }
+
+    // ★追加: 複数IDを一括取得
+    suspend fun getHistoryEntitiesByIds(ids: List<Int>): List<WatchHistoryEntity> {
+        return watchHistoryDao.getByIds(ids)
+    }
 
     suspend fun saveToLocalHistory(entity: WatchHistoryEntity) {
         watchHistoryDao.insertOrUpdate(entity)
     }
 
-    // --- 最近見たチャンネル (Room: ローカルDB) ---
+    // ★追加: リストを一括保存
+    suspend fun saveAllToLocalHistory(entities: List<WatchHistoryEntity>) {
+        watchHistoryDao.insertOrUpdateAll(entities)
+    }
+
+    // --- 最近見たチャンネル ---
     fun getLastChannels() = lastChannelDao.getLastChannels()
 
     @OptIn(UnstableApi::class)
     suspend fun saveLastChannel(entity: LastChannelEntity) {
         lastChannelDao.insertOrUpdate(entity)
-        Log.d("DEBUG", "Channel saved: ${entity.name}")
+        Log.d(TAG, "Channel saved: ${entity.name}")
     }
 
-    // ★追加: 実況APIを呼び出す関数
     suspend fun getJikkyoInfo(channelId: String) = runCatching {
         apiService.getJikkyoInfo(channelId)
     }
 
-    // 視聴位置同期 (API)
     suspend fun syncPlaybackPosition(programId: String, position: Double) {
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }
     }
 
-    fun buildStreamId(channel: Channel): String {
-        val networkIdPart = when (channel.type) {
-            "GR" -> channel.networkId.toString()
-            "BS", "CS", "SKY", "BS4K" -> "${channel.networkId}00"
-            else -> channel.networkId.toString()
+    suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> = runCatching {
+        val response = apiService.getArchivedJikkyo(videoId)
+        if (response.is_success) response.comments else emptyList()
+    }
+
+    // --- 予約関連 ---
+    suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
+        apiService.getReserves().reservations
+    }
+
+    suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
+        val response = apiService.addReserve(request)
+        if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+    }
+
+    suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> = runCatching {
+        val response = apiService.updateReserve(reservationId, request)
+        if (!response.isSuccessful) {
+            throw Exception("Update reservation failed: ${response.code()} ${response.errorBody()?.string()}")
         }
-        return "${networkIdPart}${channel.serviceId}"
+    }
+
+    suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {
+        val response = apiService.deleteReservation(reservationId)
+        if (!response.isSuccessful) {
+            if (response.code() == 404) {
+                Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
+                throw Exception("Reservation not found")
+            }
+            throw Exception("Delete reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+        }
     }
 }

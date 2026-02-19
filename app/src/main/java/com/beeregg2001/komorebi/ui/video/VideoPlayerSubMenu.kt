@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.data.model.StreamQuality
 
 @Composable
 fun VideoTopSubMenuUI(
@@ -35,11 +36,15 @@ fun VideoTopSubMenuUI(
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
     currentQuality: StreamQuality,
+    // ★追加: コメント機能用パラメータ
+    isCommentEnabled: Boolean,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
-    onQualitySelect: (StreamQuality) -> Unit
+    onQualitySelect: (StreamQuality) -> Unit,
+    // ★追加: コメント切り替えコールバック
+    onCommentToggle: () -> Unit
 ) {
     // 展開中のカテゴリ管理
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
@@ -97,7 +102,7 @@ fun VideoTopSubMenuUI(
         ) {
             // --- 第一階層 (メインメニュー) ---
             Row(
-                // ★修正: 二重定義を解消し、中央揃えかつ間隔を指定
+                // 中央揃えかつ間隔を指定
                 horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
                 modifier = Modifier
                     .horizontalScroll(rememberScrollState())
@@ -122,8 +127,16 @@ fun VideoTopSubMenuUI(
                 VideoMenuTileItem(
                     title = "字幕",
                     icon = Icons.Default.Subtitles,
-                    subtitle = if (isSubtitleEnabled) "ON" else "OFF",
+                    subtitle = if (isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                )
+                // ★追加: コメント切り替えボタン
+                VideoMenuTileItem(
+                    title = "コメント",
+                    icon = Icons.Default.Chat,
+                    subtitle = if (isCommentEnabled) "表示" else "非表示",
+                    onClick = onCommentToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
                 )
                 // 画質ボタン（トグル動作）

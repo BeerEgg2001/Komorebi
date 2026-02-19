@@ -3,7 +3,9 @@ package com.beeregg2001.komorebi.ui.video
 import androidx.compose.ui.graphics.vector.ImageVector
 
 enum class AudioMode { MAIN, SUB }
-enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY }
+
+// ★修正: COMMENT を追加
+enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY, COMMENT }
 
 // 画質定義 (表示名とAPIパラメータを一元管理)
 enum class StreamQuality(val label: String, val apiParams: String) {
@@ -16,15 +18,20 @@ enum class StreamQuality(val label: String, val apiParams: String) {
     QUALITY_360P("360p", "360p"),
     QUALITY_240P("240p", "240p");
 
-    // ★追加: 設定画面・初期化用のヘルパー
     companion object {
+        fun next(current: StreamQuality): StreamQuality {
+            val values = entries.toTypedArray()
+            return values[(current.ordinal + 1) % values.size]
+        }
+
+        // ★追加: VideoPlayerScreenで使用されるメソッド
         fun fromApiParams(params: String): StreamQuality {
             return entries.find { it.apiParams == params } ?: QUALITY_1080P_60
         }
 
-        fun next(current: StreamQuality): StreamQuality {
-            val values = entries.toTypedArray()
-            return values[(current.ordinal + 1) % values.size]
+        // 既存のメソッド（fromApiParamsに委譲）
+        fun fromValue(value: String): StreamQuality {
+            return fromApiParams(value)
         }
     }
 }
