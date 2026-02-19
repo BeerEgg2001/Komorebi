@@ -7,6 +7,7 @@ import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,7 +45,8 @@ fun VideoTabContent(
     onProgramClick: (RecordedProgram) -> Unit,
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
-    onShowAllRecordings: () -> Unit = {}
+    onShowAllRecordings: () -> Unit = {},
+    onShowSeriesList: () -> Unit = {} // ★追加
 ) {
     val listState = rememberTvLazyListState()
     var isContentReady by remember { mutableStateOf(false) }
@@ -102,13 +104,25 @@ fun VideoTabContent(
                 }
 
                 item {
-                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp)) {
+                    // ★修正: 2つのボタンを横並びに配置
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
                         Button(
                             onClick = onShowAllRecordings,
-                            modifier = Modifier.width(260.dp).focusProperties { left = FocusRequester.Cancel; right = FocusRequester.Cancel }
+                            modifier = Modifier.width(260.dp).focusProperties { left = FocusRequester.Cancel }
                         ) {
                             Icon(Icons.Default.List, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp))
                             Text("すべての録画を表示")
+                        }
+
+                        Button(
+                            onClick = onShowSeriesList,
+                            modifier = Modifier.width(260.dp).focusProperties { right = FocusRequester.Cancel }
+                        ) {
+                            Icon(Icons.Default.LibraryBooks, null, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp))
+                            Text("シリーズから探す")
                         }
                     }
                 }
@@ -130,13 +144,19 @@ fun VideoSectionRow(
         }
     }
     Column {
-        Text(title, style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(start = 32.dp, bottom = 12.dp))
+        if (title.isNotEmpty()) {
+            Text(title, style = MaterialTheme.typography.headlineSmall, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(start = 32.dp, bottom = 12.dp))
+        }
         TvLazyRow(contentPadding = PaddingValues(horizontal = 32.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(items, key = { _, p -> p.id }) { _, program ->
                 val isSelected = program.id == selectedProgramId
+                var isFocused by remember { mutableStateOf(false) }
+
                 RecordedCard(
                     program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) },
-                    modifier = Modifier.then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
+                    modifier = Modifier
+                        .onFocusChanged { isFocused = it.isFocused }
+                        .then(if (isSelected) Modifier.focusRequester(watchedProgramFocusRequester) else Modifier)
                         .focusProperties { if (isFirstSection && topNavFocusRequester != null) up = topNavFocusRequester }
                 )
             }

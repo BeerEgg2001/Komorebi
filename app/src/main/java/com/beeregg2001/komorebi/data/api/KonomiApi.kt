@@ -26,10 +26,8 @@ interface KonomiApi {
 
     @GET("api/videos/search")
     suspend fun searchVideos(
-        @Query("keyword") keyword: String,
+        @Query("query") keyword: String,
         @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 24,
-        @Query("sort") sort: String = "recorded_start_at",
         @Query("order") order: String = "desc"
     ): RecordedApiResponse
 

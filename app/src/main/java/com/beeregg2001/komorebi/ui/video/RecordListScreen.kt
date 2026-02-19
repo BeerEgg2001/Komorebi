@@ -58,7 +58,9 @@ fun RecordListScreen(
     konomiPort: String,
     onProgramClick: (RecordedProgram) -> Unit,
     onLoadMore: () -> Unit,
+    isLoadingInitial: Boolean,
     isLoadingMore: Boolean,
+    customTitle: String? = null, // ★追加: シリーズ名を受け取る
     onBack: () -> Unit,
     onSearch: (String) -> Unit
 ) {
@@ -68,12 +70,14 @@ fun RecordListScreen(
     var isKeyboardActive by remember { mutableStateOf(false) }
     var isBackButtonFocused by remember { mutableStateOf(false) }
 
+    // ★追加: 表示するタイトルを管理（手動で検索されたらシリーズ名を消すため）
+    var currentDisplayTitle by remember(customTitle) { mutableStateOf(customTitle) }
+
     val scope = rememberCoroutineScope()
     val limitedHistory = remember(searchHistory) { searchHistory.take(5) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val gridState = rememberTvLazyGridState()
 
-    // Focus Requesters
     val searchInputFocusRequester = remember { FocusRequester() }
     val innerTextFieldFocusRequester = remember { FocusRequester() }
     val historyListFocusRequester = remember { FocusRequester() }
@@ -85,6 +89,7 @@ fun RecordListScreen(
     val executeSearch = { query: String ->
         isKeyboardActive = false
         activeSearchQuery = query
+        currentDisplayTitle = null // ★手動で検索された場合はシリーズ名を破棄する
         onSearch(query)
         keyboardController?.hide()
         isSearchBarVisible = false
@@ -132,7 +137,6 @@ fun RecordListScreen(
     LaunchedEffect(isSearchBarVisible) {
         if (isSearchBarVisible) {
             delay(150)
-            // ★修正: 検索ボタンを押した後は、戻る(閉じる)ボタンではなく検索バーにフォーカスする
             searchInputFocusRequester.safeRequestFocus(TAG)
         }
     }
@@ -150,7 +154,6 @@ fun RecordListScreen(
             .background(Color(0xFF121212))
             .padding(horizontal = 40.dp, vertical = 20.dp)
     ) {
-        // --- ヘッダー部分 ---
         Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
             if (isSearchBarVisible) {
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
@@ -165,7 +168,6 @@ fun RecordListScreen(
                     Surface(
                         onClick = {
                             isKeyboardActive = true
-                            // TextFieldにフォーカスを強制してから、キーボードを表示する
                             innerTextFieldFocusRequester.safeRequestFocus(TAG)
                             keyboardController?.show()
                         },
@@ -200,7 +202,6 @@ fun RecordListScreen(
                             focusedBorder = Border(BorderStroke(2.dp, Color.White))
                         )
                     ) {
-                        // ★修正: fillMaxSize を追加し、decorationBox を使ってテキストの垂直配置を完全に揃える
                         Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                             BasicTextField(
                                 value = searchQuery,
@@ -247,11 +248,14 @@ fun RecordListScreen(
                         Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
                     }
                     Spacer(Modifier.width(16.dp))
+
+                    // ★修正: シリーズ名(currentDisplayTitle)が存在すればそれを表示
                     Text(
-                        text = if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
+                        text = currentDisplayTitle ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
                         style = MaterialTheme.typography.headlineSmall,
                         fontSize = 20.sp, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)
                     )
+
                     IconButton(
                         onClick = { isSearchBarVisible = true },
                         modifier = Modifier.focusRequester(searchOpenButtonFocusRequester)
@@ -264,49 +268,53 @@ fun RecordListScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        // --- コンテンツエリア ---
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            TvLazyVerticalGrid(
-                state = gridState,
-                columns = TvGridCells.Fixed(4),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .focusProperties {
-                        if (isSearchBarVisible || isKeyboardActive) {
-                            enter = { FocusRequester.Cancel }
-                        }
-                    }
-            ) {
-                itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                    if (!isLoadingMore && index >= recentRecordings.size - 4) {
-                        SideEffect { onLoadMore() }
-                    }
-                    RecordedCard(
-                        program = program, konomiIp = konomiIp, konomiPort = konomiPort,
-                        onClick = { onProgramClick(program) },
-                        modifier = Modifier
-                            .aspectRatio(16f / 9f)
-                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                            .focusProperties {
-                                if (index < 4) {
-                                    up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-                                }
-                            }
-                    )
+            if (isLoadingInitial && recentRecordings.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color.White)
                 }
-                if (isLoadingMore) {
-                    item(span = { TvGridItemSpan(maxLineSpan) }) {
-                        Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = Color.White)
+            } else {
+                TvLazyVerticalGrid(
+                    state = gridState,
+                    columns = TvGridCells.Fixed(4),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .focusProperties {
+                            if (isSearchBarVisible || isKeyboardActive) {
+                                enter = { FocusRequester.Cancel }
+                            }
+                        }
+                ) {
+                    itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
+                        if (!isLoadingMore && index >= recentRecordings.size - 4) {
+                            SideEffect { onLoadMore() }
+                        }
+                        RecordedCard(
+                            program = program, konomiIp = konomiIp, konomiPort = konomiPort,
+                            onClick = { onProgramClick(program) },
+                            modifier = Modifier
+                                .aspectRatio(16f / 9f)
+                                .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                                .focusProperties {
+                                    if (index < 4) {
+                                        up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                                    }
+                                }
+                        )
+                    }
+                    if (isLoadingMore) {
+                        item(span = { TvGridItemSpan(maxLineSpan) }) {
+                            Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Color.White)
+                            }
                         }
                     }
                 }
             }
 
-            // 履歴オーバーレイ
             if (isSearchBarVisible && limitedHistory.isNotEmpty()) {
                 Box(
                     modifier = Modifier
@@ -316,7 +324,6 @@ fun RecordListScreen(
                         .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
                         .align(Alignment.TopCenter)
                 ) {
-                    // ★最大高さを 320.dp に拡張
                     TvLazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
                         itemsIndexed(limitedHistory) { index, historyItem ->
                             Surface(

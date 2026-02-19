@@ -43,6 +43,7 @@ import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
+import com.beeregg2001.komorebi.ui.video.SeriesListScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -86,7 +87,11 @@ fun MainRootScreen(
     var isEpgJumpMenuOpen by remember { mutableStateOf(false) }
     var triggerHomeBack by remember { mutableStateOf(false) }
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
+
     var isRecordListOpen by remember { mutableStateOf(false) }
+    var isSeriesListOpen by remember { mutableStateOf(false) }
+    // ★追加: シリーズ画面から開いたことを記憶し、戻る先を制御・タイトルを渡すための変数
+    var openedSeriesTitle by remember { mutableStateOf<String?>(null) }
 
     var isPlayerMiniListOpen by remember { mutableStateOf(false) }
     var playerShowOverlay by remember { mutableStateOf(true) }
@@ -108,12 +113,12 @@ fun MainRootScreen(
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
     val isHomeLoading by homeViewModel.isLoading.collectAsState()
     val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
+    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val searchHistory by recordViewModel.searchHistory.collectAsState()
-
     val reserves by reserveViewModel.reserves.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
@@ -161,7 +166,22 @@ fun MainRootScreen(
             epgSelectedProgram != null -> epgSelectedProgram = null
             selectedReserve != null -> selectedReserve = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
-            isRecordListOpen -> isRecordListOpen = false
+
+            // ★修正: 戻るキーの階層を制御
+            isRecordListOpen -> {
+                isRecordListOpen = false
+                if (openedSeriesTitle != null) {
+                    // シリーズから開いていた場合はシリーズ画面に戻る
+                    isSeriesListOpen = true
+                    openedSeriesTitle = null
+                }
+                recordViewModel.searchRecordings("") // ビデオタブに戻った時のためリセット
+            }
+            isSeriesListOpen -> {
+                isSeriesListOpen = false
+                recordViewModel.searchRecordings("")
+            }
+
             showConnectionErrorDialog -> onExitApp()
             else -> triggerHomeBack = true
         }
@@ -218,11 +238,8 @@ fun MainRootScreen(
                                 isReturningFromPlayer = false
                             },
                             onBackPressed = { selectedChannel = null; isReturningFromPlayer = true },
-                            // ★追加
                             reserveViewModel = reserveViewModel,
-                            // ★修正: epgViewModel を追加
                             epgViewModel = epgViewModel,
-                            // ★追加: MainRootScreen の toastMessage ステートを更新する
                             onShowToast = { toastMessage = it }
                         )
                     }
@@ -242,11 +259,35 @@ fun MainRootScreen(
                             onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }
                         )
                     }
+                    isSeriesListOpen -> {
+                        val groupedSeries by recordViewModel.groupedSeries.collectAsState()
+                        val isSeriesLoading by recordViewModel.isSeriesLoading.collectAsState()
+
+                        LaunchedEffect(Unit) {
+                            recordViewModel.buildSeriesIndex()
+                        }
+
+                        SeriesListScreen(
+                            groupedSeries = groupedSeries,
+                            isLoading = isSeriesLoading,
+                            onSeriesClick = { searchKeyword, displayTitle ->
+                                recordViewModel.searchRecordings(searchKeyword)
+                                openedSeriesTitle = displayTitle // ★ここでタイトルを記憶
+                                isSeriesListOpen = false // 自身を閉じて
+                                isRecordListOpen = true  // 録画一覧を開く
+                            },
+                            onBack = {
+                                isSeriesListOpen = false
+                                recordViewModel.searchRecordings("")
+                            }
+                        )
+                    }
                     isRecordListOpen -> {
                         RecordListScreen(
                             recentRecordings = recentRecordings,
                             searchHistory = searchHistory,
-                            konomiIp = konomiIp, konomiPort = konomiPort,
+                            konomiIp = konomiIp,
+                            konomiPort = konomiPort,
                             onProgramClick = { program ->
                                 if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
                                 val history = watchHistory.find { it.program.id.toString() == program.id.toString() }
@@ -258,8 +299,17 @@ fun MainRootScreen(
                                 lastSelectedProgramId = program.id.toString()
                             },
                             onLoadMore = { recordViewModel.loadNextPage() },
-                            isLoadingMore = isRecLoading,
-                            onBack = { isRecordListOpen = false },
+                            isLoadingInitial = isRecLoading,
+                            isLoadingMore = isRecLoadingMore,
+                            customTitle = openedSeriesTitle, // ★記憶したタイトルを渡す
+                            onBack = {
+                                isRecordListOpen = false
+                                if (openedSeriesTitle != null) {
+                                    isSeriesListOpen = true
+                                    openedSeriesTitle = null
+                                }
+                                recordViewModel.searchRecordings("")
+                            },
                             onSearch = { query -> recordViewModel.searchRecordings(query) }
                         )
                     }
@@ -294,9 +344,7 @@ fun MainRootScreen(
                                     isReturningFromPlayer = false
                                 }
                             },
-                            onReserveSelected = { reserveItem ->
-                                selectedReserve = reserveItem
-                            },
+                            onReserveSelected = { reserveItem -> selectedReserve = reserveItem },
                             isReserveOverlayOpen = selectedReserve != null,
                             epgSelectedProgram = epgSelectedProgram,
                             onEpgProgramSelected = { epgSelectedProgram = it },
@@ -312,6 +360,7 @@ fun MainRootScreen(
                             lastPlayerChannelId = lastSelectedChannelId, lastPlayerProgramId = lastSelectedProgramId,
                             isSettingsOpen = isSettingsOpen, onSettingsToggle = { isSettingsOpen = it },
                             isRecordListOpen = isRecordListOpen, onShowAllRecordings = { isRecordListOpen = true }, onCloseRecordList = { isRecordListOpen = false },
+                            onShowSeriesList = { isSeriesListOpen = true },
                             isReturningFromPlayer = isReturningFromPlayer, onReturnFocusConsumed = { isReturningFromPlayer = false }
                         )
                     }
@@ -320,21 +369,12 @@ fun MainRootScreen(
         }
 
         // --- 詳細画面レイヤー ---
-
         if (selectedReserve != null) {
             val program = remember(selectedReserve) { ReserveMapper.toEpgProgram(selectedReserve!!) }
             ProgramDetailScreen(
-                program = program,
-                mode = ProgramDetailMode.RESERVE,
-                isReserved = true,
-                onBackClick = { selectedReserve = null },
-                onDeleteReserveClick = { _ -> reserveToDelete = selectedReserve },
-                // ★修正: 最新情報を取得してから編集ダイアログを開く
-                onEditReserveClick = { _ ->
-                    reserveViewModel.refreshReserveItem(selectedReserve!!.id) { latest ->
-                        editingReserveItem = latest ?: selectedReserve
-                    }
-                },
+                program = program, mode = ProgramDetailMode.RESERVE, isReserved = true,
+                onBackClick = { selectedReserve = null }, onDeleteReserveClick = { _ -> reserveToDelete = selectedReserve },
+                onEditReserveClick = { _ -> reserveViewModel.refreshReserveItem(selectedReserve!!.id) { latest -> editingReserveItem = latest ?: selectedReserve } },
                 initialFocusRequester = detailFocusRequester
             )
         }
@@ -344,9 +384,7 @@ fun MainRootScreen(
             val isReserved = relatedReserve != null
 
             ProgramDetailScreen(
-                program = epgSelectedProgram!!,
-                mode = ProgramDetailMode.EPG,
-                isReserved = isReserved,
+                program = epgSelectedProgram!!, mode = ProgramDetailMode.EPG, isReserved = isReserved,
                 onPlayClick = {
                     val channel = groupedChannels.values.flatten().find { ch -> ch.id == it.channel_id }
                     if (channel != null) {
@@ -357,8 +395,7 @@ fun MainRootScreen(
                 onRecordClick = { program ->
                     reserveViewModel.addReserve(program.id) {
                         scope.launch {
-                            epgSelectedProgram = null
-                            delay(300)
+                            epgSelectedProgram = null; delay(300)
                             val now = OffsetDateTime.now()
                             val start = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }
                             val end = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }
@@ -367,91 +404,35 @@ fun MainRootScreen(
                         }
                     }
                 },
-                onRecordDetailClick = { program ->
-                    editingNewProgram = program
-                },
-                // ★修正: 最新情報を取得してから編集ダイアログを開く
-                onEditReserveClick = { _ ->
-                    if (relatedReserve != null) {
-                        reserveViewModel.refreshReserveItem(relatedReserve.id) { latest ->
-                            editingReserveItem = latest ?: relatedReserve
-                        }
-                    }
-                },
-                onDeleteReserveClick = { _ ->
-                    if (relatedReserve != null) {
-                        reserveToDelete = relatedReserve
-                    }
-                },
+                onRecordDetailClick = { program -> editingNewProgram = program },
+                onEditReserveClick = { _ -> if (relatedReserve != null) { reserveViewModel.refreshReserveItem(relatedReserve.id) { latest -> editingReserveItem = latest ?: relatedReserve } } },
+                onDeleteReserveClick = { _ -> if (relatedReserve != null) { reserveToDelete = relatedReserve } },
                 onBackClick = { epgSelectedProgram = null },
                 initialFocusRequester = detailFocusRequester
             )
         }
 
-        // --- ダイアログレイヤー (最前面) ---
-
+        // --- ダイアログレイヤー ---
         if (editingReserveItem != null) {
             ReserveSettingsDialog(
-                programTitle = editingReserveItem!!.program.title,
-                initialSettings = editingReserveItem!!.recordSettings,
-                isNewReservation = false,
-                onConfirm = { newSettings ->
-                    reserveViewModel.updateReservation(editingReserveItem!!, newSettings) {
-                        scope.launch {
-                            editingReserveItem = null
-                            toastMessage = "予約設定を更新しました"
-                            delay(200)
-                            detailFocusRequester.safeRequestFocus("ProgramDetail")
-                        }
-                    }
-                },
-                onDismiss = {
-                    editingReserveItem = null
-                    scope.launch {
-                        delay(200)
-                        detailFocusRequester.safeRequestFocus("ProgramDetail")
-                    }
-                }
+                programTitle = editingReserveItem!!.program.title, initialSettings = editingReserveItem!!.recordSettings, isNewReservation = false,
+                onConfirm = { newSettings -> reserveViewModel.updateReservation(editingReserveItem!!, newSettings) { scope.launch { editingReserveItem = null; toastMessage = "予約設定を更新しました"; delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } } },
+                onDismiss = { editingReserveItem = null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } }
             )
         }
 
         if (editingNewProgram != null) {
-            val defaultSettings = remember {
-                ReserveRecordSettings(
-                    isEnabled = true,
-                    priority = 3,
-                    recordingMode = "SpecifiedService",
-                    isEventRelayFollowEnabled = true
-                )
-            }
+            val defaultSettings = remember { ReserveRecordSettings(isEnabled = true, priority = 3, recordingMode = "SpecifiedService", isEventRelayFollowEnabled = true) }
             ReserveSettingsDialog(
-                programTitle = editingNewProgram!!.title,
-                initialSettings = defaultSettings,
-                isNewReservation = true,
-                onConfirm = { newSettings ->
-                    reserveViewModel.addReserveWithSettings(editingNewProgram!!.id, newSettings) {
-                        scope.launch {
-                            editingNewProgram = null
-                            epgSelectedProgram = null
-                            delay(300)
-                            toastMessage = "予約しました"
-                        }
-                    }
-                },
-                onDismiss = {
-                    editingNewProgram = null
-                    scope.launch {
-                        delay(200)
-                        detailFocusRequester.safeRequestFocus("ProgramDetail")
-                    }
-                }
+                programTitle = editingNewProgram!!.title, initialSettings = defaultSettings, isNewReservation = true,
+                onConfirm = { newSettings -> reserveViewModel.addReserveWithSettings(editingNewProgram!!.id, newSettings) { scope.launch { editingNewProgram = null; epgSelectedProgram = null; delay(300); toastMessage = "予約しました" } } },
+                onDismiss = { editingNewProgram = null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } }
             )
         }
 
         if (reserveToDelete != null) {
             DeleteConfirmationDialog(
-                title = "予約の削除",
-                message = "この予約を削除してもよろしいですか？\n${reserveToDelete?.program?.title ?: ""}",
+                title = "予約の削除", message = "この予約を削除してもよろしいですか？\n${reserveToDelete?.program?.title ?: ""}",
                 onConfirm = {
                     val id = reserveToDelete!!.id
                     reserveViewModel.deleteReservation(id) {
@@ -468,17 +449,9 @@ fun MainRootScreen(
             )
         }
 
-        if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) {
-            InitialSetupDialog(onConfirm = { isSettingsOpen = true })
-        }
-
-        if (showConnectionErrorDialog && isSettingsInitialized && !isSettingsOpen) {
-            ConnectionErrorDialog(onGoToSettings = { showConnectionErrorDialog = false; isSettingsOpen = true }, onExit = onExitApp)
-        }
-
-        if (isSettingsOpen) {
-            SettingsScreen(onBack = closeSettingsAndRefresh)
-        }
+        if (!isSettingsInitialized && !isSettingsOpen && isSplashFinished) { InitialSetupDialog(onConfirm = { isSettingsOpen = true }) }
+        if (showConnectionErrorDialog && isSettingsInitialized && !isSettingsOpen) { ConnectionErrorDialog(onGoToSettings = { showConnectionErrorDialog = false; isSettingsOpen = true }, onExit = onExitApp) }
+        if (isSettingsOpen) { SettingsScreen(onBack = closeSettingsAndRefresh) }
 
         AnimatedVisibility(visible = !isAppReady && isSettingsInitialized && !isSettingsOpen && !showConnectionErrorDialog, enter = fadeIn(), exit = fadeOut()) {
             LoadingScreen()
@@ -488,49 +461,22 @@ fun MainRootScreen(
     }
 }
 
-// ... Dialogs (以下変更なし) ...
+// ... ダイアログ関数群（省略なし） ...
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun DeleteConfirmationDialog(
-    title: String,
-    message: String,
-    onConfirm: () -> Unit,
-    onCancel: () -> Unit
-) {
+fun DeleteConfirmationDialog(title: String, message: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(300)
-        focusRequester.safeRequestFocus("DeleteConfirm")
-    }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
-            modifier = Modifier.width(420.dp)
-        ) {
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("DeleteConfirm") }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)), modifier = Modifier.width(420.dp)) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(text = title, style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(text = message, style = MaterialTheme.typography.bodyMedium, color = Color.LightGray)
                 Spacer(modifier = Modifier.height(32.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Button(
-                        onClick = onCancel,
-                        colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("キャンセル")
-                    }
-                    Button(
-                        onClick = onConfirm,
-                        colors = ButtonDefaults.colors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
-                        modifier = Modifier.weight(1f).focusRequester(focusRequester)
-                    ) {
-                        Text("削除する")
-                    }
+                    Button(onClick = onCancel, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.weight(1f)) { Text("キャンセル") }
+                    Button(onClick = onConfirm, colors = ButtonDefaults.colors(containerColor = Color(0xFFD32F2F), contentColor = Color.White), modifier = Modifier.weight(1f).focusRequester(focusRequester)) { Text("削除する") }
                 }
             }
         }
@@ -541,31 +487,15 @@ fun DeleteConfirmationDialog(
 @Composable
 fun InitialSetupDialog(onConfirm: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(300)
-        focusRequester.safeRequestFocus("InitialSetup")
-    }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)),
-            modifier = Modifier.width(400.dp)
-        ) {
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("InitialSetup") }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = Color(0xFF222222)), modifier = Modifier.width(400.dp)) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(text = AppStrings.SETUP_REQUIRED_TITLE, style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(text = AppStrings.SETUP_REQUIRED_MESSAGE, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                 Spacer(modifier = Modifier.height(32.dp))
-                Button(
-                    onClick = onConfirm,
-                    colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
-                ) {
-                    Text(AppStrings.GO_TO_SETTINGS)
-                }
+                Button(onClick = onConfirm, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)) { Text(AppStrings.GO_TO_SETTINGS) }
             }
         }
     }
@@ -575,35 +505,17 @@ fun InitialSetupDialog(onConfirm: () -> Unit) {
 @Composable
 fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(300)
-        focusRequester.safeRequestFocus("ConnectionError")
-    }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
-            modifier = Modifier.width(420.dp)
-        ) {
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("ConnectionError") }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)), modifier = Modifier.width(420.dp)) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(text = AppStrings.CONNECTION_ERROR_TITLE, style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(text = AppStrings.CONNECTION_ERROR_MESSAGE, style = MaterialTheme.typography.bodyMedium, color = Color.LightGray)
                 Spacer(modifier = Modifier.height(32.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Button(onClick = onExit, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.weight(1f)) {
-                        Text(AppStrings.EXIT_APP)
-                    }
-                    Button(
-                        onClick = onGoToSettings,
-                        colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-                        modifier = Modifier.weight(1f).focusRequester(focusRequester)
-                    ) {
-                        Text(AppStrings.GO_TO_SETTINGS_SHORT)
-                    }
+                    Button(onClick = onExit, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.weight(1f)) { Text(AppStrings.EXIT_APP) }
+                    Button(onClick = onGoToSettings, colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary), modifier = Modifier.weight(1f).focusRequester(focusRequester)) { Text(AppStrings.GO_TO_SETTINGS_SHORT) }
                 }
             }
         }
@@ -614,34 +526,15 @@ fun ConnectionErrorDialog(onGoToSettings: () -> Unit, onExit: () -> Unit) {
 @Composable
 fun IncompatibleOsDialog(onExit: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(300)
-        focusRequester.safeRequestFocus("IncompatibleOS")
-    }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)),
-            modifier = Modifier.width(420.dp)
-        ) {
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("IncompatibleOS") }
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = Color(0xFF2B1B1B)), modifier = Modifier.width(420.dp)) {
             Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(text = "非対応のOSバージョン", style = MaterialTheme.typography.headlineSmall, color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API ${Build.VERSION.SDK_INT}) は現在サポートされていません。",
-                    style = MaterialTheme.typography.bodyMedium, color = Color.LightGray
-                )
+                Text(text = "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API ${Build.VERSION.SDK_INT}) は現在サポートされていません。", style = MaterialTheme.typography.bodyMedium, color = Color.LightGray)
                 Spacer(modifier = Modifier.height(32.dp))
-                Button(
-                    onClick = onExit,
-                    colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
-                ) {
-                    Text("アプリを終了する")
-                }
+                Button(onClick = onExit, colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White), modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)) { Text("アプリを終了する") }
             }
         }
     }

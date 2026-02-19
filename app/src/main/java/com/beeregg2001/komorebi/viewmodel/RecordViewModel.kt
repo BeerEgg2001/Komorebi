@@ -10,6 +10,7 @@ import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
+import com.beeregg2001.komorebi.util.TitleNormalizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,13 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
+    // ★変更: Pair<表示用タイトル, 検索用キーワード> のリストを保持する
+    private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
+    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
+
+    private val _isSeriesLoading = MutableStateFlow(false)
+    val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
+
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
 
@@ -60,7 +68,55 @@ class RecordViewModel @Inject constructor(
         loadSearchHistory()
     }
 
-    fun fetchRecentRecordings() {
+    fun buildSeriesIndex() {
+        if (_groupedSeries.value.isNotEmpty() || _isSeriesLoading.value) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSeriesLoading.value = true
+            // ジャンル -> (表示用タイトル -> Pair(表示用, 検索用))
+            val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+            var page = 1
+
+            try {
+                while (true) {
+                    val response = repository.getRecordedPrograms(page = page)
+                    if (response.recordedPrograms.isEmpty()) break
+
+                    response.recordedPrograms.forEach { prog ->
+                        val genre = prog.genres?.firstOrNull()?.major ?: "その他"
+
+                        // ★表示用と検索用を別々に抽出
+                        val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
+                        val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
+
+                        if (displayTitle.isNotEmpty()) {
+                            val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
+                            // 表示用タイトルをキーにして重複を排除
+                            if (!genreMap.containsKey(displayTitle)) {
+                                genreMap[displayTitle] = Pair(displayTitle, searchKeyword)
+                            }
+                        }
+                    }
+
+                    if (response.recordedPrograms.size < 30) break
+                    page++
+                }
+
+                // 表示用タイトルでソートしてUIに渡す
+                _groupedSeries.value = allSeriesMap.mapValues { entry ->
+                    entry.value.values.sortedBy { it.first }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Series Index build failed", e)
+            } finally {
+                _isSeriesLoading.value = false
+            }
+        }
+    }
+
+    fun fetchRecentRecordings(forceRefresh: Boolean = false) {
+        if (!forceRefresh && currentSearchQuery.isNotEmpty()) return
         currentSearchQuery = ""
         fetchInitialRecordings()
     }
@@ -76,11 +132,11 @@ class RecordViewModel @Inject constructor(
     private fun fetchInitialRecordings() {
         viewModelScope.launch {
             _isRecordingLoading.value = true
+            _recentRecordings.value = emptyList()
+
             try {
                 currentPage = 1
                 hasMorePages = true
-
-                Log.i(TAG, "Fetching initial recordings...")
 
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
@@ -89,14 +145,6 @@ class RecordViewModel @Inject constructor(
                 }
 
                 totalItems = response.total
-
-                // ★追加: 取得したリストにサムネイル情報が含まれているか確認
-                if (response.recordedPrograms.isNotEmpty()) {
-                    val sample = response.recordedPrograms.first()
-                    Log.i(TAG, "API Sample: ID=${sample.id}, HasTileInfo=${sample.recordedVideo.thumbnailInfo?.tile != null}")
-                } else {
-                    Log.i(TAG, "API returned empty list")
-                }
 
                 val initialList = response.recordedPrograms.map { program ->
                     program.copy(isRecording = program.recordedVideo.status == "Recording")
@@ -110,7 +158,6 @@ class RecordViewModel @Inject constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching recordings", e)
-                e.printStackTrace()
             } finally {
                 _isRecordingLoading.value = false
             }
@@ -118,15 +165,12 @@ class RecordViewModel @Inject constructor(
     }
 
     fun loadNextPage() {
-        if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) {
-            return
-        }
+        if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) return
 
         viewModelScope.launch {
             _isLoadingMore.value = true
             try {
                 val nextPage = currentPage + 1
-
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = nextPage)
                 } else {
@@ -147,9 +191,8 @@ class RecordViewModel @Inject constructor(
                 if (newItems.size < pageSize || (totalItems > 0 && _recentRecordings.value.size >= totalItems)) {
                     hasMorePages = false
                 }
-
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Load next page failed", e)
             } finally {
                 _isLoadingMore.value = false
             }
@@ -162,12 +205,9 @@ class RecordViewModel @Inject constructor(
             val jsonString = prefs.getString(KEY_HISTORY, "[]")
             val jsonArray = JSONArray(jsonString)
             val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) {
-                list.add(jsonArray.getString(i))
-            }
+            for (i in 0 until jsonArray.length()) { list.add(jsonArray.getString(i)) }
             _searchHistory.value = list
         } catch (e: Exception) {
-            e.printStackTrace()
             _searchHistory.value = emptyList()
         }
     }
@@ -176,9 +216,7 @@ class RecordViewModel @Inject constructor(
         val currentList = _searchHistory.value.toMutableList()
         currentList.remove(query)
         currentList.add(0, query)
-        if (currentList.size > 5) {
-            currentList.removeAt(currentList.lastIndex)
-        }
+        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex)
         _searchHistory.value = currentList
         saveSearchHistory(currentList)
     }
@@ -197,28 +235,18 @@ class RecordViewModel @Inject constructor(
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
                 prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) {}
         }
     }
 
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
-        viewModelScope.launch {
-            historyRepository.saveWatchHistory(program, positionSeconds)
-        }
+        viewModelScope.launch { historyRepository.saveWatchHistory(program, positionSeconds) }
     }
 
     @UnstableApi
-    fun startStreamMaintenance(
-        program: RecordedProgram,
-        quality: String,
-        sessionId: String,
-        getPositionSeconds: () -> Double
-    ) {
+    fun startStreamMaintenance(program: RecordedProgram, quality: String, sessionId: String, getPositionSeconds: () -> Double) {
         stopStreamMaintenance()
 
-        // ★追加: 保存しようとしているデータにタイル情報があるかログ出力
         val hasTile = program.recordedVideo.thumbnailInfo?.tile != null
         Log.i(TAG, "Start maintenance for ID=${program.id}. Has Tile Info? $hasTile")
 

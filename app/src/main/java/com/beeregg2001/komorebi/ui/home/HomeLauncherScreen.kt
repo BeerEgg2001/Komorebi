@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -16,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
@@ -84,6 +87,7 @@ fun HomeLauncherScreen(
     isRecordListOpen: Boolean = false,
     onShowAllRecordings: () -> Unit = {},
     onCloseRecordList: () -> Unit = {},
+    onShowSeriesList: () -> Unit = {}, // ★追加
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {}
 ) {
@@ -91,28 +95,82 @@ fun HomeLauncherScreen(
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
 
     val epgUiState = epgViewModel.uiState
-    val liveRows by channelViewModel.liveRows.collectAsState()
-    val reserves by reserveViewModel.reserves.collectAsState()
+    val currentBroadcastingType by epgViewModel.selectedBroadcastingType.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val lastChannels by homeViewModel.lastWatchedChannelFlow.collectAsState()
-    val pickupGenre by homeViewModel.pickupGenreLabel.collectAsState()
-    val genrePickup by homeViewModel.genrePickupPrograms.collectAsState()
+    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
+    val isRecordingLoadingInitial by recordViewModel.isRecordingLoading.collectAsState()
+    val isRecordingLoadingMore by recordViewModel.isLoadingMore.collectAsState()
+    val reserves by reserveViewModel.reserves.collectAsState()
 
-    val hotChannels by remember { derivedStateOf { homeViewModel.getHotChannels(liveRows) } }
+    val hotChannels by remember { derivedStateOf { homeViewModel.getHotChannels(channelViewModel.liveRows.value) } }
     val upcomingReserves by remember { derivedStateOf { homeViewModel.getUpcomingReserves(reserves) } }
+    val genrePickup by homeViewModel.genrePickupPrograms.collectAsState()
+    val pickupGenreLabel by homeViewModel.pickupGenreLabel.collectAsState()
+
+    val watchHistoryPrograms = remember(watchHistory) { watchHistory.map { KonomiDataMapper.toDomainModel(it) } }
+    val logoUrls = remember(epgUiState) { if (epgUiState is EpgUiState.Success) epgUiState.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList() }
 
     val tabFocusRequesters = remember { List(tabs.size) { FocusRequester() } }
+    val settingsFocusRequester = remember { FocusRequester() }
     val contentFirstItemRequesters = remember { List(tabs.size) { FocusRequester() } }
 
     var internalLastPlayerChannelId by remember(lastPlayerChannelId) { mutableStateOf(lastPlayerChannelId) }
     var isEpgJumping by remember { mutableStateOf(false) }
+    var topNavHasFocus by remember { mutableStateOf(false) }
 
+    val restoreProgramIdInt = remember(lastPlayerProgramId) { lastPlayerProgramId?.toIntOrNull() }
     val isFullScreenMode = selectedChannel != null || selectedProgram != null || epgSelectedProgram != null || isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
+
+    LaunchedEffect(selectedTabIndex) {
+        when (selectedTabIndex) {
+            0 -> homeViewModel.refreshHomeData()
+            1 -> channelViewModel.fetchChannels()
+            2 -> recordViewModel.fetchRecentRecordings(forceRefresh = false)
+            4 -> reserveViewModel.fetchReserves()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!isReturningFromPlayer) {
+            delay(500)
+            if (!isFullScreenMode) tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
+        }
+    }
+
+    LaunchedEffect(isFullScreenMode) {
+        if (!isFullScreenMode) {
+            delay(200)
+            if (selectedTabIndex == 4) contentFirstItemRequesters[4].safeRequestFocus(TAG)
+            else if (selectedTabIndex != 3) tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
+        }
+    }
+
+    LaunchedEffect(triggerBack) {
+        if (triggerBack) {
+            if (!topNavHasFocus) {
+                tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus(TAG)
+            } else {
+                if (selectedTabIndex > 0) {
+                    selectedTabIndex = 0
+                    onTabChange(0)
+                    delay(50); tabFocusRequesters[0].safeRequestFocus(TAG)
+                } else {
+                    onFinalBack()
+                }
+            }
+            onBackTriggered()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (!isFullScreenMode) {
-                Row(modifier = Modifier.fillMaxWidth().height(80.dp).padding(top = 8.dp, start = 40.dp, end = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(80.dp).padding(top = 8.dp, start = 40.dp, end = 40.dp)
+                        .onFocusChanged { topNavHasFocus = it.hasFocus },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     DigitalClock()
                     Spacer(modifier = Modifier.width(32.dp))
                     TabRow(
@@ -121,8 +179,7 @@ fun HomeLauncherScreen(
                         indicator = { tabPositions, doesTabRowHaveFocus ->
                             TabRowDefaults.UnderlinedIndicator(
                                 currentTabPosition = tabPositions[selectedTabIndex],
-                                doesTabRowHaveFocus = doesTabRowHaveFocus,
-                                activeColor = Color.White
+                                doesTabRowHaveFocus = doesTabRowHaveFocus, activeColor = Color.White
                             )
                         }
                     ) {
@@ -130,39 +187,43 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = selectedTabIndex == index,
                                 onFocus = { if (selectedTabIndex != index) { selectedTabIndex = index; onTabChange(index) } },
-                                modifier = Modifier.focusRequester(tabFocusRequesters[index]).focusProperties { down = contentFirstItemRequesters[index] }
+                                modifier = Modifier.focusRequester(tabFocusRequesters[index])
+                                    .focusProperties { down = contentFirstItemRequesters[index]; canFocus = !(selectedTabIndex == 3 && isEpgJumping) }
                             ) {
                                 Text(text = title, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium, color = if (selectedTabIndex == index) Color.White else Color.Gray)
                             }
                         }
                     }
-                    IconButton(onClick = { onSettingsToggle(true) }) { Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.Gray) }
+                    IconButton(
+                        onClick = { onSettingsToggle(true) },
+                        modifier = Modifier.focusRequester(settingsFocusRequester)
+                            .focusProperties { left = tabFocusRequesters.last(); canFocus = !(selectedTabIndex == 3 && isEpgJumping) }
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.Gray)
+                    }
                 }
             }
 
             Box(modifier = Modifier.weight(1f)) {
                 when (selectedTabIndex) {
                     0 -> HomeContents(
-                        lastWatchedChannels = lastChannels,
-                        watchHistory = watchHistory,
-                        hotChannels = hotChannels,
-                        upcomingReserves = upcomingReserves,
-                        genrePickup = genrePickup,
-                        pickupGenreName = pickupGenre,
-                        onChannelClick = { onChannelClick(it) },
-                        onHistoryClick = { onProgramSelected(KonomiDataMapper.toDomainModel(it)) },
+                        lastWatchedChannels = lastChannels, watchHistory = watchHistory,
+                        hotChannels = hotChannels, upcomingReserves = upcomingReserves,
+                        genrePickup = genrePickup, pickupGenreName = pickupGenreLabel,
+                        onChannelClick = onChannelClick,
+                        onHistoryClick = { historyItem ->
+                            val programId = historyItem.program.id.toIntOrNull()
+                            val betterProgram = recentRecordings.find { it.id == programId }
+                            if (betterProgram != null) onProgramSelected(betterProgram.copy(playbackPosition = historyItem.playback_position))
+                            else onProgramSelected(KonomiDataMapper.toDomainModel(historyItem))
+                        },
                         onReserveClick = onReserveSelected,
                         onProgramClick = { onEpgProgramSelected(it) },
-                        onNavigateToTab = { index ->
-                            selectedTabIndex = index
-                            onTabChange(index)
-                        },
+                        onNavigateToTab = { index -> selectedTabIndex = index; onTabChange(index) },
                         konomiIp = konomiIp, konomiPort = konomiPort,
                         mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        tabFocusRequester = tabFocusRequesters[0],
-                        externalFocusRequester = contentFirstItemRequesters[0],
-                        lastFocusedChannelId = internalLastPlayerChannelId,
-                        lastFocusedProgramId = lastPlayerProgramId
+                        tabFocusRequester = tabFocusRequesters[0], externalFocusRequester = contentFirstItemRequesters[0],
+                        lastFocusedChannelId = internalLastPlayerChannelId, lastFocusedProgramId = lastPlayerProgramId
                     )
                     1 -> LiveContent(
                         channelViewModel = channelViewModel, epgViewModel = epgViewModel, groupedChannels = groupedChannels,
@@ -174,37 +235,31 @@ fun HomeLauncherScreen(
                         reserveViewModel = reserveViewModel
                     )
                     2 -> VideoTabContent(
-                        recentRecordings = recordViewModel.recentRecordings.collectAsState().value,
-                        watchHistory = watchHistory.map { KonomiDataMapper.toDomainModel(it) },
-                        selectedProgram = selectedProgram,
-                        restoreProgramId = if (isReturningFromPlayer && selectedTabIndex == 2) lastPlayerProgramId?.toIntOrNull() else null,
-                        konomiIp = konomiIp, konomiPort = konomiPort,
-                        topNavFocusRequester = tabFocusRequesters[2], contentFirstItemRequester = contentFirstItemRequesters[2],
-                        onProgramClick = { onProgramSelected(it) }, onLoadMore = { recordViewModel.loadNextPage() },
-                        isLoadingMore = recordViewModel.isLoadingMore.collectAsState().value, onShowAllRecordings = onShowAllRecordings
+                        recentRecordings = recentRecordings, watchHistory = watchHistoryPrograms, selectedProgram = selectedProgram,
+                        restoreProgramId = if (isReturningFromPlayer && selectedTabIndex == 2) restoreProgramIdInt else null,
+                        konomiIp = konomiIp, konomiPort = konomiPort, topNavFocusRequester = tabFocusRequesters[2],
+                        contentFirstItemRequester = contentFirstItemRequesters[2],
+                        onProgramClick = { program ->
+                            val betterProgram = recentRecordings.find { it.id == program.id }
+                            if (betterProgram != null) onProgramSelected(betterProgram.copy(playbackPosition = program.playbackPosition))
+                            else onProgramSelected(program)
+                        },
+                        onLoadMore = { recordViewModel.loadNextPage() }, isLoadingMore = isRecordingLoadingMore,
+                        onShowAllRecordings = onShowAllRecordings,
+                        onShowSeriesList = onShowSeriesList // ★追加
                     )
                     3 -> EpgNavigationContainer(
-                        uiState = epgUiState,
-                        logoUrls = epgUiState.let { if (it is EpgUiState.Success) it.data.map { wrap -> epgViewModel.getLogoUrl(wrap.channel) } else emptyList() },
-                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                        mainTabFocusRequester = tabFocusRequesters[3],
-                        contentRequester = contentFirstItemRequesters[3],
-                        selectedProgram = epgSelectedProgram,
-                        onProgramSelected = onEpgProgramSelected,
-                        isJumpMenuOpen = isEpgJumpMenuOpen,
-                        onJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                        onNavigateToPlayer = onNavigateToPlayer,
-                        currentType = epgViewModel.selectedBroadcastingType.collectAsState().value,
-                        onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
+                        uiState = epgUiState, logoUrls = logoUrls, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                        mainTabFocusRequester = tabFocusRequesters[3], contentRequester = contentFirstItemRequesters[3],
+                        selectedProgram = epgSelectedProgram, onProgramSelected = onEpgProgramSelected, isJumpMenuOpen = isEpgJumpMenuOpen,
+                        onJumpMenuStateChanged = onEpgJumpMenuStateChanged, onNavigateToPlayer = onNavigateToPlayer,
+                        currentType = currentBroadcastingType, onTypeChanged = { epgViewModel.updateBroadcastingType(it) },
                         restoreChannelId = if (isReturningFromPlayer && selectedTabIndex == 3) lastPlayerChannelId else null,
-                        availableTypes = groupedChannels.keys.toList(),
-                        onJumpStateChanged = { isEpgJumping = it },
-                        reserves = reserves
+                        availableTypes = groupedChannels.keys.toList(), onJumpStateChanged = { isEpgJumping = it }, reserves = reserves
                     )
                     4 -> ReserveListScreen(
-                        onBack = { tabFocusRequesters[4].safeRequestFocus(TAG) },
-                        onProgramClick = onReserveSelected, konomiIp = konomiIp, konomiPort = konomiPort,
-                        contentFirstItemRequester = contentFirstItemRequesters[4]
+                        onBack = { tabFocusRequesters[4].safeRequestFocus(TAG) }, onProgramClick = onReserveSelected,
+                        konomiIp = konomiIp, konomiPort = konomiPort, contentFirstItemRequester = contentFirstItemRequesters[4]
                     )
                 }
             }

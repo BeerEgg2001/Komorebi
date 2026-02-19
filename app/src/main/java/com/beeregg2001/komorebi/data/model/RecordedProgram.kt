@@ -17,8 +17,9 @@ data class RecordedProgram(
     @SerializedName("is_partially_recorded") val isPartiallyRecorded: Boolean,
     val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
+    val genres: List<EpgGenre>? = null, // ★追加: 番組表と同じジャンル情報
     val isRecording: Boolean = false,
-    val playbackPosition: Double = 0.0 // ★追加
+    val playbackPosition: Double = 0.0
 )
 
 data class RecordedChannel(
