@@ -9,7 +9,7 @@ import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
-import com.beeregg2001.komorebi.data.repository.EpgRepository // ★再追加
+import com.beeregg2001.komorebi.data.repository.EpgRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -26,19 +26,17 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val epgRepository: EpgRepository, // ★EpgRepositoryを再注入
+    private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // 視聴履歴
     val watchHistory: StateFlow<List<KonomiHistoryProgram>> = repository.getLocalWatchHistory()
         .map { entities -> entities.map { KonomiDataMapper.toUiModel(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 前回視聴チャンネル
     val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
         .map { entities ->
             entities.map { entity ->
@@ -53,7 +51,6 @@ class HomeViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 各種設定
     val pickupGenreLabel = settingsRepository.homePickupGenre
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "アニメ")
 
@@ -69,7 +66,8 @@ class HomeViewModel @Inject constructor(
     private val _genrePickupTimeSlot = MutableStateFlow("夜")
     val genrePickupTimeSlot: StateFlow<String> = _genrePickupTimeSlot.asStateFlow()
 
-    // 勢いのあるチャンネル抽出
+    private val _sharedEpgData = MutableStateFlow<List<EpgChannelWrapper>>(emptyList())
+
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
             .filter { (it.jikkyoForce ?: 0) > 0 }
@@ -77,7 +75,6 @@ class HomeViewModel @Inject constructor(
             .take(5)
     }
 
-    // 録画予約抽出
     fun getUpcomingReserves(reserves: List<ReserveItem>): List<ReserveItem> {
         val now = OffsetDateTime.now()
         return reserves.filter {
@@ -86,25 +83,30 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.program.startTime }.take(5)
     }
 
-    // ★修正: 特定の放送波に依存せず、GR, BS, CS 全てを個別に取得・集計する
+    fun updateEpgData(data: List<EpgChannelWrapper>) {
+        _sharedEpgData.value = data
+    }
+
     private fun fetchAllTypeGenrePickup() {
         viewModelScope.launch {
             val genre = pickupGenreLabel.value
             val timeSetting = pickupTimeSetting.value
             val isExcludePaid = excludePaidBroadcasts.value == "ON"
 
-            // 取得範囲は24時間分に絞って軽量化
             val now = OffsetDateTime.now()
             val startSearch = now.minusHours(1)
             val endSearch = now.plusHours(24)
 
             val types = listOf("GR", "BS", "CS")
 
-            // 全放送波のデータを並列でフェッチ（キャッシュがあれば瞬時に返る）
+            // ★修正: クラッシュを避けるため、first()を使わず、Result型を適切に処理
             val allPrograms = types.map { type ->
                 async {
-                    // Flowの最初の値（キャッシュまたは最新）を1件取得
-                    epgRepository.getEpgDataStream(startSearch, endSearch, type).first().getOrNull() ?: emptyList()
+                    // Flowを収集し、最初の1件が来たら即座に完了する（透過性を守った安全な取得）
+                    epgRepository.getEpgDataStream(startSearch, endSearch, type)
+                        .take(1)
+                        .map { it.getOrNull() ?: emptyList() }
+                        .firstOrNull() ?: emptyList()
                 }
             }.awaitAll().flatten()
 
@@ -112,7 +114,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // フィルタリング処理（共通ロジック）
     private suspend fun filterGenrePickup(
         allPrograms: List<EpgChannelWrapper>,
         genre: String,
@@ -150,10 +151,8 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // 設定変更を監視して再取得
             combine(pickupGenreLabel, pickupTimeSetting, excludePaidBroadcasts) { _, _, _ -> Unit }
                 .collectLatest {
-                    // 起動直後の負荷集中を避けるため少し待機
                     delay(1000)
                     fetchAllTypeGenrePickup()
                 }
@@ -163,7 +162,6 @@ class HomeViewModel @Inject constructor(
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
-            // 視聴履歴の同期（バルクインサート）
             repository.getWatchHistory().onSuccess { apiHistoryList ->
                 val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
                 val existingEntitiesMap = repository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
@@ -183,7 +181,6 @@ class HomeViewModel @Inject constructor(
                 if (entitiesToSave.isNotEmpty()) repository.saveAllToLocalHistory(entitiesToSave)
             }
             repository.refreshUser()
-            // ホーム更新時にピックアップも再取得
             fetchAllTypeGenrePickup()
             _isLoading.value = false
         }
