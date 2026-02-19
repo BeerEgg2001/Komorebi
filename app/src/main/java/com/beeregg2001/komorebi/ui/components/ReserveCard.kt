@@ -213,7 +213,7 @@ fun ReserveCard(
 
                 // 番組概要
                 Text(
-                    text = program.description,
+                    text = program.description ?: "",
                     style = MaterialTheme.typography.bodySmall,
                     color = subTextColor,
                     maxLines = 1,

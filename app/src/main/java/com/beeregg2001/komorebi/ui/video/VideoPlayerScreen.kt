@@ -90,16 +90,14 @@ fun VideoPlayerScreen(
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
     val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
 
-    // 実況設定の反映ロジック
-    val commentEnabledState = rememberSaveable { mutableStateOf(true) }
-    val hasInitializedComment = rememberSaveable { mutableStateOf(false) }
+    // ★修正: 設定読み込み待ちガード
+    val commentEnabledState = rememberSaveable { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(commentDefaultDisplayStr) {
-        if (!hasInitializedComment.value) {
+        if (commentEnabledState.value == null) {
             commentEnabledState.value = (commentDefaultDisplayStr == "ON")
-            hasInitializedComment.value = true
         }
     }
-    val isCommentEnabled by commentEnabledState
+    val isCommentEnabled = commentEnabledState.value ?: false
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
@@ -194,7 +192,7 @@ fun VideoPlayerScreen(
                 onSpeedToggle = { val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(currentSpeed); toastState = "速度: ${currentSpeed}x" to System.currentTimeMillis() },
                 onSubtitleToggle = { isSubtitleEnabled = !isSubtitleEnabled; toastState = "字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}" to System.currentTimeMillis() },
                 onQualitySelect = { currentQuality = it; toastState = "画質: ${it.label}" to System.currentTimeMillis() },
-                onCommentToggle = { commentEnabledState.value = !commentEnabledState.value; toastState = "実況: ${if(commentEnabledState.value) "表示" else "非表示"}" to System.currentTimeMillis() }
+                onCommentToggle = { commentEnabledState.value = !(commentEnabledState.value ?: true); toastState = "実況: ${if(commentEnabledState.value == true) "表示" else "非表示"}" to System.currentTimeMillis() }
             )
         }
         PlaybackIndicator(indicatorState); VideoToast(toastState)
