@@ -2,6 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.main
 
+// ... インポート文（変更なし）
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
@@ -134,25 +135,6 @@ fun MainRootScreen(
 
     val epgUiState = epgViewModel.uiState
 
-    // ★追加: 起動時タブの設定を適用したかどうかのフラグ
-    var hasAppliedStartupTab by rememberSaveable { mutableStateOf(false) }
-
-    // ★追加: アプリ起動時に一度だけローカルからデフォルトタブを読み込んで適用する
-    LaunchedEffect(Unit) {
-        if (!hasAppliedStartupTab) {
-            val tab = settingsViewModel.getStartupTabOnce()
-            currentTabIndex = when (tab) {
-                "ホーム" -> 0
-                "ライブ" -> 1
-                "ビデオ" -> 2
-                "番組表" -> 3
-                "録画予約" -> 4
-                else -> 0
-            }
-            hasAppliedStartupTab = true
-        }
-    }
-
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
         isDataReady = false
@@ -171,13 +153,11 @@ fun MainRootScreen(
         }
     }
 
-    LaunchedEffect(epgUiState) {
-        if (epgUiState is EpgUiState.Success) {
-            homeViewModel.updateEpgData(epgUiState.data)
-        }
-    }
+    // ★削除: EpgViewModelの単一放送波データに引きずられる原因となっていたため、同期処理を廃止
+    // HomeViewModel側でGR, BS, CSを個別に取得するように変更しました。
 
     BackHandler(enabled = true) {
+        // ... バックハンドラーの中身（変更なし）
         when {
             editingNewProgram != null -> editingNewProgram = null
             editingReserveItem != null -> editingReserveItem = null
@@ -230,14 +210,14 @@ fun MainRootScreen(
         isSplashFinished = true
     }
 
-    // ★修正: タブの初期適用が終わるまでスプラッシュ画面を維持する
-    val isAppReady = ((isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)) && hasAppliedStartupTab
+    val isAppReady = (isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)
 
     Box(modifier = Modifier.fillMaxSize()) {
         val showMainContent = isAppReady && isSettingsInitialized && !showConnectionErrorDialog
 
         AnimatedVisibility(visible = showMainContent, enter = fadeIn(), exit = fadeOut()) {
             Box(modifier = Modifier.fillMaxSize()) {
+                // ... コンテンツ表示（変更なし）
                 when {
                     selectedChannel != null -> {
                         LivePlayerScreen(
@@ -394,6 +374,7 @@ fun MainRootScreen(
             }
         }
 
+        // ... ダイアログ表示（変更なし）
         if (selectedReserve != null) {
             val program = remember(selectedReserve) { ReserveMapper.toEpgProgram(selectedReserve!!) }
             ProgramDetailScreen(
@@ -485,6 +466,7 @@ fun MainRootScreen(
     }
 }
 
+// ... 以降の Composable 関数（変更なし）
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DeleteConfirmationDialog(title: String, message: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
