@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -51,9 +52,11 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val liveQuality by repository.liveQuality.collectAsState(initial = "1080p-60fps")
     val videoQuality by repository.videoQuality.collectAsState(initial = "1080p-60fps")
+
     val pickupGenre by repository.homePickupGenre.collectAsState(initial = "アニメ")
-    // ★追加: 有料放送を除外する設定（デフォルトはON）
     val excludePaid by repository.excludePaidBroadcasts.collectAsState(initial = "ON")
+    // ★追加: ピックアップ時間帯のState
+    val pickupTime by repository.homePickupTime.collectAsState(initial = "自動")
 
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var editingItem by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -61,9 +64,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     var showLiveQualitySelection by remember { mutableStateOf(false) }
     var showVideoQualitySelection by remember { mutableStateOf(false) }
     var showPickupGenreSelection by remember { mutableStateOf(false) }
+    // ★追加: 時間帯選択ダイアログの表示フラグ
+    var showPickupTimeSelection by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
 
-    val categories = listOf(Category("接続設定", Icons.Default.CastConnected), Category("再生設定", Icons.Default.PlayCircle), Category("コメント表示設定", Icons.Default.Tv), Category("アプリ情報", Icons.Default.Info))
+    val categories = listOf(
+        Category("接続設定", Icons.Default.CastConnected),
+        Category("再生設定", Icons.Default.PlayCircle),
+        Category("表示設定", Icons.Default.Dashboard),
+        Category("コメント表示設定", Icons.Default.Tv),
+        Category("アプリ情報", Icons.Default.Info)
+    )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
     var isSidebarFocused by remember { mutableStateOf(true) }
 
@@ -74,8 +85,10 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val liveQFocusRequester = remember { FocusRequester() }
     val videoQFocusRequester = remember { FocusRequester() }
+
     val genreFocusRequester = remember { FocusRequester() }
-    val exPaidFocusRequester = remember { FocusRequester() } // ★追加: 有料放送除外ボタンのフォーカス管理
+    val timeFocusRequester = remember { FocusRequester() } // ★追加: 時間帯のFocusRequester
+    val exPaidFocusRequester = remember { FocusRequester() }
 
     val cDefaultDisplayFocusRequester = remember { FocusRequester() }
     val cSpeedFocusRequester = remember { FocusRequester() }
@@ -93,13 +106,24 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (restoreFocusRequester == null) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() }
     }
 
-    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showLicenses) {
-        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showLicenses) {
+    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showPickupTimeSelection, showLicenses) {
+        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showPickupTimeSelection && !showLicenses) {
             delay(250)
             if (restoreFocusRequester != null) {
                 if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) { selectedCategoryIndex = restoreCategoryIndex; delay(50) }
                 restoreFocusRequester?.safeRequestFocus(); restoreFocusRequester = null; restoreCategoryIndex = -1
             } else if (isSidebarFocused) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() }
+        }
+    }
+
+    val getRightTargetRequester: (Int) -> FocusRequester = { index ->
+        when (index) {
+            0 -> kIpFocusRequester
+            1 -> liveQFocusRequester
+            2 -> genreFocusRequester
+            3 -> cDefaultDisplayFocusRequester
+            4 -> appInfoLicenseRequester
+            else -> FocusRequester.Default
         }
     }
 
@@ -116,21 +140,46 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text(text = "設定", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
             }
             categories.forEachIndexed { index, category ->
-                CategoryItem(title = category.name, icon = category.icon, isSelected = selectedCategoryIndex == index, onFocused = { selectedCategoryIndex = index }, onClick = {
-                    when (index) { 0 -> kIpFocusRequester.safeRequestFocus(); 1 -> liveQFocusRequester.safeRequestFocus(); 2 -> cDefaultDisplayFocusRequester.safeRequestFocus(); 3 -> appInfoLicenseRequester.safeRequestFocus() }
-                }, modifier = Modifier.focusRequester(categoryFocusRequesters[index]))
+                val targetRequester = getRightTargetRequester(index)
+                CategoryItem(
+                    title = category.name,
+                    icon = category.icon,
+                    isSelected = selectedCategoryIndex == index,
+                    onFocused = { selectedCategoryIndex = index },
+                    onClick = { targetRequester.safeRequestFocus() },
+                    modifier = Modifier
+                        .focusRequester(categoryFocusRequesters[index])
+                        .focusProperties { right = targetRequester }
+                )
             }
             Spacer(modifier = Modifier.weight(1f))
-            CategoryItem(title = "ホームに戻る", icon = Icons.Default.Home, isSelected = false, onFocused = { }, onClick = onBack)
+
+            val activeRightTarget = getRightTargetRequester(selectedCategoryIndex)
+            CategoryItem(
+                title = "ホームに戻る",
+                icon = Icons.Default.Home,
+                isSelected = false,
+                onFocused = { },
+                onClick = onBack,
+                modifier = Modifier.focusProperties { right = activeRightTarget }
+            )
         }
 
-        Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .padding(vertical = 48.dp, horizontal = 64.dp)
+                .focusProperties {
+                    left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default
+                }
+        ) {
             when (selectedCategoryIndex) {
                 0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, { t, v -> editingItem = t to v }, kIpFocusRequester, kPortFocusRequester, mIpFocusRequester, mPortFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 0 })
-                // ★修正: PlaybackSettingsContentに excludePaid と関連するコールバックを渡す
-                1 -> PlaybackSettingsContent(liveQuality, videoQuality, pickupGenre, excludePaid, liveQFocusRequester, videoQFocusRequester, genreFocusRequester, exPaidFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { showPickupGenreSelection = true }, { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
-                2 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> editingItem = t to v }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefaultDisplayFocusRequester, cSpeedFocusRequester, cSizeFocusRequester, cOpacityFocusRequester, cMaxLinesFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 2 })
-                3 -> AppInfoContent({ showLicenses = true }, appInfoLicenseRequester, { restoreFocusRequester = it; restoreCategoryIndex = 3 })
+                1 -> PlaybackSettingsContent(liveQuality, videoQuality, liveQFocusRequester, videoQFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
+                2 -> HomeDisplaySettingsContent(pickupGenre, excludePaid, pickupTime, genreFocusRequester, exPaidFocusRequester, timeFocusRequester, { showPickupGenreSelection = true }, { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, { showPickupTimeSelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 2 })
+                3 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> editingItem = t to v }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefaultDisplayFocusRequester, cSpeedFocusRequester, cSizeFocusRequester, cOpacityFocusRequester, cMaxLinesFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 3 })
+                4 -> AppInfoContent({ showLicenses = true }, appInfoLicenseRequester, { restoreFocusRequester = it; restoreCategoryIndex = 4 })
             }
         }
     }
@@ -151,11 +200,14 @@ fun SettingsScreen(onBack: () -> Unit) {
         val genres = listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー")
         SelectionDialog("ピックアップジャンルを選択", genres.map { it to it }, pickupGenre, { showPickupGenreSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) }; showPickupGenreSelection = false })
     }
+    // ★追加: ピックアップ時間帯の選択ダイアログ
+    if (showPickupTimeSelection) {
+        val times = listOf("自動" to "自動", "朝 (5:00 - 11:00)" to "朝", "昼 (11:00 - 18:00)" to "昼", "夜 (18:00 - 5:00)" to "夜")
+        SelectionDialog("ピックアップ時間帯を選択", times, pickupTime, { showPickupTimeSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) }; showPickupTimeSelection = false })
+    }
 
     if (showLicenses) {
-        OpenSourceLicensesScreen(
-            onBack = { showLicenses = false }
-        )
+        OpenSourceLicensesScreen(onBack = { showLicenses = false })
     }
 }
 
@@ -174,12 +226,11 @@ fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: St
     }
 }
 
-// ★修正: 引数とUIの構造を調整
 @Composable
 fun PlaybackSettingsContent(
-    liveQ: String, videoQ: String, genre: String, excludePaid: String,
-    liveR: FocusRequester, videoR: FocusRequester, genreR: FocusRequester, exPaidR: FocusRequester,
-    onL: () -> Unit, onV: () -> Unit, onG: () -> Unit, onExPaid: () -> Unit,
+    liveQ: String, videoQ: String,
+    liveR: FocusRequester, videoR: FocusRequester,
+    onL: () -> Unit, onV: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -189,9 +240,24 @@ fun PlaybackSettingsContent(
             SettingItem("ライブ視聴画質", StreamQuality.fromValue(liveQ).label, modifier = Modifier.focusRequester(liveR), onClick = { onClick(liveR); onL() })
             SettingItem("録画視聴画質", StreamQuality.fromValue(videoQ).label, modifier = Modifier.focusRequester(videoR), onClick = { onClick(videoR); onV() })
         }
+    }
+}
+
+// ★修正: ホーム画面設定に時間帯の項目を追加
+@Composable
+fun HomeDisplaySettingsContent(
+    genre: String, excludePaid: String, pickupTime: String,
+    genreR: FocusRequester, exPaidR: FocusRequester, timeR: FocusRequester,
+    onG: () -> Unit, onExPaid: () -> Unit, onTime: () -> Unit,
+    onClick: (FocusRequester) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text("表示設定", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold)
 
         SettingsSection("ホーム画面設定") {
             SettingItem("ピックアップジャンル", genre, Icons.Default.Category, modifier = Modifier.focusRequester(genreR), onClick = { onClick(genreR); onG() })
+            // ★追加: ピックアップ時間帯のトグル
+            SettingItem("ピックアップ時間帯", pickupTime, Icons.Default.Schedule, modifier = Modifier.focusRequester(timeR), onClick = { onClick(timeR); onTime() })
             SettingItem("ピックアップから有料放送を除外する", if (excludePaid == "ON") "ON (除外する)" else "OFF (除外しない)", Icons.Default.Block, modifier = Modifier.focusRequester(exPaidR), onClick = { onClick(exPaidR); onExPaid() })
         }
     }
@@ -200,7 +266,7 @@ fun PlaybackSettingsContent(
 @Composable
 fun DisplaySettingsContent(def: String, speed: String, size: String, opacity: String, max: String, onEdit: (String, String) -> Unit, onT: () -> Unit, defR: FocusRequester, spR: FocusRequester, szR: FocusRequester, opR: FocusRequester, mxR: FocusRequester, onClick: (FocusRequester) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text("表示設定", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold)
+        Text("コメント表示設定", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold)
         SettingsSection("ニコニコ実況") {
             SettingItem("デフォルト表示", if (def == "ON") "表示" else "非表示", modifier = Modifier.focusRequester(defR), onClick = { onClick(defR); onT() })
             SettingItem("コメントの速さ", speed, Icons.Default.Chat, modifier = Modifier.focusRequester(spR), onClick = { onClick(spR); onEdit("実況コメントの速さ", speed) })

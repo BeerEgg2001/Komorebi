@@ -34,9 +34,9 @@ class SettingsRepository @Inject constructor(
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
-
-        // ★追加: 有料放送除外設定
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
+        // ★追加: ピックアップの時間帯設定（自動、朝、昼、夜）
+        val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
     }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
@@ -54,9 +54,10 @@ class SettingsRepository @Inject constructor(
     val videoQuality: Flow<String> = context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
 
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
-
-    // ★追加: デフォルトはON（除外する）
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
+
+    // ★追加: デフォルトは「自動」（現在の時間帯）
+    val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)

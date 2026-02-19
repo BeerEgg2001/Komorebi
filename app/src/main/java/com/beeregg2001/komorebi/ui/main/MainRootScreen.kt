@@ -90,7 +90,6 @@ fun MainRootScreen(
 
     var isRecordListOpen by remember { mutableStateOf(false) }
     var isSeriesListOpen by remember { mutableStateOf(false) }
-    // ★追加: シリーズ画面から開いたことを記憶し、戻る先を制御・タイトルを渡すための変数
     var openedSeriesTitle by remember { mutableStateOf<String?>(null) }
 
     var isPlayerMiniListOpen by remember { mutableStateOf(false) }
@@ -132,6 +131,8 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
+    val epgUiState = epgViewModel.uiState
+
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
         isDataReady = false
@@ -147,6 +148,13 @@ fun MainRootScreen(
         if (toastMessage != null) {
             delay(3000)
             toastMessage = null
+        }
+    }
+
+    // ★追加: EpgViewModelが取得したEPGデータを、ピックアップ抽出用にHomeViewModelに共有する
+    LaunchedEffect(epgUiState) {
+        if (epgUiState is EpgUiState.Success) {
+            homeViewModel.updateEpgData(epgUiState.data)
         }
     }
 
@@ -167,15 +175,13 @@ fun MainRootScreen(
             selectedReserve != null -> selectedReserve = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
 
-            // ★修正: 戻るキーの階層を制御
             isRecordListOpen -> {
                 isRecordListOpen = false
                 if (openedSeriesTitle != null) {
-                    // シリーズから開いていた場合はシリーズ画面に戻る
                     isSeriesListOpen = true
                     openedSeriesTitle = null
                 }
-                recordViewModel.searchRecordings("") // ビデオタブに戻った時のためリセット
+                recordViewModel.searchRecordings("")
             }
             isSeriesListOpen -> {
                 isSeriesListOpen = false
@@ -187,9 +193,10 @@ fun MainRootScreen(
         }
     }
 
-    LaunchedEffect(isChannelLoading, isHomeLoading, isRecLoading) {
+    // ★修正: isRecLoading を待機条件から外し、起動を高速化
+    LaunchedEffect(isChannelLoading, isHomeLoading) {
         delay(500)
-        if (!isChannelLoading && !isHomeLoading && !isRecLoading) {
+        if (!isChannelLoading && !isHomeLoading) {
             if (isChannelError) {
                 showConnectionErrorDialog = true
                 isDataReady = false
@@ -272,9 +279,9 @@ fun MainRootScreen(
                             isLoading = isSeriesLoading,
                             onSeriesClick = { searchKeyword, displayTitle ->
                                 recordViewModel.searchRecordings(searchKeyword)
-                                openedSeriesTitle = displayTitle // ★ここでタイトルを記憶
-                                isSeriesListOpen = false // 自身を閉じて
-                                isRecordListOpen = true  // 録画一覧を開く
+                                openedSeriesTitle = displayTitle
+                                isSeriesListOpen = false
+                                isRecordListOpen = true
                             },
                             onBack = {
                                 isSeriesListOpen = false
@@ -301,7 +308,7 @@ fun MainRootScreen(
                             onLoadMore = { recordViewModel.loadNextPage() },
                             isLoadingInitial = isRecLoading,
                             isLoadingMore = isRecLoadingMore,
-                            customTitle = openedSeriesTitle, // ★記憶したタイトルを渡す
+                            customTitle = openedSeriesTitle,
                             onBack = {
                                 isRecordListOpen = false
                                 if (openedSeriesTitle != null) {
@@ -368,7 +375,6 @@ fun MainRootScreen(
             }
         }
 
-        // --- 詳細画面レイヤー ---
         if (selectedReserve != null) {
             val program = remember(selectedReserve) { ReserveMapper.toEpgProgram(selectedReserve!!) }
             ProgramDetailScreen(
@@ -412,7 +418,6 @@ fun MainRootScreen(
             )
         }
 
-        // --- ダイアログレイヤー ---
         if (editingReserveItem != null) {
             ReserveSettingsDialog(
                 programTitle = editingReserveItem!!.program.title, initialSettings = editingReserveItem!!.recordSettings, isNewReservation = false,
@@ -461,7 +466,6 @@ fun MainRootScreen(
     }
 }
 
-// ... ダイアログ関数群（省略なし） ...
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DeleteConfirmationDialog(title: String, message: String, onConfirm: () -> Unit, onCancel: () -> Unit) {

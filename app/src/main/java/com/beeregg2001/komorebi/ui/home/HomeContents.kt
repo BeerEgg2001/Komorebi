@@ -46,6 +46,7 @@ fun HomeContents(
     upcomingReserves: List<ReserveItem>,
     genrePickup: List<Pair<EpgProgram, String>>,
     pickupGenreName: String,
+    pickupTimeSlot: String, // ★追加: 時間帯の文字列
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
@@ -115,7 +116,7 @@ fun HomeContents(
             }
         }
 
-        // 2. 今、盛り上がっているチャンネル (放送中サムネイル表示)
+        // 2. 今、盛り上がっているチャンネル
         if (hotChannels.isNotEmpty()) {
             item {
                 Column {
@@ -149,10 +150,22 @@ fun HomeContents(
         if (genrePickup.isNotEmpty()) {
             item {
                 Column {
-                    SectionHeader("今夜の${pickupGenreName}ピックアップ", Icons.Default.Star, Modifier.padding(horizontal = 32.dp))
+                    // ★修正: 時間帯に応じてヘッダーのテキストを変える
+                    val timePrefix = when(pickupTimeSlot) {
+                        "朝" -> "今朝の"
+                        "昼" -> "今日の"
+                        else -> "今夜の"
+                    }
+                    SectionHeader("${timePrefix}${pickupGenreName}ピックアップ", Icons.Default.Star, Modifier.padding(horizontal = 32.dp))
+
                     TvLazyRow(contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         items(genrePickup) { (program, channelName) ->
-                            GenrePickupCard(program, channelName, onClick = { onProgramClick(program) })
+                            GenrePickupCard(
+                                program = program,
+                                channelName = channelName,
+                                timeSlot = pickupTimeSlot, // ★カードに時間帯を渡す
+                                onClick = { onProgramClick(program) }
+                            )
                         }
                     }
                     Spacer(Modifier.height(12.dp))
@@ -178,13 +191,12 @@ fun HomeContents(
 }
 
 /**
- * 勢いのあるチャンネルカード (ライブサムネイル対応)
+ * 勢いのあるチャンネルカード
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    // KonomiTVのライブサムネイルURL
     val liveThumbnailUrl = "http://$konomiIp:$konomiPort/api/streams/live/${uiState.displayChannelId}/thumbnail"
 
     Surface(
@@ -195,14 +207,12 @@ fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // 背景にライブ映像のサムネイルを表示
             AsyncImage(
                 model = liveThumbnailUrl,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
-            // グラデーションオーバーレイ
             Box(modifier = Modifier.fillMaxSize().background(
                 Brush.verticalGradient(listOf(Color.Transparent, if (isFocused) Color.White.copy(0.9f) else Color.Black.copy(0.85f)))
             ))
@@ -227,14 +237,28 @@ fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String
 }
 
 /**
- * ジャンル別ピックアップカード (局ロゴ + グラデーション背景)
+ * ジャンル別ピックアップカード (局ロゴ + 時間帯別グラデーション背景)
  */
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun GenrePickupCard(program: EpgProgram, channelName: String, onClick: () -> Unit) {
+fun GenrePickupCard(program: EpgProgram, channelName: String, timeSlot: String, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
     val start = OffsetDateTime.parse(program.start_time)
+
+    // ★修正: 時間帯に応じてグラデーションの色を変える
+    val gradientStartColor = when (timeSlot) {
+        "朝" -> Color(0xFFE65100).copy(alpha = 0.3f) // 朝焼けのオレンジ
+        "昼" -> Color(0xFF006064).copy(alpha = 0.3f) // 昼の青空・緑
+        else -> Color(0xFF1A237E).copy(alpha = 0.3f) // 夜の深い青
+    }
+
+    // ★修正: 時間テキストのアクセントカラーも合わせる
+    val timeColor = when (timeSlot) {
+        "朝" -> Color(0xFFFFCC80)
+        "昼" -> Color(0xFF81D4FA)
+        else -> Color(0xFF81D4FA)
+    }
 
     Surface(
         onClick = onClick,
@@ -246,15 +270,14 @@ fun GenrePickupCard(program: EpgProgram, channelName: String, onClick: () -> Uni
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
     ) {
-        // アニメっぽさを出すための青系グラデーション
         Box(Modifier.fillMaxSize().background(
-            Brush.horizontalGradient(listOf(Color(0xFF1A237E).copy(0.3f), Color.Transparent))
+            Brush.horizontalGradient(listOf(gradientStartColor, Color.Transparent))
         )) {
             Column(Modifier.padding(16.dp)) {
                 Text(
                     text = "${start.format(DateTimeFormatter.ofPattern("MM/dd HH:mm"))} - $channelName",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if(isFocused) Color.Black.copy(0.6f) else Color(0xFF81D4FA),
+                    color = if(isFocused) Color.Black.copy(0.6f) else timeColor,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(8.dp))
@@ -274,6 +297,7 @@ fun GenrePickupCard(program: EpgProgram, channelName: String, onClick: () -> Uni
 /**
  * 予約カード
  */
+@RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun UpcomingReserveCard(reserve: ReserveItem, onClick: () -> Unit) {

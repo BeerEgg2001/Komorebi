@@ -107,6 +107,8 @@ fun HomeLauncherScreen(
     val upcomingReserves by remember { derivedStateOf { homeViewModel.getUpcomingReserves(reserves) } }
     val genrePickup by homeViewModel.genrePickupPrograms.collectAsState()
     val pickupGenreLabel by homeViewModel.pickupGenreLabel.collectAsState()
+    // ★追加: 現在のピックアップ時間帯（朝・昼・夜）を取得
+    val genrePickupTimeSlot by homeViewModel.genrePickupTimeSlot.collectAsState()
 
     val watchHistoryPrograms = remember(watchHistory) { watchHistory.map { KonomiDataMapper.toDomainModel(it) } }
     val logoUrls = remember(epgUiState) { if (epgUiState is EpgUiState.Success) epgUiState.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList() }
@@ -210,6 +212,7 @@ fun HomeLauncherScreen(
                         lastWatchedChannels = lastChannels, watchHistory = watchHistory,
                         hotChannels = hotChannels, upcomingReserves = upcomingReserves,
                         genrePickup = genrePickup, pickupGenreName = pickupGenreLabel,
+                        pickupTimeSlot = genrePickupTimeSlot, // ★追加
                         onChannelClick = onChannelClick,
                         onHistoryClick = { historyItem ->
                             val programId = historyItem.program.id.toIntOrNull()
@@ -220,7 +223,6 @@ fun HomeLauncherScreen(
                         onReserveClick = onReserveSelected,
                         onProgramClick = { onEpgProgramSelected(it) },
                         onNavigateToTab = { index ->
-                            // ★修正ポイント: 画面が破棄されて自動フォーカスが暴走する前に、目的のタブにフォーカスを当てる
                             tabFocusRequesters.getOrNull(index)?.safeRequestFocus(TAG)
                             selectedTabIndex = index
                             onTabChange(index)

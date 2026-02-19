@@ -6,16 +6,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
-import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
-import com.beeregg2001.komorebi.data.repository.EpgRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 import java.time.LocalTime
 import java.time.OffsetDateTime
 import javax.inject.Inject
@@ -24,8 +22,7 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val epgRepository: EpgRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository // ★EpgRepositoryの注入を削除
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
@@ -55,12 +52,23 @@ class HomeViewModel @Inject constructor(
     val pickupGenreLabel = settingsRepository.homePickupGenre
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "アニメ")
 
-    // ★追加: 有料放送除外設定
+    // 有料放送除外設定
     val excludePaidBroadcasts = settingsRepository.excludePaidBroadcasts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
 
+    // ピックアップの時間帯設定
+    val pickupTimeSetting = settingsRepository.homePickupTime
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "自動")
+
     private val _genrePickupPrograms = MutableStateFlow<List<Pair<EpgProgram, String>>>(emptyList())
     val genrePickupPrograms: StateFlow<List<Pair<EpgProgram, String>>> = _genrePickupPrograms.asStateFlow()
+
+    // 現在適用されている時間帯（朝・昼・夜）をUIに伝えるためのState
+    private val _genrePickupTimeSlot = MutableStateFlow("夜")
+    val genrePickupTimeSlot: StateFlow<String> = _genrePickupTimeSlot.asStateFlow()
+
+    // ★追加: EpgViewModelから共有されたEPGデータを保持するStateFlow
+    private val _sharedEpgData = MutableStateFlow<List<EpgChannelWrapper>>(emptyList())
 
     // 勢いのあるチャンネル抽出
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
@@ -79,54 +87,73 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.program.startTime }.take(5)
     }
 
-    private fun fetchAllTypeGenrePickup(genre: String) {
-        viewModelScope.launch {
-            val now = OffsetDateTime.now()
-            val startSearch = now.withHour(0).withMinute(0)
-            val endSearch = now.plusDays(1).withHour(5).withMinute(0)
-            val nightStart = LocalTime.of(18, 0)
-            val nightEnd = LocalTime.of(5, 0)
+    // ★追加: MainRootScreenから呼ばれ、EpgViewModelが取得したデータをセットする
+    fun updateEpgData(data: List<EpgChannelWrapper>) {
+        _sharedEpgData.value = data
+    }
 
-            val types = listOf("GR", "BS", "CS")
+    // ★修正: ネットワーク通信を廃止し、渡されたリストをローカルで高速にフィルタリングする関数に変更
+    private suspend fun filterGenrePickup(
+        allPrograms: List<EpgChannelWrapper>,
+        genre: String,
+        timeSetting: String,
+        excludePaidStr: String
+    ): List<Pair<EpgProgram, String>> = withContext(Dispatchers.Default) {
+        if (allPrograms.isEmpty()) return@withContext emptyList()
 
-            // ★現在の除外設定を取得
-            val isExcludePaid = excludePaidBroadcasts.value == "ON"
+        val now = OffsetDateTime.now()
 
-            // 全放送波のデータを並列で取得
-            val allPrograms = types.map { type ->
-                async {
-                    epgRepository.fetchEpgData(startSearch, endSearch, type).getOrNull() ?: emptyList()
-                }
-            }.awaitAll().flatten()
-
-            val filtered = allPrograms.flatMap { wrapper ->
-                wrapper.programs.map { it to wrapper.channel.name }
-            }.filter { (prog, _) ->
-                val start = runCatching { OffsetDateTime.parse(prog.start_time) }.getOrNull() ?: return@filter false
-                val isGenre = prog.genres?.any { it.major.contains(genre) } == true
-                val isNight = start.toLocalTime().let { t -> t.isAfter(nightStart) || t.isBefore(nightEnd) }
-
-                // ★追加: is_free フラグをチェック (除外設定がONなら無料番組のみを通す)
-                val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
-
-                isGenre && isNight && start.isAfter(now) && isFreeCheckOk
-            }.sortedBy { it.first.start_time }.take(15)
-
-            _genrePickupPrograms.value = filtered
+        // 「自動」の場合は現在の時刻から時間帯を決定
+        val actualTimeSlot = if (timeSetting == "自動") {
+            val h = now.hour
+            when {
+                h in 5..10 -> "朝"
+                h in 11..17 -> "昼"
+                else -> "夜"
+            }
+        } else {
+            timeSetting
         }
+        _genrePickupTimeSlot.value = actualTimeSlot
+
+        val isExcludePaid = excludePaidStr == "ON"
+
+        allPrograms.flatMap { wrapper ->
+            wrapper.programs.map { it to wrapper.channel.name }
+        }.filter { (prog, _) ->
+            val start = runCatching { OffsetDateTime.parse(prog.start_time) }.getOrNull() ?: return@filter false
+            val isGenre = prog.genres?.any { it.major.contains(genre) } == true
+
+            val t = start.toLocalTime()
+            val isTimeMatch = when (actualTimeSlot) {
+                "朝" -> !t.isBefore(LocalTime.of(5, 0)) && t.isBefore(LocalTime.of(11, 0))
+                "昼" -> !t.isBefore(LocalTime.of(11, 0)) && t.isBefore(LocalTime.of(18, 0))
+                else -> !t.isBefore(LocalTime.of(18, 0)) || t.isBefore(LocalTime.of(5, 0))
+            }
+
+            val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
+
+            isGenre && isTimeMatch && start.isAfter(now) && isFreeCheckOk
+        }.sortedBy { it.first.start_time }.take(15)
     }
 
     init {
-        // ★修正: ジャンル、または有料除外設定のどちらかが変更されたら自動で再フェッチする
+        // ★修正: _sharedEpgData の変更も監視し、データが更新されたら自動でリストを作り直す
         viewModelScope.launch {
-            combine(pickupGenreLabel, excludePaidBroadcasts) { genre, _ ->
-                genre
-            }.collectLatest { genre ->
-                fetchAllTypeGenrePickup(genre)
+            combine(
+                _sharedEpgData,
+                pickupGenreLabel,
+                excludePaidBroadcasts,
+                pickupTimeSetting
+            ) { epgData, genre, excludePaid, time ->
+                filterGenrePickup(epgData, genre, time, excludePaid)
+            }.collectLatest { filteredPrograms ->
+                _genrePickupPrograms.value = filteredPrograms
             }
         }
     }
 
+    // ★修正: 重い処理（fetchAllTypeGenrePickup）が消えたため、非常に軽量化
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
@@ -146,7 +173,6 @@ class HomeViewModel @Inject constructor(
                 }
             }
             repository.refreshUser()
-            fetchAllTypeGenrePickup(pickupGenreLabel.value)
             _isLoading.value = false
         }
     }
