@@ -10,7 +10,7 @@ import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
-import com.beeregg2001.komorebi.data.repository.EpgRepository // ★追加
+import com.beeregg2001.komorebi.data.repository.EpgRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -24,7 +24,7 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val epgRepository: EpgRepository, // ★番組集計用に追加
+    private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
@@ -55,7 +55,10 @@ class HomeViewModel @Inject constructor(
     val pickupGenreLabel = settingsRepository.homePickupGenre
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "アニメ")
 
-    // ★全放送波を対象としたピックアップ番組リスト
+    // ★追加: 有料放送除外設定
+    val excludePaidBroadcasts = settingsRepository.excludePaidBroadcasts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
+
     private val _genrePickupPrograms = MutableStateFlow<List<Pair<EpgProgram, String>>>(emptyList())
     val genrePickupPrograms: StateFlow<List<Pair<EpgProgram, String>>> = _genrePickupPrograms.asStateFlow()
 
@@ -76,7 +79,6 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.program.startTime }.take(5)
     }
 
-    // ★全放送波（GR/BS/CS）から指定ジャンルを抽出する
     private fun fetchAllTypeGenrePickup(genre: String) {
         viewModelScope.launch {
             val now = OffsetDateTime.now()
@@ -86,6 +88,9 @@ class HomeViewModel @Inject constructor(
             val nightEnd = LocalTime.of(5, 0)
 
             val types = listOf("GR", "BS", "CS")
+
+            // ★現在の除外設定を取得
+            val isExcludePaid = excludePaidBroadcasts.value == "ON"
 
             // 全放送波のデータを並列で取得
             val allPrograms = types.map { type ->
@@ -100,7 +105,11 @@ class HomeViewModel @Inject constructor(
                 val start = runCatching { OffsetDateTime.parse(prog.start_time) }.getOrNull() ?: return@filter false
                 val isGenre = prog.genres?.any { it.major.contains(genre) } == true
                 val isNight = start.toLocalTime().let { t -> t.isAfter(nightStart) || t.isBefore(nightEnd) }
-                isGenre && isNight && start.isAfter(now)
+
+                // ★追加: is_free フラグをチェック (除外設定がONなら無料番組のみを通す)
+                val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
+
+                isGenre && isNight && start.isAfter(now) && isFreeCheckOk
             }.sortedBy { it.first.start_time }.take(15)
 
             _genrePickupPrograms.value = filtered
@@ -108,9 +117,11 @@ class HomeViewModel @Inject constructor(
     }
 
     init {
-        // 初回読み込み時にピックアップを更新
+        // ★修正: ジャンル、または有料除外設定のどちらかが変更されたら自動で再フェッチする
         viewModelScope.launch {
-            pickupGenreLabel.collectLatest { genre ->
+            combine(pickupGenreLabel, excludePaidBroadcasts) { genre, _ ->
+                genre
+            }.collectLatest { genre ->
                 fetchAllTypeGenrePickup(genre)
             }
         }
@@ -135,7 +146,6 @@ class HomeViewModel @Inject constructor(
                 }
             }
             repository.refreshUser()
-            // ホーム更新時にピックアップも再取得
             fetchAllTypeGenrePickup(pickupGenreLabel.value)
             _isLoading.value = false
         }

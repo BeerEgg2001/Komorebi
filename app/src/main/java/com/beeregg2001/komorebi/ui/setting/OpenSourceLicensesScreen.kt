@@ -338,7 +338,15 @@ third-party archives.
    See the License for the specific language governing permissions and
    limitations under the License.
         """.trimIndent()
-    )
+    ),
+    OssLibrary(
+        name = "SCRename.py",
+        author = "rigaya",
+        licenseName = "",
+        licenseText = """
+            素晴らしいソフトを公開いただいたSCRename.vbsの作者様並びに、Python対応していただいたrigaya様に心より感謝申し上げます。
+        """.trimIndent()
+),
 )
 
 @OptIn(ExperimentalTvMaterial3Api::class)

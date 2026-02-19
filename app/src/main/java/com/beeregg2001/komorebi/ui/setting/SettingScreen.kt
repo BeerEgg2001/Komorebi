@@ -52,6 +52,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val liveQuality by repository.liveQuality.collectAsState(initial = "1080p-60fps")
     val videoQuality by repository.videoQuality.collectAsState(initial = "1080p-60fps")
     val pickupGenre by repository.homePickupGenre.collectAsState(initial = "アニメ")
+    // ★追加: 有料放送を除外する設定（デフォルトはON）
+    val excludePaid by repository.excludePaidBroadcasts.collectAsState(initial = "ON")
 
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var editingItem by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -73,6 +75,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val liveQFocusRequester = remember { FocusRequester() }
     val videoQFocusRequester = remember { FocusRequester() }
     val genreFocusRequester = remember { FocusRequester() }
+    val exPaidFocusRequester = remember { FocusRequester() } // ★追加: 有料放送除外ボタンのフォーカス管理
 
     val cDefaultDisplayFocusRequester = remember { FocusRequester() }
     val cSpeedFocusRequester = remember { FocusRequester() }
@@ -90,8 +93,8 @@ fun SettingsScreen(onBack: () -> Unit) {
         if (restoreFocusRequester == null) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() }
     }
 
-    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection) {
-        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection) {
+    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showLicenses) {
+        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showLicenses) {
             delay(250)
             if (restoreFocusRequester != null) {
                 if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) { selectedCategoryIndex = restoreCategoryIndex; delay(50) }
@@ -124,7 +127,8 @@ fun SettingsScreen(onBack: () -> Unit) {
         Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp)) {
             when (selectedCategoryIndex) {
                 0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, { t, v -> editingItem = t to v }, kIpFocusRequester, kPortFocusRequester, mIpFocusRequester, mPortFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 0 })
-                1 -> PlaybackSettingsContent(liveQuality, videoQuality, pickupGenre, liveQFocusRequester, videoQFocusRequester, genreFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { showPickupGenreSelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
+                // ★修正: PlaybackSettingsContentに excludePaid と関連するコールバックを渡す
+                1 -> PlaybackSettingsContent(liveQuality, videoQuality, pickupGenre, excludePaid, liveQFocusRequester, videoQFocusRequester, genreFocusRequester, exPaidFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { showPickupGenreSelection = true }, { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
                 2 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> editingItem = t to v }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefaultDisplayFocusRequester, cSpeedFocusRequester, cSizeFocusRequester, cOpacityFocusRequester, cMaxLinesFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 2 })
                 3 -> AppInfoContent({ showLicenses = true }, appInfoLicenseRequester, { restoreFocusRequester = it; restoreCategoryIndex = 3 })
             }
@@ -147,6 +151,12 @@ fun SettingsScreen(onBack: () -> Unit) {
         val genres = listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー")
         SelectionDialog("ピックアップジャンルを選択", genres.map { it to it }, pickupGenre, { showPickupGenreSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) }; showPickupGenreSelection = false })
     }
+
+    if (showLicenses) {
+        OpenSourceLicensesScreen(
+            onBack = { showLicenses = false }
+        )
+    }
 }
 
 @Composable
@@ -164,14 +174,25 @@ fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: St
     }
 }
 
+// ★修正: 引数とUIの構造を調整
 @Composable
-fun PlaybackSettingsContent(liveQ: String, videoQ: String, genre: String, liveR: FocusRequester, videoR: FocusRequester, genreR: FocusRequester, onL: () -> Unit, onV: () -> Unit, onG: () -> Unit, onClick: (FocusRequester) -> Unit) {
+fun PlaybackSettingsContent(
+    liveQ: String, videoQ: String, genre: String, excludePaid: String,
+    liveR: FocusRequester, videoR: FocusRequester, genreR: FocusRequester, exPaidR: FocusRequester,
+    onL: () -> Unit, onV: () -> Unit, onG: () -> Unit, onExPaid: () -> Unit,
+    onClick: (FocusRequester) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("再生設定", style = MaterialTheme.typography.headlineMedium, color = Color.White, fontWeight = FontWeight.Bold)
-        SettingsSection("デフォルト設定") {
+
+        SettingsSection("画質設定") {
             SettingItem("ライブ視聴画質", StreamQuality.fromValue(liveQ).label, modifier = Modifier.focusRequester(liveR), onClick = { onClick(liveR); onL() })
             SettingItem("録画視聴画質", StreamQuality.fromValue(videoQ).label, modifier = Modifier.focusRequester(videoR), onClick = { onClick(videoR); onV() })
-            SettingItem("ホームのピックアップジャンル", genre, Icons.Default.Category, modifier = Modifier.focusRequester(genreR), onClick = { onClick(genreR); onG() })
+        }
+
+        SettingsSection("ホーム画面設定") {
+            SettingItem("ピックアップジャンル", genre, Icons.Default.Category, modifier = Modifier.focusRequester(genreR), onClick = { onClick(genreR); onG() })
+            SettingItem("ピックアップから有料放送を除外する", if (excludePaid == "ON") "ON (除外する)" else "OFF (除外しない)", Icons.Default.Block, modifier = Modifier.focusRequester(exPaidR), onClick = { onClick(exPaidR); onExPaid() })
         }
     }
 }

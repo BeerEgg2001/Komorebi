@@ -87,7 +87,7 @@ fun HomeLauncherScreen(
     isRecordListOpen: Boolean = false,
     onShowAllRecordings: () -> Unit = {},
     onCloseRecordList: () -> Unit = {},
-    onShowSeriesList: () -> Unit = {}, // ★追加
+    onShowSeriesList: () -> Unit = {},
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {}
 ) {
@@ -219,7 +219,12 @@ fun HomeLauncherScreen(
                         },
                         onReserveClick = onReserveSelected,
                         onProgramClick = { onEpgProgramSelected(it) },
-                        onNavigateToTab = { index -> selectedTabIndex = index; onTabChange(index) },
+                        onNavigateToTab = { index ->
+                            // ★修正ポイント: 画面が破棄されて自動フォーカスが暴走する前に、目的のタブにフォーカスを当てる
+                            tabFocusRequesters.getOrNull(index)?.safeRequestFocus(TAG)
+                            selectedTabIndex = index
+                            onTabChange(index)
+                        },
                         konomiIp = konomiIp, konomiPort = konomiPort,
                         mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
                         tabFocusRequester = tabFocusRequesters[0], externalFocusRequester = contentFirstItemRequesters[0],
@@ -246,7 +251,7 @@ fun HomeLauncherScreen(
                         },
                         onLoadMore = { recordViewModel.loadNextPage() }, isLoadingMore = isRecordingLoadingMore,
                         onShowAllRecordings = onShowAllRecordings,
-                        onShowSeriesList = onShowSeriesList // ★追加
+                        onShowSeriesList = onShowSeriesList
                     )
                     3 -> EpgNavigationContainer(
                         uiState = epgUiState, logoUrls = logoUrls, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
