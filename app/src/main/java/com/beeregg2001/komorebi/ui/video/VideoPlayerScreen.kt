@@ -50,6 +50,7 @@ import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Color as AndroidColor
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 private const val TAG = "VideoPlayerScreen"
 
@@ -77,7 +78,6 @@ fun VideoPlayerScreen(
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
 
-    // SettingsRepository から設定値を読み込む
     val repository = remember { com.beeregg2001.komorebi.data.SettingsRepository(context) }
     val commentSpeedStr by repository.commentSpeed.collectAsState(initial = "1.0")
     val commentFontSizeStr by repository.commentFontSize.collectAsState(initial = "1.0")
@@ -85,24 +85,26 @@ fun VideoPlayerScreen(
     val commentMaxLinesStr by repository.commentMaxLines.collectAsState(initial = "0")
     val commentDefaultDisplayStr by repository.commentDefaultDisplay.collectAsState(initial = "ON")
 
-    // 数値変換
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
     val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
 
-    // 再生設定
+    // ★修正: 設定読み込み待ちガード
+    val commentEnabledState = rememberSaveable { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(commentDefaultDisplayStr) {
+        if (commentEnabledState.value == null) {
+            commentEnabledState.value = (commentDefaultDisplayStr == "ON")
+        }
+    }
+    val isCommentEnabled = commentEnabledState.value ?: false
+
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
     var currentQuality by remember { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
     var isSubtitleEnabled by remember { mutableStateOf(true) }
-
-    // コメント機能の状態
-    var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) { mutableStateOf(commentDefaultDisplayStr == "ON") }
     val allComments = remember { mutableStateListOf<ArchivedComment>() }
     val isEmulator = remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
-
-    // セッション管理
     val currentSessionId = remember(currentQuality) { UUID.randomUUID().toString() }
 
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
@@ -111,276 +113,95 @@ fun VideoPlayerScreen(
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var wasPlayingBeforeSceneSearch by remember { mutableStateOf(false) }
 
-    // 1. コメントデータの取得
     LaunchedEffect(program.recordedVideo.id) {
         val fetchedComments = recordViewModel.getArchivedComments(program.recordedVideo.id)
-        allComments.clear()
-        allComments.addAll(fetchedComments)
+        allComments.clear(); allComments.addAll(fetchedComments)
     }
 
-    val audioProcessor = remember {
-        ChannelMixingAudioProcessor().apply {
-            putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
-        }
-    }
-
-    // 2. ExoPlayer の初期化
+    val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
     val exoPlayer = remember {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
-            }
+        val renderersFactory = object : DefaultRenderersFactory(context) { override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? = DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0").setAllowCrossProtocolRedirects(true)
+        ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
+            val mediaItem = MediaItem.Builder().setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+            setMediaItem(mediaItem); setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
+            addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) { isPlayerPlaying = playing }
+                override fun onCues(cues: CueGroup) { if (isSubtitleEnabled) { val text = cues.cues.joinToString("\n") { it.text ?: "" }; webViewRef.value?.evaluateJavascript("showSubtitle('${text.replace("'", "\\'").replace("\n", " ")}')", null) } }
+            })
+            if (initialPositionMs > 0) seekTo(initialPositionMs)
+            prepare(); playWhenReady = true
         }
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("DTVClient/1.0")
-            .setAllowCrossProtocolRedirects(true)
-
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory))
-            .build().apply {
-                val mediaItem = MediaItem.Builder()
-                    .setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value))
-                    .setMimeType(MimeTypes.APPLICATION_M3U8)
-                    .build()
-                setMediaItem(mediaItem)
-                setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
-                addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(playing: Boolean) { isPlayerPlaying = playing }
-                    override fun onCues(cues: CueGroup) {
-                        if (isSubtitleEnabled) {
-                            val text = cues.cues.joinToString("\n") { it.text ?: "" }
-                            webViewRef.value?.evaluateJavascript("showSubtitle('${text.replace("'", "\\'").replace("\n", " ")}')", null)
-                        }
-                    }
-                })
-                if (initialPositionMs > 0) seekTo(initialPositionMs)
-                prepare()
-                playWhenReady = true
-            }
     }
 
-    // 3. 画質変更のリロード処理
     LaunchedEffect(currentQuality) {
-        val currentPos = exoPlayer.currentPosition
-        val isPlaying = exoPlayer.isPlaying
-        exoPlayer.stop()
-        exoPlayer.clearMediaItems()
+        val currentPos = exoPlayer.currentPosition; val isPlaying = exoPlayer.isPlaying; exoPlayer.stop(); exoPlayer.clearMediaItems()
         val newUrl = UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)
-        val newMediaItem = MediaItem.Builder().setUri(newUrl).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-        exoPlayer.setMediaItem(newMediaItem)
-        exoPlayer.seekTo(currentPos)
-        exoPlayer.prepare()
-        if (isPlaying) exoPlayer.play()
+        exoPlayer.setMediaItem(MediaItem.Builder().setUri(newUrl).setMimeType(MimeTypes.APPLICATION_M3U8).build())
+        exoPlayer.seekTo(currentPos); exoPlayer.prepare(); if (isPlaying) exoPlayer.play()
     }
 
-    // 4. シーンサーチ時の再生制御
-    LaunchedEffect(isSceneSearchOpen) {
-        if (isSceneSearchOpen) {
-            wasPlayingBeforeSceneSearch = exoPlayer.isPlaying
-            if (wasPlayingBeforeSceneSearch) exoPlayer.pause()
-        } else {
-            if (wasPlayingBeforeSceneSearch) exoPlayer.play()
-        }
-    }
+    LaunchedEffect(isSceneSearchOpen) { if (isSceneSearchOpen) { wasPlayingBeforeSceneSearch = exoPlayer.isPlaying; if (wasPlayingBeforeSceneSearch) exoPlayer.pause() } else if (wasPlayingBeforeSceneSearch) exoPlayer.play() }
 
-    // 5. ストリーム維持と視聴履歴の更新 (ViewModelへ移譲済み)
     LaunchedEffect(isPlayerPlaying, currentQuality, currentSessionId) {
-        if (isPlayerPlaying) {
-            recordViewModel.startStreamMaintenance(
-                program = program,
-                quality = currentQuality.value,
-                sessionId = currentSessionId,
-                getPositionSeconds = { exoPlayer.currentPosition / 1000.0 }
-            )
-        } else {
-            recordViewModel.stopStreamMaintenance()
-        }
+        if (isPlayerPlaying) recordViewModel.startStreamMaintenance(program, currentQuality.value, currentSessionId, { exoPlayer.currentPosition / 1000.0 })
+        else recordViewModel.stopStreamMaintenance()
     }
 
-    // 6. コントロールの自動非表示
-    LaunchedEffect(showControls, isPlayerPlaying, isSubMenuOpen, isSceneSearchOpen) {
-        if (showControls && isPlayerPlaying && !isSubMenuOpen && !isSceneSearchOpen) {
-            delay(5000)
-            onShowControlsChange(false)
+    LaunchedEffect(showControls, isPlayerPlaying, isSubMenuOpen, isSceneSearchOpen) { if (showControls && isPlayerPlaying && !isSubMenuOpen && !isSceneSearchOpen) { delay(5000); onShowControlsChange(false) } }
+
+    LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, showControls) { delay(150); when { isSubMenuOpen -> subMenuFocusRequester.safeRequestFocus(TAG); !isSceneSearchOpen && !showControls -> mainFocusRequester.safeRequestFocus(TAG) } }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).onKeyEvent { keyEvent ->
+        if (keyEvent.type != KeyEventType.KeyDown || isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
+        onShowControlsChange(true)
+        when (keyEvent.nativeKeyEvent.keyCode) {
+            NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> { if (exoPlayer.isPlaying) { exoPlayer.pause(); indicatorState = IndicatorState(Icons.Default.Pause, "停止") } else { exoPlayer.play(); indicatorState = IndicatorState(Icons.Default.PlayArrow, "再生") }; true }
+            NativeKeyEvent.KEYCODE_DPAD_RIGHT -> { exoPlayer.seekTo(exoPlayer.currentPosition + 30000); indicatorState = IndicatorState(Icons.Default.FastForward, "+30s"); true }
+            NativeKeyEvent.KEYCODE_DPAD_LEFT -> { exoPlayer.seekTo(exoPlayer.currentPosition - 10000); indicatorState = IndicatorState(Icons.Default.FastRewind, "-10s"); true }
+            NativeKeyEvent.KEYCODE_DPAD_UP -> { onSubMenuToggle(true); true }
+            NativeKeyEvent.KEYCODE_DPAD_DOWN -> { onSceneSearchToggle(true); true }
+            else -> false
         }
-    }
+    }) {
+        AndroidView(factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } }, modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable())
 
-    // 7. フォーカス制御 (safeRequestFocus導入)
-    LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, showControls) {
-        delay(150)
-        when {
-            isSubMenuOpen -> subMenuFocusRequester.safeRequestFocus(TAG)
-            !isSceneSearchOpen && !showControls -> mainFocusRequester.safeRequestFocus(TAG)
-        }
-    }
-
-    LaunchedEffect(toastState) { if (toastState != null) { delay(2000); toastState = null } }
-    LaunchedEffect(indicatorState) { if (indicatorState != null) { delay(1200); indicatorState = null } }
-
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black)
-            .onKeyEvent { keyEvent ->
-                if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
-                val keyCode = keyEvent.nativeKeyEvent.keyCode
-                if (isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
-
-                onShowControlsChange(true)
-                when (keyCode) {
-                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                        if (exoPlayer.isPlaying) {
-                            exoPlayer.pause()
-                            indicatorState = IndicatorState(Icons.Default.Pause, "停止")
-                        } else {
-                            exoPlayer.play()
-                            indicatorState = IndicatorState(Icons.Default.PlayArrow, "再生")
-                        }
-                        true
-                    }
-                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        exoPlayer.seekTo(exoPlayer.currentPosition + 30000)
-                        indicatorState = IndicatorState(Icons.Default.FastForward, "+30s"); true
-                    }
-                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        exoPlayer.seekTo(exoPlayer.currentPosition - 10000)
-                        indicatorState = IndicatorState(Icons.Default.FastRewind, "-10s"); true
-                    }
-                    NativeKeyEvent.KEYCODE_DPAD_UP -> { onSubMenuToggle(true); true }
-                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> { onSceneSearchToggle(true); true }
-                    else -> false
-                }
-            }
-    ) {
-        // ビデオレンダリング
-        AndroidView(
-            factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
-            update = { it.player = exoPlayer },
-            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable()
-        )
-
-        val isUiVisible = showControls || isSubMenuOpen || isSceneSearchOpen
-
-        // コメントオーバーレイ (分離済みコンポーネント)
         if (isCommentEnabled) {
-            ArchivedCommentOverlay(
-                modifier = Modifier.fillMaxSize(),
-                comments = allComments,
-                currentPositionMs = exoPlayer.currentPosition,
-                isPlaying = isPlayerPlaying,
-                isCommentEnabled = isCommentEnabled,
-                commentSpeed = commentSpeed,
-                commentFontSizeScale = commentFontSizeScale,
-                commentOpacity = commentOpacity,
-                commentMaxLines = commentMaxLines,
-                useSoftwareRendering = isEmulator
-            )
+            ArchivedCommentOverlay(modifier = Modifier.fillMaxSize(), comments = allComments, currentPositionMs = exoPlayer.currentPosition, isPlaying = isPlayerPlaying, isCommentEnabled = isCommentEnabled, commentSpeed = commentSpeed, commentFontSizeScale = commentFontSizeScale, commentOpacity = commentOpacity, commentMaxLines = commentMaxLines, useSoftwareRendering = isEmulator)
         }
 
-        // 字幕表示用 WebView
         if (isSubtitleEnabled) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        setBackgroundColor(0)
-                        settings.apply { javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false }
-                        loadUrl("file:///android_asset/subtitle_renderer.html")
-                        webViewRef.value = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize().alpha(if (!isUiVisible) 1f else 0f)
-            )
+            AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (showControls || isSubMenuOpen || isSceneSearchOpen) 0f else 1f))
         }
 
-        // プレイヤーコントロール
-        PlayerControls(
-            exoPlayer = exoPlayer,
-            title = program.title,
-            isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen
-        )
+        PlayerControls(exoPlayer = exoPlayer, title = program.title, isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen)
 
-        // シーンサーチオーバーレイ
-        AnimatedVisibility(
-            visible = isSceneSearchOpen,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-        ) {
-            SceneSearchOverlay(
-                program = program,
-                currentPositionMs = exoPlayer.currentPosition,
-                konomiIp = konomiIp, konomiPort = konomiPort,
-                onSeekRequested = { time ->
-                    exoPlayer.seekTo(time)
-                    onSceneSearchToggle(false)
-                    scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
-                },
-                onClose = {
-                    onSceneSearchToggle(false)
-                    scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
-                }
-            )
+        AnimatedVisibility(visible = isSceneSearchOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
+            SceneSearchOverlay(program = program, currentPositionMs = exoPlayer.currentPosition, konomiIp = konomiIp, konomiPort = konomiPort, onSeekRequested = { exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } }, onClose = { onSceneSearchToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } })
         }
 
-        // サブメニューオーバーレイ
         AnimatedVisibility(visible = isSubMenuOpen, enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
             VideoTopSubMenuUI(
-                currentAudioMode = currentAudioMode, currentSpeed = currentSpeed,
-                isSubtitleEnabled = isSubtitleEnabled,
-                currentQuality = currentQuality,
-                isCommentEnabled = isCommentEnabled,
-                focusRequester = subMenuFocusRequester,
+                currentAudioMode = currentAudioMode, currentSpeed = currentSpeed, isSubtitleEnabled = isSubtitleEnabled, currentQuality = currentQuality, isCommentEnabled = isCommentEnabled, focusRequester = subMenuFocusRequester,
                 onAudioToggle = {
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                     val tracks = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                    if (tracks.size >= 2) {
-                        val target = if (currentAudioMode == AudioMode.SUB) 1 else 0
-                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                            .addOverride(TrackSelectionOverride(tracks[target].mediaTrackGroup, 0))
-                            .build()
-                    }
+                    if (tracks.size >= 2) exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(tracks[if (currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build()
                     toastState = "音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}" to System.currentTimeMillis()
                 },
-                onSpeedToggle = {
-                    val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f)
-                    currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]
-                    exoPlayer.setPlaybackSpeed(currentSpeed)
-                    toastState = "再生速度: ${currentSpeed}x" to System.currentTimeMillis()
-                },
-                onSubtitleToggle = {
-                    isSubtitleEnabled = !isSubtitleEnabled
-                    toastState = "字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}" to System.currentTimeMillis()
-                },
-                onQualitySelect = { newQuality ->
-                    currentQuality = newQuality
-                    toastState = "画質: ${newQuality.label}" to System.currentTimeMillis()
-                },
-                onCommentToggle = {
-                    isCommentEnabled = !isCommentEnabled
-                    toastState = "コメント: ${if(isCommentEnabled) "表示" else "非表示"}" to System.currentTimeMillis()
-                }
+                onSpeedToggle = { val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(currentSpeed); toastState = "速度: ${currentSpeed}x" to System.currentTimeMillis() },
+                onSubtitleToggle = { isSubtitleEnabled = !isSubtitleEnabled; toastState = "字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}" to System.currentTimeMillis() },
+                onQualitySelect = { currentQuality = it; toastState = "画質: ${it.label}" to System.currentTimeMillis() },
+                onCommentToggle = { commentEnabledState.value = !(commentEnabledState.value ?: true); toastState = "実況: ${if(commentEnabledState.value == true) "表示" else "非表示"}" to System.currentTimeMillis() }
             )
         }
-
-        PlaybackIndicator(indicatorState)
-        VideoToast(toastState)
+        PlaybackIndicator(indicatorState); VideoToast(toastState)
     }
 
-    // ライフサイクル管理
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                exoPlayer.pause()
-                onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
-            }
-        }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) { exoPlayer.pause(); onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0) } }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            exoPlayer.stop()
-            exoPlayer.clearVideoSurface()
-            exoPlayer.release()
-        }
+        onDispose { onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0); lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
     }
 }

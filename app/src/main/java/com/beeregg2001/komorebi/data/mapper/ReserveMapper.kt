@@ -15,18 +15,19 @@ object ReserveMapper {
         return EpgProgram(
             id = item.program.id,
             channel_id = item.channel.id,
-            network_id = item.channel.network_Id,
-            service_id = item.channel.service_Id,
+            // ★修正: Long 型から Int 型へ明示的に変換してビルドエラーを解消
+            network_id = item.channel.network_Id.toInt(),
+            service_id = item.channel.service_Id.toInt(),
             event_id = 0, // 予約情報には含まれない場合があるため0
             title = item.program.title,
-            description = item.program.description,
+            description = item.program.description ?: "",
             start_time = item.program.startTime,
             end_time = item.program.endTime,
             duration = item.program.duration,
             detail = item.program.detail ?: emptyMap(),
             genres = null, // 必要であれば ReserveGenre -> EpgGenre の変換を追加
 
-            // ★追加: 不足していたパラメータを設定
+            // 追加されたパラメータの設定
             is_free = item.program.isFree,
             video_type = item.program.videoType,
             audio_type = item.program.audioType,

@@ -103,20 +103,26 @@ class KonomiRepository @Inject constructor(
         if (response.is_success) response.comments else emptyList()
     }
 
-    // --- 予約関連 ---
+    // --- 予約関連 (修正版) ---
     suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
         apiService.getReserves().reservations
     }
 
     suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.addReserve(request)
-        if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+        if (!response.isSuccessful) {
+            val errorBody = response.errorBody()?.string()
+            Log.e(TAG, "Reservation failed: $errorBody")
+            throw Exception("Reservation failed: ${response.code()} $errorBody")
+        }
     }
 
     suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.updateReserve(reservationId, request)
         if (!response.isSuccessful) {
-            throw Exception("Update reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+            val errorBody = response.errorBody()?.string()
+            Log.e(TAG, "Update reservation failed: $errorBody")
+            throw Exception("Update reservation failed: ${response.code()} $errorBody")
         }
     }
 
@@ -125,7 +131,7 @@ class KonomiRepository @Inject constructor(
         if (!response.isSuccessful) {
             if (response.code() == 404) {
                 Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
-                throw Exception("Reservation not found")
+                return@runCatching
             }
             throw Exception("Delete reservation failed: ${response.code()} ${response.errorBody()?.string()}")
         }

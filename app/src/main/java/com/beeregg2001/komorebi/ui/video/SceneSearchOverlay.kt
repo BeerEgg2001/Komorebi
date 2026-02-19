@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -44,20 +45,17 @@ import java.io.FileOutputStream
 import java.net.URL
 import java.security.MessageDigest
 import kotlin.math.floor
-import kotlin.math.roundToInt
 
-private const val TAG = "Komorebi_Debug_Overlay"
+private const val TAG = "SceneSearchOverlay"
 
+// --- TileSheetLoader クラスは変更なし ---
 class TileSheetLoader(private val context: Context) {
     private var isReleased = false
-
     @OptIn(ExperimentalCoroutinesApi::class)
     private val decodeDispatcher = Dispatchers.IO.limitedParallelism(4)
-
     private val tileCache = object : LruCache<String, Bitmap>(10 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
-
     private var fullSheetBitmap: Bitmap? = null
     private val sheetLoadingMutex = Mutex()
 
@@ -68,103 +66,44 @@ class TileSheetLoader(private val context: Context) {
         fullSheetBitmap = null
     }
 
-    suspend fun loadTile(
-        url: String,
-        col: Int,
-        row: Int,
-        tileW: Int,
-        tileH: Int
-    ): Bitmap? {
+    suspend fun loadTile(url: String, col: Int, row: Int, tileW: Int, tileH: Int): Bitmap? {
         if (isReleased) return null
-
         val key = "c${col}_r${row}"
-
-        synchronized(tileCache) {
-            tileCache.get(key)?.let { return it }
-        }
-
+        synchronized(tileCache) { tileCache.get(key)?.let { return it } }
         return withContext(decodeDispatcher) {
             if (!isActive || isReleased) return@withContext null
-
             try {
                 val sheet = getOrLoadFullSheet(url) ?: return@withContext null
-
                 val x = col * tileW
                 val y = row * tileH
-
-                if (x + tileW > sheet.width || y + tileH > sheet.height) {
-                    Log.w(TAG, "Tile out of bounds! x=$x, y=$y, tileW=$tileW, tileH=$tileH, sheet=${sheet.width}x${sheet.height}")
-                    return@withContext null
-                }
-
+                if (x + tileW > sheet.width || y + tileH > sheet.height) return@withContext null
                 val tileBitmap = Bitmap.createBitmap(sheet, x, y, tileW, tileH)
-
-                synchronized(tileCache) {
-                    if (!isReleased) tileCache.put(key, tileBitmap)
-                }
-
-                return@withContext tileBitmap
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
+                synchronized(tileCache) { if (!isReleased) tileCache.put(key, tileBitmap) }
+                tileBitmap
+            } catch (e: Exception) { null }
         }
     }
 
     private suspend fun getOrLoadFullSheet(url: String): Bitmap? {
-        if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) {
-            return fullSheetBitmap
-        }
-
+        if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) return fullSheetBitmap
         return sheetLoadingMutex.withLock {
-            if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) {
-                return fullSheetBitmap
-            }
-            if (isReleased) return null
-
+            if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) return@withLock fullSheetBitmap
+            if (isReleased) return@withLock null
             try {
                 val fileName = hashString(url) + ".webp"
                 val file = File(context.cacheDir, fileName)
-
                 if (!file.exists() || file.length() == 0L) {
-                    Log.i(TAG, "Downloading sheet: $url")
-                    withContext(Dispatchers.IO) {
-                        URL(url).openStream().use { input ->
-                            FileOutputStream(file).use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                    }
-                } else {
-                    Log.i(TAG, "Using cached sheet: $fileName")
+                    withContext(Dispatchers.IO) { URL(url).openStream().use { input -> FileOutputStream(file).use { output -> input.copyTo(output) } } }
                 }
-
-                val options = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.RGB_565
-                    inMutable = true
-                }
-
+                val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565; inMutable = true }
                 val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
-                if (bitmap != null) {
-                    fullSheetBitmap = bitmap
-                    Log.i(TAG, "Sheet loaded. Size: ${bitmap.width}x${bitmap.height}")
-                } else {
-                    Log.e(TAG, "Failed to decode sheet bitmap")
-                }
+                if (bitmap != null) fullSheetBitmap = bitmap
                 bitmap
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
+            } catch (e: Exception) { null }
         }
     }
 
-    private fun hashString(input: String): String {
-        return MessageDigest.getInstance("MD5")
-            .digest(input.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-    }
+    private fun hashString(input: String): String = MessageDigest.getInstance("MD5").digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -180,30 +119,21 @@ fun SceneSearchOverlay(
     val context = LocalContext.current
     val loader = remember { TileSheetLoader(context) }
 
-    DisposableEffect(Unit) {
-        onDispose { loader.release() }
-    }
+    DisposableEffect(Unit) { onDispose { loader.release() } }
 
     val tileInfo = program.recordedVideo.thumbnailInfo?.tile
     val tileColumns = tileInfo?.columnCount ?: 1
-    val tileRows = tileInfo?.rowCount ?: 1
     val tileInterval = tileInfo?.intervalSec ?: 10.0
     val tileWidth = tileInfo?.tileWidth ?: 320
     val tileHeight = tileInfo?.tileHeight ?: 180
-
-    // ★重要ログ: シーンサーチ起動時にパラメータが正しいか確認
-    LaunchedEffect(Unit) {
-        Log.i(TAG, "Overlay Opened. TileInfo: ${tileColumns}x${tileRows}, Interval=$tileInterval, BaseURL=${UrlBuilder.getTiledThumbnailUrl(konomiIp, konomiPort, program.recordedVideo.id)}")
-        if (tileInfo == null) {
-            Log.e(TAG, "ERROR: ThumbnailInfo is NULL! Program ID: ${program.id}")
-        }
-    }
 
     val intervals = VideoPlayerConstants.SEARCH_INTERVALS
     var intervalIndex by remember { mutableIntStateOf(1) }
     val currentInterval = intervals[intervalIndex]
 
     val durationMs = (program.recordedVideo.duration * 1000).toLong()
+
+    // ★改善1: 現在フォーカスされている時間をステートとして保持する
     var focusedTime by remember { mutableLongStateOf(currentPositionMs / 1000) }
 
     val timePoints = remember(currentInterval, durationMs) {
@@ -214,14 +144,23 @@ fun SceneSearchOverlay(
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    val targetInitialIndex = remember(currentInterval, currentPositionMs) {
-        timePoints.indexOfFirst { it >= currentPositionMs / 1000 }.coerceAtLeast(0)
+    // ★改善2: インターバル切り替え時に、現在の focusedTime に最も近いインデックスを計算する
+    val targetIndex = remember(currentInterval) {
+        timePoints.indexOfFirst { it >= focusedTime }.coerceAtLeast(0)
     }
 
-    LaunchedEffect(targetInitialIndex, currentInterval) {
-        listState.scrollToItem(targetInitialIndex)
+    // ★改善3: アイテムを画面中央に配置するためのオフセット計算
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val itemWidthPx = with(density) { 224.dp.toPx() } // TiledThumbnailItemの幅
+    val centerOffset = (-(screenWidthPx / 2) + (itemWidthPx / 2)).toInt()
+
+    // インターバル変更や初期表示時にスクロールとフォーカスを行う
+    LaunchedEffect(targetIndex) {
+        listState.scrollToItem(targetIndex, centerOffset)
         delay(150)
-        runCatching { focusRequester.requestFocus() }
+        focusRequester.safeRequestFocus(TAG)
     }
 
     Box(
@@ -272,8 +211,9 @@ fun SceneSearchOverlay(
                         tileWidth = tileWidth,
                         tileHeight = tileHeight,
                         onClick = { onSeekRequested(time * 1000) },
+                        // ★改善4: フォーカスが当たった時に focusedTime を更新する
                         onFocused = { focusedTime = time },
-                        modifier = if (index == targetInitialIndex) Modifier.focusRequester(focusRequester) else Modifier
+                        modifier = if (index == targetIndex) Modifier.focusRequester(focusRequester) else Modifier
                     )
                 }
             }
@@ -343,9 +283,7 @@ fun TiledThumbnailItem(
         delay(50)
         if (isActive) {
             val result = loader.loadTile(imageUrl, col, row, tileWidth, tileHeight)
-            if (result != null && isActive) {
-                bitmap = result
-            }
+            if (result != null && isActive) { bitmap = result }
         }
     }
 

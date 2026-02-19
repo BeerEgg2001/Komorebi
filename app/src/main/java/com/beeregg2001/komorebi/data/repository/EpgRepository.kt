@@ -18,6 +18,7 @@ import retrofit2.http.Query
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException // ★追加
 
 interface KonomiTvApiService {
     @GET("api/programs/timetable")
@@ -31,8 +32,8 @@ interface KonomiTvApiService {
 
 class EpgRepository @Inject constructor(
     private val apiService: KonomiTvApiService,
-    private val epgCacheDao: EpgCacheDao, // ★キャッシュ用Dao
-    private val gson: Gson                // ★JSON変換用
+    private val epgCacheDao: EpgCacheDao,
+    private val gson: Gson
 ) {
     /**
      * DBキャッシュ付きの番組表データ取得（Flow）
@@ -53,6 +54,7 @@ class EpgRepository @Inject constructor(
                 emit(Result.success(data))
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e // ★重要: キャンセル/中断例外は再送出する
             Log.e("EPG", "Cache Read Error", e)
         }
 
@@ -75,13 +77,14 @@ class EpgRepository @Inject constructor(
             // 4. 最新データをエミットしてUIを更新
             emit(Result.success(response.channels))
         } catch (e: Exception) {
+            if (e is CancellationException) throw e // ★重要: AbortFlowExceptionなどを握りつぶさない
             Log.e("EPG", "Fetch Error: $startTime to $endTime", e)
             emit(Result.failure(e))
         }
     }
 
     /**
-     * 単発のAPIフェッチ（拡張取得用などに維持）
+     * 単発のAPIフェッチ
      */
     @OptIn(UnstableApi::class)
     @RequiresApi(Build.VERSION_CODES.O)
