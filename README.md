@@ -3,6 +3,25 @@
 **Komorebi** は、Mirakurun および KonomiTV バックエンドに対応した、Android TV 向けの高機能視聴クライアントアプリです。
 モダンな UI と PS3 ライクなシーンサーチ、高度なストリーミング制御を組み合わせ、これまでにない快適なテレビ視聴体験を提供します。
 
+## 📋 目次
+1. [はじめに](#-はじめに)
+2. [動作環境](#動作環境)
+3. [実装済み機能](#-実装済み機能)
+    * [ホームタブ](#-ホームタブ)
+    * [ライブタブ](#-ライブタブ)
+    * [番組表タブ](#-番組表タブ)
+    * [ビデオタブ](#-ビデオタブ)
+    * [録画予約タブ](#-録画予約タブ)
+    * [設定タブ](#-設定タブ)
+4. [視聴体験](#-視聴体験)
+    * [ライブ視聴画面](#-ライブ視聴画面)
+    * [ビデオ視聴画面](#-ビデオ視聴画面)
+5. [パフォーマンスへのこだわり](#-パフォーマンスへのこだわり)
+6. [将来実装予定の機能](#-将来実装予定の機能)
+7. [バグ対応等](#バグ対応等)
+8. [SpecialThanks!](#-specialthanks)
+9. [技術構成](#-技術構成)
+
 ---
 
 ## 🚀 はじめに
@@ -20,47 +39,52 @@
 * REGZA 55X8900K (Android TV 10)
 * Fire Tv Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
 
+---
+
 ## ✨ 実装済み機能
 
 ### 🏠 ホームタブ
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/2b7122d4-e878-4c05-8213-630aad3624dd" />
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/ba372c31-9b23-48b8-938d-6955dd993e78" />
 
-**チャンネル視聴記録**: 視聴した放送局の履歴をローカル DB に自動記録します。
-
-**録画視聴履歴の保存**: 録画番組の再生位置を自動保存し、いつでも続きから再生可能です。
+* **チャンネル視聴記録**: 視聴した放送局の履歴をローカル DB に自動記録します。
+* **録画視聴履歴の保存**: 録画番組の再生位置を自動保存し、いつでも続きから再生可能です。
+* **パーソナライズ・ピックアップ**: 設定したジャンルに基づき、おすすめ番組を時間帯（朝・昼・夜）に合わせた美しい背景色と共に表示します。
 
 ### 📡 ライブタブ
 <img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/8e22cebe-2b37-4346-86e1-9f3d9b412bc8" />
 
-**放送波別チャンネルリスト**: 地デジ、BS、CS、BS4K、スカパーを種別ごとに整理して表示します。
+* **放送波別チャンネルリスト**: 地デジ、BS、CS、BS4K、スカパーを種別ごとに整理して表示します。
+* **番組進行状況の可視化**: 放送中の番組タイトルと共に、終了までの進捗をバーで表示します。
 
 ### 📅 番組表タブ
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/f5c026a2-c2fa-4619-a98b-c5497b813781" />
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/bd89b7dc-37d6-475f-9733-344a9ae6421e" />
 
-**マルチ放送波対応**: 放送波種別ごとに最適化された番組表をシームレスに閲覧できます。また、番組表画面にて戻るキーを長押しすることで、現在時刻に即座に戻ることができます。
-
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/9e756fd4-5757-44ad-8f6b-c4807674afcb" />
-
-**詳細表示 & 即視聴**: 番組詳細を確認でき、放送中の番組であればそのままライブ視聴画面へ遷移可能です。
-
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/c46b497a-a94e-4282-8eea-7044967e3158" />
-
-**日時指定ジャンプ**: 任意の日時へ素早く移動し、番組チェックが可能です。
+* **マルチ放送波対応**: 放送波種別ごとに最適化された番組表をシームレスに閲覧できます。戻るキー長押しで現在時刻へ即座に戻ります。
+* **詳細表示 & 予約・視聴**: 番組詳細の確認から、ライブ視聴や録画予約へのスムーズな遷移が可能です。
+* **日時指定ジャンプ**: 任意の日時へ素早く移動し、先々の番組チェックが可能です。
 
 ### 🎥 ビデオタブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/9593c924-7dda-4210-b543-8be5274a43e7" />
 
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/0eb334bc-e8a8-4dfb-b51f-b381a3a6eee1" />
+* **シリーズ(作品名)から探す**: 膨大な録画を独自のアルゴリズムで自動グループ化。話数や記号を整理し、作品ごとに美しくまとめて表示します。
 
-**視聴履歴 & 最近の録画**: 直近の視聴番組や新着録画をすぐに確認できます。
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/203d7acc-a959-4f69-84c8-41e3b7c953cb" />
 
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/203338f5-bba8-4c31-a51e-aa855049aa3e" />
+* **視聴履歴 & 最近の録画**: 直近の視聴番組や新着録画をすぐに確認できます。
+* **録画高速検索**: タイトルによるインクリメンタルサーチが可能です。
 
-**録画一覧 & 高速検索**: 膨大な録画ライブラリからタイトルによるインクリメンタルサーチが可能です。
+### 🔴 録画予約タブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/a869cab3-00d4-433a-b4ac-3616d726ffa1" />
+
+* **予約一覧管理**: 現在予約されている番組を時系列で一括管理できます。
+* **詳細予約設定**: 優先度、録画モード、イベントリレー追従など、レコーダーとして必須の項目を細かく指定可能です。
 
 ### ⚙️ 設定タブ
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/33c0c8d3-a164-48c0-924f-ac77e03da923" />
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/bb7d6088-3610-4289-9786-5335c531ecc2" />
 
-**接続設定**: KonomiTV および Mirakurun のアドレス指定が可能です。Mirakurunについてはダイレクトストリームを使いたい場合に記入してください。
+* **起動時のデフォルトタブ設定**: アプリ起動時にどの画面を最初に表示するか選択可能です。
+* **表示・再生設定**: 実況コメントの不透明度や速度、ストリーミング画質、ピックアップ対象ジャンルなどを詳細にカスタマイズできます。
+* **接続設定**: KonomiTV および Mirakurun のアドレス指定が可能です。
 
 ---
 
@@ -69,41 +93,41 @@
 ### 🔴 ライブ視聴画面
 <img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/2ed64c36-0541-44df-b637-bca534348b68" />
 
-**情報オーバーレイ**: 決定ボタンで番組詳細、進行状況、放送局情報を一括表示します。決定ボタン２度押しで右上に固定オーバーレイを表示します。
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/9eebd487-18e6-4a90-90cb-484bd4ce1e69" />
-
-**ミニチャンネルリスト**: 下キーで視聴を継続しながら他局をザッピングできます。
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/591ec573-ad7a-466a-a08b-fda996f4cae2" />
-
-**高度な音声設定**: デュアルモノ、主音声/副音声の切り替えに対応（上キーのサブメニュー）。
-
-**字幕表示**: aribb24 ロジックによる高品質な字幕表示に対応。
-
-**ソース切り替え**: KonomiTV と Mirakurun の配信ソースを動的に切り替え可能です。
-
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/c41b7847-2955-49c7-b55e-86653624d110" />
-
-**ニコニコ実況表示**: ニコニコ実況とNX-Jikkyoのコメント表示に対応しています。サブメニューより表示非表示の切り替え可能です。また、設定画面からデフォルトで表示するかの選択も可能です。
-
-※録画番組での実況表示については、後日アップデートで対応予定です
+* **情報オーバーレイ**: 決定ボタンで詳細情報を表示。２度押しで情報を固定表示します。
+* **ミニチャンネルリスト**: 下キーで視聴を継続しながら他局をザッピングできます。
+* **即時録画**: サブメニューから視聴中の番組をボタン一つで録画開始できます。
+* **ニコニコ実況表示**: コメント表示に対応し、リアルタイムの盛り上がりを共有できます。
+* **高度な音声・字幕**: デュアルモノ切り替え、aribb24 ロジックによる高品質な字幕に対応しています。
 
 ### 🎞️ ビデオ視聴画面
-**直感的シーク**: 左右キーによる 30 秒スキップ / 10 秒戻しに対応。
-<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/e77d784f-1cdd-4441-adcb-6c14bcfa6526" />
-**PS3 風シーンサーチ**: 下キーで起動。10 秒間隔のタイル画像から 1 コマを鮮明に切り出し、直感的な場面探しを実現します。
-**マーキー表示**: 長い番組名も自動スクロールで全て表示します。
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/078a2b61-bdf2-4be4-addd-5e9ebc1f42e7" />
+
+* **直感的シーク**: 左右キーによる 30 秒スキップ / 10 秒戻しに対応。
+* **PS3 風シーンサーチ**: 下キーで起動。10 秒間隔のタイル画像から鮮明なコマを切り出し、見たい場面をすぐに見つけられます。
+* **マーキー表示**: 長い番組名も自動スクロールでフル表示します。
+
+---
+
+## 🚀 パフォーマンスへのこだわり
+Android TV 特有の制約（低スペックなSoC、限られたメモリ）で快適に動作させるため、以下のチューニングを行っています。
+
+* **オフラインファースト EPG**: 番組表をローカル DB にキャッシュすることで、開いた瞬間の「待ち時間ゼロ」を実現しています。
+* **非同期遅延読み込み**: 起動時の負荷を分散し、UI の応答性を最優先する設計を採用しています。
+* **メモリ最適化 (Coil)**: サムネイル画像を UI サイズに合わせて適切に縮小デコードし、メモリ不足によるクラッシュを防ぎます。
+* **DB バルク処理**: データベースへのアクセスを一括化（N+1問題の解消）し、システム全体の負荷を軽減しています。
 
 ---
 
 ## 🚀 将来実装予定の機能
-* **画質・パフォーマンス**: KonomiTV 画質変更、Amatsukaze 出力 txt によるチャプタースキップ。
-* **録画・予約**: 録画予約機能、ライブ画面からの即時録画開始。
-* **ソーシャル & UI**: ニコニコ実況表示、カスタムテーマ、L 字クロップ、KonomiTV ユーザー連携。
-* **管理機能**: チャンネルピン留め、録画番組マイリスト、ミニ番組表。
-* **操作性改善**: ライブ視聴中の左右キー選局、その他 KonomiTV 拡張への対応。
+* **管理機能**: 録画済み番組の削除機能、キーワード自動録画。
+* **画質・パフォーマンス**: Amatsukaze 出力 txt によるチャプタースキップ。
+* **UI**: カスタムテーマ、L 字クロップ、KonomiTV ユーザー連携。
+* **操作性改善**: ライブ視聴中の左右キー選局。
+
+---
 
 ## バグ対応等
-* 操作中にアプリクラッシュなどが発生した場合は、Githubのissueへ記載してください。動作環境と操作した履歴、現象を詳しく記載いただけると助かります。
+* 操作中にアプリクラッシュなどが発生した場合は、Githubのissueへ記載もしくは、作者X([@tamago0602](https://x.com/tamago0602)))へご連絡ください。動作環境と操作した履歴、現象を詳しく記載いただけると助かります。
 
 ---
 
@@ -115,10 +139,17 @@
 * **[KonomiTV](https://github.com/tsukumijima/KonomiTV)**: 強力な API バックエンドおよび配信プラットフォーム。
 * **[Mirakurun](https://github.com/Chinachu/Mirakurun)**: チューナー管理および配信 API。
 * **[DanmakuFlameMaster](https://github.com/bilibili/DanmakuFlameMaster)**: ニコニコ実況およびNX-Jikkyoのコメント表示。
+* **[SCRename](https://github.com/rigaya/SCRenamePy)**: シリーズから探すの正規表現の参考にさせていただきました。
 
 ---
 
 ## 🛠️ 技術構成
 * **UI**: Jetpack Compose for TV
+* **Database**: Room (with JSON Caching)
 * **Player**: ExoPlayer / Media3
-* **Image**: Coil (Custom Transformation for Scene Search)
+* **Image**: Coil (Custom Size Downsampling)
+* **DI**: Dagger Hilt
+
+---
+**Komorebi** の最新の進化をぜひお楽しみください！
+さらなる改善案やバグ報告、特定のデバイスでの動作報告も、GitHub Issue や X にてお待ちしております。
