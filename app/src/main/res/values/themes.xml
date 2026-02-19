@@ -1,7 +1,9 @@
 <resources>
-    <style name="Theme.ComposeTv" parent="Theme.MaterialComponents.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowFullscreen">true</item>
+    <style name="Theme.Komorebi" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/background_dark</item>
+    </style>
+
+    <style name="Theme_Komorebi_Starting" parent="Theme.Komorebi">
+        <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
 </resources>

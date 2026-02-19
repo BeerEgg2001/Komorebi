@@ -2,13 +2,13 @@
 
 package com.beeregg2001.komorebi.ui.main
 
-// ... インポート文（変更なし）
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -119,6 +119,7 @@ fun MainRootScreen(
     val searchHistory by recordViewModel.searchHistory.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
 
+    // ★修正: 変数名を isRecLoading に統一して Unresolved Reference を解消
     val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
     val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
 
@@ -134,6 +135,23 @@ fun MainRootScreen(
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
     val epgUiState = epgViewModel.uiState
+    var hasAppliedStartupTab by rememberSaveable { mutableStateOf(false) }
+
+    // アプリ起動時に一度だけローカルからデフォルトタブを読み込んで適用する
+    LaunchedEffect(Unit) {
+        if (!hasAppliedStartupTab) {
+            val tab = settingsViewModel.getStartupTabOnce()
+            currentTabIndex = when (tab) {
+                "ホーム" -> 0
+                "ライブ" -> 1
+                "ビデオ" -> 2
+                "番組表" -> 3
+                "録画予約" -> 4
+                else -> 0
+            }
+            hasAppliedStartupTab = true
+        }
+    }
 
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
@@ -153,11 +171,7 @@ fun MainRootScreen(
         }
     }
 
-    // ★削除: EpgViewModelの単一放送波データに引きずられる原因となっていたため、同期処理を廃止
-    // HomeViewModel側でGR, BS, CSを個別に取得するように変更しました。
-
     BackHandler(enabled = true) {
-        // ... バックハンドラーの中身（変更なし）
         when {
             editingNewProgram != null -> editingNewProgram = null
             editingReserveItem != null -> editingReserveItem = null
@@ -173,7 +187,6 @@ fun MainRootScreen(
             epgSelectedProgram != null -> epgSelectedProgram = null
             selectedReserve != null -> selectedReserve = null
             isEpgJumpMenuOpen -> isEpgJumpMenuOpen = false
-
             isRecordListOpen -> {
                 isRecordListOpen = false
                 if (openedSeriesTitle != null) {
@@ -186,7 +199,6 @@ fun MainRootScreen(
                 isSeriesListOpen = false
                 recordViewModel.searchRecordings("")
             }
-
             showConnectionErrorDialog -> onExitApp()
             else -> triggerHomeBack = true
         }
@@ -205,19 +217,23 @@ fun MainRootScreen(
         }
     }
 
+    // 起動時の暗転を短縮
     LaunchedEffect(Unit) {
-        delay(2000)
+        delay(500)
         isSplashFinished = true
     }
 
-    val isAppReady = (isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)
+    val isAppReady = ((isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)) && hasAppliedStartupTab
 
     Box(modifier = Modifier.fillMaxSize()) {
         val showMainContent = isAppReady && isSettingsInitialized && !showConnectionErrorDialog
 
-        AnimatedVisibility(visible = showMainContent, enter = fadeIn(), exit = fadeOut()) {
+        AnimatedVisibility(
+            visible = showMainContent,
+            enter = fadeIn(animationSpec = tween(400)),
+            exit = fadeOut()
+        ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // ... コンテンツ表示（変更なし）
                 when {
                     selectedChannel != null -> {
                         LivePlayerScreen(
@@ -268,11 +284,7 @@ fun MainRootScreen(
                     isSeriesListOpen -> {
                         val groupedSeries by recordViewModel.groupedSeries.collectAsState()
                         val isSeriesLoading by recordViewModel.isSeriesLoading.collectAsState()
-
-                        LaunchedEffect(Unit) {
-                            recordViewModel.buildSeriesIndex()
-                        }
-
+                        LaunchedEffect(Unit) { recordViewModel.buildSeriesIndex() }
                         SeriesListScreen(
                             groupedSeries = groupedSeries,
                             isLoading = isSeriesLoading,
@@ -305,7 +317,7 @@ fun MainRootScreen(
                                 lastSelectedProgramId = program.id.toString()
                             },
                             onLoadMore = { recordViewModel.loadNextPage() },
-                            isLoadingInitial = isRecLoading,
+                            isLoadingInitial = isRecLoading, // ★修正済み
                             isLoadingMore = isRecLoadingMore,
                             customTitle = openedSeriesTitle,
                             onBack = {
@@ -368,13 +380,18 @@ fun MainRootScreen(
                             isRecordListOpen = isRecordListOpen, onShowAllRecordings = { isRecordListOpen = true }, onCloseRecordList = { isRecordListOpen = false },
                             onShowSeriesList = { isSeriesListOpen = true },
                             isReturningFromPlayer = isReturningFromPlayer, onReturnFocusConsumed = { isReturningFromPlayer = false }
+                            // ★不整合だった Loading 系の引数を削除（HomeLauncherScreen側で直接収集するため）
                         )
                     }
                 }
             }
         }
 
-        // ... ダイアログ表示（変更なし）
+        if (!showMainContent && !showConnectionErrorDialog) {
+            LoadingScreen()
+        }
+
+        // --- ダイアログ等は変更なし ---
         if (selectedReserve != null) {
             val program = remember(selectedReserve) { ReserveMapper.toEpgProgram(selectedReserve!!) }
             ProgramDetailScreen(
@@ -388,7 +405,6 @@ fun MainRootScreen(
         if (epgSelectedProgram != null) {
             val relatedReserve = reserves.find { it.program.id == epgSelectedProgram!!.id }
             val isReserved = relatedReserve != null
-
             ProgramDetailScreen(
                 program = epgSelectedProgram!!, mode = ProgramDetailMode.EPG, isReserved = isReserved,
                 onPlayClick = {
@@ -458,15 +474,10 @@ fun MainRootScreen(
         if (showConnectionErrorDialog && isSettingsInitialized && !isSettingsOpen) { ConnectionErrorDialog(onGoToSettings = { showConnectionErrorDialog = false; isSettingsOpen = true }, onExit = onExitApp) }
         if (isSettingsOpen) { SettingsScreen(onBack = closeSettingsAndRefresh) }
 
-        AnimatedVisibility(visible = !isAppReady && isSettingsInitialized && !isSettingsOpen && !showConnectionErrorDialog, enter = fadeIn(), exit = fadeOut()) {
-            LoadingScreen()
-        }
-
         GlobalToast(message = toastMessage)
     }
 }
 
-// ... 以降の Composable 関数（変更なし）
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DeleteConfirmationDialog(title: String, message: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
