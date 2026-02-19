@@ -45,12 +45,16 @@ class SettingsViewModel @Inject constructor(
     val commentDefaultDisplay: StateFlow<String> = settingsRepository.commentDefaultDisplay
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
 
-    // ★追加: 画質設定の StateFlow
+    // 画質設定の StateFlow
     val liveQuality: StateFlow<String> = settingsRepository.liveQuality
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1080p-60fps")
 
     val videoQuality: StateFlow<String> = settingsRepository.videoQuality
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1080p-60fps")
+
+    // ★追加: 起動時タブの StateFlow
+    val startupTab: StateFlow<String> = settingsRepository.startupTab
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ホーム")
 
     // 設定が初期化済みかどうか
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
@@ -61,5 +65,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.saveString(SettingsRepository.MIRAKURUN_IP, ip)
         }
+    }
+
+    // ★追加: MainRootScreen の初期化用にSuspend関数を提供
+    suspend fun getStartupTabOnce(): String {
+        return settingsRepository.getStartupTabOnce()
     }
 }

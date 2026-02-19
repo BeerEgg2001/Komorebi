@@ -35,8 +35,10 @@ class SettingsRepository @Inject constructor(
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
-        // ★追加: ピックアップの時間帯設定（自動、朝、昼、夜）
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
+
+        // ★追加: 起動時のデフォルトタブ
+        val STARTUP_TAB = stringPreferencesKey("startup_tab")
     }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
@@ -55,9 +57,10 @@ class SettingsRepository @Inject constructor(
 
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
-
-    // ★追加: デフォルトは「自動」（現在の時間帯）
     val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
+
+    // ★追加: デフォルトは「ホーム」
+    val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
@@ -76,5 +79,11 @@ class SettingsRepository @Inject constructor(
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) { ip = "https://$ip" }
         val base = ip.removeSuffix("/")
         return "$base:$port/"
+    }
+
+    // ★追加: 起動時に一度だけ確実に設定を読み取るための関数
+    suspend fun getStartupTabOnce(): String {
+        val prefs = context.dataStore.data.first()
+        return prefs[STARTUP_TAB] ?: "ホーム"
     }
 }

@@ -111,14 +111,15 @@ fun MainRootScreen(
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val isChannelLoading by channelViewModel.isLoading.collectAsState()
     val isHomeLoading by homeViewModel.isLoading.collectAsState()
-    val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
-    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val searchHistory by recordViewModel.searchHistory.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
+
+    val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
+    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
 
     var isDataReady by remember { mutableStateOf(false) }
     var isSplashFinished by remember { mutableStateOf(false) }
@@ -132,6 +133,25 @@ fun MainRootScreen(
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
     val epgUiState = epgViewModel.uiState
+
+    // ★追加: 起動時タブの設定を適用したかどうかのフラグ
+    var hasAppliedStartupTab by rememberSaveable { mutableStateOf(false) }
+
+    // ★追加: アプリ起動時に一度だけローカルからデフォルトタブを読み込んで適用する
+    LaunchedEffect(Unit) {
+        if (!hasAppliedStartupTab) {
+            val tab = settingsViewModel.getStartupTabOnce()
+            currentTabIndex = when (tab) {
+                "ホーム" -> 0
+                "ライブ" -> 1
+                "ビデオ" -> 2
+                "番組表" -> 3
+                "録画予約" -> 4
+                else -> 0
+            }
+            hasAppliedStartupTab = true
+        }
+    }
 
     val closeSettingsAndRefresh = {
         isSettingsOpen = false
@@ -151,7 +171,6 @@ fun MainRootScreen(
         }
     }
 
-    // ★追加: EpgViewModelが取得したEPGデータを、ピックアップ抽出用にHomeViewModelに共有する
     LaunchedEffect(epgUiState) {
         if (epgUiState is EpgUiState.Success) {
             homeViewModel.updateEpgData(epgUiState.data)
@@ -193,7 +212,6 @@ fun MainRootScreen(
         }
     }
 
-    // ★修正: isRecLoading を待機条件から外し、起動を高速化
     LaunchedEffect(isChannelLoading, isHomeLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading) {
@@ -212,7 +230,8 @@ fun MainRootScreen(
         isSplashFinished = true
     }
 
-    val isAppReady = (isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)
+    // ★修正: タブの初期適用が終わるまでスプラッシュ画面を維持する
+    val isAppReady = ((isDataReady && isSplashFinished) || (!isSettingsInitialized && isSplashFinished)) && hasAppliedStartupTab
 
     Box(modifier = Modifier.fillMaxSize()) {
         val showMainContent = isAppReady && isSettingsInitialized && !showConnectionErrorDialog
