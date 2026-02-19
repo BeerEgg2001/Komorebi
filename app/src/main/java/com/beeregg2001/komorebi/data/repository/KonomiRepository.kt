@@ -34,7 +34,6 @@ class KonomiRepository @Inject constructor(
     }
 
     // --- チャンネル・録画 ---
-    // ★修正: 戻り値を ChannelApiResponse に変更
     suspend fun getChannels(): ChannelApiResponse = apiService.getChannels()
 
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
@@ -68,8 +67,18 @@ class KonomiRepository @Inject constructor(
         return watchHistoryDao.getById(id)
     }
 
+    // ★追加: 複数IDを一括取得
+    suspend fun getHistoryEntitiesByIds(ids: List<Int>): List<WatchHistoryEntity> {
+        return watchHistoryDao.getByIds(ids)
+    }
+
     suspend fun saveToLocalHistory(entity: WatchHistoryEntity) {
         watchHistoryDao.insertOrUpdate(entity)
+    }
+
+    // ★追加: リストを一括保存
+    suspend fun saveAllToLocalHistory(entities: List<WatchHistoryEntity>) {
+        watchHistoryDao.insertOrUpdateAll(entities)
     }
 
     // --- 最近見たチャンネル ---
@@ -99,13 +108,11 @@ class KonomiRepository @Inject constructor(
         apiService.getReserves().reservations
     }
 
-    // ★修正: リクエストオブジェクトを受け取るように変更
     suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.addReserve(request)
         if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
     }
 
-    // ★追加: 予約更新の実装
     suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.updateReserve(reservationId, request)
         if (!response.isSuccessful) {

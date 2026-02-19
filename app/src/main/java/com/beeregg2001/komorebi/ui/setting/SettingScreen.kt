@@ -281,7 +281,7 @@ fun DisplaySettingsContent(def: String, speed: String, size: String, opacity: St
 fun AppInfoContent(onShow: () -> Unit, licR: FocusRequester, onClick: (FocusRequester) -> Unit) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Komorebi", style = MaterialTheme.typography.displayMedium, color = Color.White, fontWeight = FontWeight.Bold)
-        Text("Version 0.3.5 beta", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+        Text("Version 0.3.0 beta", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
         Spacer(Modifier.height(48.dp))
         SettingItem("オープンソースライセンス", "", modifier = Modifier.width(400.dp).focusRequester(licR), onClick = { onClick(licR); onShow() })
     }

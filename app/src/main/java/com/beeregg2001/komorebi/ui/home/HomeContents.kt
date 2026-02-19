@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext // ★追加
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.foundation.lazy.list.*
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
+import coil.request.CachePolicy // ★追加
+import coil.request.ImageRequest // ★追加
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.viewmodel.Channel
@@ -46,7 +49,7 @@ fun HomeContents(
     upcomingReserves: List<ReserveItem>,
     genrePickup: List<Pair<EpgProgram, String>>,
     pickupGenreName: String,
-    pickupTimeSlot: String, // ★追加: 時間帯の文字列
+    pickupTimeSlot: String,
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
@@ -80,7 +83,6 @@ fun HomeContents(
         contentPadding = PaddingValues(top = 24.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(40.dp)
     ) {
-        // 1. 前回視聴したチャンネル
         if (lastWatchedChannels.isNotEmpty()) {
             item {
                 Column {
@@ -116,7 +118,6 @@ fun HomeContents(
             }
         }
 
-        // 2. 今、盛り上がっているチャンネル
         if (hotChannels.isNotEmpty()) {
             item {
                 Column {
@@ -130,7 +131,6 @@ fun HomeContents(
             }
         }
 
-        // 3. これからの録画予約
         if (upcomingReserves.isNotEmpty()) {
             item {
                 Column {
@@ -146,11 +146,9 @@ fun HomeContents(
             }
         }
 
-        // 4. ジャンル別ピックアップ (リッチデザイン)
         if (genrePickup.isNotEmpty()) {
             item {
                 Column {
-                    // ★修正: 時間帯に応じてヘッダーのテキストを変える
                     val timePrefix = when(pickupTimeSlot) {
                         "朝" -> "今朝の"
                         "昼" -> "今日の"
@@ -163,7 +161,7 @@ fun HomeContents(
                             GenrePickupCard(
                                 program = program,
                                 channelName = channelName,
-                                timeSlot = pickupTimeSlot, // ★カードに時間帯を渡す
+                                timeSlot = pickupTimeSlot,
                                 onClick = { onProgramClick(program) }
                             )
                         }
@@ -174,7 +172,6 @@ fun HomeContents(
             }
         }
 
-        // 5. 録画の視聴履歴
         if (watchHistory.isNotEmpty()) {
             item {
                 Column {
@@ -190,14 +187,11 @@ fun HomeContents(
     }
 }
 
-/**
- * 勢いのあるチャンネルカード
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String, onClick: () -> Unit) {
     var isFocused by remember { mutableStateOf(false) }
-    val liveThumbnailUrl = "http://$konomiIp:$konomiPort/api/streams/live/${uiState.displayChannelId}/thumbnail"
+    val liveThumbnailUrl = UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, uiState.channel.displayChannelId)
 
     Surface(
         onClick = onClick,
@@ -207,8 +201,14 @@ fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp))
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // ★修正: Coilのメモリ最適化 (UIサイズ 300x168dp に合わせてピクセルを絞る)
             AsyncImage(
-                model = liveThumbnailUrl,
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(liveThumbnailUrl)
+                    .size(coil.size.Size(400, 225))
+                    .crossfade(true)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .build(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
@@ -236,9 +236,6 @@ fun HotChannelCard(uiState: UiChannelState, konomiIp: String, konomiPort: String
     }
 }
 
-/**
- * ジャンル別ピックアップカード (局ロゴ + 時間帯別グラデーション背景)
- */
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -246,14 +243,12 @@ fun GenrePickupCard(program: EpgProgram, channelName: String, timeSlot: String, 
     var isFocused by remember { mutableStateOf(false) }
     val start = OffsetDateTime.parse(program.start_time)
 
-    // ★修正: 時間帯に応じてグラデーションの色を変える
     val gradientStartColor = when (timeSlot) {
-        "朝" -> Color(0xFFE65100).copy(alpha = 0.3f) // 朝焼けのオレンジ
-        "昼" -> Color(0xFF006064).copy(alpha = 0.3f) // 昼の青空・緑
-        else -> Color(0xFF1A237E).copy(alpha = 0.3f) // 夜の深い青
+        "朝" -> Color(0xFFE65100).copy(alpha = 0.3f)
+        "昼" -> Color(0xFF006064).copy(alpha = 0.3f)
+        else -> Color(0xFF1A237E).copy(alpha = 0.3f)
     }
 
-    // ★修正: 時間テキストのアクセントカラーも合わせる
     val timeColor = when (timeSlot) {
         "朝" -> Color(0xFFFFCC80)
         "昼" -> Color(0xFF81D4FA)
@@ -294,9 +289,6 @@ fun GenrePickupCard(program: EpgProgram, channelName: String, timeSlot: String, 
     }
 }
 
-/**
- * 予約カード
- */
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -384,7 +376,18 @@ fun WatchHistoryCard(history: KonomiHistoryProgram, konomiIp: String, konomiPort
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.DarkGray, focusedContainerColor = Color.White)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(model = thumbnailUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            // ★修正: Coilのメモリ最適化 (UIサイズ 260x150dp に合わせてピクセルを絞る)
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnailUrl)
+                    .size(coil.size.Size(360, 200))
+                    .crossfade(true)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
             Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, if (isFocused) Color.White.copy(0.9f) else Color.Black.copy(0.8f)))))
             Column(modifier = Modifier.align(Alignment.BottomStart).padding(12.dp)) {
                 Text(program.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, color = if (isFocused) Color.Black else Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)

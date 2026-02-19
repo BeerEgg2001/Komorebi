@@ -45,7 +45,6 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    // ★変更: Pair<表示用タイトル, 検索用キーワード> のリストを保持する
     private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
     val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
 
@@ -64,7 +63,7 @@ class RecordViewModel @Inject constructor(
     private var maintenanceJob: Job? = null
 
     init {
-        fetchInitialRecordings()
+        // ★修正: 起動時の自動取得を削除（MainRootScreen側でタブ選択時に呼ばれるため）
         loadSearchHistory()
     }
 
@@ -73,7 +72,6 @@ class RecordViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             _isSeriesLoading.value = true
-            // ジャンル -> (表示用タイトル -> Pair(表示用, 検索用))
             val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
             var page = 1
 
@@ -84,14 +82,11 @@ class RecordViewModel @Inject constructor(
 
                     response.recordedPrograms.forEach { prog ->
                         val genre = prog.genres?.firstOrNull()?.major ?: "その他"
-
-                        // ★表示用と検索用を別々に抽出
                         val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
                         val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
 
                         if (displayTitle.isNotEmpty()) {
                             val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
-                            // 表示用タイトルをキーにして重複を排除
                             if (!genreMap.containsKey(displayTitle)) {
                                 genreMap[displayTitle] = Pair(displayTitle, searchKeyword)
                             }
@@ -102,7 +97,6 @@ class RecordViewModel @Inject constructor(
                     page++
                 }
 
-                // 表示用タイトルでソートしてUIに渡す
                 _groupedSeries.value = allSeriesMap.mapValues { entry ->
                     entry.value.values.sortedBy { it.first }
                 }

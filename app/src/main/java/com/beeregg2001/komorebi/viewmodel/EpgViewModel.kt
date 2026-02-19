@@ -41,6 +41,9 @@ class EpgViewModel @Inject constructor(
     private var konomiIp = ""
     private var konomiPort = ""
 
+    private var hasInitialFetched = false
+    private var epgJob: Job? = null // ★追加: フロー監視ジョブの管理用
+
     init {
         loadInitialData()
     }
@@ -62,9 +65,16 @@ class EpgViewModel @Inject constructor(
                 val isMirakurunReady = mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()
                 val isKonomiReady = konomiIp.isNotEmpty() && konomiPort.isNotEmpty()
 
-                if (isMirakurunReady || isKonomiReady) {
+                if ((isMirakurunReady || isKonomiReady) && !hasInitialFetched) {
+                    hasInitialFetched = true
+
+                    viewModelScope.launch {
+                        delay(1500)
+                        refreshEpgData(type)
+                        _isPreloading.value = false
+                    }
+                } else if ((isMirakurunReady || isKonomiReady) && hasInitialFetched) {
                     refreshEpgData(type)
-                    _isPreloading.value = false
                 }
             }.collectLatest { }
         }
@@ -75,8 +85,13 @@ class EpgViewModel @Inject constructor(
     }
 
     fun refreshEpgData(channelType: String? = null) {
-        viewModelScope.launch {
-            uiState = EpgUiState.Loading
+        epgJob?.cancel()
+        epgJob = viewModelScope.launch {
+            // ★変更: キャッシュがなく、初めての場合のみローディング状態にする
+            if (uiState !is EpgUiState.Success) {
+                uiState = EpgUiState.Loading
+            }
+
             val now = OffsetDateTime.now()
             val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
             val epgLimit = now.plusDays(7)
@@ -84,27 +99,30 @@ class EpgViewModel @Inject constructor(
             val end = if (requestedEnd.isAfter(epgLimit)) epgLimit else requestedEnd
 
             val typeToFetch = channelType ?: _selectedBroadcastingType.value
-            val result = repository.fetchEpgData(
+
+            // ★変更: getEpgDataStream のフローを監視し、キャッシュ -> API最新 の順でUIを更新する
+            repository.getEpgDataStream(
                 startTime = start,
                 endTime = end,
                 channelType = typeToFetch
-            )
-
-            result.onSuccess { data ->
-                // ★改善点: 重いデータ変換（map処理）をバックグラウンドスレッドで実行
-                val processedState = withContext(Dispatchers.Default) {
-                    val logoUrls = data.map { getLogoUrl(it.channel) }
-                    EpgUiState.Success(
-                        data = data,
-                        logoUrls = logoUrls,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort
-                    )
+            ).collect { result ->
+                result.onSuccess { data ->
+                    val processedState = withContext(Dispatchers.Default) {
+                        val logoUrls = data.map { getLogoUrl(it.channel) }
+                        EpgUiState.Success(
+                            data = data,
+                            logoUrls = logoUrls,
+                            mirakurunIp = mirakurunIp,
+                            mirakurunPort = mirakurunPort
+                        )
+                    }
+                    uiState = processedState
+                }.onFailure { e ->
+                    // キャッシュで成功表示済みならエラーにせず維持する
+                    if (uiState !is EpgUiState.Success) {
+                        uiState = EpgUiState.Error(e.message ?: "Unknown Error")
+                    }
                 }
-                // UIスレッドに戻って状態を更新
-                uiState = processedState
-            }.onFailure { e ->
-                uiState = EpgUiState.Error(e.message ?: "Unknown Error")
             }
         }
     }
@@ -126,7 +144,6 @@ class EpgViewModel @Inject constructor(
             )
 
             result.onSuccess { newData ->
-                // ★改善点: 拡張データの処理も非同期化
                 val processedState = withContext(Dispatchers.Default) {
                     val logoUrls = newData.map { getLogoUrl(it.channel) }
                     EpgUiState.Success(

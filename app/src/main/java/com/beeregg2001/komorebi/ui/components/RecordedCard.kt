@@ -13,6 +13,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext // ★追加
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,6 +22,8 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
+import coil.request.CachePolicy // ★追加
+import coil.request.ImageRequest // ★追加
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 
@@ -57,14 +60,12 @@ fun RecordedCard(
     val totalDuration = program.recordedVideo.duration.toLong()
     val currentPosition = program.playbackPosition.toLong()
 
-    // 表示テキストの決定：履歴があれば「続きから 12:34」、なければ「30:00」
     val durationDisplay = if (currentPosition > 5) {
         "続きから ${formatTime(currentPosition)}"
     } else {
         formatTime(totalDuration)
     }
 
-    // 進捗率の計算
     val progress = if (totalDuration > 0) (currentPosition.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f) else 0f
 
     Surface(
@@ -91,8 +92,14 @@ fun RecordedCard(
         )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // ★修正: Coilのメモリ最適化 (UIサイズ 185x104dp に合わせてピクセルを絞る)
             AsyncImage(
-                model = thumbnailUrl,
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnailUrl)
+                    .size(coil.size.Size(300, 168))
+                    .crossfade(true)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .build(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
@@ -104,7 +111,6 @@ fun RecordedCard(
                     .background(Color.Black.copy(alpha = if (isFocused) 0.1f else 0.5f))
             )
 
-            // 右上のインジケータ
             Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                 if (program.isRecording) {
                     Row(
@@ -128,7 +134,6 @@ fun RecordedCard(
                 }
             }
 
-            // 下部番組情報エリア
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -178,7 +183,6 @@ fun RecordedCard(
                 }
             }
 
-            // 進捗バー (カードの最下部)
             if (currentPosition > 5) {
                 Box(
                     modifier = Modifier

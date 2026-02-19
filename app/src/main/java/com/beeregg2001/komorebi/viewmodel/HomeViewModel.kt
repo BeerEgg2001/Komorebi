@@ -22,18 +22,16 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
-    private val settingsRepository: SettingsRepository // ★EpgRepositoryの注入を削除
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // 視聴履歴
     val watchHistory: StateFlow<List<KonomiHistoryProgram>> = repository.getLocalWatchHistory()
         .map { entities -> entities.map { KonomiDataMapper.toUiModel(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 前回視聴チャンネル
     val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
         .map { entities ->
             entities.map { entity ->
@@ -48,29 +46,23 @@ class HomeViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // ジャンル設定
     val pickupGenreLabel = settingsRepository.homePickupGenre
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "アニメ")
 
-    // 有料放送除外設定
     val excludePaidBroadcasts = settingsRepository.excludePaidBroadcasts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
 
-    // ピックアップの時間帯設定
     val pickupTimeSetting = settingsRepository.homePickupTime
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "自動")
 
     private val _genrePickupPrograms = MutableStateFlow<List<Pair<EpgProgram, String>>>(emptyList())
     val genrePickupPrograms: StateFlow<List<Pair<EpgProgram, String>>> = _genrePickupPrograms.asStateFlow()
 
-    // 現在適用されている時間帯（朝・昼・夜）をUIに伝えるためのState
     private val _genrePickupTimeSlot = MutableStateFlow("夜")
     val genrePickupTimeSlot: StateFlow<String> = _genrePickupTimeSlot.asStateFlow()
 
-    // ★追加: EpgViewModelから共有されたEPGデータを保持するStateFlow
     private val _sharedEpgData = MutableStateFlow<List<EpgChannelWrapper>>(emptyList())
 
-    // 勢いのあるチャンネル抽出
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
             .filter { (it.jikkyoForce ?: 0) > 0 }
@@ -78,7 +70,6 @@ class HomeViewModel @Inject constructor(
             .take(5)
     }
 
-    // 録画予約抽出
     fun getUpcomingReserves(reserves: List<ReserveItem>): List<ReserveItem> {
         val now = OffsetDateTime.now()
         return reserves.filter {
@@ -87,12 +78,10 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.program.startTime }.take(5)
     }
 
-    // ★追加: MainRootScreenから呼ばれ、EpgViewModelが取得したデータをセットする
     fun updateEpgData(data: List<EpgChannelWrapper>) {
         _sharedEpgData.value = data
     }
 
-    // ★修正: ネットワーク通信を廃止し、渡されたリストをローカルで高速にフィルタリングする関数に変更
     private suspend fun filterGenrePickup(
         allPrograms: List<EpgChannelWrapper>,
         genre: String,
@@ -103,7 +92,6 @@ class HomeViewModel @Inject constructor(
 
         val now = OffsetDateTime.now()
 
-        // 「自動」の場合は現在の時刻から時間帯を決定
         val actualTimeSlot = if (timeSetting == "自動") {
             val h = now.hour
             when {
@@ -138,7 +126,6 @@ class HomeViewModel @Inject constructor(
     }
 
     init {
-        // ★修正: _sharedEpgData の変更も監視し、データが更新されたら自動でリストを作り直す
         viewModelScope.launch {
             combine(
                 _sharedEpgData,
@@ -153,14 +140,20 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ★修正: 重い処理（fetchAllTypeGenrePickup）が消えたため、非常に軽量化
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
             repository.getWatchHistory().onSuccess { apiHistoryList ->
-                apiHistoryList.forEach { history ->
-                    val programId = history.program.id.toIntOrNull() ?: return@forEach
-                    val existingEntity = repository.getHistoryEntityById(programId)
+                // ★修正: N+1問題を解消し、DBの読み書きを1回にまとめる（バルクインサート）
+                val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
+
+                // 全件を一気に検索してMapにする
+                val existingEntitiesMap = repository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
+
+                // メモリ上でマージして保存用リストを作る
+                val entitiesToSave = apiHistoryList.mapNotNull { history ->
+                    val programId = history.program.id.toIntOrNull() ?: return@mapNotNull null
+                    val existingEntity = existingEntitiesMap[programId]
                     var newEntity = KonomiDataMapper.toEntity(history)
                     if (existingEntity != null) {
                         newEntity = newEntity.copy(
@@ -169,7 +162,12 @@ class HomeViewModel @Inject constructor(
                             tileWidth = existingEntity.tileWidth, tileHeight = existingEntity.tileHeight
                         )
                     }
-                    repository.saveToLocalHistory(newEntity)
+                    newEntity
+                }
+
+                // リストを1回のトランザクションで書き込む
+                if (entitiesToSave.isNotEmpty()) {
+                    repository.saveAllToLocalHistory(entitiesToSave)
                 }
             }
             repository.refreshUser()

@@ -8,6 +8,7 @@ import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
 import com.beeregg2001.komorebi.data.model.ReserveRequest
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +29,10 @@ class ReserveViewModel @Inject constructor(
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     init {
-        fetchReserves()
+        viewModelScope.launch {
+            delay(2000)
+            fetchReserves()
+        }
     }
 
     fun fetchReserves() {
