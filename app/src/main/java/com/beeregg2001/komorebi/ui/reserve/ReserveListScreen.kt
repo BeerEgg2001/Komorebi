@@ -44,7 +44,6 @@ fun ReserveListScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            // ★修正: 親のグラデーションを通すため、ここにあった .background() を削除しました
             .padding(horizontal = 40.dp, vertical = 20.dp)
             .onKeyEvent { event ->
                 if (event.key == Key.Back) {
@@ -59,7 +58,7 @@ fun ReserveListScreen(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 20.dp)
+            modifier = Modifier.padding(bottom = 8.dp) // リスト内のpaddingで調整するため少し減らしました
         ) {
             Text(
                 text = "放送が近い録画予約",
@@ -91,7 +90,8 @@ fun ReserveListScreen(
         } else {
             TvLazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 40.dp),
+                // ★修正: top = 20.dp を追加。これにより拡大されたカードがヘッダーに被らず、クリップもされなくなります
+                contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)

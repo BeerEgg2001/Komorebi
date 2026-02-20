@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.ui.video
 
+import android.util.Log
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.beeregg2001.komorebi.data.model.ArchivedComment
@@ -11,11 +12,13 @@ import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Color as AndroidColor
 import kotlin.math.abs
 
+private const val TAG = "ArchivedCommentOverlay"
+
 @Composable
 fun ArchivedCommentOverlay(
     modifier: Modifier = Modifier,
     comments: List<ArchivedComment>,
-    currentPositionProvider: () -> Long, // ★修正: Stateではなく関数(Provider)として最新時間を取得する
+    currentPositionProvider: () -> Long,
     isPlaying: Boolean,
     isCommentEnabled: Boolean,
     commentSpeed: Float,
@@ -30,30 +33,39 @@ fun ArchivedCommentOverlay(
     // 最後にコメントを放出した時間を記録
     var lastEmittedTime by remember { mutableDoubleStateOf(0.0) }
 
-    // ★追加: 映像の一時停止/再生に合わせてDanmakuView自体も一時停止/再生する
-    LaunchedEffect(isPlaying) {
+    LaunchedEffect(isPlaying, isCommentEnabled) {
+        Log.i(TAG, "State Changed -> isPlaying: $isPlaying, isCommentEnabled: $isCommentEnabled")
         danmakuViewRef.value?.let { view ->
             if (view.isPrepared) {
-                if (isPlaying) view.resume() else view.pause()
+                if (isPlaying && isCommentEnabled) {
+                    Log.i(TAG, "Resuming DanmakuView")
+                    view.resume()
+                } else {
+                    Log.i(TAG, "Pausing DanmakuView")
+                    view.pause()
+                }
             }
         }
     }
 
     // コメント同期ロジック
     LaunchedEffect(isPlaying, isCommentEnabled, comments.size) {
+        Log.i(TAG, "Sync loop started. Comments count: ${comments.size}")
         if (!isCommentEnabled || comments.isEmpty()) return@LaunchedEffect
 
         while (isActive) {
             if (isPlaying) {
                 val currentSec = currentPositionProvider() / 1000.0
 
-                // ★追加: シーク検知 (時間が2秒以上ジャンプした場合)
+                // シーク検知 (時間が2秒以上ジャンプした場合)
                 if (abs(currentSec - lastEmittedTime) > 2.0) {
-                    lastEmittedTime = currentSec
+                    Log.i(TAG, "Seek detected! Jumped from $lastEmittedTime to $currentSec")
+                    lastEmittedTime = (currentSec - 0.2).coerceAtLeast(0.0)
                     danmakuViewRef.value?.removeAllDanmakus(true) // 画面の古いコメントを消去
                 }
 
                 if (currentSec > lastEmittedTime) {
+                    var addedCount = 0
                     comments.forEach { comment ->
                         if (comment.time > lastEmittedTime && comment.time <= currentSec) {
                             danmakuViewRef.value?.let { view ->
@@ -62,7 +74,11 @@ fun ArchivedCommentOverlay(
                                     addDanmakuToView(view, comment, commentFontSizeScale)
                                 }
                             }
+                            addedCount++
                         }
+                    }
+                    if (addedCount > 0) {
+                        Log.i(TAG, "Added $addedCount comments to view at $currentSec sec")
                     }
                     lastEmittedTime = currentSec
                 }
@@ -79,8 +95,9 @@ fun ArchivedCommentOverlay(
         opacity = commentOpacity,
         maxLines = commentMaxLines,
         onViewCreated = { view ->
+            Log.i(TAG, "DanmakuView created and prepared")
             danmakuViewRef.value = view
-            if (!isPlaying) view.pause() // 初期表示時に止まっていたら止める
+            if (!isPlaying || !isCommentEnabled) view.pause() // 初期表示時に止まっていたら止める
         }
     )
 }

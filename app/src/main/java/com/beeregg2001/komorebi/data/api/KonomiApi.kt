@@ -32,10 +32,10 @@ interface KonomiApi {
     ): RecordedApiResponse
 
     // --- 視聴維持 ---
-    @POST("api/videos/{videoId}/keep-alive")
+    @PUT("api/streams/video/{videoId}/{quality}/keep-alive")
     suspend fun keepAlive(
         @Path("videoId") videoId: Int,
-        @Query("quality") quality: String,
+        @Path("quality") quality: String,
         @Query("session_id") sessionId: String
     ): Response<Unit>
 
@@ -54,7 +54,7 @@ interface KonomiApi {
     @GET("api/jikkyo/{channelId}")
     suspend fun getJikkyoInfo(@Path("channelId") channelId: String): JikkyoResponse
 
-    @GET("api/videos/{videoId}/comments")
+    @GET("api/videos/{videoId}/jikkyo")
     suspend fun getArchivedJikkyo(@Path("videoId") videoId: Int): ArchivedJikkyoResponse
 
     // --- 予約関連 ---
