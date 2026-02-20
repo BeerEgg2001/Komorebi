@@ -324,34 +324,6 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
     }
 }
 
-@Composable
-fun LiveToast(message: String?) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(bottom = 80.dp),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        AnimatedVisibility(
-            visible = message != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Box(
-                modifier = Modifier
-                    .background(Color.Black.copy(0.85f), RoundedCornerShape(32.dp))
-                    .border(1.dp, Color.White.copy(0.2f), RoundedCornerShape(32.dp))
-                    .padding(horizontal = 28.dp, vertical = 14.dp)
-            ) {
-                Text(
-                    text = message ?: "",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
-                )
-            }
-        }
-    }
-}
-
 fun formatChannelType(type: String): String = when (type.uppercase()) {
     "GR" -> "地デジ"
     "BS" -> "BS"

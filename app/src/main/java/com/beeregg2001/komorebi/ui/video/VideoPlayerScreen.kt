@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
+import android.util.Base64 // ★追加
 import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
@@ -26,13 +27,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.*
 import androidx.media3.common.*
 import androidx.media3.common.audio.*
-import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.extractor.metadata.id3.PrivFrame // ★追加
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
@@ -116,32 +117,18 @@ fun VideoPlayerScreen(
         Log.i(TAG, "Fetched comments count: ${fetchedComments.size}")
         allComments.clear()
         allComments.addAll(fetchedComments)
-        if (fetchedComments.isEmpty()) {
-            onShowToast("この番組の実況コメントデータはありません")
-        }
     }
 
     val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
     val exoPlayer = remember {
         Log.i(TAG, "Initializing ExoPlayer")
-
-        // ★修正: CustomPlayerManager と同様に拡張レンダラーを優先させる設定を追加
         val renderersFactory = object : DefaultRenderersFactory(context) {
-            init {
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
-            }
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? =
-                DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
+            init { setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER) }
+            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? = DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
         }
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0").setAllowCrossProtocolRedirects(true)
         ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
-
-            // 全てのテキストトラック（言語未指定含む）を許可し、初期状態でテキストトラックの無効化を解除
-            trackSelectionParameters = trackSelectionParameters.buildUpon()
-                .setSelectUndeterminedTextLanguage(true)
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !isSubtitleEnabled)
-                .build()
 
             val mediaItem = MediaItem.Builder().setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)).setMimeType(MimeTypes.APPLICATION_M3U8).build()
             setMediaItem(mediaItem)
@@ -153,35 +140,18 @@ fun VideoPlayerScreen(
                     Log.i(TAG, "ExoPlayer isPlaying changed to: $playing")
                 }
 
-                // ★追加: 映像ストリーム内にそもそもどのようなトラックが存在するかを出力
-                override fun onTracksChanged(tracks: Tracks) {
-                    Log.i(TAG, "--- onTracksChanged: Checking available tracks ---")
-                    var textTrackFound = false
-                    for (group in tracks.groups) {
-                        val typeStr = when(group.type) {
-                            C.TRACK_TYPE_AUDIO -> "AUDIO"
-                            C.TRACK_TYPE_VIDEO -> "VIDEO"
-                            C.TRACK_TYPE_TEXT -> { textTrackFound = true; "TEXT" }
-                            else -> "OTHER"
+                // ★修正: onCues ではなく onMetadata で ID3 トラックに埋め込まれた aribb24 バイナリデータを取得する
+                override fun onMetadata(metadata: Metadata) {
+                    if (!isSubtitleEnabled) return
+                    for (i in 0 until metadata.length()) {
+                        val entry = metadata.get(i)
+                        if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                            val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                            val ptsMs = currentPosition
+                            webViewRef.value?.post {
+                                webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }", null)
+                            }
                         }
-                        Log.i(TAG, "TrackGroup [$typeStr] length=${group.length}, selected=${group.isSelected}")
-                        for (i in 0 until group.length) {
-                            val format = group.getTrackFormat(i)
-                            Log.i(TAG, "  Format $i: mime=${format.sampleMimeType}, lang=${format.language}, codecs=${format.codecs}")
-                        }
-                    }
-                    if (!textTrackFound) {
-                        Log.w(TAG, "No TEXT tracks were found in the stream!")
-                    }
-                }
-
-                override fun onCues(cues: CueGroup) {
-                    val text = cues.cues.joinToString("<br>") { it.text?.toString() ?: "" }
-                    if (text.isNotEmpty()) {
-                        Log.i(TAG, "onCues received subtitle text: $text")
-                    }
-                    webViewRef.value?.post {
-                        webViewRef.value?.evaluateJavascript("showSubtitle('${text.replace("'", "\\'").replace("\n", "<br>")}')", null)
                     }
                 }
             })
@@ -190,12 +160,17 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(isSubtitleEnabled) {
-        Log.i(TAG, "isSubtitleEnabled changed to: $isSubtitleEnabled")
-        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-            .setSelectUndeterminedTextLanguage(true)
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !isSubtitleEnabled)
-            .build()
+    // ★追加: LivePlayerScreen 同様、aribb24.js 用のクロック同期処理を回す
+    LaunchedEffect(exoPlayer, isSubtitleEnabled) {
+        while (true) {
+            if (isSubtitleEnabled && exoPlayer.isPlaying) {
+                val currentPos = exoPlayer.currentPosition
+                webViewRef.value?.post {
+                    webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null)
+                }
+            }
+            delay(100)
+        }
     }
 
     LaunchedEffect(currentQuality) {
@@ -233,7 +208,7 @@ fun VideoPlayerScreen(
 
         if (isHeavyUiReady) {
             ArchivedCommentOverlay(
-                modifier = Modifier.fillMaxSize().alpha(if (isCommentEnabled) 1f else 0f),
+                modifier = Modifier.fillMaxSize(),
                 comments = allComments,
                 currentPositionProvider = { exoPlayer.currentPosition },
                 isPlaying = isPlayerPlaying,
@@ -251,14 +226,18 @@ fun VideoPlayerScreen(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         layoutParams = ViewGroup.LayoutParams(-1, -1)
-                        setBackgroundColor(0)
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
                         loadUrl("file:///android_asset/subtitle_renderer.html")
                         webViewRef.value = this
-                        Log.i(TAG, "Subtitle WebView created and initialized")
+                        Log.i(TAG, "Subtitle WebView created")
                     }
                 },
-                modifier = Modifier.fillMaxSize().alpha(if (isSubtitleEnabled) 1f else 0f)
+                update = { view ->
+                    // View.VISIBLE と View.INVISIBLE で制御することで再ロード不要で即座に切り替わる
+                    view.visibility = if (isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                },
+                modifier = Modifier.fillMaxSize()
             )
         }
 
@@ -278,9 +257,17 @@ fun VideoPlayerScreen(
                     onShowToast("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 onSpeedToggle = { val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(currentSpeed); onShowToast("速度: ${currentSpeed}x") },
-                onSubtitleToggle = { isSubtitleEnabled = !isSubtitleEnabled; onShowToast("字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}") },
+                onSubtitleToggle = {
+                    isSubtitleEnabled = !isSubtitleEnabled
+                    Log.i(TAG, "isSubtitleEnabled toggled to: $isSubtitleEnabled")
+                    onShowToast("字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}")
+                },
                 onQualitySelect = { currentQuality = it; onShowToast("画質: ${it.label}") },
-                onCommentToggle = { isCommentEnabled = !isCommentEnabled; Log.i(TAG, "isCommentEnabled toggled to: $isCommentEnabled"); onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}") }
+                onCommentToggle = {
+                    isCommentEnabled = !isCommentEnabled
+                    Log.i(TAG, "isCommentEnabled toggled to: $isCommentEnabled")
+                    onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}")
+                }
             )
         }
         PlaybackIndicator(indicatorState)
