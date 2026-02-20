@@ -21,6 +21,7 @@
 7. [バグ対応等](#バグ対応等)
 8. [SpecialThanks!](#-specialthanks)
 9. [技術構成](#-技術構成)
+10. [ビルド方法](#-ビルド方法)
 
 ---
 
@@ -149,6 +150,86 @@ Android TV 特有の制約（低スペックなSoC、限られたメモリ）で
 * **Player**: ExoPlayer / Media3
 * **Image**: Coil (Custom Size Downsampling)
 * **DI**: Dagger Hilt
+
+---
+
+## ビルド前の準備
+
+フォントファイルと FFmpeg のバイナリは `.gitignore` に含まれているため、ビルド前に手動での準備が必要です。
+
+### 1. フォントファイルの準備
+
+フォントファイルは、手動でのダウンロードが必要です。
+
+```sh
+FONT_CSS=$(curl -fsSL "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100;300;400;500;600;700" -A "Mozilla/5.0")
+URLS=($(echo "$FONT_CSS" | grep -oP 'url\(\K[^)]+'))
+curl -fsSL "${URLS[0]}" -o app/src/main/res/font/notosansjp_thin.ttf
+curl -fsSL "${URLS[1]}" -o app/src/main/res/font/notosansjp_light.ttf
+curl -fsSL "${URLS[2]}" -o app/src/main/res/font/notosansjp_regular.ttf
+curl -fsSL "${URLS[3]}" -o app/src/main/res/font/notosansjp_medium.ttf
+curl -fsSL "${URLS[4]}" -o app/src/main/res/font/notosansjp_semibold.ttf
+curl -fsSL "${URLS[5]}" -o app/src/main/res/font/notosansjp_bold.ttf
+```
+
+### 2. media-decoder-ffmpeg のセットアップ
+
+FFmpeg デコーダーは以下の手順での準備が必要です。プロジェクトルート直下の `media/` に配置します（`.gitignore` に含まれています）。
+
+#### 2.1 AndroidX Media3 のクローン
+
+プロジェクトのルートディレクトリで実行してください。
+
+```sh
+git clone --branch 1.4.1 --depth 1 https://github.com/androidx/media.git media
+```
+
+#### 2.2 Media3 1.4.1 の不足ファイルを補完
+
+Media3 1.4.1 にはいくつかのファイルが欠落しているため、スタブを作成します。
+
+```sh
+# datasource_httpengine ディレクトリが欠落しているため作成
+mkdir -p media/libraries/datasource_httpengine
+
+# 多くのモジュールで proguard-rules.txt が欠落しているため空ファイルを作成
+for dir in media/libraries/*/; do
+    [ ! -f "$dir/proguard-rules.txt" ] && touch "$dir/proguard-rules.txt"
+done
+```
+
+#### 2.3 FFmpeg のクロスコンパイル
+
+NDK のパスは環境によって異なります。Android Studio の場合は SDK Manager > SDK Tools > NDK (Side by side) からインストールでき、インストール先は以下が一般的です。
+
+| OS | 一般的なパス |
+|---|---|
+| Linux | `~/Android/Sdk/ndk/<version>` |
+| Mac | `~/Library/Android/sdk/ndk/<version>` |
+
+コマンドラインで確認する場合:
+```sh
+ls ~/Android/Sdk/ndk/        # Linux
+ls ~/Library/Android/sdk/ndk/  # Mac
+```
+
+```sh
+# FFmpeg ソースを decoder_ffmpeg が参照する場所に直接クローン
+git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git media/libraries/decoder_ffmpeg/src/main/jni/ffmpeg
+
+# クロスコンパイル（NDK_PATH は自身の環境に合わせて変更してください）
+NDK_PATH=/path/to/ndk/<version>  # 例: ~/Android/Sdk/ndk/28.2.13676358
+HOST_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)  # linux-x86_64 / darwin-x86_64 / darwin-arm64
+MODULE_PATH=media/libraries/decoder_ffmpeg/src/main
+
+bash "${MODULE_PATH}/jni/build_ffmpeg.sh" \
+    "${MODULE_PATH}" \
+    "${NDK_PATH}" \
+    ${HOST_PLATFORM} \
+    21 \
+    vorbis opus flac mp3 ac3 eac3
+```
+
 
 ---
 **Komorebi** の最新の進化をぜひお楽しみください！

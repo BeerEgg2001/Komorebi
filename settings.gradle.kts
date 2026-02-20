@@ -16,11 +16,16 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
 rootProject.name = "Komorebi"
 include(":app")
-// settings.gradle.kts (Kotlin DSL 形式)
-include(":media-decoder-ffmpeg")
-project(":media-decoder-ffmpeg").projectDir = File("/Users/taichimaekawa/Documents/ffmpeg/media/libraries/decoder_ffmpeg")
+
+val mediaDir = file("media")
+if (!mediaDir.exists()) {
+    error("media/ ディレクトリが見つかりません。README の「ビルド前の準備」を参照してください。")
+}
+(gradle as ExtensionAware).extra["androidxMediaModulePrefix"] = "media3-"
+apply(from = file("${mediaDir.canonicalPath}/core_settings.gradle"))

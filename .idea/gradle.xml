@@ -11,7 +11,6 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
-            <option value="$USER_HOME$/Documents/ffmpeg/media/libraries/decoder_ffmpeg" />
           </set>
         </option>
       </GradleProjectSettings>

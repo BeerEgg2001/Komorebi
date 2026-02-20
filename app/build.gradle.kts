@@ -38,7 +38,6 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "4.2.3" // インストールされているCMakeのバージョンに合わせて変更可能
         }
     }
 
@@ -135,6 +134,7 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3_version")
     implementation("androidx.media3:media3-common:$media3_version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
+    implementation(project(":media3-lib-decoder-ffmpeg"))
 
     // --- その他 ---
     implementation("io.coil-kt:coil-compose:2.5.0")
