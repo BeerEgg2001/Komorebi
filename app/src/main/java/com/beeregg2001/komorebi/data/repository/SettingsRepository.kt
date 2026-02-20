@@ -33,13 +33,17 @@ class SettingsRepository @Inject constructor(
         val LIVE_QUALITY = stringPreferencesKey("live_quality")
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
 
+        val LIVE_SUBTITLE_DEFAULT = stringPreferencesKey("live_subtitle_default")
+        val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
+
+        // ★追加: 字幕・コメントのレイヤー設定キー
+        val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
+
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
 
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
-
-        // ★追加: アプリテーマ設定のキー
         val APP_THEME = stringPreferencesKey("app_theme")
     }
 
@@ -57,13 +61,17 @@ class SettingsRepository @Inject constructor(
     val liveQuality: Flow<String> = context.dataStore.data.map { it[LIVE_QUALITY] ?: "1080p-60fps" }
     val videoQuality: Flow<String> = context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
 
+    val liveSubtitleDefault: Flow<String> = context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
+    val videoSubtitleDefault: Flow<String> = context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
+
+    // ★追加: 字幕・コメントのレイヤー設定フロー (初期値はKonomiTVと同じくコメントを上に)
+    val subtitleCommentLayer: Flow<String> = context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
+
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
     val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
 
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
-
-    // ★追加: テーマの Flow (デフォルトは MONOTONE)
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->

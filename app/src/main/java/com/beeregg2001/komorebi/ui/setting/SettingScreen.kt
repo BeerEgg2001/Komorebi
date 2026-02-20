@@ -41,7 +41,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.LocalTime // ★追加
+import java.time.LocalTime
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -51,8 +51,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val repository = remember { SettingsRepository(context) }
     val colors = KomorebiTheme.colors
-
-    // ★修正: currentTimeを取得し、背景ブラシに渡す
     val currentTime = remember { LocalTime.now() }
     val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
 
@@ -69,6 +67,12 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val liveQuality by repository.liveQuality.collectAsState(initial = "1080p-60fps")
     val videoQuality by repository.videoQuality.collectAsState(initial = "1080p-60fps")
+
+    val liveSubtitleDefault by repository.liveSubtitleDefault.collectAsState(initial = "OFF")
+    val videoSubtitleDefault by repository.videoSubtitleDefault.collectAsState(initial = "OFF")
+
+    // ★追加: レイヤー設定の取得
+    val subtitleCommentLayer by repository.subtitleCommentLayer.collectAsState(initial = "CommentOnTop")
 
     val pickupGenre by repository.homePickupGenre.collectAsState(initial = "アニメ")
     val excludePaid by repository.excludePaidBroadcasts.collectAsState(initial = "ON")
@@ -88,6 +92,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var showThemeColorSelection by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
 
+    // ★追加: レイヤー設定ダイアログの表示状態
+    var showLayerSelection by remember { mutableStateOf(false) }
+
     val categories = listOf(Category("接続設定", Icons.Default.CastConnected), Category("再生設定", Icons.Default.PlayCircle), Category("表示設定", Icons.Default.Dashboard), Category("コメント表示設定", Icons.Default.Tv), Category("アプリ情報", Icons.Default.Info))
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
     var isSidebarFocused by remember { mutableStateOf(true) }
@@ -95,6 +102,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     val kIpFocusRequester = remember { FocusRequester() }; val kPortFocusRequester = remember { FocusRequester() }
     val mIpFocusRequester = remember { FocusRequester() }; val mPortFocusRequester = remember { FocusRequester() }
     val liveQFocusRequester = remember { FocusRequester() }; val videoQFocusRequester = remember { FocusRequester() }
+    val liveSubFocusRequester = remember { FocusRequester() }; val videoSubFocusRequester = remember { FocusRequester() }
+    val layerFocusRequester = remember { FocusRequester() } // ★追加: レイヤー設定フォーカス
+
     val themeModeFocusRequester = remember { FocusRequester() }; val themeColorFocusRequester = remember { FocusRequester() }
     val genreFocusRequester = remember { FocusRequester() }; val timeFocusRequester = remember { FocusRequester() }
     val exPaidFocusRequester = remember { FocusRequester() }; val startTabFocusRequester = remember { FocusRequester() }
@@ -109,8 +119,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     LaunchedEffect(selectedCategoryIndex) { scrollState.scrollTo(0) }
     LaunchedEffect(Unit) { delay(300); if (restoreFocusRequester == null) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() } }
 
-    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showPickupTimeSelection, showStartupTabSelection, showThemeModeSelection, showThemeColorSelection, showLicenses) {
-        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showPickupTimeSelection && !showStartupTabSelection && !showThemeModeSelection && !showThemeColorSelection && !showLicenses) {
+    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showPickupTimeSelection, showStartupTabSelection, showThemeModeSelection, showThemeColorSelection, showLicenses, showLayerSelection) {
+        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showPickupTimeSelection && !showStartupTabSelection && !showThemeModeSelection && !showThemeColorSelection && !showLicenses && !showLayerSelection) {
             delay(250)
             if (restoreFocusRequester != null) {
                 if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) { selectedCategoryIndex = restoreCategoryIndex; delay(50) }
@@ -122,7 +132,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val isDarkMode = currentThemeName in listOf("MONOTONE", "WINTER_DARK", "SPRING", "SUMMER", "AUTUMN")
     val themeSeason = when(currentThemeName) { "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT" }
 
-    // ★修正: background(colors.background) を先に塗ってからブラシを重ねる
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -152,7 +161,15 @@ fun SettingsScreen(onBack: () -> Unit) {
             Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
                 when (selectedCategoryIndex) {
                     0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, { t, v -> editingItem = t to v }, kIpFocusRequester, kPortFocusRequester, mIpFocusRequester, mPortFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 0 })
-                    1 -> PlaybackSettingsContent(liveQuality, videoQuality, liveQFocusRequester, videoQFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
+                    1 -> PlaybackSettingsContent(
+                        liveQuality, videoQuality, liveSubtitleDefault, videoSubtitleDefault, subtitleCommentLayer,
+                        liveQFocusRequester, videoQFocusRequester, liveSubFocusRequester, videoSubFocusRequester, layerFocusRequester,
+                        { showLiveQualitySelection = true }, { showVideoQualitySelection = true },
+                        { scope.launch { repository.saveString(SettingsRepository.LIVE_SUBTITLE_DEFAULT, if (liveSubtitleDefault == "ON") "OFF" else "ON") } },
+                        { scope.launch { repository.saveString(SettingsRepository.VIDEO_SUBTITLE_DEFAULT, if (videoSubtitleDefault == "ON") "OFF" else "ON") } },
+                        { showLayerSelection = true },
+                        { restoreFocusRequester = it; restoreCategoryIndex = 1 }
+                    )
                     2 -> HomeDisplaySettingsContent(isDarkMode = isDarkMode, themeSeason = themeSeason, genre = pickupGenre, excludePaid = excludePaid, pickupTime = pickupTime, startupTab = startupTab, themeModeR = themeModeFocusRequester, themeColorR = themeColorFocusRequester, genreR = genreFocusRequester, exPaidR = exPaidFocusRequester, timeR = timeFocusRequester, startTabR = startTabFocusRequester, onThemeMode = { showThemeModeSelection = true }, onThemeColor = { showThemeColorSelection = true }, onG = { showPickupGenreSelection = true }, onExPaid = { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, onTime = { showPickupTimeSelection = true }, onStartTab = { showStartupTabSelection = true }, onClick = { restoreFocusRequester = it; restoreCategoryIndex = 2 })
                     3 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> editingItem = t to v }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefaultDisplayFocusRequester, cSpeedFocusRequester, cSizeFocusRequester, cOpacityFocusRequester, cMaxLinesFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 3 })
                     4 -> AppInfoContent({ showLicenses = true }, appInfoLicenseRequester, { restoreFocusRequester = it; restoreCategoryIndex = 4 })
@@ -178,11 +195,27 @@ fun SettingsScreen(onBack: () -> Unit) {
     if (showPickupGenreSelection) { SelectionDialog("ピックアップジャンルを選択", listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー").map { it to it }, pickupGenre, { showPickupGenreSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) }; showPickupGenreSelection = false }) }
     if (showPickupTimeSelection) { SelectionDialog("ピックアップ時間帯を選択", listOf("自動" to "自動", "朝 (5:00 - 11:00)" to "朝", "昼 (11:00 - 18:00)" to "昼", "夜 (18:00 - 5:00)" to "夜"), pickupTime, { showPickupTimeSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) }; showPickupTimeSelection = false }) }
     if (showStartupTabSelection) { SelectionDialog("起動時のデフォルトタブを選択", listOf("ホーム" to "ホーム", "ライブ" to "ライブ", "ビデオ" to "ビデオ", "番組表" to "番組表", "録画予約" to "録画予約"), startupTab, { showStartupTabSelection = false }, { scope.launch { repository.saveString(SettingsRepository.STARTUP_TAB, it) }; showStartupTabSelection = false }) }
+
+    // ★追加: レイヤー設定のダイアログ
+    if (showLayerSelection) {
+        SelectionDialog(
+            title = "字幕とコメントの表示優先度",
+            options = listOf("実況コメントを上に表示" to "CommentOnTop", "字幕を上に表示" to "SubtitleOnTop"),
+            current = subtitleCommentLayer,
+            onDismiss = { showLayerSelection = false },
+            onSelect = { selectedLayer ->
+                scope.launch { repository.saveString(SettingsRepository.SUBTITLE_COMMENT_LAYER, selectedLayer) }
+                showLayerSelection = false
+            }
+        )
+    }
+
     if (showLicenses) {
         OpenSourceLicensesScreen(onBack = { showLicenses = false })
     }
 }
 
+// 他コンポーネント省略なし
 @Composable
 fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: String, onEdit: (String, String) -> Unit, kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, onClick: (FocusRequester) -> Unit) {
     val colors = KomorebiTheme.colors
@@ -200,13 +233,27 @@ fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: St
 }
 
 @Composable
-fun PlaybackSettingsContent(liveQ: String, videoQ: String, liveR: FocusRequester, videoR: FocusRequester, onL: () -> Unit, onV: () -> Unit, onClick: (FocusRequester) -> Unit) {
+fun PlaybackSettingsContent(
+    liveQ: String, videoQ: String, liveSub: String, videoSub: String, layerOrder: String,
+    liveR: FocusRequester, videoR: FocusRequester, liveSubR: FocusRequester, videoSubR: FocusRequester, layerR: FocusRequester,
+    onL: () -> Unit, onV: () -> Unit, onLiveSubToggle: () -> Unit, onVideoSubToggle: () -> Unit, onLayer: () -> Unit,
+    onClick: (FocusRequester) -> Unit
+) {
     val colors = KomorebiTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("再生設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
         SettingsSection("画質設定") {
-            SettingItem("ライブ視聴画質", StreamQuality.fromValue(liveQ).label, modifier = Modifier.focusRequester(liveR), onClick = { onClick(liveR); onL() })
+            SettingItem("ライブ視聴画質", StreamQuality.fromValue(liveQ).label, Icons.Default.HighQuality, modifier = Modifier.focusRequester(liveR), onClick = { onClick(liveR); onL() })
             SettingItem("録画視聴画質", StreamQuality.fromValue(videoQ).label, modifier = Modifier.focusRequester(videoR), onClick = { onClick(videoR); onV() })
+        }
+        SettingsSection("字幕設定") {
+            SettingItem("ライブ視聴 デフォルト表示", if (liveSub == "ON") "表示" else "非表示", Icons.Default.ClosedCaption, modifier = Modifier.focusRequester(liveSubR), onClick = { onClick(liveSubR); onLiveSubToggle() })
+            SettingItem("録画視聴 デフォルト表示", if (videoSub == "ON") "表示" else "非表示", modifier = Modifier.focusRequester(videoSubR), onClick = { onClick(videoSubR); onVideoSubToggle() })
+        }
+        // ★追加: レイヤー設定セクション
+        SettingsSection("表示レイヤー設定") {
+            val layerText = if (layerOrder == "CommentOnTop") "コメントを上に表示" else "字幕を上に表示"
+            SettingItem("字幕とコメントの重なり", layerText, Icons.Default.Layers, modifier = Modifier.focusRequester(layerR), onClick = { onClick(layerR); onLayer() })
         }
     }
 }
@@ -243,8 +290,8 @@ fun DisplaySettingsContent(def: String, speed: String, size: String, opacity: St
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("コメント表示設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
         SettingsSection("ニコニコ実況") {
-            SettingItem("デフォルト表示", if (def == "ON") "表示" else "非表示", modifier = Modifier.focusRequester(defR), onClick = { onClick(defR); onT() })
-            SettingItem("コメントの速さ", speed, Icons.Default.Chat, modifier = Modifier.focusRequester(spR), onClick = { onClick(spR); onEdit("実況コメントの速さ", speed) })
+            SettingItem("デフォルト表示", if (def == "ON") "表示" else "非表示", Icons.Default.Chat, modifier = Modifier.focusRequester(defR), onClick = { onClick(defR); onT() })
+            SettingItem("コメントの速さ", speed, modifier = Modifier.focusRequester(spR), onClick = { onClick(spR); onEdit("実況コメントの速さ", speed) })
             SettingItem("サイズ倍率", size, modifier = Modifier.focusRequester(szR), onClick = { onClick(szR); onEdit("実況フォントサイズ倍率", size) })
             SettingItem("不透明度", opacity, modifier = Modifier.focusRequester(opR), onClick = { onClick(opR); onEdit("実況コメント不透明度", opacity) })
             SettingItem("最大同時表示行数", max, modifier = Modifier.focusRequester(mxR), onClick = { onClick(mxR); onEdit("実況最大同時表示行数", max) })
@@ -259,7 +306,7 @@ fun AppInfoContent(onShow: () -> Unit, licR: FocusRequester, onClick: (FocusRequ
         Text("Komorebi", style = MaterialTheme.typography.displayMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
         Text("Version 0.4.0 beta", style = MaterialTheme.typography.titleMedium, color = colors.textSecondary)
         Spacer(Modifier.height(48.dp))
-        SettingItem("オープンソースライセンス", "", modifier = Modifier.width(400.dp).focusRequester(licR), onClick = { onClick(licR); onShow() })
+        SettingItem("オープンソースライセンス", "", Icons.Default.Info, modifier = Modifier.width(400.dp).focusRequester(licR), onClick = { onClick(licR); onShow() })
     }
 }
 

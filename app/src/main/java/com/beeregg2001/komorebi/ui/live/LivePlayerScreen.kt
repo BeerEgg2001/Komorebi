@@ -110,6 +110,9 @@ fun LivePlayerScreen(
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
 
+    // ★追加: 設定からレイヤー順序を取得
+    val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -159,7 +162,9 @@ fun LivePlayerScreen(
 
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentQuality by remember(initialQuality) { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
-    val subtitleEnabledState = rememberSaveable { mutableStateOf(false) }
+
+    val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
+    val subtitleEnabledState = rememberSaveable(liveSubtitleDefaultStr) { mutableStateOf(liveSubtitleDefaultStr == "ON") }
     val isSubtitleEnabled by subtitleEnabledState
 
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -171,7 +176,6 @@ fun LivePlayerScreen(
     var sseStatus by remember { mutableStateOf("Standby") }
     var sseDetail by remember { mutableStateOf(AppStrings.SSE_CONNECTING) }
 
-    // ★追加: Compose側で再生状態を把握するための変数
     var isPlayerPlaying by remember { mutableStateOf(false) }
 
     val mainFocusRequester = remember { FocusRequester() }
@@ -206,7 +210,6 @@ fun LivePlayerScreen(
         }.build().apply {
             playWhenReady = true
             addListener(object : Player.Listener {
-                // ★追加: 再生状態の変更を検知
                 override fun onIsPlayingChanged(playing: Boolean) {
                     isPlayerPlaying = playing
                 }
@@ -230,7 +233,6 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★追加: ExoPlayerの一時停止に合わせてDanmakuViewも止める
     LaunchedEffect(isPlayerPlaying) {
         danmakuViewRef.value?.let { view ->
             if (view.isPrepared) {
@@ -368,7 +370,6 @@ fun LivePlayerScreen(
         when (keyCode) {
             NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
                 if (!isSubMenuOpen && !isMiniListOpen) {
-                    // ★追加: ライブ中でもOKボタンで一時停止できるように変更
                     if (exoPlayer.isPlaying) {
                         exoPlayer.pause()
                     } else {
@@ -404,11 +405,45 @@ fun LivePlayerScreen(
                 .alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.MIRAKURUN) 1f else 0f)
         )
 
-        if (isHeavyUiReady && isCommentEnabled) {
-            LiveCommentOverlay(modifier = Modifier.fillMaxSize(), useSoftwareRendering = isEmulator, speed = commentSpeed, opacity = commentOpacity, maxLines = commentMaxLines, onViewCreated = { view ->
-                danmakuViewRef.value = view
-                if (!isPlayerPlaying) view.pause() // 初期化時に止まっていたら同期
-            })
+        // ★追加: 描画レイヤー（コメントと字幕）の順序を動的に切り替える
+        val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
+
+        val commentLayer = @Composable {
+            if (isHeavyUiReady && isCommentEnabled) {
+                LiveCommentOverlay(modifier = Modifier.fillMaxSize(), useSoftwareRendering = isEmulator, speed = commentSpeed, opacity = commentOpacity, maxLines = commentMaxLines, onViewCreated = { view ->
+                    danmakuViewRef.value = view
+                    if (!isPlayerPlaying) view.pause()
+                })
+            }
+        }
+
+        val subtitleLayer = @Composable {
+            if (isHeavyUiReady) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(-1, -1);
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT);
+                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true };
+                            loadUrl("file:///android_asset/subtitle_renderer.html");
+                            webViewRef.value = this
+                        }
+                    },
+                    update = { view ->
+                        view.visibility = if (isSubtitleEnabled && !isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        // 後から描画したものが上になる
+        if (subtitleCommentLayer == "CommentOnTop") {
+            subtitleLayer()
+            commentLayer()
+        } else {
+            commentLayer()
+            subtitleLayer()
         }
 
         AnimatedVisibility(visible = currentStreamSource == StreamSource.KONOMITV && (sseStatus == "Standby" || sseStatus == "Offline") && playerError == null) {
@@ -470,11 +505,6 @@ fun LivePlayerScreen(
                 onQualitySelect = { if (currentQuality != it) { currentQuality = it; retryKey++; onShowToast("画質: ${it.label}") }; onSubMenuToggle(false) },
                 onCloseMenu = { onSubMenuToggle(false) }
             )
-        }
-
-        val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
-        if (isHeavyUiReady && isSubtitleEnabled) {
-            AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (!isUiVisible) 1f else 0f))
         }
 
         if (playerError != null) LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)

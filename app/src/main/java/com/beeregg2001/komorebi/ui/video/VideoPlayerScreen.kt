@@ -3,7 +3,7 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
-import android.util.Base64 // ★追加
+import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
@@ -33,7 +33,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.extractor.metadata.id3.PrivFrame // ★追加
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
@@ -87,6 +87,9 @@ fun VideoPlayerScreen(
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
 
+    // ★追加: 設定からレイヤー順序を取得
+    val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -99,7 +102,10 @@ fun VideoPlayerScreen(
     var currentAudioMode by remember { mutableStateOf(AudioMode.MAIN) }
     var currentSpeed by remember { mutableFloatStateOf(1.0f) }
     var currentQuality by remember { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
-    var isSubtitleEnabled by remember { mutableStateOf(true) }
+
+    val videoSubtitleDefaultStr by settingsViewModel.videoSubtitleDefault.collectAsState()
+    var isSubtitleEnabled by rememberSaveable(videoSubtitleDefaultStr) { mutableStateOf(videoSubtitleDefaultStr == "ON") }
+
     val allComments = remember { mutableStateListOf<ArchivedComment>() }
     val isEmulator = remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(currentQuality) { UUID.randomUUID().toString() }
@@ -112,16 +118,13 @@ fun VideoPlayerScreen(
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(program.recordedVideo.id) {
-        Log.i(TAG, "Fetching comments for video ID: ${program.recordedVideo.id}")
         val fetchedComments = recordViewModel.getArchivedComments(program.recordedVideo.id)
-        Log.i(TAG, "Fetched comments count: ${fetchedComments.size}")
         allComments.clear()
         allComments.addAll(fetchedComments)
     }
 
     val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
     val exoPlayer = remember {
-        Log.i(TAG, "Initializing ExoPlayer")
         val renderersFactory = object : DefaultRenderersFactory(context) {
             init { setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER) }
             override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? = DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
@@ -137,10 +140,8 @@ fun VideoPlayerScreen(
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(playing: Boolean) {
                     isPlayerPlaying = playing
-                    Log.i(TAG, "ExoPlayer isPlaying changed to: $playing")
                 }
 
-                // ★修正: onCues ではなく onMetadata で ID3 トラックに埋め込まれた aribb24 バイナリデータを取得する
                 override fun onMetadata(metadata: Metadata) {
                     if (!isSubtitleEnabled) return
                     for (i in 0 until metadata.length()) {
@@ -160,7 +161,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // ★追加: LivePlayerScreen 同様、aribb24.js 用のクロック同期処理を回す
     LaunchedEffect(exoPlayer, isSubtitleEnabled) {
         while (true) {
             if (isSubtitleEnabled && exoPlayer.isPlaying) {
@@ -174,7 +174,6 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(currentQuality) {
-        Log.i(TAG, "Quality changed to: ${currentQuality.label}")
         val currentPos = exoPlayer.currentPosition; val isPlaying = exoPlayer.isPlaying; exoPlayer.stop(); exoPlayer.clearMediaItems()
         val newUrl = UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)
         exoPlayer.setMediaItem(MediaItem.Builder().setUri(newUrl).setMimeType(MimeTypes.APPLICATION_M3U8).build())
@@ -206,39 +205,51 @@ fun VideoPlayerScreen(
     }) {
         AndroidView(factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } }, modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable())
 
-        if (isHeavyUiReady) {
-            ArchivedCommentOverlay(
-                modifier = Modifier.fillMaxSize(),
-                comments = allComments,
-                currentPositionProvider = { exoPlayer.currentPosition },
-                isPlaying = isPlayerPlaying,
-                isCommentEnabled = isCommentEnabled,
-                commentSpeed = commentSpeed,
-                commentFontSizeScale = commentFontSizeScale,
-                commentOpacity = commentOpacity,
-                commentMaxLines = commentMaxLines,
-                useSoftwareRendering = isEmulator
-            )
+        // ★追加: 描画レイヤー（コメントと字幕）の順序を動的に切り替える
+        val commentLayer = @Composable {
+            if (isHeavyUiReady) {
+                ArchivedCommentOverlay(
+                    modifier = Modifier.fillMaxSize(),
+                    comments = allComments,
+                    currentPositionProvider = { exoPlayer.currentPosition },
+                    isPlaying = isPlayerPlaying,
+                    isCommentEnabled = isCommentEnabled,
+                    commentSpeed = commentSpeed,
+                    commentFontSizeScale = commentFontSizeScale,
+                    commentOpacity = commentOpacity,
+                    commentMaxLines = commentMaxLines,
+                    useSoftwareRendering = isEmulator
+                )
+            }
         }
 
-        if (isHeavyUiReady) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(-1, -1)
-                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
-                        loadUrl("file:///android_asset/subtitle_renderer.html")
-                        webViewRef.value = this
-                        Log.i(TAG, "Subtitle WebView created")
-                    }
-                },
-                update = { view ->
-                    // View.VISIBLE と View.INVISIBLE で制御することで再ロード不要で即座に切り替わる
-                    view.visibility = if (isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+        val subtitleLayer = @Composable {
+            if (isHeavyUiReady) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            layoutParams = ViewGroup.LayoutParams(-1, -1)
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
+                            loadUrl("file:///android_asset/subtitle_renderer.html")
+                            webViewRef.value = this
+                        }
+                    },
+                    update = { view ->
+                        view.visibility = if (isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        // 後から描画したものが上になる
+        if (subtitleCommentLayer == "CommentOnTop") {
+            subtitleLayer()
+            commentLayer()
+        } else {
+            commentLayer()
+            subtitleLayer()
         }
 
         PlayerControls(exoPlayer = exoPlayer, title = program.title, isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen)
@@ -259,13 +270,11 @@ fun VideoPlayerScreen(
                 onSpeedToggle = { val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(currentSpeed); onShowToast("速度: ${currentSpeed}x") },
                 onSubtitleToggle = {
                     isSubtitleEnabled = !isSubtitleEnabled
-                    Log.i(TAG, "isSubtitleEnabled toggled to: $isSubtitleEnabled")
                     onShowToast("字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}")
                 },
                 onQualitySelect = { currentQuality = it; onShowToast("画質: ${it.label}") },
                 onCommentToggle = {
                     isCommentEnabled = !isCommentEnabled
-                    Log.i(TAG, "isCommentEnabled toggled to: $isCommentEnabled")
                     onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}")
                 }
             )
