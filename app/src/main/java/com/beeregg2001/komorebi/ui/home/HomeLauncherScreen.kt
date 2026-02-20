@@ -166,7 +166,6 @@ fun HomeLauncherScreen(
         }
     }
 
-    // ★修正: 親の光を通すために .background() を削除
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (!isFullScreenMode) {
@@ -202,12 +201,18 @@ fun HomeLauncherScreen(
                             }
                         }
                     }
+                    // ★修正: 設定ボタンがフォーカスされた時の色を反転させ、視認性を向上
                     IconButton(
                         onClick = { onSettingsToggle(true) },
                         modifier = Modifier.focusRequester(settingsFocusRequester)
-                            .focusProperties { left = tabFocusRequesters.last(); canFocus = !(selectedTabIndex == 3 && isEpgJumping) }
+                            .focusProperties { left = tabFocusRequesters.last(); canFocus = !(selectedTabIndex == 3 && isEpgJumping) },
+                        colors = IconButtonDefaults.colors(
+                            focusedContainerColor = colors.textPrimary,
+                            focusedContentColor = if (colors.isDark) Color.Black else Color.White,
+                            contentColor = colors.textSecondary
+                        )
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = colors.textSecondary)
+                        Icon(Icons.Default.Settings, contentDescription = "設定")
                     }
                 }
             }
