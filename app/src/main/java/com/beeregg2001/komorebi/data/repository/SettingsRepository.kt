@@ -37,8 +37,10 @@ class SettingsRepository @Inject constructor(
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
 
-        // ★追加: 起動時のデフォルトタブ
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
+
+        // ★追加: アプリテーマ設定のキー
+        val APP_THEME = stringPreferencesKey("app_theme")
     }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
@@ -59,8 +61,10 @@ class SettingsRepository @Inject constructor(
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
     val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
 
-    // ★追加: デフォルトは「ホーム」
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
+
+    // ★追加: テーマの Flow (デフォルトは MONOTONE)
+    val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
@@ -81,7 +85,6 @@ class SettingsRepository @Inject constructor(
         return "$base:$port/"
     }
 
-    // ★追加: 起動時に一度だけ確実に設定を読み取るための関数
     suspend fun getStartupTabOnce(): String {
         val prefs = context.dataStore.data.first()
         return prefs[STARTUP_TAB] ?: "ホーム"

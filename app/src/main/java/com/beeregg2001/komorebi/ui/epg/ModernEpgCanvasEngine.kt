@@ -39,12 +39,11 @@ import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 import java.time.Duration
 import java.time.OffsetDateTime
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.delay
-
-private const val TAG = "EPG_DEBUG_ENGINE"
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -53,6 +52,7 @@ fun ModernEpgCanvasEngine_Smooth(
     logoUrls: List<String>,
     topTabFocusRequester: FocusRequester,
     headerFocusRequester: FocusRequester,
+    jumpButtonFocusRequester: FocusRequester, // ★引数で受け取る
     gridFocusRequester: FocusRequester,
     onProgramSelected: (EpgProgram) -> Unit,
     jumpTargetTime: OffsetDateTime?,
@@ -66,13 +66,12 @@ fun ModernEpgCanvasEngine_Smooth(
     reserves: List<ReserveItem> = emptyList()
 ) {
     val density = LocalDensity.current
-    val config = remember(density) { EpgConfig(density) }
+    val colors = KomorebiTheme.colors // ★追加
+    val config = remember(density, colors) { EpgConfig(density, colors) }
     val epgState = remember { EpgState(config) }
     val textMeasurer = rememberTextMeasurer()
     val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
-
-    // ★追加: 時計アイコンのPainterを生成
     val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
 
     val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
@@ -88,23 +87,20 @@ fun ModernEpgCanvasEngine_Smooth(
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
     var hasRenderedFirstFrame by remember { mutableStateOf(false) }
     var isJumping by remember { mutableStateOf(false) }
-
     var isLongPressHandled by remember { mutableStateOf(false) }
 
-    // 初期配置
     LaunchedEffect(epgState.hasData) {
         if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
     }
 
-    // ヘッダー表示時のフォーカス制御
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
             val index = pendingHeaderFocusIndex!!
-            delay(50) // 再構築を待機
+            delay(50)
             if (index == -2) {
-                topTabFocusRequester.safeRequestFocus(TAG)
+                topTabFocusRequester.safeRequestFocus("Epg_TopTab")
             } else if (index in subTabFocusRequesters.indices) {
-                subTabFocusRequesters[index].safeRequestFocus(TAG)
+                subTabFocusRequesters[index].safeRequestFocus("Epg_SubTab")
             }
             pendingHeaderFocusIndex = null
         }
@@ -124,7 +120,6 @@ fun ModernEpgCanvasEngine_Smooth(
         val h = constraints.maxHeight.toFloat()
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
 
-        // ジャンプ処理
         LaunchedEffect(jumpTargetTime) {
             if (jumpTargetTime != null && epgState.hasData) {
                 isJumping = true
@@ -146,11 +141,15 @@ fun ModernEpgCanvasEngine_Smooth(
 
         val animValues = EpgAnimValues(scrollX, scrollY, animX, animY, animH)
 
-        Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        Column(modifier = Modifier.fillMaxSize().background(colors.background)) { // ★修正
             AnimatedVisibility(visible = isHeaderVisible, enter = expandVertically(), exit = shrinkVertically()) {
                 EpgHeaderSection(
-                    topTabFocusRequester = topTabFocusRequester, headerFocusRequester = headerFocusRequester, gridFocusRequester = gridFocusRequester,
-                    subTabFocusRequesters = subTabFocusRequesters, availableBroadcastingTypes = visibleTabs,
+                    topTabFocusRequester = topTabFocusRequester,
+                    headerFocusRequester = headerFocusRequester,
+                    jumpMenuFocusRequester = jumpButtonFocusRequester, // ★引数を渡す
+                    gridFocusRequester = gridFocusRequester,
+                    subTabFocusRequesters = subTabFocusRequesters,
+                    availableBroadcastingTypes = visibleTabs,
                     onEpgJumpMenuStateChanged = onEpgJumpMenuStateChanged, onTypeChanged = onTypeChanged, currentType = currentType
                 )
             }
@@ -168,8 +167,7 @@ fun ModernEpgCanvasEngine_Smooth(
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) {
                                 if (event.nativeKeyEvent.isLongPress) {
-                                    isJumping = true
-                                    isLongPressHandled = true
+                                    isJumping = true; isLongPressHandled = true
                                     epgState.jumpToNow()
                                     epgState.updatePositions(0, ChronoUnit.MINUTES.between(epgState.baseTime, OffsetDateTime.now()).toInt())
                                     return@onKeyEvent true
@@ -178,12 +176,10 @@ fun ModernEpgCanvasEngine_Smooth(
                             }
                             if (event.type == KeyEventType.KeyUp) {
                                 if (isLongPressHandled) {
-                                    isLongPressHandled = false
-                                    isJumping = false
+                                    isLongPressHandled = false; isJumping = false
                                     return@onKeyEvent true
                                 } else {
-                                    isJumping = false
-                                    isHeaderVisible = true
+                                    isJumping = false; isHeaderVisible = true
                                     pendingHeaderFocusIndex = visibleTabs.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
                                     return@onKeyEvent true
                                 }
@@ -224,13 +220,9 @@ fun ModernEpgCanvasEngine_Smooth(
                     Spacer(modifier = Modifier.fillMaxSize().drawWithCache {
                         onDrawBehind {
                             drawer.draw(
-                                drawScope = this,
-                                state = epgState,
-                                animValues = animValues,
-                                logoPainters = logoPainters,
-                                isGridFocused = isContentFocused || epgState.hasData,
-                                reserveMap = reserveMap,
-                                clockPainter = clockPainter // ★追加: 時計アイコンを渡す
+                                drawScope = this, state = epgState, animValues = animValues,
+                                logoPainters = logoPainters, isGridFocused = isContentFocused || epgState.hasData,
+                                reserveMap = reserveMap, clockPainter = clockPainter
                             )
                             hasRenderedFirstFrame = true
                         }
@@ -238,8 +230,8 @@ fun ModernEpgCanvasEngine_Smooth(
                 }
 
                 if (uiState is EpgUiState.Loading || epgState.isCalculating || (!hasRenderedFirstFrame && !isJumping)) {
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.5f)), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.White)
+                    Box(Modifier.fillMaxSize().background(colors.background.copy(alpha = 0.5f)), contentAlignment = Alignment.Center) { // ★修正
+                        CircularProgressIndicator(color = colors.textPrimary) // ★修正
                     }
                 }
             }
@@ -251,6 +243,7 @@ fun ModernEpgCanvasEngine_Smooth(
 fun EpgHeaderSection(
     topTabFocusRequester: FocusRequester,
     headerFocusRequester: FocusRequester,
+    jumpMenuFocusRequester: FocusRequester, // ★外部から受け取る
     gridFocusRequester: FocusRequester,
     subTabFocusRequesters: List<FocusRequester>,
     availableBroadcastingTypes: List<Pair<String, String>>,
@@ -258,12 +251,12 @@ fun EpgHeaderSection(
     onTypeChanged: (String) -> Unit,
     currentType: String
 ) {
-    val jumpMenuFocusRequester = remember { FocusRequester() }
+    val colors = KomorebiTheme.colors // ★追加
     val currentTypeIndex = remember(currentType, availableBroadcastingTypes) {
         availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
     }
 
-    Box(modifier = Modifier.fillMaxWidth().height(48.dp).background(Color(0xFF0A0A0A))) {
+    Box(modifier = Modifier.fillMaxWidth().height(48.dp).background(colors.surface)) { // ★修正
         Row(modifier = Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.Center) {
             availableBroadcastingTypes.forEachIndexed { index, (label, apiValue) ->
                 var isTabFocused by remember { mutableStateOf(false) }
@@ -293,12 +286,12 @@ fun EpgHeaderSection(
                                 onTypeChanged(apiValue); true
                             } else false
                         }
-                        .focusable().background(if (isTabFocused) Color.White else Color.Transparent, RectangleShape),
+                        .focusable().background(if (isTabFocused) colors.textPrimary else Color.Transparent, RectangleShape), // ★修正
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(label, color = if (isTabFocused) Color.Black else Color.White, fontSize = 15.sp)
+                    Text(label, color = if (isTabFocused) (if(colors.isDark) Color.Black else Color.White) else colors.textPrimary, fontSize = 15.sp) // ★修正
                     if (currentType == apiValue && !isTabFocused) {
-                        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.6f).height(3.dp).background(Color.White))
+                        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.6f).height(3.dp).background(colors.accent)) // ★修正
                     }
                 }
             }
@@ -308,7 +301,7 @@ fun EpgHeaderSection(
         Box(
             modifier = Modifier.align(Alignment.CenterStart).width(110.dp).fillMaxHeight()
                 .onFocusChanged { isJumpBtnFocused = it.isFocused }
-                .focusRequester(jumpMenuFocusRequester)
+                .focusRequester(jumpMenuFocusRequester) // ★渡された Requester を使用
                 .focusProperties {
                     right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default
                     down = gridFocusRequester
@@ -326,10 +319,10 @@ fun EpgHeaderSection(
                         onEpgJumpMenuStateChanged(true); true
                     } else false
                 }
-                .focusable().background(if (isJumpBtnFocused) Color.White else Color.Transparent),
+                .focusable().background(if (isJumpBtnFocused) colors.textPrimary else Color.Transparent), // ★修正
             contentAlignment = Alignment.Center
         ) {
-            Text("日時指定", color = if (isJumpBtnFocused) Color.Black else Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text("日時指定", color = if (isJumpBtnFocused) (if(colors.isDark) Color.Black else Color.White) else colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 15.sp) // ★修正
         }
     }
 }

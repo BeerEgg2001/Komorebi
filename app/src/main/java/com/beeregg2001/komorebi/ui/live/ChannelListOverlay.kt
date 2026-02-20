@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -20,8 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -31,11 +30,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -50,18 +48,28 @@ fun ChannelListOverlay(
     focusRequester: FocusRequester
 ) {
     val focusManager = LocalFocusManager.current
+    val colors = KomorebiTheme.colors
 
-    // タブの定義順序
-    val tabs = listOf("GR", "BS", "CS", "BS4K", "SKY")
+    // 表示可能なタブをフィルタリング
+    val allTabs = listOf("GR", "BS", "CS", "BS4K", "SKY")
+    val availableTabKeys = remember(groupedChannels) {
+        allTabs.filter { groupedChannels.containsKey(it) }
+    }
 
     // 現在のチャンネルが含まれるタブを初期選択にする
     val initialTab = groupedChannels.entries.find { entry ->
         entry.value.any { it.id == currentChannelId }
-    }?.key ?: tabs.first()
+    }?.key ?: availableTabKeys.firstOrNull() ?: ""
 
     var selectedTab by remember { mutableStateOf(initialTab) }
     val currentChannels = groupedChannels[selectedTab] ?: emptyList()
     val listState = rememberLazyListState()
+
+    // タブに対応する FocusRequester リスト
+    val tabFocusRequesters = remember(availableTabKeys) {
+        List(availableTabKeys.size) { FocusRequester() }
+    }
+    val selectedTabIndex = availableTabKeys.indexOf(selectedTab).coerceAtLeast(0)
 
     // タブ切り替え時にリストを先頭（または選択中チャンネル）に戻す
     LaunchedEffect(selectedTab) {
@@ -80,24 +88,34 @@ fun ChannelListOverlay(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color.Black.copy(alpha = 0.6f),
-                        Color.Black.copy(alpha = 0.9f),
-                        Color.Black
+                        // ★修正: 黒の固定値からテーマ背景色ベースのグラデーションへ
+                        colors.background.copy(alpha = 0.6f),
+                        colors.background.copy(alpha = 0.9f),
+                        colors.background
                     ),
                     startY = 0f,
                     endY = 500f
                 )
             )
-            .padding(bottom = 8.dp, top = 24.dp)
+            .padding(bottom = 8.dp, top = 16.dp)
     ) {
-        // --- 1. 放送波種別タブ ---
+        // --- 1. 放送波種別タブ (下線タイプ & フォーカス維持修正) ---
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.Center
         ) {
-            tabs.forEach { tabKey ->
-                if (groupedChannels.containsKey(tabKey)) {
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                modifier = Modifier.widthIn(max = 800.dp),
+                indicator = { tabPositions, doesTabRowHaveFocus ->
+                    TabRowDefaults.UnderlinedIndicator(
+                        currentTabPosition = tabPositions[selectedTabIndex],
+                        doesTabRowHaveFocus = doesTabRowHaveFocus,
+                        activeColor = Color.White
+                    )
+                }
+            ) {
+                availableTabKeys.forEachIndexed { index, tabKey ->
                     val label = when (tabKey) {
                         "GR" -> "地デジ"
                         "BS" -> "BS"
@@ -107,20 +125,32 @@ fun ChannelListOverlay(
                         else -> tabKey
                     }
 
-                    TypeTabItem(
-                        label = label,
-                        isSelected = selectedTab == tabKey,
-                        onFocus = { selectedTab = tabKey }
-                    )
+                    val isSelected = selectedTab == tabKey
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val isFocused by interactionSource.collectIsFocusedAsState()
 
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Tab(
+                        selected = isSelected,
+                        onFocus = { selectedTab = tabKey },
+                        modifier = Modifier.focusRequester(tabFocusRequesters[index]),
+                        interactionSource = interactionSource
+                    ) {
+                        // ★修正: Unresolved reference を回避するため Text 側で色を指定
+                        Text(
+                            text = label,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected || isFocused) Color.White else Color.Gray
+                        )
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // --- 2. チャンネルリスト ---
+        // --- 2. チャンネルリスト (上に移動した際に現在選択中のタブへ戻る設定) ---
         LazyRow(
             state = listState,
             contentPadding = PaddingValues(horizontal = 48.dp),
@@ -128,11 +158,15 @@ fun ChannelListOverlay(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(130.dp)
-                // ★追加: 戻るキーで上のタブへフォーカス移動
+                // ★修正: リストから上に移動したとき、常に地デジではなく「現在選択中のタブ」へ移動させる
+                .focusProperties {
+                    up = tabFocusRequesters[selectedTabIndex]
+                }
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
-                        focusManager.moveFocus(FocusDirection.Up)
-                        return@onKeyEvent true // イベントを消費して、ここでは閉じない
+                        // 戻るキーでも選択中のタブにフォーカスを戻す
+                        tabFocusRequesters[selectedTabIndex].requestFocus()
+                        return@onKeyEvent true
                     }
                     false
                 }
@@ -169,34 +203,32 @@ fun ChannelCardItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val colors = KomorebiTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    // フォーカス時のスケールアニメーション
     val scale by animateFloatAsState(
         targetValue = if (isFocused) 1.1f else 1.0f,
         animationSpec = tween(200),
         label = "scale"
     )
 
-    // 背景色: フォーカス時は白、視聴中はグレー、通常は暗いグレー
+    // ★修正: カード背景色のテーマ化
     val backgroundColor by animateColorAsState(
-        targetValue = if (isFocused) Color.White
-        else if (isSelected) Color(0xFF424242)
-        else Color(0xFF222222),
-        animationSpec = tween(200),
-        label = "bgColor"
+        targetValue = if (isFocused) colors.textPrimary
+        else if (isSelected) colors.surface
+        else colors.surface.copy(alpha = 0.6f),
+        animationSpec = tween(200), label = "bgColor"
     )
 
-    // 文字色: フォーカス時は黒、それ以外は白
+    // ★修正: 文字色のテーマ化
     val contentColor by animateColorAsState(
-        targetValue = if (isFocused) Color.Black else Color.White,
+        targetValue = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.textPrimary,
         label = "contentColor"
     )
 
-    // ボーダー設定: フォーカス時のみ太い白枠を表示
     val borderWidth = if (isFocused) 3.dp else 0.dp
-    val borderColor = if (isFocused) Color.White else Color.Transparent
+    val borderColor = if (isFocused) colors.accent else Color.Transparent
 
     Box(
         modifier = modifier
@@ -264,56 +296,14 @@ fun ChannelCardItem(
             }
         }
 
-        // 視聴中インジケータ
         if (isSelected) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .offset(x = 4.dp, y = (-4).dp)
                     .size(8.dp)
-                    .background(Color.White, RoundedCornerShape(50))
+                    .background(colors.accent, RoundedCornerShape(50))
             )
         }
-    }
-}
-
-@Composable
-fun TypeTabItem(
-    label: String,
-    isSelected: Boolean,
-    onFocus: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    if (isFocused) {
-        LaunchedEffect(Unit) {
-            onFocus()
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                if (isFocused) Color.White
-                else if (isSelected) Color(0xFF616161)
-                else Color.White.copy(0.1f)
-            )
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { onFocus() }
-            )
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = if (isFocused) Color.Black else Color.White
-        )
     }
 }

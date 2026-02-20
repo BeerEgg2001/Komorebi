@@ -43,6 +43,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -60,17 +61,17 @@ fun RecordListScreen(
     onLoadMore: () -> Unit,
     isLoadingInitial: Boolean,
     isLoadingMore: Boolean,
-    customTitle: String? = null, // ★追加: シリーズ名を受け取る
+    customTitle: String? = null,
     onBack: () -> Unit,
     onSearch: (String) -> Unit
 ) {
+    val colors = KomorebiTheme.colors // ★追加
     var searchQuery by remember { mutableStateOf("") }
     var activeSearchQuery by remember { mutableStateOf("") }
     var isSearchBarVisible by remember { mutableStateOf(false) }
     var isKeyboardActive by remember { mutableStateOf(false) }
     var isBackButtonFocused by remember { mutableStateOf(false) }
 
-    // ★追加: 表示するタイトルを管理（手動で検索されたらシリーズ名を消すため）
     var currentDisplayTitle by remember(customTitle) { mutableStateOf(customTitle) }
 
     val scope = rememberCoroutineScope()
@@ -89,7 +90,7 @@ fun RecordListScreen(
     val executeSearch = { query: String ->
         isKeyboardActive = false
         activeSearchQuery = query
-        currentDisplayTitle = null // ★手動で検索された場合はシリーズ名を破棄する
+        currentDisplayTitle = null
         onSearch(query)
         keyboardController?.hide()
         isSearchBarVisible = false
@@ -151,7 +152,7 @@ fun RecordListScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
+            .background(colors.background) // ★修正
             .padding(horizontal = 40.dp, vertical = 20.dp)
     ) {
         Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
@@ -161,7 +162,7 @@ fun RecordListScreen(
                         onClick = { handleBackPress() },
                         modifier = Modifier.focusRequester(searchCloseButtonFocusRequester)
                     ) {
-                        Icon(Icons.Default.ArrowBack, "閉じる", tint = Color.White)
+                        Icon(Icons.Default.ArrowBack, "閉じる", tint = colors.textPrimary) // ★修正
                     }
                     Spacer(Modifier.width(16.dp))
 
@@ -192,14 +193,14 @@ fun RecordListScreen(
                                 down = if (limitedHistory.isNotEmpty()) historyListFocusRequester else firstItemFocusRequester
                             },
                         colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Color.White.copy(alpha = 0.1f),
-                            focusedContainerColor = Color.White.copy(alpha = 0.15f)
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f), // ★修正
+                            focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f) // ★修正
                         ),
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
                         border = ClickableSurfaceDefaults.border(
-                            border = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))),
-                            focusedBorder = Border(BorderStroke(2.dp, Color.White))
+                            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.3f))), // ★修正
+                            focusedBorder = Border(BorderStroke(2.dp, colors.accent)) // ★修正
                         )
                     ) {
                         Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -209,8 +210,8 @@ fun RecordListScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusRequester(innerTextFieldFocusRequester),
-                                textStyle = TextStyle(color = Color.White, fontSize = 20.sp),
-                                cursorBrush = SolidColor(Color.White),
+                                textStyle = TextStyle(color = colors.textPrimary, fontSize = 20.sp), // ★修正
+                                cursorBrush = SolidColor(colors.textPrimary), // ★修正
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) }),
@@ -222,7 +223,7 @@ fun RecordListScreen(
                                         if (searchQuery.isEmpty()) {
                                             Text(
                                                 text = "番組名を検索...",
-                                                color = Color.Gray,
+                                                color = colors.textSecondary, // ★修正
                                                 fontSize = 18.sp
                                             )
                                         }
@@ -234,7 +235,7 @@ fun RecordListScreen(
                     }
                     Spacer(Modifier.width(16.dp))
                     IconButton(onClick = { executeSearch(searchQuery) }) {
-                        Icon(Icons.Default.Search, "検索実行", tint = Color.White)
+                        Icon(Icons.Default.Search, "検索実行", tint = colors.textPrimary) // ★修正
                     }
                 }
             } else {
@@ -245,22 +246,21 @@ fun RecordListScreen(
                             .focusRequester(backButtonFocusRequester)
                             .onFocusChanged { isBackButtonFocused = it.isFocused }
                     ) {
-                        Icon(Icons.Default.ArrowBack, "戻る", tint = Color.White)
+                        Icon(Icons.Default.ArrowBack, "戻る", tint = colors.textPrimary) // ★修正
                     }
                     Spacer(Modifier.width(16.dp))
 
-                    // ★修正: シリーズ名(currentDisplayTitle)が存在すればそれを表示
                     Text(
                         text = currentDisplayTitle ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
                         style = MaterialTheme.typography.headlineSmall,
-                        fontSize = 20.sp, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)
+                        fontSize = 20.sp, color = colors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f) // ★修正
                     )
 
                     IconButton(
                         onClick = { isSearchBarVisible = true },
                         modifier = Modifier.focusRequester(searchOpenButtonFocusRequester)
                     ) {
-                        Icon(Icons.Default.Search, "検索", tint = Color.White)
+                        Icon(Icons.Default.Search, "検索", tint = colors.textPrimary) // ★修正
                     }
                 }
             }
@@ -271,7 +271,7 @@ fun RecordListScreen(
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (isLoadingInitial && recentRecordings.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Color.White)
+                    CircularProgressIndicator(color = colors.textPrimary) // ★修正
                 }
             } else {
                 TvLazyVerticalGrid(
@@ -308,7 +308,7 @@ fun RecordListScreen(
                     if (isLoadingMore) {
                         item(span = { TvGridItemSpan(maxLineSpan) }) {
                             Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = Color.White)
+                                CircularProgressIndicator(color = colors.textPrimary) // ★修正
                             }
                         }
                     }
@@ -320,8 +320,8 @@ fun RecordListScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 64.dp)
-                        .background(Color(0xFF1E1E1E), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                        .background(colors.surface, RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)) // ★修正
+                        .border(1.dp, colors.textPrimary.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)) // ★修正
                         .align(Alignment.TopCenter)
                 ) {
                     TvLazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
@@ -343,20 +343,20 @@ fun RecordListScreen(
                                     },
                                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
                                 border = ClickableSurfaceDefaults.border(
-                                    focusedBorder = Border(BorderStroke(2.dp, Color.White))
+                                    focusedBorder = Border(BorderStroke(2.dp, colors.accent)) // ★修正
                                 ),
                                 colors = ClickableSurfaceDefaults.colors(
                                     containerColor = Color.Transparent,
-                                    focusedContainerColor = Color.White.copy(alpha = 0.15f)
+                                    focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f) // ★修正
                                 )
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.History, null, Modifier.size(18.dp), tint = Color.Gray)
+                                    Icon(Icons.Default.History, null, Modifier.size(18.dp), tint = colors.textSecondary) // ★修正
                                     Spacer(Modifier.width(12.dp))
-                                    Text(text = historyItem, color = Color.White, fontSize = 16.sp)
+                                    Text(text = historyItem, color = colors.textPrimary, fontSize = 16.sp) // ★修正
                                 }
                             }
                         }

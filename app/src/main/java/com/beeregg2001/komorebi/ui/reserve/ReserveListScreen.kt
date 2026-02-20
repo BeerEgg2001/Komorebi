@@ -22,6 +22,7 @@ import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.components.ReserveCard
 import com.beeregg2001.komorebi.viewmodel.ReserveViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
 private const val TAG = "ReserveListScreen"
 
@@ -30,7 +31,6 @@ private const val TAG = "ReserveListScreen"
 @Composable
 fun ReserveListScreen(
     onBack: () -> Unit,
-    // ★修正: クリック時は詳細画面へ遷移する（MainRootでハンドリング）
     onProgramClick: (ReserveItem) -> Unit,
     konomiIp: String,
     konomiPort: String,
@@ -39,11 +39,12 @@ fun ReserveListScreen(
 ) {
     val reserves by viewModel.reserves.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val colors = KomorebiTheme.colors // ★追加
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
+            .background(colors.background) // ★修正
             .padding(horizontal = 40.dp, vertical = 20.dp)
             .onKeyEvent { event ->
                 if (event.key == Key.Back) {
@@ -56,7 +57,6 @@ fun ReserveListScreen(
                 false
             }
     ) {
-        // ヘッダー
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(bottom = 20.dp)
@@ -64,50 +64,42 @@ fun ReserveListScreen(
             Text(
                 text = "放送が近い録画予約",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
+                color = colors.textPrimary, // ★修正
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
         }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Color.White)
+                CircularProgressIndicator(color = colors.textPrimary) // ★修正
             }
         } else if (reserves.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
-                    .then(
-                        if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
-                    )
+                    .then(if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier)
                     .focusable(),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "現在、予約されている番組はありません。",
-                    color = Color.Gray,
+                    color = colors.textSecondary, // ★修正
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
         } else {
-            // リストがある場合
             TvLazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 40.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
-                    .then(
-                        if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier
-                    )
+                    .then(if (contentFirstItemRequester != null) Modifier.focusRequester(contentFirstItemRequester) else Modifier)
             ) {
                 items(reserves) { program ->
                     ReserveCard(
-                        item = program,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        // クリック時に詳細画面へ
+                        item = program, konomiIp = konomiIp, konomiPort = konomiPort,
                         onClick = { onProgramClick(program) }
                     )
                 }

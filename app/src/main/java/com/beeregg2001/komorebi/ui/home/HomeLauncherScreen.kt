@@ -31,6 +31,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
 private const val TAG = "HomeLauncher"
 
@@ -46,7 +47,7 @@ fun DigitalClock(modifier: Modifier = Modifier) {
     }
     Text(
         text = currentTime.format(DateTimeFormatter.ofPattern("HH:mm")),
-        color = Color.White,
+        color = KomorebiTheme.colors.textPrimary,
         style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp),
         modifier = modifier
     )
@@ -91,6 +92,7 @@ fun HomeLauncherScreen(
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {}
 ) {
+    val colors = KomorebiTheme.colors
     val tabs = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
 
@@ -165,7 +167,7 @@ fun HomeLauncherScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
+    Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (!isFullScreenMode) {
                 Row(
@@ -181,8 +183,8 @@ fun HomeLauncherScreen(
                         indicator = { tabPositions, doesTabRowHaveFocus ->
                             TabRowDefaults.UnderlinedIndicator(
                                 currentTabPosition = tabPositions[selectedTabIndex],
-                                doesTabRowHaveFocus = doesTabRowHaveFocus, activeColor = Color.White
-                            )
+                                doesTabRowHaveFocus = doesTabRowHaveFocus,
+                                activeColor = colors.accent                            )
                         }
                     ) {
                         tabs.forEachIndexed { index, title ->
@@ -192,7 +194,11 @@ fun HomeLauncherScreen(
                                 modifier = Modifier.focusRequester(tabFocusRequesters[index])
                                     .focusProperties { down = contentFirstItemRequesters[index]; canFocus = !(selectedTabIndex == 3 && isEpgJumping) }
                             ) {
-                                Text(text = title, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium, color = if (selectedTabIndex == index) Color.White else Color.Gray)
+                                Text(text = title,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (selectedTabIndex == index) colors.textPrimary else colors.textSecondary
+                                )
                             }
                         }
                     }
@@ -201,7 +207,7 @@ fun HomeLauncherScreen(
                         modifier = Modifier.focusRequester(settingsFocusRequester)
                             .focusProperties { left = tabFocusRequesters.last(); canFocus = !(selectedTabIndex == 3 && isEpgJumping) }
                     ) {
-                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = Color.Gray)
+                        Icon(Icons.Default.Settings, contentDescription = "設定", tint = colors.textSecondary)
                     }
                 }
             }

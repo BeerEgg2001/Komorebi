@@ -14,15 +14,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.*
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -50,17 +49,15 @@ fun EpgNavigationContainer(
 ) {
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     val gridFocusRequester = remember { FocusRequester() }
+
+    // ★追加: 日時指定ボタン専用の FocusRequester
+    val jumpButtonRequester = remember { FocusRequester() }
+
     var isInternalJumping by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val colors = KomorebiTheme.colors // ★追加
 
     LaunchedEffect(isInternalJumping) { onJumpStateChanged(isInternalJumping) }
-
-    LaunchedEffect(isJumpMenuOpen) {
-        if (!isJumpMenuOpen && isInternalJumping) {
-            repeat(15) { runCatching { gridFocusRequester.requestFocus() }; delay(48) }
-            isInternalJumping = false
-        }
-    }
 
     var previousProgram by remember { mutableStateOf<EpgProgram?>(null) }
     LaunchedEffect(selectedProgram) {
@@ -70,10 +67,13 @@ fun EpgNavigationContainer(
         previousProgram = selectedProgram
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = Modifier.fillMaxSize().background(colors.background)) { // ★修正: Color.Black -> colors.background
         ModernEpgCanvasEngine_Smooth(
             uiState = uiState, logoUrls = logoUrls,
-            topTabFocusRequester = mainTabFocusRequester, headerFocusRequester = contentRequester, gridFocusRequester = gridFocusRequester,
+            topTabFocusRequester = mainTabFocusRequester,
+            headerFocusRequester = contentRequester,
+            jumpButtonFocusRequester = jumpButtonRequester, // ★渡す
+            gridFocusRequester = gridFocusRequester,
             onProgramSelected = { onProgramSelected(it) }, jumpTargetTime = jumpTargetTime, onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged, currentType = currentType, onTypeChanged = onTypeChanged,
             availableTypes = availableTypes, restoreChannelId = restoreChannelId,
@@ -82,7 +82,7 @@ fun EpgNavigationContainer(
 
         if (selectedProgram != null) {
             val detailRequester = remember { FocusRequester() }
-            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).zIndex(2f)) {
+            Box(modifier = Modifier.fillMaxSize().background(colors.background.copy(alpha = 0.8f)).zIndex(2f)) { // ★修正
                 ProgramDetailScreen(
                     program = selectedProgram,
                     onPlayClick = { onNavigateToPlayer(it.channel_id, mirakurunIp, mirakurunPort) },
@@ -99,7 +99,7 @@ fun EpgNavigationContainer(
 
         AnimatedVisibility(
             visible = isJumpMenuOpen, enter = fadeIn(), exit = fadeOut(),
-            modifier = Modifier.zIndex(10f).focusProperties { exit = { gridFocusRequester } }
+            modifier = Modifier.zIndex(10f) // ★引き算: focusProperties を削除し干渉を防ぐ
         ) {
             val now = remember { OffsetDateTime.now() }
             EpgJumpMenu(
@@ -107,12 +107,15 @@ fun EpgNavigationContainer(
                 onSelect = { selectedTime ->
                     scope.launch {
                         isInternalJumping = true; jumpTargetTime = selectedTime
+                        onJumpMenuStateChanged(false)
+                        delay(50)
                         gridFocusRequester.safeRequestFocus("EpgNav_JumpSelect")
-                        delay(100); onJumpMenuStateChanged(false)
                     }
                 },
                 onDismiss = {
-                    onJumpMenuStateChanged(false); contentRequester.safeRequestFocus("EpgNav_JumpDismiss")
+                    onJumpMenuStateChanged(false)
+                    // ★明示的ルーティング: メニューを閉じたら直ちにボタンへフォーカスを戻す
+                    jumpButtonRequester.safeRequestFocus("EpgNav_JumpDismiss")
                 }
             )
         }

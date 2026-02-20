@@ -26,6 +26,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
 @Composable
 fun TopSubMenuUI(
@@ -46,6 +47,7 @@ fun TopSubMenuUI(
     onQualitySelect: (StreamQuality) -> Unit,
     onCloseMenu: () -> Unit
 ) {
+    val colors = KomorebiTheme.colors // ★追加
     var isQualityMode by remember { mutableStateOf(false) }
     val qualityFocusRequester = remember { FocusRequester() }
     val mainQualityButtonRequester = remember { FocusRequester() }
@@ -66,7 +68,7 @@ fun TopSubMenuUI(
         modifier = Modifier
             .fillMaxWidth()
             .wrapContentHeight()
-            .background(Brush.verticalGradient(listOf(Color.Black.copy(0.9f), Color.Transparent)))
+            .background(Brush.verticalGradient(listOf(colors.background.copy(0.9f), Color.Transparent))) // ★修正
             .padding(top = 24.dp, bottom = 60.dp)
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
@@ -97,16 +99,16 @@ fun TopSubMenuUI(
                     .padding(horizontal = 32.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
-                // ★修正: 録画ボタンに focusRequester を付与して初期フォーカスにする
+                // 録画ボタン
                 MenuTileItem(
                     title = if (isRecording) "録画停止" else "録画開始",
                     icon = if (isRecording) Icons.Default.StopCircle else Icons.Default.RadioButtonChecked,
                     subtitle = if (isRecording) "録画中" else "番組を録画",
                     onClick = onRecordToggle,
                     modifier = Modifier
-                        .focusRequester(focusRequester) // 初期フォーカス位置
+                        .focusRequester(focusRequester)
                         .focusProperties { down = FocusRequester.Cancel },
-                    contentColor = if (isRecording) Color(0xFFFF5252) else Color.White
+                    contentColor = if (isRecording) Color(0xFFFF5252) else colors.textPrimary // ★修正
                 )
                 Spacer(Modifier.width(16.dp))
 
@@ -115,7 +117,8 @@ fun TopSubMenuUI(
                     title = AppStrings.MENU_AUDIO, icon = Icons.Default.PlayArrow,
                     subtitle = if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
                     onClick = onAudioToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary // ★修正
                 )
                 Spacer(Modifier.width(16.dp))
 
@@ -125,7 +128,8 @@ fun TopSubMenuUI(
                     subtitle = if(isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
                     enabled = isSubtitleSupported,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary // ★修正
                 )
                 Spacer(Modifier.width(16.dp))
 
@@ -134,7 +138,8 @@ fun TopSubMenuUI(
                     title = AppStrings.MENU_COMMENT, icon = Icons.Default.Chat,
                     subtitle = if(isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary // ★修正
                 )
                 Spacer(Modifier.width(16.dp))
 
@@ -148,7 +153,8 @@ fun TopSubMenuUI(
                         .focusRequester(mainQualityButtonRequester)
                         .focusProperties {
                             if (!isQualityMode) down = FocusRequester.Cancel
-                        }
+                        },
+                    contentColor = colors.textPrimary // ★修正
                 )
                 Spacer(Modifier.width(16.dp))
 
@@ -158,14 +164,15 @@ fun TopSubMenuUI(
                     subtitle = if(currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
                     onClick = { onSourceToggle(); onCloseMenu() },
                     enabled = isMirakurunAvailable,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary // ★修正
                 )
             }
 
             AnimatedVisibility(visible = isQualityMode) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Spacer(Modifier.height(16.dp))
-                    Box(modifier = Modifier.width(400.dp).height(2.dp).background(Color.White.copy(0.2f)))
+                    Box(modifier = Modifier.width(400.dp).height(2.dp).background(colors.textPrimary.copy(0.2f))) // ★修正
                     Spacer(Modifier.height(16.dp))
 
                     Row(
@@ -192,7 +199,8 @@ fun TopSubMenuUI(
                                         down = FocusRequester.Cancel
                                     },
                                 width = 140.dp,
-                                height = 90.dp
+                                height = 90.dp,
+                                contentColor = colors.textPrimary // ★修正
                             )
                             Spacer(Modifier.width(16.dp))
                         }
@@ -209,17 +217,18 @@ fun MenuTileItem(
     onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
     width: Dp = 160.dp,
     height: Dp = 100.dp,
-    contentColor: Color = Color.White // ★追加: 文字色指定用
+    contentColor: Color = Color.White
 ) {
+    val colors = KomorebiTheme.colors // ★追加
     Surface(
         onClick = onClick,
         enabled = enabled,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(0.1f),
-            contentColor = if (enabled) contentColor else Color.White.copy(0.3f),
-            focusedContainerColor = Color.White,
-            focusedContentColor = Color.Black
+            containerColor = colors.textPrimary.copy(0.1f), // ★修正: Color.White.copy(0.1f)
+            contentColor = if (enabled) contentColor else colors.textPrimary.copy(0.3f), // ★修正
+            focusedContainerColor = colors.textPrimary, // ★修正: Color.White
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White // ★修正
         ),
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
         modifier = modifier.size(width, height).alpha(if(enabled) 1f else 0.5f)

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -35,6 +36,7 @@ fun ReserveSettingsDialog(
     onConfirm: (ReserveRecordSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val colors = KomorebiTheme.colors
     var isEnabled by remember { mutableStateOf(initialSettings.isEnabled) }
     var priority by remember { mutableIntStateOf(initialSettings.priority) }
     var isEventRelay by remember { mutableStateOf(initialSettings.isEventRelayFollowEnabled) }
@@ -60,22 +62,36 @@ fun ReserveSettingsDialog(
         Surface(
             modifier = Modifier.width(550.dp),
             shape = RoundedCornerShape(8.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF1A1A1A), contentColor = Color.White)
+            colors = SurfaceDefaults.colors(
+                // ★修正: Color(0xFF1A1A1A) -> colors.surface
+                containerColor = colors.surface,
+                contentColor = colors.textPrimary
+            )
         ) {
             Column(modifier = Modifier.padding(32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Text(text = if (isNewReservation) "詳細予約設定" else "予約設定の変更", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold, fontFamily = NotoSansJP)
-                Text(text = programTitle, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFAAAAAA), maxLines = 1)
-                Divider(color = Color.White.copy(alpha = 0.1f))
+                Text(text = if (isNewReservation) "詳細予約設定" else "予約設定の変更", style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontFamily = NotoSansJP)
+                Text(text = programTitle, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, maxLines = 1)
+                // ★修正: Dividerの色
+                Divider(color = colors.textPrimary.copy(alpha = 0.1f))
 
                 SettingRow(label = "予約を有効にする") {
-                    Switch(checked = isEnabled, onCheckedChange = { isEnabled = it }, modifier = Modifier.focusRequester(focusRequester), colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = Color.White, uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF333333)))
+                    Switch(checked = isEnabled,
+                        onCheckedChange = { isEnabled = it },
+                        modifier = Modifier.focusRequester(focusRequester),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
+                            checkedTrackColor = colors.accent,
+                            uncheckedThumbColor = colors.textPrimary,
+                            uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                        )
+                    )
                 }
 
                 SettingRow(label = "優先度 (1-5)") {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        IconButton(onClick = { if (priority > 1) priority-- }, enabled = priority > 1) { Icon(Icons.Default.Remove, null, tint = if (priority > 1) Color.White else Color.DarkGray) }
-                        Text(text = priority.toString(), style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.width(30.dp), textAlign = TextAlign.Center)
-                        IconButton(onClick = { if (priority < 5) priority++ }, enabled = priority < 5) { Icon(Icons.Default.Add, null, tint = if (priority < 5) Color.White else Color.DarkGray) }
+                        IconButton(onClick = { if (priority > 1) priority-- }, enabled = priority > 1) { Icon(Icons.Default.Remove, null, tint = if (priority > 1) colors.textPrimary else colors.textSecondary) }
+                        Text(text = priority.toString(), style = MaterialTheme.typography.titleLarge, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.width(30.dp), textAlign = TextAlign.Center)
+                        IconButton(onClick = { if (priority < 5) priority++ }, enabled = priority < 5) { Icon(Icons.Default.Add, null, tint = if (priority < 5) colors.textPrimary else colors.textSecondary) }
                     }
                 }
 
@@ -84,14 +100,19 @@ fun ReserveSettingsDialog(
                     Button(
                         onClick = { /* 固定 */ },
                         enabled = false, // 変更不可にする
-                        colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.Gray)
+                        colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = Color.Gray)
                     ) {
                         Text(text = "指定サービス")
                     }
                 }
 
                 SettingRow(label = "イベントリレー追従") {
-                    Switch(checked = isEventRelay, onCheckedChange = { isEventRelay = it }, colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = Color.White, uncheckedThumbColor = Color.White, uncheckedTrackColor = Color(0xFF333333)))
+                    Switch(checked = isEventRelay, onCheckedChange = { isEventRelay = it }, colors = SwitchDefaults.colors(
+                        checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
+                        checkedTrackColor = colors.accent,
+                        uncheckedThumbColor = colors.textPrimary,
+                        uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    ))
                 }
 
                 Spacer(Modifier.height(16.dp))

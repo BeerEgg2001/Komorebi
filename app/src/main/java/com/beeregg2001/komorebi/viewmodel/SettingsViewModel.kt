@@ -52,9 +52,13 @@ class SettingsViewModel @Inject constructor(
     val videoQuality: StateFlow<String> = settingsRepository.videoQuality
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "1080p-60fps")
 
-    // ★追加: 起動時タブの StateFlow
+    // 起動時タブの StateFlow
     val startupTab: StateFlow<String> = settingsRepository.startupTab
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ホーム")
+
+    // ★追加: アプリテーマの StateFlow
+    val appTheme: StateFlow<String> = settingsRepository.appTheme
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MONOTONE")
 
     // 設定が初期化済みかどうか
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
@@ -67,7 +71,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★追加: MainRootScreen の初期化用にSuspend関数を提供
+    // ★追加: テーマの更新
+    fun updateAppTheme(themeName: String) {
+        viewModelScope.launch {
+            settingsRepository.saveString(SettingsRepository.APP_THEME, themeName)
+        }
+    }
+
+    // MainRootScreen の初期化用にSuspend関数を提供
     suspend fun getStartupTabOnce(): String {
         return settingsRepository.getStartupTabOnce()
     }
