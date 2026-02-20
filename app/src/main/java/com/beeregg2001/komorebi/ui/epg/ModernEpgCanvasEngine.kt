@@ -98,6 +98,7 @@ fun ModernEpgCanvasEngine_Smooth(
             pendingHeaderFocusIndex = null
         }
     }
+
     LaunchedEffect(uiState) { if (uiState is EpgUiState.Success) { val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType; lastLoadedType = currentType; if (isTypeChanged) hasRenderedFirstFrame = false; epgState.updateData(uiState.data, resetFocus = isTypeChanged) } }
 
     BoxWithConstraints {
@@ -114,7 +115,6 @@ fun ModernEpgCanvasEngine_Smooth(
 
         val animValues = EpgAnimValues(scrollX, scrollY, animX, animY, animH)
 
-        // ★修正: 透過設定
         Column(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(visible = isHeaderVisible, enter = expandVertically(), exit = shrinkVertically()) {
                 EpgHeaderSection(
@@ -175,7 +175,7 @@ fun EpgHeaderSection(
     val colors = KomorebiTheme.colors
     val currentTypeIndex = remember(currentType, availableBroadcastingTypes) { availableBroadcastingTypes.indexOfFirst { it.second == currentType }.coerceAtLeast(0) }
 
-    Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+    Box(modifier = Modifier.fillMaxWidth().height(48.dp).background(colors.surface.copy(alpha = 0.95f))) {
         Row(modifier = Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.Center) {
             availableBroadcastingTypes.forEachIndexed { index, (label, apiValue) ->
                 var isTabFocused by remember { mutableStateOf(false) }
@@ -191,18 +191,31 @@ fun EpgHeaderSection(
                             left = if (index == 0) jumpMenuFocusRequester else subTabFocusRequesters[index - 1]
                             right = if (index == availableBroadcastingTypes.size - 1) FocusRequester.Default else subTabFocusRequesters[index + 1]
                             down = gridFocusRequester
-                            up = topTabFocusRequester // ★重要
+                            up = topTabFocusRequester
                         }
                         .onKeyEvent { event ->
-                            // ★修正: ナイティブなキーコード判定を導入し、確実性を向上
-                            if (event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                            // ★修正: KeyDownを消費し、KeyUpで確実にトップナビへフォーカスを移す
+                            if (event.key == Key.Back || event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                                if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                                 if (event.type == KeyEventType.KeyUp) {
                                     topTabFocusRequester.safeRequestFocus("EpgHeader_Back")
+                                    return@onKeyEvent true
                                 }
-                                return@onKeyEvent true
                             }
-                            if (event.type == KeyEventType.KeyDown && (event.key == Key.DirectionCenter || event.key == Key.Enter)) { onTypeChanged(apiValue); true }
-                            else false
+                            if (event.type == KeyEventType.KeyDown) {
+                                when (event.key) {
+                                    // ★修正: 上キーでも確実にトップナビへ戻る
+                                    Key.DirectionUp -> {
+                                        topTabFocusRequester.safeRequestFocus("EpgHeader_Up")
+                                        return@onKeyEvent true
+                                    }
+                                    Key.DirectionCenter, Key.Enter -> {
+                                        onTypeChanged(apiValue)
+                                        return@onKeyEvent true
+                                    }
+                                }
+                            }
+                            false
                         }
                         .focusable().background(if (isTabFocused) colors.textPrimary else Color.Transparent, RectangleShape),
                     contentAlignment = Alignment.Center
@@ -220,12 +233,27 @@ fun EpgHeaderSection(
                 .focusRequester(jumpMenuFocusRequester)
                 .focusProperties { right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default; down = gridFocusRequester; up = topTabFocusRequester }
                 .onKeyEvent { event ->
-                    if (event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
-                        if (event.type == KeyEventType.KeyUp) { topTabFocusRequester.safeRequestFocus("EpgJump_Back") }
-                        return@onKeyEvent true
+                    // ★修正: 同様にKeyDownを消費して確実に戻れるようにする
+                    if (event.key == Key.Back || event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                        if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
+                        if (event.type == KeyEventType.KeyUp) {
+                            topTabFocusRequester.safeRequestFocus("EpgJump_Back")
+                            return@onKeyEvent true
+                        }
                     }
-                    if (event.type == KeyEventType.KeyDown && (event.key == Key.DirectionCenter || event.key == Key.Enter)) { onEpgJumpMenuStateChanged(true); true }
-                    else false
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionUp -> {
+                                topTabFocusRequester.safeRequestFocus("EpgJump_Up")
+                                return@onKeyEvent true
+                            }
+                            Key.DirectionCenter, Key.Enter -> {
+                                onEpgJumpMenuStateChanged(true)
+                                return@onKeyEvent true
+                            }
+                        }
+                    }
+                    false
                 }
                 .focusable().background(if (isJumpBtnFocused) colors.textPrimary else Color.Transparent),
             contentAlignment = Alignment.Center
