@@ -43,11 +43,8 @@ import java.util.UUID
 import androidx.tv.material3.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import com.beeregg2001.komorebi.ui.live.LiveCommentOverlay
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import master.flame.danmaku.controller.IDanmakuView
-import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Color as AndroidColor
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -98,10 +95,9 @@ fun VideoPlayerScreen(
         mutableStateOf(commentDefaultDisplayStr == "ON")
     }
 
-    // ★追加: 重いUI（WebView等）の初期化を遅延させるフラグ
     var isHeavyUiReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        delay(800) // ビデオのSurface確保を最優先するため、0.8秒待つ
+        delay(800)
         isHeavyUiReady = true
     }
 
@@ -190,12 +186,21 @@ fun VideoPlayerScreen(
     }) {
         AndroidView(factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } }, modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable())
 
-        // ★修正: UIが重い処理（DanmakuView）は遅延ロード
         if (isHeavyUiReady && isCommentEnabled) {
-            ArchivedCommentOverlay(modifier = Modifier.fillMaxSize(), comments = allComments, currentPositionMs = exoPlayer.currentPosition, isPlaying = isPlayerPlaying, isCommentEnabled = isCommentEnabled, commentSpeed = commentSpeed, commentFontSizeScale = commentFontSizeScale, commentOpacity = commentOpacity, commentMaxLines = commentMaxLines, useSoftwareRendering = isEmulator)
+            ArchivedCommentOverlay(
+                modifier = Modifier.fillMaxSize(),
+                comments = allComments,
+                currentPositionProvider = { exoPlayer.currentPosition }, // ★修正: 最新時間を返す関数を渡す
+                isPlaying = isPlayerPlaying,
+                isCommentEnabled = isCommentEnabled,
+                commentSpeed = commentSpeed,
+                commentFontSizeScale = commentFontSizeScale,
+                commentOpacity = commentOpacity,
+                commentMaxLines = commentMaxLines,
+                useSoftwareRendering = isEmulator
+            )
         }
 
-        // ★修正: UIが重い処理（WebView）は遅延ロード
         if (isHeavyUiReady && isSubtitleEnabled) {
             AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (showControls || isSubMenuOpen || isSceneSearchOpen) 0f else 1f))
         }

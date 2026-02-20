@@ -64,7 +64,6 @@ import java.util.concurrent.TimeUnit
 import android.graphics.Color as AndroidColor
 import master.flame.danmaku.controller.IDanmakuView
 import master.flame.danmaku.danmaku.model.BaseDanmaku
-import android.graphics.Typeface
 import android.os.Build
 import androidx.annotation.RequiresApi
 import java.time.OffsetDateTime
@@ -120,10 +119,9 @@ fun LivePlayerScreen(
         mutableStateOf(commentDefaultDisplayStr == "ON")
     }
 
-    // ★追加: 重いUI（WebView等）の初期化を遅延させるフラグ
     var isHeavyUiReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        delay(800) // ビデオのSurface確保を最優先するため、0.8秒待つ
+        delay(800)
         isHeavyUiReady = true
     }
 
@@ -173,6 +171,9 @@ fun LivePlayerScreen(
     var sseStatus by remember { mutableStateOf("Standby") }
     var sseDetail by remember { mutableStateOf(AppStrings.SSE_CONNECTING) }
 
+    // ★追加: Compose側で再生状態を把握するための変数
+    var isPlayerPlaying by remember { mutableStateOf(false) }
+
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
@@ -205,6 +206,11 @@ fun LivePlayerScreen(
         }.build().apply {
             playWhenReady = true
             addListener(object : Player.Listener {
+                // ★追加: 再生状態の変更を検知
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlayerPlaying = playing
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     if (currentStreamSource == StreamSource.KONOMITV && sseStatus == "Standby") return
                     playerError = analyzePlayerError(error)
@@ -221,6 +227,15 @@ fun LivePlayerScreen(
                     }
                 }
             })
+        }
+    }
+
+    // ★追加: ExoPlayerの一時停止に合わせてDanmakuViewも止める
+    LaunchedEffect(isPlayerPlaying) {
+        danmakuViewRef.value?.let { view ->
+            if (view.isPrepared) {
+                if (isPlayerPlaying) view.resume() else view.pause()
+            }
         }
     }
 
@@ -297,7 +312,6 @@ fun LivePlayerScreen(
         if (playerError == null) { delay(300); mainFocusRequester.safeRequestFocus(TAG) }
     }
 
-    // ★修正: isHeavyUiReady も依存配列に追加し、準備ができるまでコメント処理を開始しない
     DisposableEffect(currentChannelItem.id, isCommentEnabled, isHeavyUiReady) {
         processedCommentIds.clear()
         if (!isCommentEnabled || !isHeavyUiReady) { danmakuViewRef.value?.removeAllDanmakus(true); return@DisposableEffect onDispose { } }
@@ -354,6 +368,13 @@ fun LivePlayerScreen(
         when (keyCode) {
             NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
                 if (!isSubMenuOpen && !isMiniListOpen) {
+                    // ★追加: ライブ中でもOKボタンで一時停止できるように変更
+                    if (exoPlayer.isPlaying) {
+                        exoPlayer.pause()
+                    } else {
+                        exoPlayer.play()
+                    }
+
                     when {
                         showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
                         isPinnedOverlay -> onPinnedOverlayChange(false)
@@ -383,9 +404,11 @@ fun LivePlayerScreen(
                 .alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.MIRAKURUN) 1f else 0f)
         )
 
-        // ★修正: UIが重い処理（DanmakuView）は遅延ロード
         if (isHeavyUiReady && isCommentEnabled) {
-            LiveCommentOverlay(modifier = Modifier.fillMaxSize(), useSoftwareRendering = isEmulator, speed = commentSpeed, opacity = commentOpacity, maxLines = commentMaxLines, onViewCreated = { view -> danmakuViewRef.value = view })
+            LiveCommentOverlay(modifier = Modifier.fillMaxSize(), useSoftwareRendering = isEmulator, speed = commentSpeed, opacity = commentOpacity, maxLines = commentMaxLines, onViewCreated = { view ->
+                danmakuViewRef.value = view
+                if (!isPlayerPlaying) view.pause() // 初期化時に止まっていたら同期
+            })
         }
 
         AnimatedVisibility(visible = currentStreamSource == StreamSource.KONOMITV && (sseStatus == "Standby" || sseStatus == "Offline") && playerError == null) {
@@ -449,7 +472,6 @@ fun LivePlayerScreen(
             )
         }
 
-        // ★修正: UIが重い処理（WebView）は遅延ロード
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
         if (isHeavyUiReady && isSubtitleEnabled) {
             AndroidView(factory = { ctx -> WebView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(0); settings.apply { javaScriptEnabled = true; domStorageEnabled = true }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value = this } }, modifier = Modifier.fillMaxSize().alpha(if (!isUiVisible) 1f else 0f))
