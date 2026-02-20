@@ -35,9 +35,12 @@ class SettingsRepository @Inject constructor(
 
         val LIVE_SUBTITLE_DEFAULT = stringPreferencesKey("live_subtitle_default")
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
-
-        // ★追加: 字幕・コメントのレイヤー設定キー
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
+
+        // ★追加: アドオン・ラボ設定キー
+        val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
+        val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
+        val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
@@ -63,9 +66,12 @@ class SettingsRepository @Inject constructor(
 
     val liveSubtitleDefault: Flow<String> = context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
     val videoSubtitleDefault: Flow<String> = context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
-
-    // ★追加: 字幕・コメントのレイヤー設定フロー (初期値はKonomiTVと同じくコメントを上に)
     val subtitleCommentLayer: Flow<String> = context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
+
+    // ★追加: アドオン・ラボ用フロー
+    val labAnnictIntegration: Flow<String> = context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
+    val labShobocalIntegration: Flow<String> = context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
+    val defaultPostCommand: Flow<String> = context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
 
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }

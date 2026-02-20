@@ -104,7 +104,20 @@ fun ModernEpgCanvasEngine_Smooth(
     BoxWithConstraints {
         val w = constraints.maxWidth.toFloat(); val h = constraints.maxHeight.toFloat()
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
-        LaunchedEffect(jumpTargetTime) { if (jumpTargetTime != null && epgState.hasData) { isJumping = true; epgState.jumpToTime(jumpTargetTime); onJumpFinished(); delay(150); isJumping = false } }
+
+        // ★修正: try-finally で囲み、onJumpFinished を最後に呼ぶことでフラグの戻し忘れを防止
+        LaunchedEffect(jumpTargetTime) {
+            if (jumpTargetTime != null && epgState.hasData) {
+                try {
+                    isJumping = true
+                    epgState.jumpToTime(jumpTargetTime)
+                    delay(300) // アニメーションと描画が安定するまで待機
+                } finally {
+                    isJumping = false
+                    onJumpFinished() // ここで null にすることで Effect が終了する
+                }
+            }
+        }
 
         val scrollSpec = if (isJumping) snap() else spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 2500f)
         val scrollX by animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
@@ -194,7 +207,6 @@ fun EpgHeaderSection(
                             up = topTabFocusRequester
                         }
                         .onKeyEvent { event ->
-                            // ★修正: KeyDownを消費し、KeyUpで確実にトップナビへフォーカスを移す
                             if (event.key == Key.Back || event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                                 if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                                 if (event.type == KeyEventType.KeyUp) {
@@ -204,7 +216,6 @@ fun EpgHeaderSection(
                             }
                             if (event.type == KeyEventType.KeyDown) {
                                 when (event.key) {
-                                    // ★修正: 上キーでも確実にトップナビへ戻る
                                     Key.DirectionUp -> {
                                         topTabFocusRequester.safeRequestFocus("EpgHeader_Up")
                                         return@onKeyEvent true
@@ -233,7 +244,6 @@ fun EpgHeaderSection(
                 .focusRequester(jumpMenuFocusRequester)
                 .focusProperties { right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else FocusRequester.Default; down = gridFocusRequester; up = topTabFocusRequester }
                 .onKeyEvent { event ->
-                    // ★修正: 同様にKeyDownを消費して確実に戻れるようにする
                     if (event.key == Key.Back || event.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                         if (event.type == KeyEventType.KeyDown) return@onKeyEvent true
                         if (event.type == KeyEventType.KeyUp) {

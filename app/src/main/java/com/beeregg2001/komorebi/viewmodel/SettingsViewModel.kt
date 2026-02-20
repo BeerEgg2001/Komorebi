@@ -44,10 +44,16 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val videoSubtitleDefault: StateFlow<String> = settingsRepository.videoSubtitleDefault
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
-
-    // ★追加: 字幕・コメントのレイヤー順序のStateFlow公開
     val subtitleCommentLayer: StateFlow<String> = settingsRepository.subtitleCommentLayer
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "CommentOnTop")
+
+    // ★追加: アドオン・ラボ用StateFlow
+    val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
+    val labShobocalIntegration: StateFlow<String> = settingsRepository.labShobocalIntegration
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
+    val defaultPostCommand: StateFlow<String> = settingsRepository.defaultPostCommand
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     val startupTab: StateFlow<String> = settingsRepository.startupTab
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ホーム")

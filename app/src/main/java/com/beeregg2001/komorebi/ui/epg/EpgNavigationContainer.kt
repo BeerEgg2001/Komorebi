@@ -65,7 +65,6 @@ fun EpgNavigationContainer(
         previousProgram = selectedProgram
     }
 
-    // ★修正: 親の光を通すために .background() を削除
     Box(modifier = Modifier.fillMaxSize()) {
         ModernEpgCanvasEngine_Smooth(
             uiState = uiState, logoUrls = logoUrls,
@@ -73,7 +72,10 @@ fun EpgNavigationContainer(
             headerFocusRequester = contentRequester,
             jumpButtonFocusRequester = jumpButtonRequester,
             gridFocusRequester = gridFocusRequester,
-            onProgramSelected = { onProgramSelected(it) }, jumpTargetTime = jumpTargetTime, onJumpFinished = { jumpTargetTime = null },
+            onProgramSelected = { onProgramSelected(it) },
+            jumpTargetTime = jumpTargetTime,
+            // ★修正: ModernEpgCanvasEngine 側がアニメーション完了後にこれを呼び出す
+            onJumpFinished = { jumpTargetTime = null },
             onEpgJumpMenuStateChanged = onJumpMenuStateChanged, currentType = currentType, onTypeChanged = onTypeChanged,
             availableTypes = availableTypes, restoreChannelId = restoreChannelId,
             reserves = reserves
@@ -105,10 +107,17 @@ fun EpgNavigationContainer(
                 dates = remember(now) { List(7) { now.plusDays(it.toLong()) } },
                 onSelect = { selectedTime ->
                     scope.launch {
-                        isInternalJumping = true; jumpTargetTime = selectedTime
+                        isInternalJumping = true
+                        jumpTargetTime = selectedTime
                         onJumpMenuStateChanged(false)
-                        delay(50)
+
+                        yield()
+                        delay(100)
+
                         gridFocusRequester.safeRequestFocus("EpgNav_JumpSelect")
+
+                        // フラグを戻すことでトップナビへのフォーカスが可能になる
+                        isInternalJumping = false
                     }
                 },
                 onDismiss = {
