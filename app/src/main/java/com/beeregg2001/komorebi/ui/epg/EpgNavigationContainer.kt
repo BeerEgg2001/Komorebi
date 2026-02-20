@@ -50,6 +50,7 @@ fun EpgNavigationContainer(
     var jumpTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     val gridFocusRequester = remember { FocusRequester() }
     val jumpButtonRequester = remember { FocusRequester() }
+
     var isInternalJumping by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val colors = KomorebiTheme.colors
@@ -64,7 +65,8 @@ fun EpgNavigationContainer(
         previousProgram = selectedProgram
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
+    // ★修正: 親の光を通すために .background() を削除
+    Box(modifier = Modifier.fillMaxSize()) {
         ModernEpgCanvasEngine_Smooth(
             uiState = uiState, logoUrls = logoUrls,
             topTabFocusRequester = mainTabFocusRequester,
@@ -81,7 +83,14 @@ fun EpgNavigationContainer(
             val detailRequester = remember { FocusRequester() }
             Box(modifier = Modifier.fillMaxSize().background(colors.background.copy(alpha = 0.8f)).zIndex(2f)) {
                 ProgramDetailScreen(
-                    program = selectedProgram, onPlayClick = { onNavigateToPlayer(it.channel_id, mirakurunIp, mirakurunPort) }, onRecordClick = {}, onBackClick = { gridFocusRequester.safeRequestFocus("EpgNav_UIBack"); onProgramSelected(null) }, initialFocusRequester = detailRequester
+                    program = selectedProgram,
+                    onPlayClick = { onNavigateToPlayer(it.channel_id, mirakurunIp, mirakurunPort) },
+                    onRecordClick = {},
+                    onBackClick = {
+                        gridFocusRequester.safeRequestFocus("EpgNav_UIBack")
+                        onProgramSelected(null)
+                    },
+                    initialFocusRequester = detailRequester
                 )
             }
             LaunchedEffect(selectedProgram) { yield(); detailRequester.safeRequestFocus("EpgNav_DetailOpen") }
@@ -97,21 +106,14 @@ fun EpgNavigationContainer(
                 onSelect = { selectedTime ->
                     scope.launch {
                         isInternalJumping = true; jumpTargetTime = selectedTime
-                        // ★修正: 先にフォーカスを安全なグリッドに逃がす
-                        gridFocusRequester.safeRequestFocus("EpgNav_JumpSelect")
-                        delay(50)
-                        // フォーカスが移ったのを見届けてからUIを破棄する
                         onJumpMenuStateChanged(false)
+                        delay(50)
+                        gridFocusRequester.safeRequestFocus("EpgNav_JumpSelect")
                     }
                 },
                 onDismiss = {
-                    scope.launch {
-                        // ★修正: 先にフォーカスを安全な「日時指定ボタン」に逃がす
-                        jumpButtonRequester.safeRequestFocus("EpgNav_JumpDismiss")
-                        delay(50)
-                        // フォーカスが移ったのを見届けてからUIを破棄する
-                        onJumpMenuStateChanged(false)
-                    }
+                    onJumpMenuStateChanged(false)
+                    jumpButtonRequester.safeRequestFocus("EpgNav_JumpDismiss")
                 }
             )
         }

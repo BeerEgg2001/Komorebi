@@ -43,7 +43,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -65,7 +65,7 @@ fun RecordListScreen(
     onBack: () -> Unit,
     onSearch: (String) -> Unit
 ) {
-    val colors = KomorebiTheme.colors // ★追加
+    val colors = KomorebiTheme.colors
     var searchQuery by remember { mutableStateOf("") }
     var activeSearchQuery by remember { mutableStateOf("") }
     var isSearchBarVisible by remember { mutableStateOf(false) }
@@ -87,6 +87,13 @@ fun RecordListScreen(
     val searchOpenButtonFocusRequester = remember { FocusRequester() }
     val searchCloseButtonFocusRequester = remember { FocusRequester() }
 
+    // ボタンの共通フォーカス色設定
+    val iconButtonColors = IconButtonDefaults.colors(
+        focusedContainerColor = colors.textPrimary,
+        focusedContentColor = if (colors.isDark) Color.Black else Color.White,
+        contentColor = colors.textPrimary
+    )
+
     val executeSearch = { query: String ->
         isKeyboardActive = false
         activeSearchQuery = query
@@ -105,162 +112,72 @@ fun RecordListScreen(
             isKeyboardActive -> {
                 isKeyboardActive = false
                 keyboardController?.hide()
-                scope.launch {
-                    delay(100)
-                    searchInputFocusRequester.safeRequestFocus(TAG)
-                }
+                scope.launch { delay(100); searchInputFocusRequester.safeRequestFocus(TAG) }
             }
             isSearchBarVisible -> {
-                isSearchBarVisible = false
-                searchQuery = ""
-                scope.launch {
-                    delay(50)
-                    searchOpenButtonFocusRequester.safeRequestFocus(TAG)
-                }
+                isSearchBarVisible = false; searchQuery = ""
+                scope.launch { delay(50); searchOpenButtonFocusRequester.safeRequestFocus(TAG) }
             }
             activeSearchQuery.isNotEmpty() -> {
-                activeSearchQuery = ""
-                onSearch("")
-                scope.launch {
-                    delay(50)
-                    backButtonFocusRequester.safeRequestFocus(TAG)
-                }
+                activeSearchQuery = ""; onSearch("")
+                scope.launch { delay(50); backButtonFocusRequester.safeRequestFocus(TAG) }
             }
-            else -> {
-                if (isBackButtonFocused) onBack()
-                else backButtonFocusRequester.safeRequestFocus(TAG)
-            }
+            else -> { if (isBackButtonFocused) onBack() else backButtonFocusRequester.safeRequestFocus(TAG) }
         }
     }
 
     BackHandler(enabled = true) { handleBackPress() }
 
-    LaunchedEffect(isSearchBarVisible) {
-        if (isSearchBarVisible) {
-            delay(150)
-            searchInputFocusRequester.safeRequestFocus(TAG)
-        }
-    }
+    LaunchedEffect(isSearchBarVisible) { if (isSearchBarVisible) { delay(150); searchInputFocusRequester.safeRequestFocus(TAG) } }
+    LaunchedEffect(Unit) { delay(300); if (!isSearchBarVisible && activeSearchQuery.isEmpty()) { backButtonFocusRequester.safeRequestFocus(TAG) } }
 
-    LaunchedEffect(Unit) {
-        delay(300)
-        if (!isSearchBarVisible && activeSearchQuery.isEmpty()) {
-            backButtonFocusRequester.safeRequestFocus(TAG)
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background) // ★修正
-            .padding(horizontal = 40.dp, vertical = 20.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 20.dp)) {
         Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
             if (isSearchBarVisible) {
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = { handleBackPress() },
-                        modifier = Modifier.focusRequester(searchCloseButtonFocusRequester)
+                        modifier = Modifier.focusRequester(searchCloseButtonFocusRequester),
+                        colors = iconButtonColors
                     ) {
-                        Icon(Icons.Default.ArrowBack, "閉じる", tint = colors.textPrimary) // ★修正
+                        Icon(Icons.Default.ArrowBack, "閉じる")
                     }
                     Spacer(Modifier.width(16.dp))
 
                     Surface(
-                        onClick = {
-                            isKeyboardActive = true
-                            innerTextFieldFocusRequester.safeRequestFocus(TAG)
-                            keyboardController?.show()
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp)
-                            .focusRequester(searchInputFocusRequester)
-                            .onKeyEvent {
-                                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                                    if (limitedHistory.isNotEmpty()) {
-                                        historyListFocusRequester.safeRequestFocus(TAG)
-                                        return@onKeyEvent true
-                                    } else {
-                                        firstItemFocusRequester.safeRequestFocus(TAG)
-                                        return@onKeyEvent true
-                                    }
-                                }
-                                false
-                            }
-                            .focusProperties {
-                                left = searchCloseButtonFocusRequester
-                                down = if (limitedHistory.isNotEmpty()) historyListFocusRequester else firstItemFocusRequester
-                            },
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.1f), // ★修正
-                            focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f) // ★修正
-                        ),
-                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        border = ClickableSurfaceDefaults.border(
-                            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.3f))), // ★修正
-                            focusedBorder = Border(BorderStroke(2.dp, colors.accent)) // ★修正
-                        )
+                        onClick = { isKeyboardActive = true; innerTextFieldFocusRequester.safeRequestFocus(TAG); keyboardController?.show() },
+                        modifier = Modifier.weight(1f).height(40.dp).focusRequester(searchInputFocusRequester).onKeyEvent { if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) { if (limitedHistory.isNotEmpty()) { historyListFocusRequester.safeRequestFocus(TAG); return@onKeyEvent true } else { firstItemFocusRequester.safeRequestFocus(TAG); return@onKeyEvent true } }; false }.focusProperties { left = searchCloseButtonFocusRequester; down = if (limitedHistory.isNotEmpty()) historyListFocusRequester else firstItemFocusRequester },
+                        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f)),
+                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f), shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                        border = ClickableSurfaceDefaults.border(border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.3f))), focusedBorder = Border(BorderStroke(2.dp, colors.accent)))
                     ) {
                         Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                             BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(innerTextFieldFocusRequester),
-                                textStyle = TextStyle(color = colors.textPrimary, fontSize = 20.sp), // ★修正
-                                cursorBrush = SolidColor(colors.textPrimary), // ★修正
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) }),
-                                decorationBox = { innerTextField ->
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.CenterStart
-                                    ) {
-                                        if (searchQuery.isEmpty()) {
-                                            Text(
-                                                text = "番組名を検索...",
-                                                color = colors.textSecondary, // ★修正
-                                                fontSize = 18.sp
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
-                                }
+                                value = searchQuery, onValueChange = { searchQuery = it }, modifier = Modifier.fillMaxWidth().focusRequester(innerTextFieldFocusRequester),
+                                textStyle = TextStyle(color = colors.textPrimary, fontSize = 20.sp), cursorBrush = SolidColor(colors.textPrimary), singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) }),
+                                decorationBox = { innerTextField -> Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) { if (searchQuery.isEmpty()) { Text(text = "番組名を検索...", color = colors.textSecondary, fontSize = 18.sp) }; innerTextField() } }
                             )
                         }
                     }
                     Spacer(Modifier.width(16.dp))
-                    IconButton(onClick = { executeSearch(searchQuery) }) {
-                        Icon(Icons.Default.Search, "検索実行", tint = colors.textPrimary) // ★修正
+                    IconButton(onClick = { executeSearch(searchQuery) }, colors = iconButtonColors) {
+                        Icon(Icons.Default.Search, "検索実行")
                     }
                 }
             } else {
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = { handleBackPress() },
-                        modifier = Modifier
-                            .focusRequester(backButtonFocusRequester)
-                            .onFocusChanged { isBackButtonFocused = it.isFocused }
+                        modifier = Modifier.focusRequester(backButtonFocusRequester).onFocusChanged { isBackButtonFocused = it.isFocused },
+                        colors = iconButtonColors
                     ) {
-                        Icon(Icons.Default.ArrowBack, "戻る", tint = colors.textPrimary) // ★修正
+                        Icon(Icons.Default.ArrowBack, "戻る")
                     }
                     Spacer(Modifier.width(16.dp))
-
-                    Text(
-                        text = currentDisplayTitle ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontSize = 20.sp, color = colors.textPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f) // ★修正
-                    )
-
-                    IconButton(
-                        onClick = { isSearchBarVisible = true },
-                        modifier = Modifier.focusRequester(searchOpenButtonFocusRequester)
-                    ) {
-                        Icon(Icons.Default.Search, "検索", tint = colors.textPrimary) // ★修正
+                    Text(text = currentDisplayTitle ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果", style = MaterialTheme.typography.headlineSmall, fontSize = 20.sp, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { isSearchBarVisible = true }, modifier = Modifier.focusRequester(searchOpenButtonFocusRequester), colors = iconButtonColors) {
+                        Icon(Icons.Default.Search, "検索")
                     }
                 }
             }
@@ -270,93 +187,33 @@ fun RecordListScreen(
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (isLoadingInitial && recentRecordings.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = colors.textPrimary) // ★修正
-                }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = colors.textPrimary) }
             } else {
                 TvLazyVerticalGrid(
-                    state = gridState,
-                    columns = TvGridCells.Fixed(4),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusProperties {
-                            if (isSearchBarVisible || isKeyboardActive) {
-                                enter = { FocusRequester.Cancel }
-                            }
-                        }
+                    state = gridState, columns = TvGridCells.Fixed(4), contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    modifier = Modifier.fillMaxSize().focusProperties { if (isSearchBarVisible || isKeyboardActive) { enter = { FocusRequester.Cancel } } }
                 ) {
                     itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                        if (!isLoadingMore && index >= recentRecordings.size - 4) {
-                            SideEffect { onLoadMore() }
-                        }
-                        RecordedCard(
-                            program = program, konomiIp = konomiIp, konomiPort = konomiPort,
-                            onClick = { onProgramClick(program) },
-                            modifier = Modifier
-                                .aspectRatio(16f / 9f)
-                                .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                                .focusProperties {
-                                    if (index < 4) {
-                                        up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-                                    }
-                                }
-                        )
+                        if (!isLoadingMore && index >= recentRecordings.size - 4) { SideEffect { onLoadMore() } }
+                        RecordedCard(program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) }, modifier = Modifier.aspectRatio(16f / 9f).then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier).focusProperties { if (index < 4) { up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester } })
                     }
-                    if (isLoadingMore) {
-                        item(span = { TvGridItemSpan(maxLineSpan) }) {
-                            Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = colors.textPrimary) // ★修正
-                            }
-                        }
-                    }
+                    if (isLoadingMore) { item(span = { TvGridItemSpan(maxLineSpan) }) { Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = colors.textPrimary) } } }
                 }
             }
 
             if (isSearchBarVisible && limitedHistory.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 64.dp)
-                        .background(colors.surface, RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)) // ★修正
-                        .border(1.dp, colors.textPrimary.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)) // ★修正
-                        .align(Alignment.TopCenter)
-                ) {
+                Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 64.dp).background(colors.surface, RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)).border(1.dp, colors.textPrimary.copy(alpha = 0.2f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)).align(Alignment.TopCenter)) {
                     TvLazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
                         itemsIndexed(limitedHistory) { index, historyItem ->
                             Surface(
                                 onClick = { executeSearch(historyItem) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(if (index == 0) Modifier.focusRequester(historyListFocusRequester) else Modifier)
-                                    .onKeyEvent {
-                                        if (index == 0 && it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) {
-                                            searchInputFocusRequester.safeRequestFocus(TAG)
-                                            return@onKeyEvent true
-                                        }
-                                        false
-                                    }
-                                    .focusProperties {
-                                        if (index == limitedHistory.size - 1) down = firstItemFocusRequester
-                                    },
-                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
-                                border = ClickableSurfaceDefaults.border(
-                                    focusedBorder = Border(BorderStroke(2.dp, colors.accent)) // ★修正
-                                ),
-                                colors = ClickableSurfaceDefaults.colors(
-                                    containerColor = Color.Transparent,
-                                    focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f) // ★修正
-                                )
+                                modifier = Modifier.fillMaxWidth().then(if (index == 0) Modifier.focusRequester(historyListFocusRequester) else Modifier).onKeyEvent { if (index == 0 && it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) { searchInputFocusRequester.safeRequestFocus(TAG); return@onKeyEvent true }; false }.focusProperties { if (index == limitedHistory.size - 1) down = firstItemFocusRequester },
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f), border = ClickableSurfaceDefaults.border(focusedBorder = Border(BorderStroke(2.dp, colors.accent))),
+                                colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f))
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.History, null, Modifier.size(18.dp), tint = colors.textSecondary) // ★修正
-                                    Spacer(Modifier.width(12.dp))
-                                    Text(text = historyItem, color = colors.textPrimary, fontSize = 16.sp) // ★修正
+                                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.History, null, Modifier.size(18.dp), tint = colors.textSecondary); Spacer(Modifier.width(12.dp)); Text(text = historyItem, color = colors.textPrimary, fontSize = 16.sp)
                                 }
                             }
                         }

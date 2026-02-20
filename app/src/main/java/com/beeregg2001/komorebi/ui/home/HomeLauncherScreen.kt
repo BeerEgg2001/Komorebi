@@ -31,7 +31,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.delay
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 private const val TAG = "HomeLauncher"
 
@@ -109,7 +109,6 @@ fun HomeLauncherScreen(
     val upcomingReserves by remember { derivedStateOf { homeViewModel.getUpcomingReserves(reserves) } }
     val genrePickup by homeViewModel.genrePickupPrograms.collectAsState()
     val pickupGenreLabel by homeViewModel.pickupGenreLabel.collectAsState()
-    // ★追加: 現在のピックアップ時間帯（朝・昼・夜）を取得
     val genrePickupTimeSlot by homeViewModel.genrePickupTimeSlot.collectAsState()
 
     val watchHistoryPrograms = remember(watchHistory) { watchHistory.map { KonomiDataMapper.toDomainModel(it) } }
@@ -167,7 +166,8 @@ fun HomeLauncherScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
+    // ★修正: 親の光を通すために .background() を削除
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (!isFullScreenMode) {
                 Row(
@@ -218,7 +218,7 @@ fun HomeLauncherScreen(
                         lastWatchedChannels = lastChannels, watchHistory = watchHistory,
                         hotChannels = hotChannels, upcomingReserves = upcomingReserves,
                         genrePickup = genrePickup, pickupGenreName = pickupGenreLabel,
-                        pickupTimeSlot = genrePickupTimeSlot, // ★追加
+                        pickupTimeSlot = genrePickupTimeSlot,
                         onChannelClick = onChannelClick,
                         onHistoryClick = { historyItem ->
                             val programId = historyItem.program.id.toIntOrNull()

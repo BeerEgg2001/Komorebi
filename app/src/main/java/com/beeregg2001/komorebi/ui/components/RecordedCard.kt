@@ -106,7 +106,7 @@ fun RecordedCard(
 
             // ★修正: 背景をテーマのSurface色にし、文字は Surface の LocalContentColor（自動反転）に任せる
             Column(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(colors.surface.copy(alpha = 0.85f)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                Text(text = program.title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = LocalContentColor.current, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1000) else Modifier))
+                Text(text = program.title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1000) else Modifier))
                 Spacer(modifier = Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     if (channelLabel.isNotEmpty()) {
@@ -115,8 +115,8 @@ fun RecordedCard(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    Text(text = program.channel?.name ?: "", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = LocalContentColor.current.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text(text = durationDisplay, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = if (currentPosition > 5) colors.accent else LocalContentColor.current.copy(alpha = 0.8f), textAlign = TextAlign.End)
+                    Text(text = program.channel?.name ?: "", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = colors.textPrimary.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(text = durationDisplay, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = if (currentPosition > 5) colors.accent else colors.textPrimary.copy(alpha = 0.8f), textAlign = TextAlign.End)
                 }
             }
 

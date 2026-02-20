@@ -22,7 +22,7 @@ import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.components.ReserveCard
 import com.beeregg2001.komorebi.viewmodel.ReserveViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 private const val TAG = "ReserveListScreen"
 
@@ -39,12 +39,12 @@ fun ReserveListScreen(
 ) {
     val reserves by viewModel.reserves.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val colors = KomorebiTheme.colors // ★追加
+    val colors = KomorebiTheme.colors
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.background) // ★修正
+            // ★修正: 親のグラデーションを通すため、ここにあった .background() を削除しました
             .padding(horizontal = 40.dp, vertical = 20.dp)
             .onKeyEvent { event ->
                 if (event.key == Key.Back) {
@@ -64,14 +64,14 @@ fun ReserveListScreen(
             Text(
                 text = "放送が近い録画予約",
                 style = MaterialTheme.typography.headlineMedium,
-                color = colors.textPrimary, // ★修正
+                color = colors.textPrimary,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
         }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.textPrimary) // ★修正
+                CircularProgressIndicator(color = colors.textPrimary)
             }
         } else if (reserves.isEmpty()) {
             Box(
@@ -84,7 +84,7 @@ fun ReserveListScreen(
             ) {
                 Text(
                     text = "現在、予約されている番組はありません。",
-                    color = colors.textSecondary, // ★修正
+                    color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyLarge
                 )
             }

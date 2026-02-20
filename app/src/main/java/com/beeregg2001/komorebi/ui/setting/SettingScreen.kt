@@ -1,17 +1,22 @@
 package com.beeregg2001.komorebi.ui.setting
 
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState // ★追加
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll // ★追加
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -33,17 +38,23 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalTime // ★追加
 
+@RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { SettingsRepository(context) }
-
     val colors = KomorebiTheme.colors
+
+    // ★修正: currentTimeを取得し、背景ブラシに渡す
+    val currentTime = remember { LocalTime.now() }
+    val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
 
     val konomiIp by repository.konomiIp.collectAsState(initial = "")
     val konomiPort by repository.konomiPort.collectAsState(initial = "")
@@ -73,57 +84,33 @@ fun SettingsScreen(onBack: () -> Unit) {
     var showPickupGenreSelection by remember { mutableStateOf(false) }
     var showPickupTimeSelection by remember { mutableStateOf(false) }
     var showStartupTabSelection by remember { mutableStateOf(false) }
-    var showThemeSelection by remember { mutableStateOf(false) }
+    var showThemeModeSelection by remember { mutableStateOf(false) }
+    var showThemeColorSelection by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
 
-    val categories = listOf(
-        Category("接続設定", Icons.Default.CastConnected),
-        Category("再生設定", Icons.Default.PlayCircle),
-        Category("表示設定", Icons.Default.Dashboard),
-        Category("コメント表示設定", Icons.Default.Tv),
-        Category("アプリ情報", Icons.Default.Info)
-    )
+    val categories = listOf(Category("接続設定", Icons.Default.CastConnected), Category("再生設定", Icons.Default.PlayCircle), Category("表示設定", Icons.Default.Dashboard), Category("コメント表示設定", Icons.Default.Tv), Category("アプリ情報", Icons.Default.Info))
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
     var isSidebarFocused by remember { mutableStateOf(true) }
 
-    val kIpFocusRequester = remember { FocusRequester() }
-    val kPortFocusRequester = remember { FocusRequester() }
-    val mIpFocusRequester = remember { FocusRequester() }
-    val mPortFocusRequester = remember { FocusRequester() }
-
-    val liveQFocusRequester = remember { FocusRequester() }
-    val videoQFocusRequester = remember { FocusRequester() }
-
-    val themeFocusRequester = remember { FocusRequester() }
-    val genreFocusRequester = remember { FocusRequester() }
-    val timeFocusRequester = remember { FocusRequester() }
-    val exPaidFocusRequester = remember { FocusRequester() }
-    val startTabFocusRequester = remember { FocusRequester() }
-
-    val cDefaultDisplayFocusRequester = remember { FocusRequester() }
-    val cSpeedFocusRequester = remember { FocusRequester() }
-    val cSizeFocusRequester = remember { FocusRequester() }
-    val cOpacityFocusRequester = remember { FocusRequester() }
-    val cMaxLinesFocusRequester = remember { FocusRequester() }
-
-    val appInfoLicenseRequester = remember { FocusRequester() }
+    val kIpFocusRequester = remember { FocusRequester() }; val kPortFocusRequester = remember { FocusRequester() }
+    val mIpFocusRequester = remember { FocusRequester() }; val mPortFocusRequester = remember { FocusRequester() }
+    val liveQFocusRequester = remember { FocusRequester() }; val videoQFocusRequester = remember { FocusRequester() }
+    val themeModeFocusRequester = remember { FocusRequester() }; val themeColorFocusRequester = remember { FocusRequester() }
+    val genreFocusRequester = remember { FocusRequester() }; val timeFocusRequester = remember { FocusRequester() }
+    val exPaidFocusRequester = remember { FocusRequester() }; val startTabFocusRequester = remember { FocusRequester() }
+    val cDefaultDisplayFocusRequester = remember { FocusRequester() }; val cSpeedFocusRequester = remember { FocusRequester() }
+    val cSizeFocusRequester = remember { FocusRequester() }; val cOpacityFocusRequester = remember { FocusRequester() }
+    val cMaxLinesFocusRequester = remember { FocusRequester() }; val appInfoLicenseRequester = remember { FocusRequester() }
 
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreCategoryIndex by remember { mutableIntStateOf(-1) }
 
-    // ★追加: コンテンツエリアのスクロール状態をカテゴリごとにリセットするためのキー
     val scrollState = rememberScrollState()
-    LaunchedEffect(selectedCategoryIndex) {
-        scrollState.scrollTo(0)
-    }
+    LaunchedEffect(selectedCategoryIndex) { scrollState.scrollTo(0) }
+    LaunchedEffect(Unit) { delay(300); if (restoreFocusRequester == null) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() } }
 
-    LaunchedEffect(Unit) {
-        delay(300)
-        if (restoreFocusRequester == null) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus() }
-    }
-
-    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showPickupTimeSelection, showStartupTabSelection, showThemeSelection, showLicenses) {
-        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showPickupTimeSelection && !showStartupTabSelection && !showThemeSelection && !showLicenses) {
+    LaunchedEffect(editingItem, showLiveQualitySelection, showVideoQualitySelection, showPickupGenreSelection, showPickupTimeSelection, showStartupTabSelection, showThemeModeSelection, showThemeColorSelection, showLicenses) {
+        if (editingItem == null && !showLiveQualitySelection && !showVideoQualitySelection && !showPickupGenreSelection && !showPickupTimeSelection && !showStartupTabSelection && !showThemeModeSelection && !showThemeColorSelection && !showLicenses) {
             delay(250)
             if (restoreFocusRequester != null) {
                 if (restoreCategoryIndex != -1 && selectedCategoryIndex != restoreCategoryIndex) { selectedCategoryIndex = restoreCategoryIndex; delay(50) }
@@ -132,79 +119,44 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     }
 
-    val getRightTargetRequester: (Int) -> FocusRequester = { index ->
-        when (index) {
-            0 -> kIpFocusRequester
-            1 -> liveQFocusRequester
-            2 -> themeFocusRequester
-            3 -> cDefaultDisplayFocusRequester
-            4 -> appInfoLicenseRequester
-            else -> FocusRequester.Default
-        }
-    }
+    val isDarkMode = currentThemeName in listOf("MONOTONE", "WINTER_DARK", "SPRING", "SUMMER", "AUTUMN")
+    val themeSeason = when(currentThemeName) { "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT" }
 
-    Row(modifier = Modifier.fillMaxSize().background(colors.surface).onKeyEvent { keyEvent ->
-        if (keyEvent.type == KeyEventType.KeyDown && (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK || keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
-            if (!isSidebarFocused) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus(); return@onKeyEvent true }
-        }
-        false
-    }) {
-        // --- サイドバー ---
-        Column(modifier = Modifier.width(280.dp).fillMaxHeight().background(colors.background).padding(vertical = 48.dp, horizontal = 24.dp).onFocusChanged { isSidebarFocused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // ★修正: background(colors.background) を先に塗ってからブラシを重ねる
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .background(backgroundBrush)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyDown && (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK || keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
+                    if (!isSidebarFocused) { categoryFocusRequesters.getOrNull(selectedCategoryIndex)?.safeRequestFocus(); return@onKeyEvent true }
+                }
+                false
+            }
+    ) {
+        Column(modifier = Modifier.width(280.dp).fillMaxHeight().background(colors.surface.copy(alpha = 0.6f)).padding(vertical = 48.dp, horizontal = 24.dp).onFocusChanged { isSidebarFocused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 32.dp, start = 8.dp)) {
                 Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = colors.textPrimary, modifier = Modifier.size(32.dp))
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(text = "設定", style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(16.dp)); Text(text = "設定", style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold)
             }
             categories.forEachIndexed { index, category ->
-                val targetRequester = getRightTargetRequester(index)
-                CategoryItem(
-                    title = category.name,
-                    icon = category.icon,
-                    isSelected = selectedCategoryIndex == index,
-                    onFocused = { selectedCategoryIndex = index },
-                    onClick = { targetRequester.safeRequestFocus() },
-                    modifier = Modifier
-                        .focusRequester(categoryFocusRequesters[index])
-                        .focusProperties { right = targetRequester }
-                )
+                val targetRequester = when(index) { 0 -> kIpFocusRequester; 1 -> liveQFocusRequester; 2 -> themeModeFocusRequester; 3 -> cDefaultDisplayFocusRequester; 4 -> appInfoLicenseRequester; else -> FocusRequester.Default }
+                CategoryItem(title = category.name, icon = category.icon, isSelected = selectedCategoryIndex == index, onFocused = { selectedCategoryIndex = index }, onClick = { targetRequester.safeRequestFocus() }, modifier = Modifier.focusRequester(categoryFocusRequesters[index]).focusProperties { right = targetRequester })
             }
             Spacer(modifier = Modifier.weight(1f))
-
-            val activeRightTarget = getRightTargetRequester(selectedCategoryIndex)
-            CategoryItem(
-                title = "ホームに戻る",
-                icon = Icons.Default.Home,
-                isSelected = false,
-                onFocused = { },
-                onClick = onBack,
-                modifier = Modifier.focusProperties { right = activeRightTarget }
-            )
+            CategoryItem(title = "ホームに戻る", icon = Icons.Default.Home, isSelected = false, onFocused = { }, onClick = onBack)
         }
 
-        // --- メインコンテンツ (スクロール対応) ---
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(vertical = 48.dp, horizontal = 64.dp)
-                .focusProperties {
-                    left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default
-                }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState) // ★追加: これで溢れた項目もスクロールで表示されます
-            ) {
+        Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp).focusProperties { left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default }) {
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
                 when (selectedCategoryIndex) {
                     0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, { t, v -> editingItem = t to v }, kIpFocusRequester, kPortFocusRequester, mIpFocusRequester, mPortFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 0 })
                     1 -> PlaybackSettingsContent(liveQuality, videoQuality, liveQFocusRequester, videoQFocusRequester, { showLiveQualitySelection = true }, { showVideoQualitySelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 1 })
-                    2 -> HomeDisplaySettingsContent(currentThemeName, pickupGenre, excludePaid, pickupTime, startupTab, themeFocusRequester, genreFocusRequester, exPaidFocusRequester, timeFocusRequester, startTabFocusRequester, { showThemeSelection = true }, { showPickupGenreSelection = true }, { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, { showPickupTimeSelection = true }, { showStartupTabSelection = true }, { restoreFocusRequester = it; restoreCategoryIndex = 2 })
+                    2 -> HomeDisplaySettingsContent(isDarkMode = isDarkMode, themeSeason = themeSeason, genre = pickupGenre, excludePaid = excludePaid, pickupTime = pickupTime, startupTab = startupTab, themeModeR = themeModeFocusRequester, themeColorR = themeColorFocusRequester, genreR = genreFocusRequester, exPaidR = exPaidFocusRequester, timeR = timeFocusRequester, startTabR = startTabFocusRequester, onThemeMode = { showThemeModeSelection = true }, onThemeColor = { showThemeColorSelection = true }, onG = { showPickupGenreSelection = true }, onExPaid = { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } }, onTime = { showPickupTimeSelection = true }, onStartTab = { showStartupTabSelection = true }, onClick = { restoreFocusRequester = it; restoreCategoryIndex = 2 })
                     3 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> editingItem = t to v }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefaultDisplayFocusRequester, cSpeedFocusRequester, cSizeFocusRequester, cOpacityFocusRequester, cMaxLinesFocusRequester, { restoreFocusRequester = it; restoreCategoryIndex = 3 })
                     4 -> AppInfoContent({ showLicenses = true }, appInfoLicenseRequester, { restoreFocusRequester = it; restoreCategoryIndex = 4 })
                 }
-                // 下部に余白を設けて、最後の項目が埋もれないようにする
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
@@ -216,38 +168,20 @@ fun SettingsScreen(onBack: () -> Unit) {
             scope.launch {
                 val key = when (title) { "KonomiTV アドレス" -> SettingsRepository.KONOMI_IP; "KonomiTV ポート番号" -> SettingsRepository.KONOMI_PORT; "Mirakurun IPアドレス" -> SettingsRepository.MIRAKURUN_IP; "Mirakurun ポート番号" -> SettingsRepository.MIRAKURUN_PORT; "実況コメントの速さ" -> SettingsRepository.COMMENT_SPEED; "実況フォントサイズ倍率" -> SettingsRepository.COMMENT_FONT_SIZE; "実況コメント不透明度" -> SettingsRepository.COMMENT_OPACITY; "実況最大同時表示行数" -> SettingsRepository.COMMENT_MAX_LINES; else -> null }
                 if (key != null) repository.saveString(key, newValue)
-            }
-            editingItem = null
+            }; editingItem = null
         })
     }
-
     if (showLiveQualitySelection) { SelectionDialog("ライブ視聴画質を選択", StreamQuality.entries.map { it.label to it.value }, liveQuality, { showLiveQualitySelection = false }, { scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, it) }; showLiveQualitySelection = false }) }
     if (showVideoQualitySelection) { SelectionDialog("録画視聴画質を選択", StreamQuality.entries.map { it.label to it.value }, videoQuality, { showVideoQualitySelection = false }, { scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, it) }; showVideoQualitySelection = false }) }
-
-    if (showThemeSelection) {
-        val themeOptions = AppTheme.entries.map { it.label to it.name }
-        SelectionDialog("アプリテーマを選択", themeOptions, currentThemeName, { showThemeSelection = false }, { scope.launch { repository.saveString(SettingsRepository.APP_THEME, it) }; showThemeSelection = false })
-    }
-
-    if (showPickupGenreSelection) {
-        val genres = listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー")
-        SelectionDialog("ピックアップジャンルを選択", genres.map { it to it }, pickupGenre, { showPickupGenreSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) }; showPickupGenreSelection = false })
-    }
-    if (showPickupTimeSelection) {
-        val times = listOf("自動" to "自動", "朝 (5:00 - 11:00)" to "朝", "昼 (11:00 - 18:00)" to "昼", "夜 (18:00 - 5:00)" to "夜")
-        SelectionDialog("ピックアップ時間帯を選択", times, pickupTime, { showPickupTimeSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) }; showPickupTimeSelection = false })
-    }
-    if (showStartupTabSelection) {
-        val tabs = listOf("ホーム" to "ホーム", "ライブ" to "ライブ", "ビデオ" to "ビデオ", "番組表" to "番組表", "録画予約" to "録画予約")
-        SelectionDialog("起動時のデフォルトタブを選択", tabs, startupTab, { showStartupTabSelection = false }, { scope.launch { repository.saveString(SettingsRepository.STARTUP_TAB, it) }; showStartupTabSelection = false })
-    }
-
+    if (showThemeModeSelection) { SelectionDialog("基本テーマを選択", listOf("ダークモード" to "DARK", "ライトモード" to "LIGHT"), if (isDarkMode) "DARK" else "LIGHT", { showThemeModeSelection = false }) { selectedMode -> val newIsDark = selectedMode == "DARK"; val newTheme = getThemeFromModeAndSeason(newIsDark, themeSeason); scope.launch { repository.saveString(SettingsRepository.APP_THEME, newTheme) }; showThemeModeSelection = false } }
+    if (showThemeColorSelection) { SelectionDialog("テーマカラー・季節を選択", listOf("デフォルト (モノトーン/ハイトーン)" to "DEFAULT", "春 (桜)" to "SPRING", "夏 (海・空)" to "SUMMER", "秋 (紅葉)" to "AUTUMN", "冬 (雪・夜空)" to "WINTER"), themeSeason, { showThemeColorSelection = false }) { selectedSeason -> val newTheme = getThemeFromModeAndSeason(isDarkMode, selectedSeason); scope.launch { repository.saveString(SettingsRepository.APP_THEME, newTheme) }; showThemeColorSelection = false } }
+    if (showPickupGenreSelection) { SelectionDialog("ピックアップジャンルを選択", listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー").map { it to it }, pickupGenre, { showPickupGenreSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) }; showPickupGenreSelection = false }) }
+    if (showPickupTimeSelection) { SelectionDialog("ピックアップ時間帯を選択", listOf("自動" to "自動", "朝 (5:00 - 11:00)" to "朝", "昼 (11:00 - 18:00)" to "昼", "夜 (18:00 - 5:00)" to "夜"), pickupTime, { showPickupTimeSelection = false }, { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) }; showPickupTimeSelection = false }) }
+    if (showStartupTabSelection) { SelectionDialog("起動時のデフォルトタブを選択", listOf("ホーム" to "ホーム", "ライブ" to "ライブ", "ビデオ" to "ビデオ", "番組表" to "番組表", "録画予約" to "録画予約"), startupTab, { showStartupTabSelection = false }, { scope.launch { repository.saveString(SettingsRepository.STARTUP_TAB, it) }; showStartupTabSelection = false }) }
     if (showLicenses) {
         OpenSourceLicensesScreen(onBack = { showLicenses = false })
     }
 }
-
-// --- 各セクション用コンポーネント (配色更新版) ---
 
 @Composable
 fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: String, onEdit: (String, String) -> Unit, kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, onClick: (FocusRequester) -> Unit) {
@@ -279,24 +213,25 @@ fun PlaybackSettingsContent(liveQ: String, videoQ: String, liveR: FocusRequester
 
 @Composable
 fun HomeDisplaySettingsContent(
-    theme: String, genre: String, excludePaid: String, pickupTime: String, startupTab: String,
-    themeR: FocusRequester, genreR: FocusRequester, exPaidR: FocusRequester, timeR: FocusRequester, startTabR: FocusRequester,
-    onTheme: () -> Unit, onG: () -> Unit, onExPaid: () -> Unit, onTime: () -> Unit, onStartTab: () -> Unit,
+    isDarkMode: Boolean, themeSeason: String, genre: String, excludePaid: String, pickupTime: String, startupTab: String,
+    themeModeR: FocusRequester, themeColorR: FocusRequester, genreR: FocusRequester, exPaidR: FocusRequester, timeR: FocusRequester, startTabR: FocusRequester,
+    onThemeMode: () -> Unit, onThemeColor: () -> Unit, onG: () -> Unit, onExPaid: () -> Unit, onTime: () -> Unit, onStartTab: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val currentThemeLabel = runCatching { AppTheme.valueOf(theme).label }.getOrDefault(theme)
+    val modeLabel = if (isDarkMode) "ダークモード" else "ライトモード"
+    val seasonLabel = when(themeSeason) { "DEFAULT" -> "デフォルト"; "SPRING" -> "春"; "SUMMER" -> "夏"; "AUTUMN" -> "秋"; "WINTER" -> "冬"; else -> "デフォルト" }
 
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("表示設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
         SettingsSection("全般") {
-            SettingItem("アプリテーマ", currentThemeLabel, Icons.Default.Palette, modifier = Modifier.focusRequester(themeR), onClick = { onClick(themeR); onTheme() })
+            SettingItem("基本テーマ", modeLabel, Icons.Default.Brightness4, modifier = Modifier.focusRequester(themeModeR), onClick = { onClick(themeModeR); onThemeMode() })
+            SettingItem("テーマカラー・季節", seasonLabel, Icons.Default.Palette, modifier = Modifier.focusRequester(themeColorR), onClick = { onClick(themeColorR); onThemeColor() })
             SettingItem("起動時のデフォルトタブ", startupTab, Icons.Default.Home, modifier = Modifier.focusRequester(startTabR), onClick = { onClick(startTabR); onStartTab() })
         }
         SettingsSection("ホーム画面設定") {
             SettingItem("ピックアップジャンル", genre, Icons.Default.Category, modifier = Modifier.focusRequester(genreR), onClick = { onClick(genreR); onG() })
             SettingItem("ピックアップ時間帯", pickupTime, Icons.Default.Schedule, modifier = Modifier.focusRequester(timeR), onClick = { onClick(timeR); onTime() })
-            // ★修正点: 長いラベルでもレイアウトが崩れないよう調整されます
             SettingItem("ピックアップから有料放送を除外する", if (excludePaid == "ON") "ON (除外する)" else "OFF (除外しない)", Icons.Default.Block, modifier = Modifier.focusRequester(exPaidR), onClick = { onClick(exPaidR); onExPaid() })
         }
     }
@@ -361,26 +296,50 @@ fun SettingItem(title: String, value: String, icon: ImageVector? = null, modifie
         colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f), focusedContainerColor = colors.textPrimary.copy(0.9f), contentColor = colors.textPrimary, focusedContentColor = if (colors.isDark) Color.Black else Color.White), shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium), scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)) {
         Row(modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) { Icon(icon, null, modifier = Modifier.size(24.dp), tint = if (isFocused) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(0.7f)); Spacer(Modifier.width(16.dp)) }
-            // ★修正: title 側に weight(1f) を持たせることで、長いテキストでも改行を許容し、右側の value を押し出さないようにします
             Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f));
             Text(value, textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge, color = if (isFocused) Color.Unspecified else colors.textSecondary)
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SelectionDialog(title: String, options: List<Pair<String, String>>, current: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
     val colors = KomorebiTheme.colors
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.8f)).onKeyEvent { if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) { onDismiss(); true } else false }, contentAlignment = Alignment.Center) {
+    val initialIndex = remember(options, current) { options.indexOfFirst { it.second == current }.coerceAtLeast(0) }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .focusProperties { exit = { FocusRequester.Cancel } }
+            .focusGroup()
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    onDismiss()
+                    true
+                } else false
+            },
+        contentAlignment = Alignment.Center
+    ) {
         Surface(shape = RoundedCornerShape(16.dp), colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = colors.surface), modifier = Modifier.width(400.dp)) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(title, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 400.dp)) {
+                LazyColumn(
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 400.dp)
+                ) {
                     items(options) { (label, value) ->
                         val isSelected = value == current
                         val focusRequester = remember { FocusRequester() }
-                        LaunchedEffect(isSelected) { if (isSelected) { delay(100); focusRequester.safeRequestFocus() } }
+                        LaunchedEffect(isSelected) {
+                            if (isSelected) {
+                                delay(100)
+                                focusRequester.safeRequestFocus()
+                            }
+                        }
                         SelectionDialogItem(label, isSelected, { onSelect(value) }, Modifier.focusRequester(focusRequester))
                     }
                 }
@@ -402,6 +361,17 @@ fun SelectionDialogItem(label: String, isSelected: Boolean, onClick: () -> Unit,
             Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
             if (isSelected) { Icon(Icons.Default.Check, null, modifier = Modifier.size(20.dp), tint = if (isFocused) Color.Unspecified else colors.textPrimary) }
         }
+    }
+}
+
+fun getThemeFromModeAndSeason(isDark: Boolean, season: String): String {
+    return when (season) {
+        "DEFAULT" -> if (isDark) "MONOTONE" else "HIGHTONE"
+        "SPRING" -> if (isDark) "SPRING" else "SPRING_LIGHT"
+        "SUMMER" -> if (isDark) "SUMMER" else "SUMMER_LIGHT"
+        "AUTUMN" -> if (isDark) "AUTUMN" else "AUTUMN_LIGHT"
+        "WINTER" -> if (isDark) "WINTER_DARK" else "WINTER_LIGHT"
+        else -> if (isDark) "MONOTONE" else "HIGHTONE"
     }
 }
 
