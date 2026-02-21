@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.util.Base64
+import android.util.SparseArray
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
 import android.webkit.*
@@ -31,15 +32,21 @@ import androidx.media3.common.*
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.Log
+import androidx.media3.common.util.ParsableByteArray
+import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.extractor.ExtractorOutput
+import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.TsExtractor
+import androidx.media3.extractor.ts.TsPayloadReader
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
@@ -69,6 +76,7 @@ import androidx.annotation.RequiresApi
 import java.time.OffsetDateTime
 import java.util.Collections
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import java.io.ByteArrayOutputStream
 
 private const val TAG = "LivePlayerScreen"
 
@@ -109,7 +117,6 @@ fun LivePlayerScreen(
     val commentOpacityStr by settingsViewModel.commentOpacity.collectAsState()
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
-
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
@@ -174,7 +181,6 @@ fun LivePlayerScreen(
     var retryKey by remember { mutableIntStateOf(0) }
     var sseStatus by remember { mutableStateOf("Standby") }
     var sseDetail by remember { mutableStateOf(AppStrings.SSE_CONNECTING) }
-
     var isPlayerPlaying by remember { mutableStateOf(false) }
 
     val mainFocusRequester = remember { FocusRequester() }
@@ -188,12 +194,15 @@ fun LivePlayerScreen(
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
 
-    // ISDB-T/Sの安定再生のため FLAG_ALLOW_NON_IDR_KEYFRAMES を追加
+    // ★ 修正箇所：rememberのキーから webViewRef.value を外し、プレイヤー再生成を防止
     val extractorsFactory = remember {
-        DefaultExtractorsFactory().apply {
-            setTsExtractorFlags(
-                DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS or
-                        DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+        ExtractorsFactory {
+            arrayOf(
+                TsExtractor(
+                    TsExtractor.MODE_SINGLE_PMT,
+                    TimestampAdjuster(0),
+                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState)
+                )
             )
         }
     }
@@ -210,24 +219,31 @@ fun LivePlayerScreen(
         else { "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
     }
 
+    // ★ 修正箇所：rememberのキーから不要な要素を削除
     val exoPlayer = remember(currentStreamSource, retryKey, currentQuality) {
         val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? { return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build() }
+            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
+                return DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
+            }
         }
         ExoPlayer.Builder(context, renderersFactory).apply {
-            if (currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
+            if (currentStreamSource == StreamSource.MIRAKURUN) {
+                setMediaSourceFactory(DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory))
+            }
         }.build().apply {
             playWhenReady = true
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(playing: Boolean) {
                     isPlayerPlaying = playing
+                    android.util.Log.i(TAG, "onIsPlayingChanged: $playing")
                 }
-
                 override fun onPlayerError(error: PlaybackException) {
+                    android.util.Log.e(TAG, "onPlayerError: ${error.message}", error)
                     if (currentStreamSource == StreamSource.KONOMITV && sseStatus == "Standby") return
                     playerError = analyzePlayerError(error)
                 }
                 override fun onMetadata(metadata: Metadata) {
+                    if (currentStreamSource == StreamSource.MIRAKURUN) return
                     if (!subtitleEnabledState.value) return
                     for (i in 0 until metadata.length()) {
                         val entry = metadata.get(i)
@@ -244,9 +260,7 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isPlayerPlaying) {
         danmakuViewRef.value?.let { view ->
-            if (view.isPrepared) {
-                if (isPlayerPlaying) view.resume() else view.pause()
-            }
+            if (view.isPrepared) { if (isPlayerPlaying) view.resume() else view.pause() }
         }
     }
 
@@ -319,6 +333,7 @@ fun LivePlayerScreen(
         } else {
             UrlBuilder.getKonomiTvLiveStreamUrl(konomiIp, konomiPort, currentChannelItem.displayChannelId, currentQuality.value)
         }
+        android.util.Log.i(TAG, "Setting MediaItem: $streamUrl")
         exoPlayer.stop(); exoPlayer.clearMediaItems(); exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl)); exoPlayer.prepare(); exoPlayer.play()
         if (playerError == null) { delay(300); mainFocusRequester.safeRequestFocus(TAG) }
     }
@@ -347,7 +362,7 @@ fun LivePlayerScreen(
                         danmaku.setTime(view.currentTime + 10); view.addDanmaku(danmaku)
                     }
                 }
-            } catch (e: Exception) { Log.e(TAG, "Parse Error", e) }
+            } catch (e: Exception) { android.util.Log.e(TAG, "Parse Error", e) }
         }
         onDispose { jikkyoClient.stop() }
     }
@@ -379,12 +394,7 @@ fun LivePlayerScreen(
         when (keyCode) {
             NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
                 if (!isSubMenuOpen && !isMiniListOpen) {
-                    if (exoPlayer.isPlaying) {
-                        exoPlayer.pause()
-                    } else {
-                        exoPlayer.play()
-                    }
-
+                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                     when {
                         showOverlay -> { onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(true) }
                         isPinnedOverlay -> onPinnedOverlayChange(false)
@@ -407,11 +417,7 @@ fun LivePlayerScreen(
         AndroidView(
             factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } },
             update = { it.player = exoPlayer },
-            modifier = Modifier
-                .fillMaxSize()
-                .focusRequester(mainFocusRequester)
-                .focusable(!isMiniListOpen && !isSubMenuOpen)
-                // ★修正箇所: Mirakurun時は常に表示(1f)、KonomiTV時は ONAir 状態を反映
+            modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable(!isMiniListOpen && !isSubMenuOpen)
                 .alpha(if (currentStreamSource == StreamSource.MIRAKURUN || sseStatus == "ONAir") 1f else 0f)
         )
 
@@ -431,10 +437,10 @@ fun LivePlayerScreen(
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(-1, -1);
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT);
-                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true };
-                            loadUrl("file:///android_asset/subtitle_renderer.html");
+                            layoutParams = ViewGroup.LayoutParams(-1, -1)
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
+                            loadUrl("file:///android_asset/subtitle_renderer.html")
                             webViewRef.value = this
                         }
                     },
@@ -446,18 +452,13 @@ fun LivePlayerScreen(
             }
         }
 
-        if (subtitleCommentLayer == "CommentOnTop") {
-            subtitleLayer()
-            commentLayer()
-        } else {
-            commentLayer()
-            subtitleLayer()
-        }
+        if (subtitleCommentLayer == "CommentOnTop") { subtitleLayer(); commentLayer() } else { commentLayer(); subtitleLayer() }
 
         AnimatedVisibility(visible = currentStreamSource == StreamSource.KONOMITV && (sseStatus == "Standby" || sseStatus == "Offline") && playerError == null) {
             Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
                 Row(modifier = Modifier.align(Alignment.TopStart).padding(32.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(color = colors.textPrimary, modifier = Modifier.size(24.dp), strokeWidth = 3.dp); Spacer(Modifier.width(16.dp))
+                    CircularProgressIndicator(color = colors.textPrimary, modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                    Spacer(Modifier.width(16.dp))
                     Text(text = sseDetail, color = colors.textPrimary, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                 }
             }
@@ -470,51 +471,122 @@ fun LivePlayerScreen(
             LiveOverlayUI(currentChannelItem, displayTitle, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, isManualOverlay, isRecording, scrollState)
         }
 
-        AnimatedVisibility(
-            visible = isMiniListOpen && playerError == null,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-        ) {
-            ChannelListOverlay(
-                groupedChannels = groupedChannels,
-                currentChannelId = currentChannelItem.id,
-                onChannelSelect = { onChannelSelect(it); onMiniListToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } },
-                mirakurunIp = mirakurunIp ?: "",
-                mirakurunPort = mirakurunPort ?: "",
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                focusRequester = listFocusRequester
-            )
+        AnimatedVisibility(visible = isMiniListOpen && playerError == null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+            ChannelListOverlay(groupedChannels, currentChannelItem.id, { onChannelSelect(it); onMiniListToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
         }
 
         AnimatedVisibility(visible = isSubMenuOpen && playerError == null, enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()) {
             TopSubMenuUI(
-                currentAudioMode = currentAudioMode, currentSource = currentStreamSource, currentQuality = currentQuality, isMirakurunAvailable = isMirakurunAvailable,
-                isSubtitleEnabled = isSubtitleEnabled, isSubtitleSupported = currentStreamSource != StreamSource.MIRAKURUN, isCommentEnabled = isCommentEnabled, isRecording = isRecording,
-                onRecordToggle = {
-                    if (isRecording) { activeReserve?.let { reserveViewModel.deleteReservation(it.id) { onShowToast("録画を停止しました") } } }
-                    else { currentProgramId?.let { reserveViewModel.addReserve(it) { onShowToast("録画を開始します") } } ?: onShowToast("番組情報不明") }
-                    onSubMenuToggle(false)
-                },
-                focusRequester = subMenuFocusRequester,
-                onAudioToggle = {
+                currentAudioMode, currentStreamSource, currentQuality, isMirakurunAvailable, isSubtitleEnabled, true, isCommentEnabled, isRecording,
+                { if (isRecording) activeReserve?.let { reserveViewModel.deleteReservation(it.id) { onShowToast("録画を停止しました") } } else currentProgramId?.let { reserveViewModel.addReserve(it) { onShowToast("録画を開始します") } } ?: onShowToast("番組情報不明"); onSubMenuToggle(false) },
+                subMenuFocusRequester,
+                {
                     currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                     val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                     if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(audioGroups[if(currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build()
                     onShowToast("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
-                onSourceToggle = { if (isMirakurunAvailable) { currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN; onShowToast("ソース切替"); onSubMenuToggle(false) } },
-                onSubtitleToggle = { subtitleEnabledState.value = !subtitleEnabledState.value; onShowToast("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") },
-                onCommentToggle = {
-                    isCommentEnabled = !isCommentEnabled
-                    onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}")
-                },
-                onQualitySelect = { if (currentQuality != it) { currentQuality = it; retryKey++; onShowToast("画質: ${it.label}") }; onSubMenuToggle(false) },
-                onCloseMenu = { onSubMenuToggle(false) }
+                { if (isMirakurunAvailable) { currentStreamSource = if(currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN; onShowToast("ソース切替"); onSubMenuToggle(false) } },
+                { subtitleEnabledState.value = !subtitleEnabledState.value; onShowToast("字幕: ${if(subtitleEnabledState.value) "表示" else "非表示"}") },
+                { isCommentEnabled = !isCommentEnabled; onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}") },
+                { if (currentQuality != it) { currentQuality = it; retryKey++; onShowToast("画質: ${it.label}") }; onSubMenuToggle(false) },
+                { onSubMenuToggle(false) }
             )
         }
 
         if (playerError != null) LiveErrorDialog(errorMessage = playerError!!, onRetry = { playerError = null; retryKey++ }, onBack = onBackPressed)
+    }
+}
+
+// =========================================================================
+// ★ 修正：TS解析および字幕抽出ロジック（Log.i使用、再初期化防止）
+// =========================================================================
+
+@UnstableApi
+private class DirectSubtitlePayloadReader(
+    private val webViewRef: MutableState<WebView?>,
+    private val isSubtitleEnabledState: MutableState<Boolean>
+) : TsPayloadReader {
+    private lateinit var timestampAdjuster: TimestampAdjuster
+    private val buffer = ByteArrayOutputStream()
+
+    override fun init(adjuster: TimestampAdjuster, extractorOutput: ExtractorOutput, idGenerator: TsPayloadReader.TrackIdGenerator) {
+        this.timestampAdjuster = adjuster
+    }
+
+    override fun seek() { buffer.reset() }
+
+    override fun consume(data: ParsableByteArray, flags: Int) {
+        if (!isSubtitleEnabledState.value) return
+        val isStart = (flags and TsPayloadReader.FLAG_PAYLOAD_UNIT_START_INDICATOR) != 0
+        if (isStart && buffer.size() > 0) {
+            parseAndSendBuffer()
+            buffer.reset()
+        }
+        val bytesAvailable = data.bytesLeft()
+        if (bytesAvailable > 0) {
+            val chunk = ByteArray(bytesAvailable)
+            data.readBytes(chunk, 0, bytesAvailable)
+            buffer.write(chunk)
+        }
+    }
+
+    private fun parseAndSendBuffer() {
+        val rawData = buffer.toByteArray()
+        var id3StartIndex = -1
+        for (i in 0 until rawData.size - 2) {
+            if (rawData[i] == 0x49.toByte() && rawData[i+1] == 0x44.toByte() && rawData[i+2] == 0x33.toByte()) {
+                id3StartIndex = i; break
+            }
+        }
+        if (id3StartIndex == -1) return
+
+        try {
+            var offset = id3StartIndex + 10
+            while (offset < rawData.size - 10) {
+                val frameId = String(rawData, offset, 4)
+                val frameSize = (rawData[offset + 4].toInt() and 0x7F shl 21) or
+                        (rawData[offset + 5].toInt() and 0x7F shl 14) or
+                        (rawData[offset + 6].toInt() and 0x7F shl 7) or
+                        (rawData[offset + 7].toInt() and 0x7F)
+                offset += 10
+                if (frameId == "PRIV") {
+                    var ownerEnd = offset
+                    while (ownerEnd < offset + frameSize && ownerEnd < rawData.size && rawData[ownerEnd].toInt() != 0) ownerEnd++
+                    val ownerString = String(rawData, offset, ownerEnd - offset)
+                    if (ownerString.contains("aribb24", true) || ownerString.contains("B24", true)) {
+                        val privateDataStart = ownerEnd + 1
+                        val privateDataLength = frameSize - (privateDataStart - offset)
+                        if (privateDataStart + privateDataLength <= rawData.size) {
+                            val privateData = rawData.copyOfRange(privateDataStart, privateDataStart + privateDataLength)
+                            val base64Data = Base64.encodeToString(privateData, Base64.NO_WRAP)
+                            val currentPtsMs = (timestampAdjuster.lastAdjustedTimestampUs / 1000) + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
+                            android.util.Log.i(TAG, "=====> [SUBTITLE] Sending to WebView. Len: ${base64Data.length} <=====")
+                            webViewRef.value?.post { webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPtsMs, '$base64Data'); }", null) }
+                        }
+                    }
+                }
+                offset += frameSize
+            }
+        } catch (e: Exception) { android.util.Log.e(TAG, "Parse error", e) }
+    }
+}
+
+@UnstableApi
+private class DirectSubtitlePayloadReaderFactory(
+    private val webViewRef: MutableState<WebView?>,
+    private val isSubtitleEnabledState: MutableState<Boolean>
+) : TsPayloadReader.Factory {
+    private val defaultFactory = DefaultTsPayloadReaderFactory(
+        DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS or
+                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
+                DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS
+    )
+    override fun createInitialPayloadReaders(): SparseArray<TsPayloadReader> = defaultFactory.createInitialPayloadReaders()
+    override fun createPayloadReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? {
+        if (streamType == 0x06 || streamType == 0x15) {
+            return DirectSubtitlePayloadReader(webViewRef, isSubtitleEnabledState)
+        }
+        return defaultFactory.createPayloadReader(streamType, esInfo)
     }
 }
