@@ -23,6 +23,8 @@ class SettingsRepository @Inject constructor(
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
+        // ★追加: 優先ソース設定キー
+        val PREFERRED_STREAM_SOURCE = stringPreferencesKey("preferred_stream_source")
 
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
@@ -37,7 +39,6 @@ class SettingsRepository @Inject constructor(
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
 
-        // ★追加: アドオン・ラボ設定キー
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
@@ -54,6 +55,8 @@ class SettingsRepository @Inject constructor(
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
     val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "" }
+    // ★追加: 優先ソース用フロー (デフォルトは KONOMITV)
+    val preferredStreamSource: Flow<String> = context.dataStore.data.map { it[PREFERRED_STREAM_SOURCE] ?: "KONOMITV" }
 
     val commentSpeed: Flow<String> = context.dataStore.data.map { it[COMMENT_SPEED] ?: "1.0" }
     val commentFontSize: Flow<String> = context.dataStore.data.map { it[COMMENT_FONT_SIZE] ?: "1.0" }
@@ -68,7 +71,6 @@ class SettingsRepository @Inject constructor(
     val videoSubtitleDefault: Flow<String> = context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
     val subtitleCommentLayer: Flow<String> = context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
 
-    // ★追加: アドオン・ラボ用フロー
     val labAnnictIntegration: Flow<String> = context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
     val labShobocalIntegration: Flow<String> = context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
     val defaultPostCommand: Flow<String> = context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }

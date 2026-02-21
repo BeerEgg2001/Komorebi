@@ -67,6 +67,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val konomiPort by repository.konomiPort.collectAsState(initial = "")
     val mirakurunIp by repository.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by repository.mirakurunPort.collectAsState(initial = "")
+    // ★追加: 優先ソースの購読
+    val preferredSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
 
     val commentSpeed by repository.commentSpeed.collectAsState(initial = "1.0")
     val commentFontSize by repository.commentFontSize.collectAsState(initial = "1.0")
@@ -110,13 +112,14 @@ fun SettingsScreen(onBack: () -> Unit) {
     // フォーカスリクエスター
     val kIpR = remember { FocusRequester() }; val kPortR = remember { FocusRequester() }
     val mIpR = remember { FocusRequester() }; val mPortR = remember { FocusRequester() }
+    val prefSrcR = remember { FocusRequester() } // ★追加: 優先ソース用リクエスター
     val liveQR = remember { FocusRequester() }; val videoQR = remember { FocusRequester() }
     val liveSubR = remember { FocusRequester() }; val videoSubR = remember { FocusRequester() }
     val layerR = remember { FocusRequester() }
     val themeModeR = remember { FocusRequester() }; val themeColorR = remember { FocusRequester() }
     val startTabR = remember { FocusRequester() }
-    val genreR = remember { FocusRequester() }; val timeR = remember { FocusRequester() } // ★復元
-    val exPaidR = remember { FocusRequester() } // ★復元
+    val genreR = remember { FocusRequester() }; val timeR = remember { FocusRequester() }
+    val exPaidR = remember { FocusRequester() }
     val cDefR = remember { FocusRequester() }; val cSpeedR = remember { FocusRequester() }
     val cSizeR = remember { FocusRequester() }; val cOpacityR = remember { FocusRequester() }
     val cMaxR = remember { FocusRequester() }
@@ -173,7 +176,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp).focusProperties { left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default }) {
             Column(modifier = Modifier.fillMaxSize().verticalScroll(mainScrollState)) {
                 when (selectedCategoryIndex) {
-                    0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t.contains("Konomi")) (if(t.contains("アドレス")) SettingsRepository.KONOMI_IP else SettingsRepository.KONOMI_PORT) else (if(t.contains("IP")) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT), it) } } }, kIpR, kPortR, mIpR, mPortR) { restoreFocusRequester = it; restoreCategoryIndex = 0 }
+                    0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, preferredSource, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t.contains("Konomi")) (if(t.contains("アドレス")) SettingsRepository.KONOMI_IP else SettingsRepository.KONOMI_PORT) else (if(t.contains("IP")) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT), it) } } }, { activeDialog = SettingDialogState.Selection("優先するソース", listOf("KonomiTV" to "KONOMITV", "Mirakurun" to "MIRAKURUN"), preferredSource) { scope.launch { repository.saveString(SettingsRepository.PREFERRED_STREAM_SOURCE, it) } } }, kIpR, kPortR, mIpR, mPortR, prefSrcR) { restoreFocusRequester = it; restoreCategoryIndex = 0 }
                     1 -> PlaybackSettingsContent(liveQuality, videoQuality, liveSubtitleDefault, videoSubtitleDefault, subtitleCommentLayer, liveQR, videoQR, liveSubR, videoSubR, layerR, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, liveQuality) { scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, it) } } }, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, videoQuality) { scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, it) } } }, { scope.launch { repository.saveString(SettingsRepository.LIVE_SUBTITLE_DEFAULT, if (liveSubtitleDefault == "ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.VIDEO_SUBTITLE_DEFAULT, if (videoSubtitleDefault == "ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Selection("表示優先度", listOf("実況コメントを上に表示" to "CommentOnTop", "字幕を上に表示" to "SubtitleOnTop"), subtitleCommentLayer) { scope.launch { repository.saveString(SettingsRepository.SUBTITLE_COMMENT_LAYER, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 1 }
                     2 -> HomeDisplaySettingsContent(isDarkMode, themeSeason, pickupGenre, excludePaid, pickupTime, startupTab, themeModeR, themeColorR, startTabR, genreR, timeR, exPaidR,
                         onMode = { activeDialog = SettingDialogState.Selection("基本テーマ", listOf("ダークモード" to "DARK", "ライトモード" to "LIGHT"), if (isDarkMode) "DARK" else "LIGHT") { val newTheme = getThemeFromModeAndSeason(it == "DARK", themeSeason); scope.launch { repository.saveString(SettingsRepository.APP_THEME, newTheme) } } },
@@ -201,7 +204,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 }
 
-// ★復元: ホーム画面のピックアップ設定を含む表示設定コンテンツ
 @Composable
 fun HomeDisplaySettingsContent(
     isDarkMode: Boolean, themeSeason: String, genre: String, excludePaid: String, pickupTime: String, startupTab: String,
@@ -242,8 +244,9 @@ fun LabSettingsContent(annict: String, shobocal: String, postCmd: String, annict
     }
 }
 
+// ★修正: 優先ソースの追加と、Mirakurun無効時のボタン非アクティブ化対応
 @Composable
-fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: String, onEdit: (String, String) -> Unit, kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, onClick: (FocusRequester) -> Unit) {
+fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: String, prefSrc: String, onEdit: (String, String) -> Unit, onSelectSrc: () -> Unit, kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, prefSrcR: FocusRequester, onClick: (FocusRequester) -> Unit) {
     val colors = KomorebiTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("接続設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
@@ -254,6 +257,18 @@ fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: St
         SettingsSection("Mirakurun (オプション)") {
             SettingItem("アドレス", mIp, Icons.Default.Dns, modifier = Modifier.focusRequester(mIpR), onClick = { onClick(mIpR); onEdit("Mirakurun IPアドレス", mIp) })
             SettingItem("ポート番号", mPort, modifier = Modifier.focusRequester(mPortR), onClick = { onClick(mPortR); onEdit("Mirakurun ポート番号", mPort) })
+        }
+        SettingsSection("配信ソース設定") {
+            val isMirakurunAvailable = mIp.isNotBlank() && mPort.isNotBlank()
+            val srcLabel = if (!isMirakurunAvailable) "KonomiTV (固定)" else if (prefSrc == "MIRAKURUN") "Mirakurun を優先" else "KonomiTV を優先"
+            SettingItem(
+                title = "優先するソース",
+                value = srcLabel,
+                icon = Icons.Default.PriorityHigh,
+                enabled = isMirakurunAvailable,
+                modifier = Modifier.focusRequester(prefSrcR),
+                onClick = { onClick(prefSrcR); onSelectSrc() }
+            )
         }
     }
 }
@@ -328,17 +343,31 @@ fun CategoryItem(title: String, icon: ImageVector, isSelected: Boolean, onFocuse
     }
 }
 
+// ★修正: enabledパラメータを追加し、非アクティブ時のグレーアウトとフォーカス制御を実装
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun SettingItem(title: String, value: String, icon: ImageVector? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun SettingItem(title: String, value: String, icon: ImageVector? = null, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    Surface(onClick = onClick, modifier = modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused },
-        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f), focusedContainerColor = colors.textPrimary.copy(0.9f), contentColor = colors.textPrimary, focusedContentColor = if (colors.isDark) Color.Black else Color.White), shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium), scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)) {
+    Surface(
+        onClick = { if (enabled) onClick() },
+        modifier = modifier.fillMaxWidth().focusProperties { canFocus = enabled }.onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = colors.textPrimary.copy(if (enabled) 0.05f else 0.02f),
+            focusedContainerColor = colors.textPrimary.copy(if (enabled) 0.9f else 0.02f),
+            contentColor = colors.textPrimary.copy(alpha = if (enabled) 1f else 0.4f),
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+        ),
+        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = if (enabled) 1.02f else 1.0f)
+    ) {
         Row(modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (icon != null) { Icon(icon, null, modifier = Modifier.size(24.dp), tint = if (isFocused) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(0.7f)); Spacer(Modifier.width(16.dp)) }
+            if (icon != null) {
+                Icon(icon, null, modifier = Modifier.size(24.dp), tint = if (isFocused && enabled) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(if (enabled) 0.7f else 0.3f))
+                Spacer(Modifier.width(16.dp))
+            }
             Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text(value, textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge, color = if (isFocused) Color.Unspecified else colors.textSecondary)
+            Text(value, textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge, color = if (isFocused && enabled) Color.Unspecified else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.5f))
         }
     }
 }

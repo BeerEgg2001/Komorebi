@@ -53,6 +53,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import com.beeregg2001.komorebi.viewmodel.*
@@ -175,7 +176,13 @@ fun LivePlayerScreen(
 
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
-    var currentStreamSource by remember { mutableStateOf(if (isMirakurunAvailable) StreamSource.MIRAKURUN else StreamSource.KONOMITV) }
+
+    // ★追加: 優先ソースの反映ロジック
+    val repository = remember { SettingsRepository(context) }
+    val preferredStreamSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
+    var currentStreamSource by remember(isMirakurunAvailable, preferredStreamSource) {
+        mutableStateOf(if (isMirakurunAvailable && preferredStreamSource == "MIRAKURUN") StreamSource.MIRAKURUN else StreamSource.KONOMITV)
+    }
 
     var playerError by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
@@ -194,7 +201,6 @@ fun LivePlayerScreen(
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
 
-    // ★ 修正箇所：rememberのキーから webViewRef.value を外し、プレイヤー再生成を防止
     val extractorsFactory = remember {
         ExtractorsFactory {
             arrayOf(
@@ -219,7 +225,6 @@ fun LivePlayerScreen(
         else { "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})" }
     }
 
-    // ★ 修正箇所：rememberのキーから不要な要素を削除
     val exoPlayer = remember(currentStreamSource, retryKey, currentQuality) {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? {
@@ -499,7 +504,7 @@ fun LivePlayerScreen(
 }
 
 // =========================================================================
-// ★ 修正：TS解析および字幕抽出ロジック（Log.i使用、再初期化防止）
+// ★ 修正：TS解析および字幕抽出ロジック
 // =========================================================================
 
 @UnstableApi
