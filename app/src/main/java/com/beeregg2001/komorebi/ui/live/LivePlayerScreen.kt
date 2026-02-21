@@ -110,7 +110,6 @@ fun LivePlayerScreen(
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
 
-    // ★追加: 設定からレイヤー順序を取得
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
@@ -188,7 +187,17 @@ fun LivePlayerScreen(
     val updatedIsSubMenuOpen by rememberUpdatedState(isSubMenuOpen)
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
-    val extractorsFactory = remember { DefaultExtractorsFactory().apply { setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS) } }
+
+    // ISDB-T/Sの安定再生のため FLAG_ALLOW_NON_IDR_KEYFRAMES を追加
+    val extractorsFactory = remember {
+        DefaultExtractorsFactory().apply {
+            setTsExtractorFlags(
+                DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS or
+                        DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+            )
+        }
+    }
+
     val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
 
     fun analyzePlayerError(error: PlaybackException): String {
@@ -402,10 +411,10 @@ fun LivePlayerScreen(
                 .fillMaxSize()
                 .focusRequester(mainFocusRequester)
                 .focusable(!isMiniListOpen && !isSubMenuOpen)
-                .alpha(if (sseStatus == "ONAir" || currentStreamSource != StreamSource.MIRAKURUN) 1f else 0f)
+                // ★修正箇所: Mirakurun時は常に表示(1f)、KonomiTV時は ONAir 状態を反映
+                .alpha(if (currentStreamSource == StreamSource.MIRAKURUN || sseStatus == "ONAir") 1f else 0f)
         )
 
-        // ★追加: 描画レイヤー（コメントと字幕）の順序を動的に切り替える
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
 
         val commentLayer = @Composable {
@@ -437,7 +446,6 @@ fun LivePlayerScreen(
             }
         }
 
-        // 後から描画したものが上になる
         if (subtitleCommentLayer == "CommentOnTop") {
             subtitleLayer()
             commentLayer()
