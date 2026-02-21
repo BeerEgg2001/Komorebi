@@ -23,6 +23,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
@@ -36,6 +37,7 @@ import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.common.QrCodeUtils
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
@@ -90,7 +92,11 @@ fun SettingsScreen(onBack: () -> Unit) {
     val startupTab by repository.startupTab.collectAsState(initial = "ホーム")
     val currentThemeName by repository.appTheme.collectAsState(initial = "MONOTONE")
 
-    // ダイアログ状態
+    // Annict 認証用
+    var showAnnictQrDialog by remember { mutableStateOf(false) }
+    val deviceId = remember { "TV-${java.util.UUID.randomUUID().toString().take(6)}" }
+
+    // ダイアログ状態管理
     var activeDialog by remember { mutableStateOf<SettingDialogState>(SettingDialogState.None) }
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
@@ -107,7 +113,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
     var isSidebarFocused by remember { mutableStateOf(true) }
 
-    // フォーカスリクエスター
+    // フォーカスリクエスター群
     val kIpR = remember { FocusRequester() }; val kPortR = remember { FocusRequester() }
     val mIpR = remember { FocusRequester() }; val mPortR = remember { FocusRequester() }
     val liveQR = remember { FocusRequester() }; val videoQR = remember { FocusRequester() }
@@ -115,8 +121,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val layerR = remember { FocusRequester() }
     val themeModeR = remember { FocusRequester() }; val themeColorR = remember { FocusRequester() }
     val startTabR = remember { FocusRequester() }
-    val genreR = remember { FocusRequester() }; val timeR = remember { FocusRequester() } // ★復元
-    val exPaidR = remember { FocusRequester() } // ★復元
+    val genreR = remember { FocusRequester() }; val timeR = remember { FocusRequester() }
+    val exPaidR = remember { FocusRequester() }
     val cDefR = remember { FocusRequester() }; val cSpeedR = remember { FocusRequester() }
     val cSizeR = remember { FocusRequester() }; val cOpacityR = remember { FocusRequester() }
     val cMaxR = remember { FocusRequester() }
@@ -153,7 +159,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
         false
     }) {
-        // サイドバー
+        // サイドバー: ホームに戻るボタンを最下部に固定
         Column(modifier = Modifier.width(280.dp).fillMaxHeight().background(colors.surface.copy(alpha = 0.6f)).padding(top = 32.dp, bottom = 32.dp, start = 24.dp, end = 24.dp).onFocusChanged { isSidebarFocused = it.hasFocus }) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 24.dp, start = 8.dp)) {
                 Icon(Icons.Default.Settings, null, tint = colors.textPrimary, modifier = Modifier.size(32.dp))
@@ -169,7 +175,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             CategoryItem(title = "ホームに戻る", icon = Icons.Default.Home, isSelected = false, onFocused = { }, onClick = onBack)
         }
 
-        // メイン
+        // メインコンテンツ
         Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp).focusProperties { left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default }) {
             Column(modifier = Modifier.fillMaxSize().verticalScroll(mainScrollState)) {
                 when (selectedCategoryIndex) {
@@ -185,12 +191,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onClick = { restoreFocusRequester = it; restoreCategoryIndex = 2 }
                     )
                     3 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(when(t){ "実況コメントの速さ"->SettingsRepository.COMMENT_SPEED; "実況フォントサイズ倍率"->SettingsRepository.COMMENT_FONT_SIZE; "実況コメント不透明度"->SettingsRepository.COMMENT_OPACITY; else->SettingsRepository.COMMENT_MAX_LINES }, it) } } }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefR, cSpeedR, cSizeR, cOpacityR, cMaxR) { restoreFocusRequester = it; restoreCategoryIndex = 3 }
-                    4 -> LabSettingsContent(labAnnict, labShobocal, defaultPostCommand, labAnnictR, labShobocalR, postCmdR, { scope.launch { repository.saveString(SettingsRepository.LAB_ANNICT_INTEGRATION, if(labAnnict=="ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.LAB_SHOBOCAL_INTEGRATION, if(labShobocal=="ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Input("デフォルト録画後実行コマンド", defaultPostCommand) { scope.launch { repository.saveString(SettingsRepository.DEFAULT_POST_COMMAND, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 4 }
+                    4 -> LabSettingsContent(labAnnict, labShobocal, defaultPostCommand, labAnnictR, labShobocalR, postCmdR,
+                        onAnnict = { showAnnictQrDialog = true },
+                        onShobocal = { scope.launch { repository.saveString(SettingsRepository.LAB_SHOBOCAL_INTEGRATION, if(labShobocal=="ON") "OFF" else "ON") } },
+                        onEditCmd = { activeDialog = SettingDialogState.Input("デフォルト録画後実行コマンド", defaultPostCommand) { scope.launch { repository.saveString(SettingsRepository.DEFAULT_POST_COMMAND, it) } } }
+                    ) { restoreFocusRequester = it; restoreCategoryIndex = 4 }
                     5 -> AppInfoContent({ activeDialog = SettingDialogState.Licenses }, appInfoLicR) { restoreFocusRequester = it; restoreCategoryIndex = 5 }
                 }
                 Spacer(Modifier.height(32.dp))
             }
         }
+    }
+
+    // ダイアログ・QRコード表示
+    if (showAnnictQrDialog) {
+        val relayUrl = "https://your-username.github.io/komorebi-auth/?id=$deviceId"
+        AnnictAuthQrDialog(url = relayUrl, onDismiss = { showAnnictQrDialog = false })
     }
 
     when (val state = activeDialog) {
@@ -201,7 +217,21 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 }
 
-// ★復元: ホーム画面のピックアップ設定を含む表示設定コンテンツ
+@Composable
+fun LabSettingsContent(annict: String, shobocal: String, postCmd: String, annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester, onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit, onClick: (FocusRequester) -> Unit) {
+    val colors = KomorebiTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text("アドオン・ラボ", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
+        SettingsSection("外部サービス連携 (実験的)") {
+            SettingItem("Annict と同期する", "アカウントを連携", Icons.Default.Sync, modifier = Modifier.focusRequester(annictR), onClick = { onClick(annictR); onAnnict() })
+            SettingItem("しょぼいカレンダー連携", if (shobocal == "ON") "有効" else "無効", Icons.Default.CalendarMonth, modifier = Modifier.focusRequester(shobocalR), onClick = { onClick(shobocalR); onShobocal() })
+        }
+        SettingsSection("録画詳細設定") {
+            SettingItem("デフォルト録画後実行コマンド", postCmd.ifEmpty { "未設定" }, Icons.Default.Terminal, modifier = Modifier.focusRequester(cmdR), onClick = { onClick(cmdR); onEditCmd() })
+        }
+    }
+}
+
 @Composable
 fun HomeDisplaySettingsContent(
     isDarkMode: Boolean, themeSeason: String, genre: String, excludePaid: String, pickupTime: String, startupTab: String,
@@ -212,32 +242,15 @@ fun HomeDisplaySettingsContent(
     val colors = KomorebiTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text("表示設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
-
         SettingsSection("全般") {
             SettingItem("基本テーマ", if (isDarkMode) "ダークモード" else "ライトモード", Icons.Default.Brightness4, modifier = Modifier.focusRequester(modeR), onClick = { onClick(modeR); onMode() })
             SettingItem("テーマカラー・季節", when(themeSeason){"SPRING"->"春";"SUMMER"->"夏";"AUTUMN"->"秋";"WINTER"->"冬";else->"デフォルト"}, Icons.Default.Palette, modifier = Modifier.focusRequester(colorR), onClick = { onClick(colorR); onColor() })
             SettingItem("起動時のデフォルトタブ", startupTab, Icons.Default.Home, modifier = Modifier.focusRequester(startR), onClick = { onClick(startR); onStart() })
         }
-
         SettingsSection("ホーム画面設定 (おすすめピックアップ)") {
             SettingItem("ピックアップジャンル", genre, Icons.Default.Category, modifier = Modifier.focusRequester(genreR), onClick = { onClick(genreR); onG() })
             SettingItem("ピックアップ時間帯", pickupTime, Icons.Default.Schedule, modifier = Modifier.focusRequester(timeR), onClick = { onClick(timeR); onTime() })
             SettingItem("ピックアップから有料放送を除外する", if (excludePaid == "ON") "ON (除外する)" else "OFF (除外しない)", Icons.Default.Block, modifier = Modifier.focusRequester(exPaidR), onClick = { onClick(exPaidR); onExPaid() })
-        }
-    }
-}
-
-@Composable
-fun LabSettingsContent(annict: String, shobocal: String, postCmd: String, annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester, onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit, onClick: (FocusRequester) -> Unit) {
-    val colors = KomorebiTheme.colors
-    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text("アドオン・ラボ", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
-        SettingsSection("外部サービス連携 (実験的)") {
-            SettingItem("Annict と同期する", if (annict == "ON") "有効" else "無効", Icons.Default.Sync, modifier = Modifier.focusRequester(annictR), onClick = { onClick(annictR); onAnnict() })
-            SettingItem("しょぼいカレンダー連携", if (shobocal == "ON") "有効" else "無効", Icons.Default.CalendarMonth, modifier = Modifier.focusRequester(shobocalR), onClick = { onClick(shobocalR); onShobocal() })
-        }
-        SettingsSection("録画詳細設定") {
-            SettingItem("デフォルト録画後実行コマンド", postCmd.ifEmpty { "未設定" }, Icons.Default.Terminal, modifier = Modifier.focusRequester(cmdR), onClick = { onClick(cmdR); onEditCmd() })
         }
     }
 }
@@ -350,7 +363,7 @@ fun SelectionDialog(title: String, options: List<Pair<String, String>>, current:
     val initialIndex = remember(options, current) { options.indexOfFirst { it.second == current }.coerceAtLeast(0) }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(0.8f)).focusProperties { exit = { FocusRequester.Cancel } }.focusGroup().onKeyEvent { if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) { onDismiss(); true } else false }, contentAlignment = Alignment.Center) {
-        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = colors.surface), modifier = Modifier.width(400.dp)) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = colors.surface), modifier = Modifier.width(400.dp)) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(title, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
                 LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 400.dp)) {
@@ -377,6 +390,44 @@ fun SelectionDialogItem(label: String, isSelected: Boolean, onClick: () -> Unit,
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
             if (isSelected) { Icon(Icons.Default.Check, null, modifier = Modifier.size(20.dp), tint = if (isFocused) Color.Unspecified else colors.textPrimary) }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun AnnictAuthQrDialog(url: String, onDismiss: () -> Unit) {
+    val colors = KomorebiTheme.colors
+    val qrBitmap = remember(url) { QrCodeUtils.generateQrCode(url) }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f)).onKeyEvent {
+            if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) { onDismiss(); true } else false
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier.width(500.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = androidx.tv.material3.SurfaceDefaults.colors(containerColor = colors.surface)
+        ) {
+            Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Annict 連携", style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(16.dp))
+                Text("スマホでQRコードを読み取って\nログインを完了させてください", textAlign = TextAlign.Center, color = colors.textSecondary)
+
+                Spacer(Modifier.height(24.dp))
+
+                androidx.compose.foundation.Image(
+                    bitmap = qrBitmap.asImageBitmap(),
+                    contentDescription = "QR Code",
+                    modifier = Modifier.size(256.dp).background(Color.White).padding(8.dp)
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                Button(onClick = onDismiss) { Text("閉じる") }
+            }
         }
     }
 }
