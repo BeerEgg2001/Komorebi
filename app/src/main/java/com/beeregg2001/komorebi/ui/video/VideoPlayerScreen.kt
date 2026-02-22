@@ -70,8 +70,7 @@ fun VideoPlayerScreen(
     isSceneSearchOpen: Boolean,
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
-    onUpdateWatchHistory: (RecordedProgram, Double) -> Unit,
-    onShowToast: (String) -> Unit,
+    onShowToast: (String) -> Unit, // ★修正: onUpdateWatchHistoryを削除しスッキリ
     recordViewModel: RecordViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -87,7 +86,6 @@ fun VideoPlayerScreen(
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
 
-    // ★追加: 設定からレイヤー順序を取得
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
@@ -95,7 +93,11 @@ fun VideoPlayerScreen(
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
     val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
 
-    var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) { mutableStateOf(commentDefaultDisplayStr == "ON") }
+    var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) {
+        mutableStateOf(
+            commentDefaultDisplayStr == "ON"
+        )
+    }
     var isHeavyUiReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(800); isHeavyUiReady = true }
 
@@ -104,10 +106,15 @@ fun VideoPlayerScreen(
     var currentQuality by remember { mutableStateOf(StreamQuality.fromValue(initialQuality)) }
 
     val videoSubtitleDefaultStr by settingsViewModel.videoSubtitleDefault.collectAsState()
-    var isSubtitleEnabled by rememberSaveable(videoSubtitleDefaultStr) { mutableStateOf(videoSubtitleDefaultStr == "ON") }
+    var isSubtitleEnabled by rememberSaveable(videoSubtitleDefaultStr) {
+        mutableStateOf(
+            videoSubtitleDefaultStr == "ON"
+        )
+    }
 
     val allComments = remember { mutableStateListOf<ArchivedComment>() }
-    val isEmulator = remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
+    val isEmulator =
+        remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(currentQuality) { UUID.randomUUID().toString() }
 
     var indicatorState by remember { mutableStateOf<IndicatorState?>(null) }
@@ -123,42 +130,81 @@ fun VideoPlayerScreen(
         allComments.addAll(fetchedComments)
     }
 
-    val audioProcessor = remember { ChannelMixingAudioProcessor().apply { putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))) } }
+    val audioProcessor = remember {
+        ChannelMixingAudioProcessor().apply {
+            putChannelMixingMatrix(
+                ChannelMixingMatrix(
+                    2,
+                    2,
+                    floatArrayOf(1f, 0f, 0f, 1f)
+                )
+            )
+        }
+    }
     val exoPlayer = remember {
         val renderersFactory = object : DefaultRenderersFactory(context) {
-            init { setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER) }
-            override fun buildAudioSink(ctx: android.content.Context, enableFloat: Boolean, enableParams: Boolean): DefaultAudioSink? = DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
+            init {
+                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
+            }
+
+            override fun buildAudioSink(
+                ctx: android.content.Context,
+                enableFloat: Boolean,
+                enableParams: Boolean
+            ): DefaultAudioSink? =
+                DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
         }
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0").setAllowCrossProtocolRedirects(true)
-        ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0")
+            .setAllowCrossProtocolRedirects(true)
+        ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
 
-            val mediaItem = MediaItem.Builder().setUri(UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-            setMediaItem(mediaItem)
-            setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(), true)
+                val mediaItem = MediaItem.Builder().setUri(
+                    UrlBuilder.getVideoPlaylistUrl(
+                        konomiIp,
+                        konomiPort,
+                        program.recordedVideo.id,
+                        currentSessionId,
+                        currentQuality.value
+                    )
+                ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+                setMediaItem(mediaItem)
+                setAudioAttributes(
+                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .setUsage(C.USAGE_MEDIA).build(), true
+                )
 
-            addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(playing: Boolean) {
-                    isPlayerPlaying = playing
-                }
+                addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        isPlayerPlaying = playing
+                    }
 
-                override fun onMetadata(metadata: Metadata) {
-                    if (!isSubtitleEnabled) return
-                    for (i in 0 until metadata.length()) {
-                        val entry = metadata.get(i)
-                        if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
-                            val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                            val ptsMs = currentPosition
-                            webViewRef.value?.post {
-                                webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }", null)
+                    override fun onMetadata(metadata: Metadata) {
+                        if (!isSubtitleEnabled) return
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is PrivFrame && (entry.owner.contains(
+                                    "aribb24",
+                                    true
+                                ) || entry.owner.contains("B24", true))
+                            ) {
+                                val base64Data =
+                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                                val ptsMs = currentPosition
+                                webViewRef.value?.post {
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($ptsMs, '$base64Data'); }",
+                                        null
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            })
-            if (initialPositionMs > 0) seekTo(initialPositionMs)
-            prepare(); playWhenReady = true
-        }
+                })
+                if (initialPositionMs > 0) seekTo(initialPositionMs)
+                prepare(); playWhenReady = true
+            }
     }
 
     LaunchedEffect(exoPlayer, isSubtitleEnabled) {
@@ -166,7 +212,10 @@ fun VideoPlayerScreen(
             if (isSubtitleEnabled && exoPlayer.isPlaying) {
                 val currentPos = exoPlayer.currentPosition
                 webViewRef.value?.post {
-                    webViewRef.value?.evaluateJavascript("if(window.syncClock){ window.syncClock($currentPos); }", null)
+                    webViewRef.value?.evaluateJavascript(
+                        "if(window.syncClock){ window.syncClock($currentPos); }",
+                        null
+                    )
                 }
             }
             delay(100)
@@ -174,38 +223,111 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(currentQuality) {
-        val currentPos = exoPlayer.currentPosition; val isPlaying = exoPlayer.isPlaying; exoPlayer.stop(); exoPlayer.clearMediaItems()
-        val newUrl = UrlBuilder.getVideoPlaylistUrl(konomiIp, konomiPort, program.recordedVideo.id, currentSessionId, currentQuality.value)
-        exoPlayer.setMediaItem(MediaItem.Builder().setUri(newUrl).setMimeType(MimeTypes.APPLICATION_M3U8).build())
+        val currentPos = exoPlayer.currentPosition;
+        val isPlaying = exoPlayer.isPlaying; exoPlayer.stop(); exoPlayer.clearMediaItems()
+        val newUrl = UrlBuilder.getVideoPlaylistUrl(
+            konomiIp,
+            konomiPort,
+            program.recordedVideo.id,
+            currentSessionId,
+            currentQuality.value
+        )
+        exoPlayer.setMediaItem(
+            MediaItem.Builder().setUri(newUrl).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+        )
         exoPlayer.seekTo(currentPos); exoPlayer.prepare(); if (isPlaying) exoPlayer.play()
     }
 
-    LaunchedEffect(isSceneSearchOpen) { if (isSceneSearchOpen) { wasPlayingBeforeSceneSearch = exoPlayer.isPlaying; if (wasPlayingBeforeSceneSearch) exoPlayer.pause() } else if (wasPlayingBeforeSceneSearch) exoPlayer.play() }
+    LaunchedEffect(isSceneSearchOpen) {
+        if (isSceneSearchOpen) {
+            wasPlayingBeforeSceneSearch =
+                exoPlayer.isPlaying; if (wasPlayingBeforeSceneSearch) exoPlayer.pause()
+        } else if (wasPlayingBeforeSceneSearch) exoPlayer.play()
+    }
 
     DisposableEffect(currentQuality, currentSessionId) {
-        recordViewModel.startStreamMaintenance(program, currentQuality.value, currentSessionId, { exoPlayer.currentPosition / 1000.0 })
+        recordViewModel.startStreamMaintenance(
+            program,
+            currentQuality.value,
+            currentSessionId,
+            { exoPlayer.currentPosition / 1000.0 })
         onDispose { recordViewModel.stopStreamMaintenance() }
     }
 
-    LaunchedEffect(indicatorState) { if (indicatorState != null) { delay(1500); indicatorState = null } }
-    LaunchedEffect(showControls, isSubMenuOpen, isSceneSearchOpen, lastInteractionTime) { if (showControls && !isSubMenuOpen && !isSceneSearchOpen) { delay(5000); onShowControlsChange(false) } }
-    LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, showControls) { delay(150); when { isSubMenuOpen -> subMenuFocusRequester.safeRequestFocus(TAG); !isSceneSearchOpen && !showControls -> mainFocusRequester.safeRequestFocus(TAG) } }
-
-    Box(modifier = Modifier.fillMaxSize().background(colors.background).onKeyEvent { keyEvent ->
-        if (keyEvent.type != KeyEventType.KeyDown || isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
-        onShowControlsChange(true); lastInteractionTime = System.currentTimeMillis()
-        when (keyEvent.nativeKeyEvent.keyCode) {
-            NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> { if (exoPlayer.isPlaying) { exoPlayer.pause(); indicatorState = IndicatorState(Icons.Default.Pause, "停止") } else { exoPlayer.play(); indicatorState = IndicatorState(Icons.Default.PlayArrow, "再生") }; true }
-            NativeKeyEvent.KEYCODE_DPAD_RIGHT -> { exoPlayer.seekTo(exoPlayer.currentPosition + 30000); indicatorState = IndicatorState(Icons.Default.FastForward, "+30s"); true }
-            NativeKeyEvent.KEYCODE_DPAD_LEFT -> { exoPlayer.seekTo(exoPlayer.currentPosition - 10000); indicatorState = IndicatorState(Icons.Default.FastRewind, "-10s"); true }
-            NativeKeyEvent.KEYCODE_DPAD_UP -> { onSubMenuToggle(true); true }
-            NativeKeyEvent.KEYCODE_DPAD_DOWN -> { onSceneSearchToggle(true); true }
-            else -> false
+    LaunchedEffect(indicatorState) {
+        if (indicatorState != null) {
+            delay(1500); indicatorState = null
         }
-    }) {
-        AndroidView(factory = { PlayerView(it).apply { player = exoPlayer; useController = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true } }, modifier = Modifier.fillMaxSize().focusRequester(mainFocusRequester).focusable())
+    }
+    LaunchedEffect(
+        showControls,
+        isSubMenuOpen,
+        isSceneSearchOpen,
+        lastInteractionTime
+    ) {
+        if (showControls && !isSubMenuOpen && !isSceneSearchOpen) {
+            delay(5000); onShowControlsChange(false)
+        }
+    }
+    LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, showControls) {
+        delay(150); when {
+        isSubMenuOpen -> subMenuFocusRequester.safeRequestFocus(TAG); !isSceneSearchOpen && !showControls -> mainFocusRequester.safeRequestFocus(
+            TAG
+        )
+    }
+    }
 
-        // ★追加: 描画レイヤー（コメントと字幕）の順序を動的に切り替える
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown || isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
+                onShowControlsChange(true); lastInteractionTime = System.currentTimeMillis()
+                when (keyEvent.nativeKeyEvent.keyCode) {
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                        if (exoPlayer.isPlaying) {
+                            exoPlayer.pause(); indicatorState =
+                                IndicatorState(Icons.Default.Pause, "停止")
+                        } else {
+                            exoPlayer.play(); indicatorState =
+                                IndicatorState(Icons.Default.PlayArrow, "再生")
+                        }; true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        exoPlayer.seekTo(exoPlayer.currentPosition + 30000); indicatorState =
+                            IndicatorState(Icons.Default.FastForward, "+30s"); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        exoPlayer.seekTo(exoPlayer.currentPosition - 10000); indicatorState =
+                            IndicatorState(Icons.Default.FastRewind, "-10s"); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                        onSubMenuToggle(true); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        onSceneSearchToggle(true); true
+                    }
+
+                    else -> false
+                }
+            }) {
+        AndroidView(
+            factory = {
+                PlayerView(it).apply {
+                    player = exoPlayer; useController = false; resizeMode =
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true
+                }
+            }, modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(mainFocusRequester)
+                .focusable()
+        )
+
         val commentLayer = @Composable {
             if (isHeavyUiReady) {
                 ArchivedCommentOverlay(
@@ -236,14 +358,14 @@ fun VideoPlayerScreen(
                         }
                     },
                     update = { view ->
-                        view.visibility = if (isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                        view.visibility =
+                            if (isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
                     },
                     modifier = Modifier.fillMaxSize()
                 )
             }
         }
 
-        // 後から描画したものが上になる
         if (subtitleCommentLayer == "CommentOnTop") {
             subtitleLayer()
             commentLayer()
@@ -252,30 +374,74 @@ fun VideoPlayerScreen(
             subtitleLayer()
         }
 
-        PlayerControls(exoPlayer = exoPlayer, title = program.title, isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen)
+        PlayerControls(
+            exoPlayer = exoPlayer,
+            title = program.title,
+            isVisible = showControls && !isSubMenuOpen && !isSceneSearchOpen
+        )
 
-        AnimatedVisibility(visible = isSceneSearchOpen, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
-            SceneSearchOverlay(program = program, currentPositionMs = exoPlayer.currentPosition, konomiIp = konomiIp, konomiPort = konomiPort, onSeekRequested = { exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } }, onClose = { onSceneSearchToggle(false); scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) } })
+        AnimatedVisibility(
+            visible = isSceneSearchOpen,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        ) {
+            SceneSearchOverlay(
+                program = program,
+                currentPositionMs = exoPlayer.currentPosition,
+                konomiIp = konomiIp,
+                konomiPort = konomiPort,
+                onSeekRequested = {
+                    exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch {
+                    delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                }
+                },
+                onClose = {
+                    onSceneSearchToggle(false); scope.launch {
+                    delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                }
+                })
         }
 
-        AnimatedVisibility(visible = isSubMenuOpen, enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
+        AnimatedVisibility(
+            visible = isSubMenuOpen,
+            enter = slideInVertically { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut()) {
             VideoTopSubMenuUI(
-                currentAudioMode = currentAudioMode, currentSpeed = currentSpeed, isSubtitleEnabled = isSubtitleEnabled, currentQuality = currentQuality, isCommentEnabled = isCommentEnabled, focusRequester = subMenuFocusRequester,
+                currentAudioMode = currentAudioMode,
+                currentSpeed = currentSpeed,
+                isSubtitleEnabled = isSubtitleEnabled,
+                currentQuality = currentQuality,
+                isCommentEnabled = isCommentEnabled,
+                focusRequester = subMenuFocusRequester,
                 onAudioToggle = {
-                    currentAudioMode = if(currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                    val tracks = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                    if (tracks.size >= 2) exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(TrackSelectionOverride(tracks[if (currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0)).build()
-                    onShowToast("音声: ${if(currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                    currentAudioMode =
+                        if (currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                    val tracks =
+                        exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
+                        exoPlayer.trackSelectionParameters.buildUpon()
+                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
+                                TrackSelectionOverride(
+                                    tracks[if (currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                    0
+                                )
+                            ).build()
+                    onShowToast("音声: ${if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
-                onSpeedToggle = { val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed = speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(currentSpeed); onShowToast("速度: ${currentSpeed}x") },
+                onSpeedToggle = {
+                    val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); currentSpeed =
+                    speeds[(speeds.indexOf(currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(
+                    currentSpeed
+                ); onShowToast("速度: ${currentSpeed}x")
+                },
                 onSubtitleToggle = {
                     isSubtitleEnabled = !isSubtitleEnabled
-                    onShowToast("字幕: ${if(isSubtitleEnabled) "表示" else "非表示"}")
+                    onShowToast("字幕: ${if (isSubtitleEnabled) "表示" else "非表示"}")
                 },
                 onQualitySelect = { currentQuality = it; onShowToast("画質: ${it.label}") },
                 onCommentToggle = {
                     isCommentEnabled = !isCommentEnabled
-                    onShowToast("実況: ${if(isCommentEnabled) "表示" else "非表示"}")
+                    onShowToast("実況: ${if (isCommentEnabled) "表示" else "非表示"}")
                 }
             )
         }
@@ -284,8 +450,22 @@ fun VideoPlayerScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) { exoPlayer.pause(); onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0) } }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                // ★修正: 外部のコールバックではなく、ViewModelに直接履歴保存を指示
+                exoPlayer.pause(); recordViewModel.updateWatchHistory(
+                    program,
+                    exoPlayer.currentPosition / 1000.0
+                )
+            }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { onUpdateWatchHistory(program, exoPlayer.currentPosition / 1000.0); lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release() }
+        onDispose {
+            // ★修正: ここも同様
+            recordViewModel.updateWatchHistory(
+                program,
+                exoPlayer.currentPosition / 1000.0
+            ); lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()
+        }
     }
 }

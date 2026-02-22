@@ -217,7 +217,6 @@ fun MainRootScreen(
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
                                 initialQuality = defaultLiveQuality,
-                                groupedChannels = groupedChannels,
                                 isMiniListOpen = state.isPlayerMiniListOpen,
                                 onMiniListToggle = { state.isPlayerMiniListOpen = it },
                                 showOverlay = state.playerShowOverlay,
@@ -258,12 +257,6 @@ fun MainRootScreen(
                                 onSceneSearchToggle = { state.isPlayerSceneSearchOpen = it },
                                 onBackPressed = {
                                     state.selectedProgram = null; state.isReturningFromPlayer = true
-                                },
-                                onUpdateWatchHistory = { prog, pos ->
-                                    recordViewModel.updateWatchHistory(
-                                        prog,
-                                        pos
-                                    )
                                 },
                                 onShowToast = { state.toastMessage = it })
                         }
