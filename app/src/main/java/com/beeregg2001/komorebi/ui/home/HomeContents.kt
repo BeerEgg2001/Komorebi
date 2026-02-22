@@ -31,7 +31,7 @@ import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalIcon // ★追加

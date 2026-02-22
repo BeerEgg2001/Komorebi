@@ -11,7 +11,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 
 @Composable
 fun ChannelLogo(

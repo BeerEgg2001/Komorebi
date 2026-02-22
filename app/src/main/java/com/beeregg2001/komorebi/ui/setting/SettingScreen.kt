@@ -48,13 +48,18 @@ sealed class SettingDialogState {
     object None : SettingDialogState()
     data class Input(val title: String, val initialValue: String, val onConfirm: (String) -> Unit) : SettingDialogState()
     data class Selection(val title: String, val options: List<Pair<String, String>>, val current: String, val onSelect: (String) -> Unit) : SettingDialogState()
+    data class ConfirmClear(val title: String, val message: String, val onConfirm: () -> Unit) : SettingDialogState() // ★追加: 確認ダイアログ用
     object Licenses : SettingDialogState()
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onClearLastChannel: () -> Unit = {}, // ★追加: チャンネル履歴削除コールバック
+    onClearWatchHistory: () -> Unit = {} // ★追加: 録画視聴履歴削除コールバック
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { SettingsRepository(context) }
@@ -67,7 +72,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val konomiPort by repository.konomiPort.collectAsState(initial = "")
     val mirakurunIp by repository.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by repository.mirakurunPort.collectAsState(initial = "")
-    // ★追加: 優先ソースの購読
     val preferredSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
 
     val commentSpeed by repository.commentSpeed.collectAsState(initial = "1.0")
@@ -98,7 +102,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     var restoreFocusRequester by remember { mutableStateOf<FocusRequester?>(null) }
     var restoreCategoryIndex by remember { mutableIntStateOf(-1) }
 
+    // ★修正: カテゴリの先頭に「基本設定」を追加
     val categories = listOf(
+        Category("基本設定", Icons.Default.SettingsApplications),
         Category("接続設定", Icons.Default.CastConnected),
         Category("再生設定", Icons.Default.PlayCircle),
         Category("表示設定", Icons.Default.Dashboard),
@@ -110,9 +116,10 @@ fun SettingsScreen(onBack: () -> Unit) {
     var isSidebarFocused by remember { mutableStateOf(true) }
 
     // フォーカスリクエスター
+    val clearChannelR = remember { FocusRequester() }; val clearHistoryR = remember { FocusRequester() } // ★追加
     val kIpR = remember { FocusRequester() }; val kPortR = remember { FocusRequester() }
     val mIpR = remember { FocusRequester() }; val mPortR = remember { FocusRequester() }
-    val prefSrcR = remember { FocusRequester() } // ★追加: 優先ソース用リクエスター
+    val prefSrcR = remember { FocusRequester() }
     val liveQR = remember { FocusRequester() }; val videoQR = remember { FocusRequester() }
     val liveSubR = remember { FocusRequester() }; val videoSubR = remember { FocusRequester() }
     val layerR = remember { FocusRequester() }
@@ -164,7 +171,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             Column(modifier = Modifier.weight(1f).verticalScroll(sidebarScrollState), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 categories.forEachIndexed { index, category ->
-                    val targetR = when(index) { 0 -> kIpR; 1 -> liveQR; 2 -> themeModeR; 3 -> cDefR; 4 -> labAnnictR; 5 -> appInfoLicR; else -> FocusRequester.Default }
+                    // ★修正: 追加したインデックス分ずらしてマッピング
+                    val targetR = when(index) { 0 -> clearChannelR; 1 -> kIpR; 2 -> liveQR; 3 -> themeModeR; 4 -> cDefR; 5 -> labAnnictR; 6 -> appInfoLicR; else -> FocusRequester.Default }
                     CategoryItem(title = category.name, icon = category.icon, isSelected = selectedCategoryIndex == index, onFocused = { selectedCategoryIndex = index }, onClick = { targetR.safeRequestFocus() }, modifier = Modifier.focusRequester(categoryFocusRequesters[index]).focusProperties { right = targetR })
                 }
             }
@@ -176,20 +184,31 @@ fun SettingsScreen(onBack: () -> Unit) {
         Box(modifier = Modifier.weight(1f).fillMaxHeight().padding(vertical = 48.dp, horizontal = 64.dp).focusProperties { left = categoryFocusRequesters.getOrNull(selectedCategoryIndex) ?: FocusRequester.Default }) {
             Column(modifier = Modifier.fillMaxSize().verticalScroll(mainScrollState)) {
                 when (selectedCategoryIndex) {
-                    0 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, preferredSource, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t.contains("Konomi")) (if(t.contains("アドレス")) SettingsRepository.KONOMI_IP else SettingsRepository.KONOMI_PORT) else (if(t.contains("IP")) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT), it) } } }, { activeDialog = SettingDialogState.Selection("優先するソース", listOf("KonomiTV" to "KONOMITV", "Mirakurun" to "MIRAKURUN"), preferredSource) { scope.launch { repository.saveString(SettingsRepository.PREFERRED_STREAM_SOURCE, it) } } }, kIpR, kPortR, mIpR, mPortR, prefSrcR) { restoreFocusRequester = it; restoreCategoryIndex = 0 }
-                    1 -> PlaybackSettingsContent(liveQuality, videoQuality, liveSubtitleDefault, videoSubtitleDefault, subtitleCommentLayer, liveQR, videoQR, liveSubR, videoSubR, layerR, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, liveQuality) { scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, it) } } }, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, videoQuality) { scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, it) } } }, { scope.launch { repository.saveString(SettingsRepository.LIVE_SUBTITLE_DEFAULT, if (liveSubtitleDefault == "ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.VIDEO_SUBTITLE_DEFAULT, if (videoSubtitleDefault == "ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Selection("表示優先度", listOf("実況コメントを上に表示" to "CommentOnTop", "字幕を上に表示" to "SubtitleOnTop"), subtitleCommentLayer) { scope.launch { repository.saveString(SettingsRepository.SUBTITLE_COMMENT_LAYER, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 1 }
-                    2 -> HomeDisplaySettingsContent(isDarkMode, themeSeason, pickupGenre, excludePaid, pickupTime, startupTab, themeModeR, themeColorR, startTabR, genreR, timeR, exPaidR,
+                    0 -> GeneralSettingsContent(
+                        onClearChannel = { activeDialog = SettingDialogState.ConfirmClear("履歴の削除", "前回視聴したチャンネルの履歴を削除しますか？") { onClearLastChannel() } },
+                        onClearHistory = { activeDialog = SettingDialogState.ConfirmClear("履歴の削除", "録画の視聴履歴を削除しますか？") { onClearWatchHistory() } },
+                        clearChannelR, clearHistoryR
+                    ) { restoreFocusRequester = it; restoreCategoryIndex = 0 }
+
+                    1 -> ConnectionSettingsContent(konomiIp, konomiPort, mirakurunIp, mirakurunPort, preferredSource, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t.contains("Konomi")) (if(t.contains("アドレス")) SettingsRepository.KONOMI_IP else SettingsRepository.KONOMI_PORT) else (if(t.contains("IP")) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT), it) } } }, { activeDialog = SettingDialogState.Selection("優先するソース", listOf("KonomiTV" to "KONOMITV", "Mirakurun" to "MIRAKURUN"), preferredSource) { scope.launch { repository.saveString(SettingsRepository.PREFERRED_STREAM_SOURCE, it) } } }, kIpR, kPortR, mIpR, mPortR, prefSrcR) { restoreFocusRequester = it; restoreCategoryIndex = 1 }
+
+                    2 -> PlaybackSettingsContent(liveQuality, videoQuality, liveSubtitleDefault, videoSubtitleDefault, subtitleCommentLayer, liveQR, videoQR, liveSubR, videoSubR, layerR, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, liveQuality) { scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, it) } } }, { activeDialog = SettingDialogState.Selection("視聴画質", StreamQuality.entries.map { it.label to it.value }, videoQuality) { scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, it) } } }, { scope.launch { repository.saveString(SettingsRepository.LIVE_SUBTITLE_DEFAULT, if (liveSubtitleDefault == "ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.VIDEO_SUBTITLE_DEFAULT, if (videoSubtitleDefault == "ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Selection("表示優先度", listOf("実況コメントを上に表示" to "CommentOnTop", "字幕を上に表示" to "SubtitleOnTop"), subtitleCommentLayer) { scope.launch { repository.saveString(SettingsRepository.SUBTITLE_COMMENT_LAYER, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 2 }
+
+                    3 -> HomeDisplaySettingsContent(isDarkMode, themeSeason, pickupGenre, excludePaid, pickupTime, startupTab, themeModeR, themeColorR, startTabR, genreR, timeR, exPaidR,
                         onMode = { activeDialog = SettingDialogState.Selection("基本テーマ", listOf("ダークモード" to "DARK", "ライトモード" to "LIGHT"), if (isDarkMode) "DARK" else "LIGHT") { val newTheme = getThemeFromModeAndSeason(it == "DARK", themeSeason); scope.launch { repository.saveString(SettingsRepository.APP_THEME, newTheme) } } },
                         onColor = { activeDialog = SettingDialogState.Selection("テーマカラー", listOf("デフォルト" to "DEFAULT", "春" to "SPRING", "夏" to "SUMMER", "秋" to "AUTUMN", "冬" to "WINTER"), themeSeason) { val newTheme = getThemeFromModeAndSeason(isDarkMode, it); scope.launch { repository.saveString(SettingsRepository.APP_THEME, newTheme) } } },
                         onStart = { activeDialog = SettingDialogState.Selection("初期タブ", listOf("ホーム" to "ホーム", "ライブ" to "ライブ", "ビデオ" to "ビデオ", "番組表" to "番組表", "録画予約" to "録画予約"), startupTab) { scope.launch { repository.saveString(SettingsRepository.STARTUP_TAB, it) } } },
                         onG = { activeDialog = SettingDialogState.Selection("ジャンルを選択", listOf("アニメ", "映画", "ドラマ", "スポーツ", "音楽", "バラエティ", "ドキュメンタリー").map { it to it }, pickupGenre) { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) } } },
                         onTime = { activeDialog = SettingDialogState.Selection("時間帯を選択", listOf("自動" to "自動", "朝" to "朝", "昼" to "昼", "夜" to "夜"), pickupTime) { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) } } },
                         onExPaid = { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (excludePaid == "ON") "OFF" else "ON") } },
-                        onClick = { restoreFocusRequester = it; restoreCategoryIndex = 2 }
+                        onClick = { restoreFocusRequester = it; restoreCategoryIndex = 3 }
                     )
-                    3 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(when(t){ "実況コメントの速さ"->SettingsRepository.COMMENT_SPEED; "実況フォントサイズ倍率"->SettingsRepository.COMMENT_FONT_SIZE; "実況コメント不透明度"->SettingsRepository.COMMENT_OPACITY; else->SettingsRepository.COMMENT_MAX_LINES }, it) } } }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefR, cSpeedR, cSizeR, cOpacityR, cMaxR) { restoreFocusRequester = it; restoreCategoryIndex = 3 }
-                    4 -> LabSettingsContent(labAnnict, labShobocal, defaultPostCommand, labAnnictR, labShobocalR, postCmdR, { scope.launch { repository.saveString(SettingsRepository.LAB_ANNICT_INTEGRATION, if(labAnnict=="ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.LAB_SHOBOCAL_INTEGRATION, if(labShobocal=="ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Input("デフォルト録画後実行コマンド", defaultPostCommand) { scope.launch { repository.saveString(SettingsRepository.DEFAULT_POST_COMMAND, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 4 }
-                    5 -> AppInfoContent({ activeDialog = SettingDialogState.Licenses }, appInfoLicR) { restoreFocusRequester = it; restoreCategoryIndex = 5 }
+
+                    4 -> DisplaySettingsContent(commentDefaultDisplay, commentSpeed, commentFontSize, commentOpacity, commentMaxLines, { t, v -> activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(when(t){ "実況コメントの速さ"->SettingsRepository.COMMENT_SPEED; "実況フォントサイズ倍率"->SettingsRepository.COMMENT_FONT_SIZE; "実況コメント不透明度"->SettingsRepository.COMMENT_OPACITY; else->SettingsRepository.COMMENT_MAX_LINES }, it) } } }, { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (commentDefaultDisplay == "ON") "OFF" else "ON") } }, cDefR, cSpeedR, cSizeR, cOpacityR, cMaxR) { restoreFocusRequester = it; restoreCategoryIndex = 4 }
+
+                    5 -> LabSettingsContent(labAnnict, labShobocal, defaultPostCommand, labAnnictR, labShobocalR, postCmdR, { scope.launch { repository.saveString(SettingsRepository.LAB_ANNICT_INTEGRATION, if(labAnnict=="ON") "OFF" else "ON") } }, { scope.launch { repository.saveString(SettingsRepository.LAB_SHOBOCAL_INTEGRATION, if(labShobocal=="ON") "OFF" else "ON") } }, { activeDialog = SettingDialogState.Input("デフォルト録画後実行コマンド", defaultPostCommand) { scope.launch { repository.saveString(SettingsRepository.DEFAULT_POST_COMMAND, it) } } }) { restoreFocusRequester = it; restoreCategoryIndex = 5 }
+
+                    6 -> AppInfoContent({ activeDialog = SettingDialogState.Licenses }, appInfoLicR) { restoreFocusRequester = it; restoreCategoryIndex = 6 }
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -200,7 +219,68 @@ fun SettingsScreen(onBack: () -> Unit) {
         is SettingDialogState.None -> {}
         is SettingDialogState.Input -> InputDialog(title = state.title, initialValue = state.initialValue, onDismiss = { closeDialog() }, onConfirm = { state.onConfirm(it); closeDialog() })
         is SettingDialogState.Selection -> SelectionDialog(title = state.title, options = state.options, current = state.current, onDismiss = { closeDialog() }, onSelect = { state.onSelect(it); closeDialog() })
+        is SettingDialogState.ConfirmClear -> ConfirmClearDialog(title = state.title, message = state.message, onConfirm = { state.onConfirm(); closeDialog() }, onDismiss = { closeDialog() })
         is SettingDialogState.Licenses -> OpenSourceLicensesScreen(onBack = { closeDialog() })
+    }
+}
+
+// ★追加: 基本設定（履歴の削除）のコンテンツ
+@Composable
+fun GeneralSettingsContent(
+    onClearChannel: () -> Unit,
+    onClearHistory: () -> Unit,
+    clearChannelR: FocusRequester,
+    clearHistoryR: FocusRequester,
+    onClick: (FocusRequester) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text("基本設定", style = MaterialTheme.typography.headlineMedium, color = colors.textPrimary, fontWeight = FontWeight.Bold)
+        SettingsSection("データ管理") {
+            SettingItem(
+                title = "前回視聴したチャンネル履歴を削除",
+                value = "削除する",
+                icon = Icons.Default.Delete,
+                modifier = Modifier.focusRequester(clearChannelR),
+                onClick = { onClick(clearChannelR); onClearChannel() }
+            )
+            SettingItem(
+                title = "録画の視聴履歴を削除",
+                value = "削除する",
+                icon = Icons.Default.Delete,
+                modifier = Modifier.focusRequester(clearHistoryR),
+                onClick = { onClick(clearHistoryR); onClearHistory() }
+            )
+        }
+    }
+}
+
+// ★追加: 削除確認用ダイアログ
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+fun ConfirmClearDialog(title: String, message: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(100); focusRequester.safeRequestFocus() }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f))
+            .focusProperties { exit = { FocusRequester.Cancel } }.focusGroup()
+            .onKeyEvent { if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) { onDismiss(); true } else false },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(shape = RoundedCornerShape(16.dp), colors = SurfaceDefaults.colors(containerColor = colors.surface), modifier = Modifier.width(420.dp)) {
+            Column(modifier = Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(title, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(message, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Button(onClick = onDismiss, colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary), modifier = Modifier.weight(1f)) { Text("キャンセル") }
+                    Button(onClick = onConfirm, colors = ButtonDefaults.colors(containerColor = Color(0xFFD32F2F), contentColor = Color.White), modifier = Modifier.weight(1f).focusRequester(focusRequester)) { Text("削除する") }
+                }
+            }
+        }
     }
 }
 
@@ -244,7 +324,6 @@ fun LabSettingsContent(annict: String, shobocal: String, postCmd: String, annict
     }
 }
 
-// ★修正: 優先ソースの追加と、Mirakurun無効時のボタン非アクティブ化対応
 @Composable
 fun ConnectionSettingsContent(kIp: String, kPort: String, mIp: String, mPort: String, prefSrc: String, onEdit: (String, String) -> Unit, onSelectSrc: () -> Unit, kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, prefSrcR: FocusRequester, onClick: (FocusRequester) -> Unit) {
     val colors = KomorebiTheme.colors
@@ -343,7 +422,6 @@ fun CategoryItem(title: String, icon: ImageVector, isSelected: Boolean, onFocuse
     }
 }
 
-// ★修正: enabledパラメータを追加し、非アクティブ時のグレーアウトとフォーカス制御を実装
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SettingItem(title: String, value: String, icon: ImageVector? = null, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {

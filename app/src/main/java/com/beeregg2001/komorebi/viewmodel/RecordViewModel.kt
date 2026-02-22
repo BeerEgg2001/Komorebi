@@ -63,7 +63,6 @@ class RecordViewModel @Inject constructor(
     private var maintenanceJob: Job? = null
 
     init {
-        // ★修正: 起動時の自動取得を削除（MainRootScreen側でタブ選択時に呼ばれるため）
         loadSearchHistory()
     }
 
@@ -235,6 +234,17 @@ class RecordViewModel @Inject constructor(
 
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch { historyRepository.saveWatchHistory(program, positionSeconds) }
+    }
+
+    // ★追加: 視聴履歴の全削除
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearWatchHistory()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear watch history", e)
+            }
+        }
     }
 
     @UnstableApi

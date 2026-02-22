@@ -1,6 +1,5 @@
 package com.beeregg2001.komorebi.ui.live
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -23,7 +22,7 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*

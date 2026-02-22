@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -99,10 +100,8 @@ class HomeViewModel @Inject constructor(
 
             val types = listOf("GR", "BS", "CS")
 
-            // ★修正: クラッシュを避けるため、first()を使わず、Result型を適切に処理
             val allPrograms = types.map { type ->
                 async {
-                    // Flowを収集し、最初の1件が来たら即座に完了する（透過性を守った安全な取得）
                     epgRepository.getEpgDataStream(startSearch, endSearch, type)
                         .take(1)
                         .map { it.getOrNull() ?: emptyList() }
@@ -195,6 +194,17 @@ class HomeViewModel @Inject constructor(
                     serviceId = channel.serviceId, updatedAt = System.currentTimeMillis()
                 )
             )
+        }
+    }
+
+    // ★追加: 前回視聴チャンネルの履歴削除
+    fun clearLastChannelHistory() {
+        viewModelScope.launch {
+            try {
+                repository.clearLastChannels()
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Failed to clear last channels", e)
+            }
         }
     }
 }

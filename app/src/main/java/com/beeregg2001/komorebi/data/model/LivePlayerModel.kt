@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.viewmodel
+package com.beeregg2001.komorebi.data.model
 
 import com.google.gson.annotations.SerializedName
 

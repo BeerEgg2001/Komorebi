@@ -17,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -32,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
 @OptIn(ExperimentalTvMaterial3Api::class)

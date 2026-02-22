@@ -3,7 +3,6 @@
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
-import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -32,11 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.UiChannelState
-import com.beeregg2001.komorebi.data.model.LiveRowState
 import com.beeregg2001.komorebi.ui.components.ChannelLogo
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield

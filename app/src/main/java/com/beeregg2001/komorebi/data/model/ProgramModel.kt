@@ -1,7 +1,5 @@
 package com.beeregg2001.komorebi.data.model
 
-import com.beeregg2001.komorebi.viewmodel.Channel
-
 /**
  * UI表示に特化した、計算済みのチャンネル状態。
  */

@@ -27,4 +27,8 @@ interface WatchHistoryDao {
 
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteById(id: Int)
+
+    // ★追加: 履歴の全削除
+    @Query("DELETE FROM watch_history")
+    suspend fun clearAll()
 }
