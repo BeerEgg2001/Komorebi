@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -20,7 +21,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.mapper.ReserveMapper
+import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.EpgProgram
+import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.data.model.ReserveItem
+import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
 import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailMode
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailScreen
@@ -34,7 +41,6 @@ import com.beeregg2001.komorebi.ui.video.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
@@ -59,7 +65,6 @@ fun MainRootScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // ★大量の変数をこの1行に集約
     val state = rememberMainRootState()
 
     val themeName by settingsViewModel.appTheme.collectAsState(initial = "MONOTONE")
@@ -93,7 +98,11 @@ fun MainRootScreen(
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
+    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
+    val searchHistory by recordViewModel.searchHistory.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
+    val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
+    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
@@ -237,8 +246,6 @@ fun MainRootScreen(
                                 onBackPressed = {
                                     state.selectedChannel = null; state.isReturningFromPlayer = true
                                 },
-                                reserveViewModel = reserveViewModel,
-                                epgViewModel = epgViewModel,
                                 onShowToast = { state.toastMessage = it })
                         }
 
@@ -280,6 +287,7 @@ fun MainRootScreen(
                             RecordListScreen(
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
+                                customTitle = state.openedSeriesTitle,
                                 onProgramClick = { program ->
                                     if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen;
                                     val history =
@@ -291,7 +299,6 @@ fun MainRootScreen(
                                     } else 0L; state.selectedProgram =
                                     program; state.lastSelectedProgramId = program.id.toString()
                                 },
-                                customTitle = state.openedSeriesTitle,
                                 onBack = {
                                     state.isRecordListOpen =
                                         false; if (state.openedSeriesTitle != null) {
@@ -429,7 +436,7 @@ fun MainRootScreen(
                                 };
                                 val isBroadcasting =
                                     now.isAfter(start) && now.isBefore(end); state.toastMessage =
-                                if (isBroadcasting) "録画を開始しました" else "予約しました"
+                                if (isBroadcasting) AppStrings.TOAST_RECORDING_STARTED else AppStrings.TOAST_RESERVED
                             }
                         }
                     },
@@ -462,7 +469,7 @@ fun MainRootScreen(
                         ) {
                             scope.launch {
                                 state.editingReserveItem = null; state.toastMessage =
-                                "予約設定を更新しました"; delay(200); detailFocusRequester.safeRequestFocus(
+                                AppStrings.TOAST_RESERVE_UPDATED; delay(200); detailFocusRequester.safeRequestFocus(
                                 "ProgramDetail"
                             )
                             }
@@ -492,7 +499,7 @@ fun MainRootScreen(
                         ) {
                             scope.launch {
                                 state.editingNewProgram = null; state.epgSelectedProgram =
-                                null; delay(300); state.toastMessage = "予約しました"
+                                null; delay(300); state.toastMessage = AppStrings.TOAST_RESERVED
                             }
                         }
                     },
@@ -504,8 +511,11 @@ fun MainRootScreen(
 
             if (state.reserveToDelete != null) {
                 DeleteConfirmationDialog(
-                    title = "予約の削除",
-                    message = "この予約を削除してもよろしいですか？\n${state.reserveToDelete?.program?.title ?: ""}",
+                    title = AppStrings.DIALOG_DELETE_RESERVE_TITLE,
+                    message = String.format(
+                        AppStrings.DIALOG_DELETE_RESERVE_MESSAGE,
+                        state.reserveToDelete?.program?.title ?: ""
+                    ),
                     onConfirm = {
                         val id =
                             state.reserveToDelete!!.id; reserveViewModel.deleteReservation(id) {
@@ -513,7 +523,7 @@ fun MainRootScreen(
                             state.reserveToDelete =
                                 null; if (state.selectedReserve != null) state.selectedReserve =
                             null; if (state.epgSelectedProgram != null) state.epgSelectedProgram =
-                            null; delay(300); state.toastMessage = "予約を削除しました"
+                            null; delay(300); state.toastMessage = AppStrings.TOAST_RESERVE_DELETED
                         }
                     }
                     },
@@ -533,11 +543,11 @@ fun MainRootScreen(
                     onBack = closeSettingsAndRefresh,
                     onClearLastChannel = {
                         homeViewModel.clearLastChannelHistory(); state.toastMessage =
-                        "チャンネル履歴を削除しました"
+                        AppStrings.TOAST_CHANNEL_HISTORY_DELETED
                     },
                     onClearWatchHistory = {
                         recordViewModel.clearWatchHistory(); state.toastMessage =
-                        "視聴履歴を削除しました"
+                        AppStrings.TOAST_WATCH_HISTORY_DELETED
                     }
                 )
             }
