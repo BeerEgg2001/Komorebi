@@ -37,40 +37,130 @@ data class KomorebiColors(
 )
 
 // --- 各テーマの配色定義 ---
-val MonotonePalette = KomorebiColors(background = Color(0xFF121212), surface = Color(0xFF1A1A1A), accent = Color.White, textPrimary = Color.White, textSecondary = Color.Gray, isDark = true)
-val HightonePalette = KomorebiColors(background = Color(0xFFF0F3F5), surface = Color(0xFFFFFFFF), accent = Color(0xFF00A0E9), textPrimary = Color(0xFF222222), textSecondary = Color(0xFF666666), isDark = false)
-val WinterDarkPalette = KomorebiColors(background = Color(0xFF162119), surface = Color(0xFF202E24), accent = Color(0xFFFFCA28), textPrimary = Color(0xFFF0F4F1), textSecondary = Color(0xFF8A9AB0), isDark = true)
-val WinterLightPalette = KomorebiColors(background = Color(0xFFFAF7F2), surface = Color(0xFFFFFFFF), accent = Color(0xFFD32F2F), textPrimary = Color(0xFF2B1F1F), textSecondary = Color(0xFF7A6868), isDark = false)
-val SpringDarkPalette = KomorebiColors(background = Color(0xFF1F1216), surface = Color(0xFF2E1C22), accent = Color(0xFFF48FB1), textPrimary = Color(0xFFFFF0F5), textSecondary = Color(0xFFBCAAA4), isDark = true)
-val SpringLightPalette = KomorebiColors(background = Color(0xFFFCE4EC), surface = Color(0xFFFFFFFF), accent = Color(0xFFD81B60), textPrimary = Color(0xFF4E342E), textSecondary = Color(0xFF8D6E63), isDark = false)
-val SummerDarkPalette = KomorebiColors(background = Color(0xFF0B132B), surface = Color(0xFF1C2541), accent = Color(0xFF00E5FF), textPrimary = Color(0xFFF0F4FF), textSecondary = Color(0xFF8E9EBD), isDark = true)
-val SummerLightPalette = KomorebiColors(background = Color(0xFFE1F5FE), surface = Color(0xFFFFFFFF), accent = Color(0xFF0288D1), textPrimary = Color(0xFF011A27), textSecondary = Color(0xFF546E7A), isDark = false)
-val AutumnDarkPalette = KomorebiColors(background = Color(0xFF2C1E16), surface = Color(0xFF3E2A20), accent = Color(0xFFFF7043), textPrimary = Color(0xFFFFF3E0), textSecondary = Color(0xFFBCAAA4), isDark = true)
-val AutumnLightPalette = KomorebiColors(background = Color(0xFFEBE0D8), surface = Color(0xFFFFFFFF), accent = Color(0xFFD84315), textPrimary = Color(0xFF3E2723), textSecondary = Color(0xFF8D6E63), isDark = false)
+val MonotonePalette = KomorebiColors(
+    background = Color(0xFF121212),
+    surface = Color(0xFF1A1A1A),
+    accent = Color.White,
+    textPrimary = Color.White,
+    textSecondary = Color.Gray,
+    isDark = true
+)
+val HightonePalette = KomorebiColors(
+    background = Color(0xFFF0F3F5),
+    surface = Color(0xFFFFFFFF),
+    accent = Color(0xFF00A0E9),
+    textPrimary = Color(0xFF222222),
+    textSecondary = Color(0xFF666666),
+    isDark = false
+)
+
+// ★修正: 背景をより深いグリーンに、アクセントを落ち着いた赤系に
+val WinterDarkPalette = KomorebiColors(
+    background = Color(0xFF0F2016), // 深い森のような緑
+    surface = Color(0xFF1A2B20),    // 少し明るい緑
+    accent = Color(0xFFCF3C3C),     // 派手すぎないシックな赤
+    textPrimary = Color(0xFFF0F4F1),
+    textSecondary = Color(0xFF8A9AB0),
+    isDark = true
+)
+val WinterLightPalette = KomorebiColors(
+    background = Color(0xFFFAF7F2),
+    surface = Color(0xFFFFFFFF),
+    accent = Color(0xFFD32F2F),
+    textPrimary = Color(0xFF2B1F1F),
+    textSecondary = Color(0xFF7A6868),
+    isDark = false
+)
+val SpringDarkPalette = KomorebiColors(
+    background = Color(0xFF1F1216),
+    surface = Color(0xFF2E1C22),
+    accent = Color(0xFFF48FB1),
+    textPrimary = Color(0xFFFFF0F5),
+    textSecondary = Color(0xFFBCAAA4),
+    isDark = true
+)
+val SpringLightPalette = KomorebiColors(
+    background = Color(0xFFFCE4EC),
+    surface = Color(0xFFFFFFFF),
+    accent = Color(0xFFD81B60),
+    textPrimary = Color(0xFF4E342E),
+    textSecondary = Color(0xFF8D6E63),
+    isDark = false
+)
+val SummerDarkPalette = KomorebiColors(
+    background = Color(0xFF0B132B),
+    surface = Color(0xFF1C2541),
+    accent = Color(0xFF00E5FF),
+    textPrimary = Color(0xFFF0F4FF),
+    textSecondary = Color(0xFF8E9EBD),
+    isDark = true
+)
+val SummerLightPalette = KomorebiColors(
+    background = Color(0xFFE1F5FE),
+    surface = Color(0xFFFFFFFF),
+    accent = Color(0xFF0288D1),
+    textPrimary = Color(0xFF011A27),
+    textSecondary = Color(0xFF546E7A),
+    isDark = false
+)
+val AutumnDarkPalette = KomorebiColors(
+    background = Color(0xFF2C1E16),
+    surface = Color(0xFF3E2A20),
+    accent = Color(0xFFFF7043),
+    textPrimary = Color(0xFFFFF3E0),
+    textSecondary = Color(0xFFBCAAA4),
+    isDark = true
+)
+val AutumnLightPalette = KomorebiColors(
+    background = Color(0xFFEBE0D8),
+    surface = Color(0xFFFFFFFF),
+    accent = Color(0xFFD84315),
+    textPrimary = Color(0xFF3E2723),
+    textSecondary = Color(0xFF8D6E63),
+    isDark = false
+)
 
 // 3. 季節の装飾用ヘルパー
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun getSeasonalBackgroundBrush(theme: AppTheme, currentTime: LocalTime): Brush {
-    // ★微調整: さらにアルファ値を下げ、影に見えないように「淡い光」にする
     val alpha = if (theme.name.contains("LIGHT")) 0.10f else 0.15f
     val hour = currentTime.hour
 
     return when (theme) {
         AppTheme.SPRING, AppTheme.SPRING_LIGHT -> {
             val center = if (hour in 16..18) Offset(1920f, 200f) else Offset(0f, 0f)
-            Brush.radialGradient(listOf(Color(0xFFFF8A80).copy(alpha = alpha), Color.Transparent), center = center, radius = 1800f)
+            Brush.radialGradient(
+                listOf(Color(0xFFFF8A80).copy(alpha = alpha), Color.Transparent),
+                center = center,
+                radius = 1800f
+            )
         }
+
         AppTheme.SUMMER, AppTheme.SUMMER_LIGHT -> {
-            Brush.verticalGradient(0.0f to Color(0xFF00E5FF).copy(alpha = alpha), 0.5f to Color.Transparent)
+            Brush.verticalGradient(
+                0.0f to Color(0xFF00E5FF).copy(alpha = alpha),
+                0.5f to Color.Transparent
+            )
         }
+
         AppTheme.AUTUMN, AppTheme.AUTUMN_LIGHT -> {
             val center = if (hour in 5..9) Offset(0f, 540f) else Offset(1920f, 540f)
-            Brush.radialGradient(listOf(Color(0xFFFF7043).copy(alpha = alpha), Color.Transparent), center = center, radius = 2000f)
+            Brush.radialGradient(
+                listOf(Color(0xFFFF7043).copy(alpha = alpha), Color.Transparent),
+                center = center,
+                radius = 2000f
+            )
         }
+
         AppTheme.WINTER_DARK, AppTheme.WINTER_LIGHT -> {
-            Brush.verticalGradient(0.5f to Color.Transparent, 1.0f to Color(0xFFFFCA28).copy(alpha = alpha))
+            // ★修正: 黄色系から、アクセントカラーに合わせた暖色系の赤（あるいは暖炉の火のような色）へ変更
+            Brush.verticalGradient(
+                0.5f to Color.Transparent,
+                1.0f to Color(0xFFCF3C3C).copy(alpha = alpha)
+            )
         }
+
         else -> Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
     }
 }
@@ -105,12 +195,51 @@ fun KomorebiTheme(theme: AppTheme = AppTheme.MONOTONE, content: @Composable () -
         AppTheme.AUTUMN -> AutumnDarkPalette; AppTheme.AUTUMN_LIGHT -> AutumnLightPalette
         else -> MonotonePalette
     }
+
+    val onAccent = if (komorebiColors.isDark) Color.Black else Color.White
+
     val materialColorScheme = if (komorebiColors.isDark) {
-        darkColorScheme(primary = komorebiColors.accent, background = komorebiColors.background, surface = komorebiColors.surface, onBackground = komorebiColors.textPrimary, onSurface = komorebiColors.textPrimary)
+        darkColorScheme(
+            primary = komorebiColors.accent,
+            onPrimary = onAccent,
+            secondary = komorebiColors.accent,
+            onSecondary = onAccent,
+            tertiary = komorebiColors.accent,
+            onTertiary = onAccent,
+            background = komorebiColors.background,
+            onBackground = komorebiColors.textPrimary,
+            surface = komorebiColors.surface,
+            onSurface = komorebiColors.textPrimary,
+            surfaceVariant = komorebiColors.surface,
+            onSurfaceVariant = komorebiColors.textSecondary,
+            error = Color(0xFFF44336)
+        )
     } else {
-        lightColorScheme(primary = komorebiColors.accent, background = komorebiColors.background, surface = komorebiColors.surface, onBackground = komorebiColors.textPrimary, onSurface = komorebiColors.textPrimary)
+        lightColorScheme(
+            primary = komorebiColors.accent,
+            onPrimary = onAccent,
+            secondary = komorebiColors.accent,
+            onSecondary = onAccent,
+            tertiary = komorebiColors.accent,
+            onTertiary = onAccent,
+            background = komorebiColors.background,
+            onBackground = komorebiColors.textPrimary,
+            surface = komorebiColors.surface,
+            onSurface = komorebiColors.textPrimary,
+            surfaceVariant = komorebiColors.surface,
+            onSurfaceVariant = komorebiColors.textSecondary,
+            error = Color(0xFFD32F2F)
+        )
     }
-    CompositionLocalProvider(LocalKomorebiColors provides komorebiColors, LocalAppTheme provides theme) {
-        MaterialTheme(colorScheme = materialColorScheme, typography = AppTypography, content = content)
+
+    CompositionLocalProvider(
+        LocalKomorebiColors provides komorebiColors,
+        LocalAppTheme provides theme
+    ) {
+        MaterialTheme(
+            colorScheme = materialColorScheme,
+            typography = AppTypography,
+            content = content
+        )
     }
 }
