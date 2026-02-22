@@ -9,7 +9,7 @@ import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.viewmodel.ChannelApiResponse
+import com.beeregg2001.komorebi.data.model.ChannelApiResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,6 +88,11 @@ class KonomiRepository @Inject constructor(
     suspend fun saveLastChannel(entity: LastChannelEntity) {
         lastChannelDao.insertOrUpdate(entity)
         Log.d(TAG, "Channel saved: ${entity.name}")
+    }
+
+    // ★追加: チャンネル履歴の全削除
+    suspend fun clearLastChannels() {
+        lastChannelDao.clearAll()
     }
 
     suspend fun getJikkyoInfo(channelId: String) = runCatching {

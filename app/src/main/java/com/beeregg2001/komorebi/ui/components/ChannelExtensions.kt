@@ -1,7 +1,7 @@
 package com.beeregg2001.komorebi.ui.components
 
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 
 /**
  * KonomiTVモード（Mirakurun設定なし）かどうかを判定するヘルパー

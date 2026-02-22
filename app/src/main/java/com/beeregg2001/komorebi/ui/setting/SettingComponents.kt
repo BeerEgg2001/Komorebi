@@ -1,0 +1,360 @@
+@file:OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+
+package com.beeregg2001.komorebi.ui.setting
+
+import android.view.KeyEvent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import kotlinx.coroutines.delay
+
+sealed class SettingDialogState {
+    object None : SettingDialogState()
+    data class Input(val title: String, val initialValue: String, val onConfirm: (String) -> Unit) : SettingDialogState()
+    data class Selection(val title: String, val options: List<Pair<String, String>>, val current: String, val onSelect: (String) -> Unit) : SettingDialogState()
+    data class ConfirmClear(val title: String, val message: String, val onConfirm: () -> Unit) : SettingDialogState()
+    object Licenses : SettingDialogState()
+}
+
+data class Category(val name: String, val icon: ImageVector)
+
+fun getThemeFromModeAndSeason(isDark: Boolean, season: String): String {
+    return when (season) {
+        "DEFAULT" -> if (isDark) "MONOTONE" else "HIGHTONE"
+        "SPRING" -> if (isDark) "SPRING" else "SPRING_LIGHT"
+        "SUMMER" -> if (isDark) "SUMMER" else "SUMMER_LIGHT"
+        "AUTUMN" -> if (isDark) "AUTUMN" else "AUTUMN_LIGHT"
+        "WINTER" -> if (isDark) "WINTER_DARK" else "WINTER_LIGHT"
+        else -> if (isDark) "MONOTONE" else "HIGHTONE"
+    }
+}
+
+@Composable
+fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    val colors = KomorebiTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            title,
+            color = colors.textSecondary,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
+        )
+        content()
+    }
+}
+
+@Composable
+fun CategoryItem(
+    title: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    onFocused: () -> Unit,
+    onClick: () -> Unit,
+    enabled: Boolean = true, // ★修正: enabledを追加
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+    Surface(
+        selected = isSelected,
+        onClick = { if (enabled) onClick() }, // ★修正
+        modifier = modifier
+            .fillMaxWidth()
+            .focusProperties { canFocus = enabled } // ★修正
+            .onFocusChanged { isFocused = it.isFocused; if (it.isFocused && enabled) onFocused() }, // ★修正
+        colors = SelectableSurfaceDefaults.colors(
+            containerColor = Color.Transparent,
+            selectedContainerColor = colors.textPrimary.copy(0.1f),
+            focusedContainerColor = colors.textPrimary.copy(0.2f),
+            contentColor = if (enabled) colors.textSecondary else colors.textSecondary.copy(alpha = 0.3f),
+            selectedContentColor = colors.textPrimary,
+            focusedContentColor = colors.textPrimary
+        ),
+        shape = SelectableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
+        scale = SelectableSurfaceDefaults.scale(focusedScale = if (enabled) 1.05f else 1.0f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                null,
+                modifier = Modifier.size(20.dp),
+                tint = if (isSelected || isFocused) colors.textPrimary else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.3f)
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            if (isSelected) Box(Modifier.width(4.dp).height(20.dp).background(colors.accent, MaterialTheme.shapes.small))
+        }
+    }
+}
+
+@Composable
+fun SettingItem(
+    title: String,
+    value: String,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+    Surface(
+        onClick = { if (enabled) onClick() },
+        modifier = modifier
+            .fillMaxWidth()
+            .focusProperties { canFocus = enabled }
+            .onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = colors.textPrimary.copy(if (enabled) 0.05f else 0.02f),
+            focusedContainerColor = colors.textPrimary.copy(if (enabled) 0.9f else 0.02f),
+            contentColor = colors.textPrimary.copy(alpha = if (enabled) 1f else 0.4f),
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+        ),
+        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = if (enabled) 1.02f else 1.0f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (icon != null) {
+                Icon(
+                    icon,
+                    null,
+                    modifier = Modifier.size(24.dp),
+                    tint = if (isFocused && enabled) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(if (enabled) 0.7f else 0.3f)
+                )
+                Spacer(Modifier.width(16.dp))
+            }
+            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(
+                value,
+                textAlign = TextAlign.End,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (isFocused && enabled) Color.Unspecified else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.5f)
+            )
+        }
+    }
+}
+
+@Composable
+fun SelectionDialog(
+    title: String,
+    options: List<Pair<String, String>>,
+    current: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val initialIndex = remember(options, current) {
+        options.indexOfFirst { it.second == current }.coerceAtLeast(0)
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .focusProperties { exit = { FocusRequester.Cancel } }
+            .focusGroup()
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                    onDismiss(); true
+                } else false
+            }, contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(400.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                LazyColumn(
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 400.dp)
+                ) {
+                    items(options) { (label, value) ->
+                        val isSelected = value == current
+                        val fR = remember { FocusRequester() }
+                        LaunchedEffect(isSelected) {
+                            if (isSelected) {
+                                delay(100); fR.safeRequestFocus()
+                            }
+                        }
+                        SelectionDialogItem(
+                            label,
+                            isSelected,
+                            { onSelect(value) },
+                            Modifier.focusRequester(fR)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = colors.textPrimary.copy(0.1f),
+                        contentColor = colors.textPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(AppStrings.BUTTON_CANCEL) }
+            }
+        }
+    }
+}
+
+@Composable
+fun SelectionDialogItem(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isSelected) colors.textPrimary.copy(0.1f) else Color.Transparent,
+            focusedContainerColor = colors.accent,
+            contentColor = colors.textPrimary,
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+        ),
+        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
+            if (isSelected) {
+                Icon(
+                    Icons.Default.Check,
+                    null,
+                    modifier = Modifier.size(20.dp),
+                    tint = if (isFocused) Color.Unspecified else colors.textPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ConfirmClearDialog(
+    title: String,
+    message: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(100); focusRequester.safeRequestFocus() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f))
+            .focusProperties { exit = { FocusRequester.Cancel } }
+            .focusGroup()
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                    onDismiss(); true
+                } else false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text(AppStrings.BUTTON_CANCEL) }
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color(0xFFD32F2F),
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text(AppStrings.BUTTON_DELETE) }
+                }
+            }
+        }
+    }
+}

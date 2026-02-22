@@ -23,6 +23,8 @@ class SettingsRepository @Inject constructor(
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
+        // ★追加: 優先ソース設定キー
+        val PREFERRED_STREAM_SOURCE = stringPreferencesKey("preferred_stream_source")
 
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
@@ -33,18 +35,28 @@ class SettingsRepository @Inject constructor(
         val LIVE_QUALITY = stringPreferencesKey("live_quality")
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
 
+        val LIVE_SUBTITLE_DEFAULT = stringPreferencesKey("live_subtitle_default")
+        val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
+        val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
+
+        val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
+        val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
+        val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
+
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
 
-        // ★追加: 起動時のデフォルトタブ
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
+        val APP_THEME = stringPreferencesKey("app_theme")
     }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
     val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "" }
+    // ★追加: 優先ソース用フロー (デフォルトは KONOMITV)
+    val preferredStreamSource: Flow<String> = context.dataStore.data.map { it[PREFERRED_STREAM_SOURCE] ?: "KONOMITV" }
 
     val commentSpeed: Flow<String> = context.dataStore.data.map { it[COMMENT_SPEED] ?: "1.0" }
     val commentFontSize: Flow<String> = context.dataStore.data.map { it[COMMENT_FONT_SIZE] ?: "1.0" }
@@ -55,12 +67,20 @@ class SettingsRepository @Inject constructor(
     val liveQuality: Flow<String> = context.dataStore.data.map { it[LIVE_QUALITY] ?: "1080p-60fps" }
     val videoQuality: Flow<String> = context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
 
+    val liveSubtitleDefault: Flow<String> = context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
+    val videoSubtitleDefault: Flow<String> = context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
+    val subtitleCommentLayer: Flow<String> = context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
+
+    val labAnnictIntegration: Flow<String> = context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
+    val labShobocalIntegration: Flow<String> = context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
+    val defaultPostCommand: Flow<String> = context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
+
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
     val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
 
-    // ★追加: デフォルトは「ホーム」
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
+    val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
@@ -81,7 +101,6 @@ class SettingsRepository @Inject constructor(
         return "$base:$port/"
     }
 
-    // ★追加: 起動時に一度だけ確実に設定を読み取るための関数
     suspend fun getStartupTabOnce(): String {
         val prefs = context.dataStore.data.first()
         return prefs[STARTUP_TAB] ?: "ホーム"

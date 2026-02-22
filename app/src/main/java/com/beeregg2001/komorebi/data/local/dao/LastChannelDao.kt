@@ -24,6 +24,10 @@ interface LastChannelDao {
 
     @Query("SELECT * FROM last_watched_channel ORDER BY updatedAt DESC LIMIT 10")
     fun getLastChannels(): Flow<List<LastChannelEntity>>
+
+    // ★追加: 履歴の全削除
+    @Query("DELETE FROM last_watched_channel")
+    suspend fun clearAll()
 }
 
 // AppDatabase.kt に DAO を追加
