@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
     @UnstableApi
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_Komorebi)
         super.onCreate(savedInstanceState)
 
         // OS互換性のチェック (Android 8.0 API 26 以上が必要)

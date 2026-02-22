@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,10 +10,14 @@ import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
+import com.beeregg2001.komorebi.data.repository.EpgRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.time.LocalTime
 import java.time.OffsetDateTime
@@ -22,6 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
+    private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
@@ -82,29 +88,47 @@ class HomeViewModel @Inject constructor(
         _sharedEpgData.value = data
     }
 
+    private fun fetchAllTypeGenrePickup() {
+        viewModelScope.launch {
+            val genre = pickupGenreLabel.value
+            val timeSetting = pickupTimeSetting.value
+            val isExcludePaid = excludePaidBroadcasts.value == "ON"
+
+            val now = OffsetDateTime.now()
+            val startSearch = now.minusHours(1)
+            val endSearch = now.plusHours(24)
+
+            val types = listOf("GR", "BS", "CS")
+
+            val allPrograms = types.map { type ->
+                async {
+                    epgRepository.getEpgDataStream(startSearch, endSearch, type)
+                        .take(1)
+                        .map { it.getOrNull() ?: emptyList() }
+                        .firstOrNull() ?: emptyList()
+                }
+            }.awaitAll().flatten()
+
+            _genrePickupPrograms.value = filterGenrePickup(allPrograms, genre, timeSetting, isExcludePaid)
+        }
+    }
+
     private suspend fun filterGenrePickup(
         allPrograms: List<EpgChannelWrapper>,
         genre: String,
         timeSetting: String,
-        excludePaidStr: String
+        isExcludePaid: Boolean
     ): List<Pair<EpgProgram, String>> = withContext(Dispatchers.Default) {
         if (allPrograms.isEmpty()) return@withContext emptyList()
 
         val now = OffsetDateTime.now()
-
         val actualTimeSlot = if (timeSetting == "自動") {
             val h = now.hour
-            when {
-                h in 5..10 -> "朝"
-                h in 11..17 -> "昼"
-                else -> "夜"
-            }
+            if (h in 5..10) "朝" else if (h in 11..17) "昼" else "夜"
         } else {
             timeSetting
         }
         _genrePickupTimeSlot.value = actualTimeSlot
-
-        val isExcludePaid = excludePaidStr == "ON"
 
         allPrograms.flatMap { wrapper ->
             wrapper.programs.map { it to wrapper.channel.name }
@@ -120,23 +144,17 @@ class HomeViewModel @Inject constructor(
             }
 
             val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
-
             isGenre && isTimeMatch && start.isAfter(now) && isFreeCheckOk
         }.sortedBy { it.first.start_time }.take(15)
     }
 
     init {
         viewModelScope.launch {
-            combine(
-                _sharedEpgData,
-                pickupGenreLabel,
-                excludePaidBroadcasts,
-                pickupTimeSetting
-            ) { epgData, genre, excludePaid, time ->
-                filterGenrePickup(epgData, genre, time, excludePaid)
-            }.collectLatest { filteredPrograms ->
-                _genrePickupPrograms.value = filteredPrograms
-            }
+            combine(pickupGenreLabel, pickupTimeSetting, excludePaidBroadcasts) { _, _, _ -> Unit }
+                .collectLatest {
+                    delay(1000)
+                    fetchAllTypeGenrePickup()
+                }
         }
     }
 
@@ -144,13 +162,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
             repository.getWatchHistory().onSuccess { apiHistoryList ->
-                // ★修正: N+1問題を解消し、DBの読み書きを1回にまとめる（バルクインサート）
                 val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
-
-                // 全件を一気に検索してMapにする
                 val existingEntitiesMap = repository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
-
-                // メモリ上でマージして保存用リストを作る
                 val entitiesToSave = apiHistoryList.mapNotNull { history ->
                     val programId = history.program.id.toIntOrNull() ?: return@mapNotNull null
                     val existingEntity = existingEntitiesMap[programId]
@@ -164,13 +177,10 @@ class HomeViewModel @Inject constructor(
                     }
                     newEntity
                 }
-
-                // リストを1回のトランザクションで書き込む
-                if (entitiesToSave.isNotEmpty()) {
-                    repository.saveAllToLocalHistory(entitiesToSave)
-                }
+                if (entitiesToSave.isNotEmpty()) repository.saveAllToLocalHistory(entitiesToSave)
             }
             repository.refreshUser()
+            fetchAllTypeGenrePickup()
             _isLoading.value = false
         }
     }
@@ -184,6 +194,17 @@ class HomeViewModel @Inject constructor(
                     serviceId = channel.serviceId, updatedAt = System.currentTimeMillis()
                 )
             )
+        }
+    }
+
+    // ★追加: 前回視聴チャンネルの履歴削除
+    fun clearLastChannelHistory() {
+        viewModelScope.launch {
+            try {
+                repository.clearLastChannels()
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Failed to clear last channels", e)
+            }
         }
     }
 }

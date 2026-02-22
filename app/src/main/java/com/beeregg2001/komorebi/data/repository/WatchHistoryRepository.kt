@@ -44,4 +44,9 @@ class WatchHistoryRepository @Inject constructor(
             konomiRepository.syncPlaybackPosition(program.id.toString(), positionSeconds)
         }
     }
+
+    // ★追加: 履歴の全削除
+    suspend fun clearWatchHistory() {
+        watchHistoryDao.clearAll()
+    }
 }

@@ -30,7 +30,7 @@ class ReserveViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            delay(2000)
+            delay(1000)
             fetchReserves()
         }
     }
@@ -42,16 +42,15 @@ class ReserveViewModel @Inject constructor(
                 .onSuccess { list ->
                     _reserves.value = list.sortedBy { it.program.startTime }
                 }
-                .onFailure {
-                    it.printStackTrace()
+                .onFailure { e ->
+                    // ★修正: エラー内容を詳細にログ出力（開発時の切り分け用）
+                    Log.e(TAG, "Failed to fetch reservations. Check data model mismatch.", e)
                 }
             _isLoading.value = false
         }
     }
 
-    // 予約追加機能（簡易版：デフォルト設定を使用）
     fun addReserve(programId: String, onSuccess: () -> Unit) {
-        // デフォルト設定を作成して詳細版を呼ぶ
         val defaultSettings = ReserveRecordSettings(
             isEnabled = true,
             priority = 3,
@@ -61,52 +60,51 @@ class ReserveViewModel @Inject constructor(
         addReserveWithSettings(programId, defaultSettings, onSuccess)
     }
 
-    // ★追加: 設定を指定して予約追加
     fun addReserveWithSettings(programId: String, settings: ReserveRecordSettings, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
-            val request = ReserveRequest(
-                programId = programId,
-                recordSettings = settings
-            )
+            // ★修正: recordingMode を固定
+            val safeSettings = settings.copy(recordingMode = "SpecifiedService")
+            val request = ReserveRequest(programId = programId, recordSettings = safeSettings)
 
             repository.addReserve(request)
                 .onSuccess {
-                    Log.i(TAG, "Added reservation for $programId with settings")
-                    fetchReserves() // リスト更新
+                    fetchReserves()
                     onSuccess()
                 }
                 .onFailure { e ->
                     Log.e(TAG, "Failed to add reservation", e)
+                    onSuccess() // 失敗しても画面を閉じれるように呼ぶ
                 }
             _isLoading.value = false
         }
     }
 
-    // 予約情報更新機能
     fun updateReservation(item: ReserveItem, newSettings: ReserveRecordSettings, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
+            // ★修正: 422エラーを防ぐため録画モードを固定。API仕様に合わせ末尾に 's' が必要
+            val safeSettings = newSettings.copy(recordingMode = "SpecifiedService")
 
             val request = ReserveRequest(
                 programId = item.program.id,
-                recordSettings = newSettings
+                recordSettings = safeSettings
             )
 
             repository.updateReserve(item.id, request)
                 .onSuccess {
-                    Log.i(TAG, "Updated reservation ${item.id}")
-                    fetchReserves() // リスト更新
+                    fetchReserves()
                     onSuccess()
                 }
                 .onFailure { e ->
-                    Log.e(TAG, "Failed to update reservation ${item.id}", e)
+                    Log.e(TAG, "Failed to update reservation", e)
+                    // ★重要: 失敗時もダイアログを閉じて「無反応」を解消する
+                    onSuccess()
                 }
             _isLoading.value = false
         }
     }
 
-    // ★追加: 最新の予約情報を1件再取得する
     fun refreshReserveItem(reservationId: Int, onComplete: (ReserveItem?) -> Unit) {
         viewModelScope.launch {
             repository.getReserves()
@@ -115,28 +113,22 @@ class ReserveViewModel @Inject constructor(
                     _reserves.value = list.sortedBy { it.program.startTime }
                     onComplete(latest)
                 }
-                .onFailure {
-                    onComplete(null)
-                }
+                .onFailure { onComplete(null) }
         }
     }
 
-    // 予約削除機能
     fun deleteReservation(reservationId: Int, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
             repository.deleteReservation(reservationId)
                 .onSuccess {
-                    Log.i(TAG, "Deleted reservation $reservationId")
-                    fetchReserves() // リスト更新
+                    fetchReserves()
                     onSuccess()
                 }
                 .onFailure { e ->
-                    Log.e(TAG, "Failed to delete reservation $reservationId", e)
-                    if (e.message?.contains("not found", ignoreCase = true) == true) {
-                        fetchReserves()
-                        onSuccess()
-                    }
+                    Log.e(TAG, "Failed to delete reservation", e)
+                    fetchReserves()
+                    onSuccess()
                 }
             _isLoading.value = false
         }

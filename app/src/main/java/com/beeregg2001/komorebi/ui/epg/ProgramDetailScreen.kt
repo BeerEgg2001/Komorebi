@@ -4,6 +4,7 @@ package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -30,6 +31,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -37,8 +39,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
 enum class ProgramDetailMode {
-    EPG, // 通常の番組表詳細
-    RESERVE // 予約リストからの確認モード
+    EPG, RESERVE
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -49,13 +50,9 @@ fun ProgramDetailScreen(
     mode: ProgramDetailMode = ProgramDetailMode.EPG,
     isReserved: Boolean = false,
     onPlayClick: (EpgProgram) -> Unit = {},
-    // 通常予約（即時）
     onRecordClick: (EpgProgram) -> Unit = {},
-    // 詳細予約（設定ダイアログ表示）
     onRecordDetailClick: (EpgProgram) -> Unit = {},
-    // 予約設定変更
     onEditReserveClick: (EpgProgram) -> Unit = {},
-    // 予約削除
     onDeleteReserveClick: (EpgProgram) -> Unit = {},
     onBackClick: () -> Unit,
     initialFocusRequester: FocusRequester
@@ -63,14 +60,14 @@ fun ProgramDetailScreen(
     val now = OffsetDateTime.now()
     val startTime = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }
     val endTime = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }
+    val colors = KomorebiTheme.colors
 
     val isPast = endTime.isBefore(now)
     val isBroadcasting = now.isAfter(startTime) && now.isBefore(endTime)
     val isFuture = startTime.isAfter(now)
 
-    // カラー定義：モノトーンに合う「録画」を象徴する赤色
-    val recordRed = Color(0xFFC62828)      // メインの録画用赤色 (Material Red 800)
-    val recordDarkRed = Color(0xFF421C1C)  // 詳細設定用：落ち着いた暗い赤色
+    val recordRed = Color(0xFFC62828)
+    val recordDarkRed = Color(0xFF421C1C)
 
     var isReady by remember { mutableStateOf(false) }
     var isClickEnabled by remember { mutableStateOf(false) }
@@ -88,13 +85,13 @@ fun ProgramDetailScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0A0A))
+            .background(colors.background)
             .focusGroup()
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Brush.linearGradient(colors = listOf(Color(0xFF1E1E1E), Color.Black)))
+                .background(Brush.linearGradient(colors = listOf(colors.surface, colors.background)))
         )
 
         Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
@@ -104,13 +101,9 @@ fun ProgramDetailScreen(
                 horizontalAlignment = Alignment.Start
             ) {
                 if (mode == ProgramDetailMode.RESERVE) {
-                    // 予約リストモード (基本は設定変更と削除)
                     Button(
                         onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = Color.White.copy(alpha = 0.1f),
-                            contentColor = Color.White
-                        ),
+                        colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
                         modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
                     ) {
                         Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
@@ -123,11 +116,11 @@ fun ProgramDetailScreen(
                         Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                     }
                 } else {
-                    // EPGモード
                     if (isBroadcasting) {
                         Button(
                             onClick = { if (isClickEnabled) onPlayClick(program) },
-                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester),
+                            colors = ButtonDefaults.colors(containerColor = colors.textPrimary, contentColor = if(colors.isDark) Color.Black else Color.White)
                         ) {
                             Text("視聴する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                         }
@@ -135,10 +128,7 @@ fun ProgramDetailScreen(
                         if (isReserved) {
                             Button(
                                 onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = Color.White.copy(alpha = 0.1f),
-                                    contentColor = Color.White
-                                ),
+                                colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
@@ -158,7 +148,6 @@ fun ProgramDetailScreen(
                             ) {
                                 Text("録画する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                             }
-                            // 詳細設定ボタン：メインの赤より一段階暗くし、モノトーンに馴染ませる
                             Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
                                 colors = ButtonDefaults.colors(containerColor = recordDarkRed, contentColor = Color.White),
@@ -172,10 +161,7 @@ fun ProgramDetailScreen(
                         if (isReserved) {
                             Button(
                                 onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = Color.White.copy(alpha = 0.1f),
-                                    contentColor = Color.White
-                                ),
+                                colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
                                 modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
                             ) {
                                 Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
@@ -195,7 +181,6 @@ fun ProgramDetailScreen(
                             ) {
                                 Text("録画予約する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                             }
-                            // 詳細設定ボタン
                             Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
                                 colors = ButtonDefaults.colors(containerColor = recordDarkRed, contentColor = Color.White),
@@ -205,11 +190,10 @@ fun ProgramDetailScreen(
                             }
                         }
                     } else {
-                        // 終了した番組
                         Button(
                             onClick = {},
                             enabled = false,
-                            colors = ButtonDefaults.colors(containerColor = Color.Gray.copy(0.3f), contentColor = Color.LightGray),
+                            colors = ButtonDefaults.colors(containerColor = colors.textSecondary.copy(0.3f), contentColor = colors.textSecondary),
                             modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
                         ) {
                             Text("終了した番組", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
@@ -217,10 +201,20 @@ fun ProgramDetailScreen(
                     }
                 }
 
+                // ★修正箇所: Border() オブジェクトでラップ
                 OutlinedButton(
                     onClick = { if (isClickEnabled) onBackClick() },
-                    modifier = Modifier.fillMaxWidth()
-                        .then(if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(initialFocusRequester) else Modifier)
+                    modifier = Modifier.fillMaxWidth().then(if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(initialFocusRequester) else Modifier),
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color.Transparent,
+                        contentColor = colors.textPrimary,
+                        focusedContainerColor = colors.textPrimary,
+                        focusedContentColor = if(colors.isDark) Color.Black else Color.White
+                    ),
+                    border = ButtonDefaults.border(
+                        border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.5f))),
+                        focusedBorder = Border(BorderStroke(2.dp, colors.accent))
+                    )
                 ) {
                     Text("戻る", fontFamily = NotoSansJP)
                 }
@@ -237,14 +231,8 @@ fun ProgramDetailScreen(
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown) {
                             when (event.key) {
-                                Key.DirectionDown -> {
-                                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 300) }
-                                    true
-                                }
-                                Key.DirectionUp -> {
-                                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 300) }
-                                    true
-                                }
+                                Key.DirectionDown -> { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 300) }; true }
+                                Key.DirectionUp -> { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 300) }; true }
                                 else -> false
                             }
                         } else false
@@ -255,20 +243,20 @@ fun ProgramDetailScreen(
                 val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd(E) HH:mm")
                 Text(
                     text = "${startTime.format(formatter)} ～ ${endTime.format(DateTimeFormatter.ofPattern("HH:mm"))}",
-                    style = MaterialTheme.typography.labelLarge, color = Color.LightGray, fontFamily = NotoSansJP
+                    style = MaterialTheme.typography.labelLarge, color = colors.textSecondary, fontFamily = NotoSansJP
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = program.title,
                     style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold, lineHeight = 46.sp),
-                    color = Color.White, fontFamily = NotoSansJP
+                    color = colors.textPrimary, fontFamily = NotoSansJP
                 )
                 Spacer(modifier = Modifier.height(32.dp))
-                Text("番組概要", style = MaterialTheme.typography.titleMedium, color = Color.White, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                Text("番組概要", style = MaterialTheme.typography.titleMedium, color = colors.textPrimary, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = program.description ?: "説明はありません。",
-                    style = MaterialTheme.typography.bodyLarge, color = Color.LightGray, fontFamily = NotoSansJP, lineHeight = 28.sp
+                    style = MaterialTheme.typography.bodyLarge, color = colors.textSecondary, fontFamily = NotoSansJP, lineHeight = 28.sp
                 )
 
                 if (isReady) { ProgramDetailedInfo(program) }
@@ -280,13 +268,14 @@ fun ProgramDetailScreen(
 
 @Composable
 fun ProgramDetailedInfo(program: EpgProgram) {
+    val colors = KomorebiTheme.colors
     Column {
         program.detail?.forEach { (label, content) ->
             if (content.isNotBlank()) {
                 Spacer(modifier = Modifier.height(24.dp))
-                Text(text = label, style = MaterialTheme.typography.titleMedium, color = Color.White, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                Text(text = label, style = MaterialTheme.typography.titleMedium, color = colors.textPrimary, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(text = content, style = MaterialTheme.typography.bodyMedium, color = Color.LightGray, fontFamily = NotoSansJP, lineHeight = 24.sp)
+                Text(text = content, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, fontFamily = NotoSansJP, lineHeight = 24.sp)
             }
         }
     }

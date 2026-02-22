@@ -2,7 +2,9 @@ package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -23,8 +25,11 @@ import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalTime
 
 data class OssLibrary(
     val name: String,
@@ -349,27 +354,41 @@ third-party archives.
 ),
 )
 
+@RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun OpenSourceLicensesScreen(onBack: () -> Unit) {
+    val colors = KomorebiTheme.colors
+    val currentTime = remember { LocalTime.now() }
+    val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
+
     var selectedLib by remember { mutableStateOf(ossLibraries.first()) }
     val listFocusRequester = remember { FocusRequester() }
     val textFocusRequester = remember { FocusRequester() }
     val listState = rememberTvLazyListState()
 
+    val inverseColor = if (colors.isDark) Color.Black else Color.White
+
     // 初期フォーカス設定
     LaunchedEffect(Unit) {
-        delay(100) // UI描画待ち
+        delay(100)
         runCatching { listFocusRequester.requestFocus() }
     }
 
-    Row(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(48.dp)) {
+    // ★修正: 背景を不透明下地 ＋ 季節のブラシの2重塗りに変更
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .background(backgroundBrush)
+            .padding(48.dp)
+    ) {
         // 左ペイン：ライブラリ一覧
         Column(modifier = Modifier.weight(0.35f).fillMaxHeight()) {
             Text(
                 text = "オープンソースライセンス",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
+                color = colors.textPrimary,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 24.dp, start = 16.dp)
             )
@@ -391,23 +410,20 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     selectedLib = lib
                                 }
                             }
-                            // ★追加: 戻るキーで設定画面に戻る処理を追加
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown &&
                                     (event.key == Key.Back || event.key == Key.Escape)) {
                                     onBack()
                                     true
-                                } else {
-                                    false
-                                }
+                                } else false
                             }
-                            // 最初の項目にリスト全体のFocusRequesterを割り当て（初期フォーカス用）
                             .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
+                        // ★修正: 録画カードと同様の「反転カラー」を適用して視認性を向上
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = Color.Transparent,
-                            focusedContainerColor = Color.White,
-                            contentColor = Color.LightGray,
-                            focusedContentColor = Color.Black
+                            focusedContainerColor = colors.textPrimary,
+                            contentColor = colors.textSecondary,
+                            focusedContentColor = inverseColor
                         ),
                         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small)
                     ) {
@@ -426,7 +442,6 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         val scrollState = rememberScrollState()
         val coroutineScope = rememberCoroutineScope()
 
-        // ライブラリが切り替わったらスクロールを先頭に戻す
         LaunchedEffect(selectedLib) {
             scrollState.scrollTo(0)
         }
@@ -435,7 +450,8 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .weight(0.65f)
                 .fillMaxHeight()
-                .background(Color(0xFF1E1E1E), MaterialTheme.shapes.medium)
+                .background(colors.surface.copy(alpha = 0.5f), MaterialTheme.shapes.medium)
+                .border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)), MaterialTheme.shapes.medium)
                 .padding(32.dp)
         ) {
             Column(
@@ -471,19 +487,19 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 Text(
                     text = selectedLib.name,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
+                    color = colors.textPrimary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = selectedLib.licenseName,
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = colors.accent,
                     modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
                 )
                 Text(
                     text = selectedLib.licenseText,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Color.LightGray,
+                    color = colors.textPrimary.copy(alpha = 0.8f),
                     lineHeight = 28.sp
                 )
 

@@ -1,6 +1,5 @@
 package com.beeregg2001.komorebi.ui.live
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -23,7 +22,7 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.viewmodel.Channel
+import com.beeregg2001.komorebi.data.model.Channel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
@@ -319,34 +318,6 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
                         Text(AppStrings.BUTTON_RETRY)
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun LiveToast(message: String?) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(bottom = 80.dp),
-        contentAlignment = Alignment.BottomCenter
-    ) {
-        AnimatedVisibility(
-            visible = message != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Box(
-                modifier = Modifier
-                    .background(Color.Black.copy(0.85f), RoundedCornerShape(32.dp))
-                    .border(1.dp, Color.White.copy(0.2f), RoundedCornerShape(32.dp))
-                    .padding(horizontal = 28.dp, vertical = 14.dp)
-            ) {
-                Text(
-                    text = message ?: "",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
-                )
             }
         }
     }

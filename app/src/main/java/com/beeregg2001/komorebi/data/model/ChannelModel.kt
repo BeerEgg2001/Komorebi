@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.viewmodel
+package com.beeregg2001.komorebi.data.model
 
 import com.google.gson.annotations.SerializedName
 
@@ -25,6 +25,7 @@ data class Channel(
     @SerializedName("program_present") val programPresent: Program?,
     @SerializedName("program_following") val programFollowing: Program?,
     @SerializedName("remocon_id") val remocon_Id: Int,
+    @SerializedName("jikkyo_force") val jikkyoForce: Int? = null // ★追加
 )
 
 // 番組情報
@@ -45,3 +46,12 @@ data class Genre(
     val major: String,
     val middle: String
 )
+
+enum class AudioMode { MAIN, SUB }
+enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE, QUALITY, COMMENT, RECORD } // ★RECORD追加
+enum class StreamSource { MIRAKURUN, KONOMITV }
+
+object LivePlayerConstants {
+    const val TAG_SUBTITLE = "SubtitleDebug"
+    const val SUBTITLE_SYNC_OFFSET_MS = -500L
+}

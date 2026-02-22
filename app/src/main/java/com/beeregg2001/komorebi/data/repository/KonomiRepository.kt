@@ -9,7 +9,7 @@ import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.viewmodel.ChannelApiResponse
+import com.beeregg2001.komorebi.data.model.ChannelApiResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -90,6 +90,11 @@ class KonomiRepository @Inject constructor(
         Log.d(TAG, "Channel saved: ${entity.name}")
     }
 
+    // ★追加: チャンネル履歴の全削除
+    suspend fun clearLastChannels() {
+        lastChannelDao.clearAll()
+    }
+
     suspend fun getJikkyoInfo(channelId: String) = runCatching {
         apiService.getJikkyoInfo(channelId)
     }
@@ -103,20 +108,26 @@ class KonomiRepository @Inject constructor(
         if (response.is_success) response.comments else emptyList()
     }
 
-    // --- 予約関連 ---
+    // --- 予約関連 (修正版) ---
     suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
         apiService.getReserves().reservations
     }
 
     suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.addReserve(request)
-        if (!response.isSuccessful) throw Exception("Reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+        if (!response.isSuccessful) {
+            val errorBody = response.errorBody()?.string()
+            Log.e(TAG, "Reservation failed: $errorBody")
+            throw Exception("Reservation failed: ${response.code()} $errorBody")
+        }
     }
 
     suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.updateReserve(reservationId, request)
         if (!response.isSuccessful) {
-            throw Exception("Update reservation failed: ${response.code()} ${response.errorBody()?.string()}")
+            val errorBody = response.errorBody()?.string()
+            Log.e(TAG, "Update reservation failed: $errorBody")
+            throw Exception("Update reservation failed: ${response.code()} $errorBody")
         }
     }
 
@@ -125,7 +136,7 @@ class KonomiRepository @Inject constructor(
         if (!response.isSuccessful) {
             if (response.code() == 404) {
                 Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
-                throw Exception("Reservation not found")
+                return@runCatching
             }
             throw Exception("Delete reservation failed: ${response.code()} ${response.errorBody()?.string()}")
         }

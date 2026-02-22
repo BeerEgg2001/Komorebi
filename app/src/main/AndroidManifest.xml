@@ -25,7 +25,7 @@
             android:exported="true"
             android:launchMode="singleInstance"
             android:hardwareAccelerated="true"
-            android:theme="@style/Theme.ComposeTv">
+            android:theme="@style/Theme_Komorebi_Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />

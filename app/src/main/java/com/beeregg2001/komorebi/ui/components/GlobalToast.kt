@@ -14,28 +14,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
 
-// ★修正: アプリ共通のトーストUI (文字色を白に強制、下から出現)
 @Composable
 fun GlobalToast(message: String?) {
+    val colors = KomorebiTheme.colors // ★追加
     AnimatedVisibility(
         visible = message != null,
-        enter = fadeIn() + slideInVertically { it }, // 下からイン
-        exit = fadeOut() + slideOutVertically { it }, // 下へアウト
+        enter = fadeIn() + slideInVertically { it },
+        exit = fadeOut() + slideOutVertically { it },
         modifier = Modifier
             .fillMaxSize()
-            .wrapContentSize(Alignment.BottomCenter) // 画面下部
+            .wrapContentSize(Alignment.BottomCenter)
             .padding(bottom = 60.dp)
     ) {
         Surface(
-            color = Color(0xFF202020),
-            contentColor = Color.White,
+            color = colors.surface, // ★修正: Color(0xFF202020) -> colors.surface
+            contentColor = colors.textPrimary, // ★修正
             shape = RoundedCornerShape(32.dp),
             shadowElevation = 8.dp,
             modifier = Modifier.padding(16.dp)
@@ -48,7 +47,7 @@ fun GlobalToast(message: String?) {
                     text = message ?: "",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
-                    color = Color.White // ★重要: 文字色を明示的に白に指定
+                    color = colors.textPrimary // ★修正
                 )
             }
         }

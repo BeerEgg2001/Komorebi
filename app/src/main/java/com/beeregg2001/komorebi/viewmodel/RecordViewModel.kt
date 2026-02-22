@@ -45,8 +45,10 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
-    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
+    private val _groupedSeries =
+        MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
+    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> =
+        _groupedSeries.asStateFlow()
 
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
@@ -63,7 +65,6 @@ class RecordViewModel @Inject constructor(
     private var maintenanceJob: Job? = null
 
     init {
-        // ★修正: 起動時の自動取得を削除（MainRootScreen側でタブ選択時に呼ばれるため）
         loadSearchHistory()
     }
 
@@ -112,7 +113,8 @@ class RecordViewModel @Inject constructor(
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
         if (!forceRefresh && currentSearchQuery.isNotEmpty()) return
         currentSearchQuery = ""
-        fetchInitialRecordings()
+        // ★修正: タブ遷移時などは既存リストを消さずにバックグラウンドで更新する
+        fetchInitialRecordings(clearData = false)
     }
 
     fun searchRecordings(query: String) {
@@ -120,13 +122,17 @@ class RecordViewModel @Inject constructor(
         if (query.isNotBlank()) {
             addSearchHistory(query)
         }
-        fetchInitialRecordings()
+        // ★修正: 明示的な検索実行時はリストをクリアする
+        fetchInitialRecordings(clearData = true)
     }
 
-    private fun fetchInitialRecordings() {
+    // ★修正: clearData フラグを追加
+    private fun fetchInitialRecordings(clearData: Boolean = true) {
         viewModelScope.launch {
             _isRecordingLoading.value = true
-            _recentRecordings.value = emptyList()
+            if (clearData) {
+                _recentRecordings.value = emptyList()
+            }
 
             try {
                 currentPage = 1
@@ -199,7 +205,9 @@ class RecordViewModel @Inject constructor(
             val jsonString = prefs.getString(KEY_HISTORY, "[]")
             val jsonArray = JSONArray(jsonString)
             val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) { list.add(jsonArray.getString(i)) }
+            for (i in 0 until jsonArray.length()) {
+                list.add(jsonArray.getString(i))
+            }
             _searchHistory.value = list
         } catch (e: Exception) {
             _searchHistory.value = emptyList()
@@ -229,7 +237,8 @@ class RecordViewModel @Inject constructor(
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
                 prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -237,8 +246,23 @@ class RecordViewModel @Inject constructor(
         viewModelScope.launch { historyRepository.saveWatchHistory(program, positionSeconds) }
     }
 
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearWatchHistory()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear watch history", e)
+            }
+        }
+    }
+
     @UnstableApi
-    fun startStreamMaintenance(program: RecordedProgram, quality: String, sessionId: String, getPositionSeconds: () -> Double) {
+    fun startStreamMaintenance(
+        program: RecordedProgram,
+        quality: String,
+        sessionId: String,
+        getPositionSeconds: () -> Double
+    ) {
         stopStreamMaintenance()
 
         val hasTile = program.recordedVideo.thumbnailInfo?.tile != null
