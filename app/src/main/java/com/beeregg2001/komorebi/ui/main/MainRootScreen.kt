@@ -93,11 +93,7 @@ fun MainRootScreen(
     val isChannelError by channelViewModel.connectionError.collectAsState()
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
-    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
-    val searchHistory by recordViewModel.searchHistory.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
-    val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
-    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
@@ -109,18 +105,25 @@ fun MainRootScreen(
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
-            state.currentTabIndex = when (tab) { "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; else -> 0 }
+            state.currentTabIndex = when (tab) {
+                "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; else -> 0
+            }
             state.hasAppliedStartupTab = true
         }
     }
 
     val closeSettingsAndRefresh = {
-        state.isSettingsOpen = false; state.isDataReady = false; state.showConnectionErrorDialog = false
+        state.isSettingsOpen = false; state.isDataReady = false; state.showConnectionErrorDialog =
+        false
         channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData()
         recordViewModel.fetchRecentRecordings(); reserveViewModel.fetchReserves()
     }
 
-    LaunchedEffect(state.toastMessage) { if (state.toastMessage != null) { delay(3000); state.toastMessage = null } }
+    LaunchedEffect(state.toastMessage) {
+        if (state.toastMessage != null) {
+            delay(3000); state.toastMessage = null
+        }
+    }
 
     BackHandler(enabled = true) {
         when {
@@ -131,15 +134,33 @@ fun MainRootScreen(
             state.isPlayerMiniListOpen -> state.isPlayerMiniListOpen = false
             state.playerIsSubMenuOpen -> state.playerIsSubMenuOpen = false
             state.isPlayerSubMenuOpen -> state.isPlayerSubMenuOpen = false
-            state.isPlayerSceneSearchOpen -> { state.isPlayerSceneSearchOpen = false; state.showPlayerControls = false }
-            state.selectedChannel != null -> { state.selectedChannel = null; state.isReturningFromPlayer = true }
-            state.selectedProgram != null -> { state.selectedProgram = null; state.showPlayerControls = true; state.isReturningFromPlayer = true }
+            state.isPlayerSceneSearchOpen -> {
+                state.isPlayerSceneSearchOpen = false; state.showPlayerControls = false
+            }
+
+            state.selectedChannel != null -> {
+                state.selectedChannel = null; state.isReturningFromPlayer = true
+            }
+
+            state.selectedProgram != null -> {
+                state.selectedProgram = null; state.showPlayerControls =
+                    true; state.isReturningFromPlayer = true
+            }
+
             state.isSettingsOpen -> closeSettingsAndRefresh()
             state.epgSelectedProgram != null -> state.epgSelectedProgram = null
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
-            state.isRecordListOpen -> { state.isRecordListOpen = false; if (state.openedSeriesTitle != null) { state.isSeriesListOpen = true; state.openedSeriesTitle = null }; recordViewModel.searchRecordings("") }
-            state.isSeriesListOpen -> { state.isSeriesListOpen = false; recordViewModel.searchRecordings("") }
+            state.isRecordListOpen -> {
+                state.isRecordListOpen = false; if (state.openedSeriesTitle != null) {
+                    state.isSeriesListOpen = true; state.openedSeriesTitle = null
+                }; recordViewModel.searchRecordings("")
+            }
+
+            state.isSeriesListOpen -> {
+                state.isSeriesListOpen = false; recordViewModel.searchRecordings("")
+            }
+
             state.showConnectionErrorDialog -> onExitApp()
             else -> state.triggerHomeBack = true
         }
@@ -148,14 +169,18 @@ fun MainRootScreen(
     LaunchedEffect(isChannelLoading, isHomeLoading) {
         delay(500)
         if (!isChannelLoading && !isHomeLoading) {
-            if (isChannelError) { state.showConnectionErrorDialog = true; state.isDataReady = false }
-            else { state.showConnectionErrorDialog = false; state.isDataReady = true }
+            if (isChannelError) {
+                state.showConnectionErrorDialog = true; state.isDataReady = false
+            } else {
+                state.showConnectionErrorDialog = false; state.isDataReady = true
+            }
         }
     }
 
     LaunchedEffect(Unit) { delay(500); state.isSplashFinished = true }
 
-    val isAppReady = ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) && state.hasAppliedStartupTab
+    val isAppReady =
+        ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) && state.hasAppliedStartupTab
 
     KomorebiTheme(theme = currentTheme) {
         val colors = KomorebiTheme.colors
@@ -175,34 +200,352 @@ fun MainRootScreen(
                 )
             }
 
-            val showMainContent = isAppReady && isSettingsInitialized && !state.showConnectionErrorDialog
-            AnimatedVisibility(visible = showMainContent, enter = fadeIn(animationSpec = tween(400)), exit = fadeOut()) {
+            val showMainContent =
+                isAppReady && isSettingsInitialized && !state.showConnectionErrorDialog
+            AnimatedVisibility(
+                visible = showMainContent,
+                enter = fadeIn(animationSpec = tween(400)),
+                exit = fadeOut()
+            ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     when {
-                        state.selectedChannel != null -> { LivePlayerScreen(channel = state.selectedChannel!!, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort, initialQuality = defaultLiveQuality, groupedChannels = groupedChannels, isMiniListOpen = state.isPlayerMiniListOpen, onMiniListToggle = { state.isPlayerMiniListOpen = it }, showOverlay = state.playerShowOverlay, onShowOverlayChange = { state.playerShowOverlay = it }, isManualOverlay = state.playerIsManualOverlay, onManualOverlayChange = { state.playerIsManualOverlay = it }, isPinnedOverlay = state.playerIsPinnedOverlay, onPinnedOverlayChange = { state.playerIsPinnedOverlay = it }, isSubMenuOpen = state.playerIsSubMenuOpen, onSubMenuToggle = { state.playerIsSubMenuOpen = it }, onChannelSelect = { newChannel -> state.selectedChannel = newChannel; state.lastSelectedChannelId = newChannel.id; state.lastSelectedProgramId = null; homeViewModel.saveLastChannel(newChannel); state.isReturningFromPlayer = false }, onBackPressed = { state.selectedChannel = null; state.isReturningFromPlayer = true }, reserveViewModel = reserveViewModel, epgViewModel = epgViewModel, onShowToast = { state.toastMessage = it }) }
-                        state.selectedProgram != null -> { VideoPlayerScreen(program = state.selectedProgram!!, initialPositionMs = state.initialPlaybackPositionMs, initialQuality = defaultVideoQuality, konomiIp = konomiIp, konomiPort = konomiPort, showControls = state.showPlayerControls, onShowControlsChange = { state.showPlayerControls = it }, isSubMenuOpen = state.isPlayerSubMenuOpen, onSubMenuToggle = { state.isPlayerSubMenuOpen = it }, isSceneSearchOpen = state.isPlayerSceneSearchOpen, onSceneSearchToggle = { state.isPlayerSceneSearchOpen = it }, onBackPressed = { state.selectedProgram = null; state.isReturningFromPlayer = true }, onUpdateWatchHistory = { prog, pos -> recordViewModel.updateWatchHistory(prog, pos) }, onShowToast = { state.toastMessage = it }) }
-                        state.isSeriesListOpen -> { val groupedSeries by recordViewModel.groupedSeries.collectAsState(); val isSeriesLoading by recordViewModel.isSeriesLoading.collectAsState(); LaunchedEffect(Unit) { recordViewModel.buildSeriesIndex() }; SeriesListScreen(groupedSeries = groupedSeries, isLoading = isSeriesLoading, onSeriesClick = { searchKeyword, displayTitle -> recordViewModel.searchRecordings(searchKeyword); state.openedSeriesTitle = displayTitle; state.isSeriesListOpen = false; state.isRecordListOpen = true }, onBack = { state.isSeriesListOpen = false; recordViewModel.searchRecordings("") }) }
-                        state.isRecordListOpen -> { RecordListScreen(recentRecordings = recentRecordings, searchHistory = searchHistory, konomiIp = konomiIp, konomiPort = konomiPort, onProgramClick = { program -> if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen; val history = watchHistory.find { it.program.id.toString() == program.id.toString() }; val duration = program.recordedVideo.duration; state.initialPlaybackPositionMs = if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) { (history.playback_position * 1000).toLong() } else 0L; state.selectedProgram = program; state.lastSelectedProgramId = program.id.toString() }, onLoadMore = { recordViewModel.loadNextPage() }, isLoadingInitial = isRecLoading, isLoadingMore = isRecLoadingMore, customTitle = state.openedSeriesTitle, onBack = { state.isRecordListOpen = false; if (state.openedSeriesTitle != null) { state.isSeriesListOpen = true; state.openedSeriesTitle = null }; recordViewModel.searchRecordings("") }, onSearch = { query -> recordViewModel.searchRecordings(query) }) }
-                        else -> { HomeLauncherScreen(channelViewModel = channelViewModel, homeViewModel = homeViewModel, epgViewModel = epgViewModel, recordViewModel = recordViewModel, reserveViewModel = reserveViewModel, groupedChannels = groupedChannels, mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort, konomiIp = konomiIp, konomiPort = konomiPort, initialTabIndex = state.currentTabIndex, onTabChange = { state.currentTabIndex = it }, selectedChannel = state.selectedChannel, onChannelClick = { channel -> state.selectedChannel = channel; if (channel != null) { state.lastSelectedChannelId = channel.id; state.lastSelectedProgramId = null; homeViewModel.saveLastChannel(channel); state.isReturningFromPlayer = false } }, selectedProgram = state.selectedProgram, onProgramSelected = { program -> if (program != null) { if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen; val history = watchHistory.find { it.program.id.toString() == program.id.toString() }; val duration = program.recordedVideo.duration; state.initialPlaybackPositionMs = if (history != null && history.playback_position > 5.0 && (duration <= 0.0 || history.playback_position < (duration - 10.0))) { (history.playback_position * 1000).toLong() } else 0L; state.selectedProgram = program; state.lastSelectedProgramId = program.id.toString(); state.lastSelectedChannelId = null; state.showPlayerControls = true; state.isReturningFromPlayer = false } }, onReserveSelected = { reserveItem -> state.selectedReserve = reserveItem }, isReserveOverlayOpen = state.selectedReserve != null, epgSelectedProgram = state.epgSelectedProgram, onEpgProgramSelected = { state.epgSelectedProgram = it }, isEpgJumpMenuOpen = state.isEpgJumpMenuOpen, onEpgJumpMenuStateChanged = { state.isEpgJumpMenuOpen = it }, triggerBack = state.triggerHomeBack, onBackTriggered = { state.triggerHomeBack = false }, onFinalBack = onExitApp, onUiReady = { }, onNavigateToPlayer = { channelId, _, _ -> val channel = groupedChannels.values.flatten().find { it.id == channelId }; if (channel != null) { state.selectedChannel = channel; state.lastSelectedChannelId = channelId; state.lastSelectedProgramId = null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram = null; state.isEpgJumpMenuOpen = false; state.isReturningFromPlayer = false } }, lastPlayerChannelId = state.lastSelectedChannelId, lastPlayerProgramId = state.lastSelectedProgramId, isSettingsOpen = state.isSettingsOpen, onSettingsToggle = { state.isSettingsOpen = it }, isRecordListOpen = state.isRecordListOpen, onShowAllRecordings = { state.isRecordListOpen = true }, onCloseRecordList = { state.isRecordListOpen = false }, onShowSeriesList = { state.isSeriesListOpen = true }, isReturningFromPlayer = state.isReturningFromPlayer, onReturnFocusConsumed = { state.isReturningFromPlayer = false }) }
+                        state.selectedChannel != null -> {
+                            LivePlayerScreen(
+                                channel = state.selectedChannel!!,
+                                mirakurunIp = mirakurunIp,
+                                mirakurunPort = mirakurunPort,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                initialQuality = defaultLiveQuality,
+                                groupedChannels = groupedChannels,
+                                isMiniListOpen = state.isPlayerMiniListOpen,
+                                onMiniListToggle = { state.isPlayerMiniListOpen = it },
+                                showOverlay = state.playerShowOverlay,
+                                onShowOverlayChange = { state.playerShowOverlay = it },
+                                isManualOverlay = state.playerIsManualOverlay,
+                                onManualOverlayChange = { state.playerIsManualOverlay = it },
+                                isPinnedOverlay = state.playerIsPinnedOverlay,
+                                onPinnedOverlayChange = { state.playerIsPinnedOverlay = it },
+                                isSubMenuOpen = state.playerIsSubMenuOpen,
+                                onSubMenuToggle = { state.playerIsSubMenuOpen = it },
+                                onChannelSelect = { newChannel ->
+                                    state.selectedChannel =
+                                        newChannel; state.lastSelectedChannelId =
+                                    newChannel.id; state.lastSelectedProgramId =
+                                    null; homeViewModel.saveLastChannel(newChannel); state.isReturningFromPlayer =
+                                    false
+                                },
+                                onBackPressed = {
+                                    state.selectedChannel = null; state.isReturningFromPlayer = true
+                                },
+                                reserveViewModel = reserveViewModel,
+                                epgViewModel = epgViewModel,
+                                onShowToast = { state.toastMessage = it })
+                        }
+
+                        state.selectedProgram != null -> {
+                            VideoPlayerScreen(
+                                program = state.selectedProgram!!,
+                                initialPositionMs = state.initialPlaybackPositionMs,
+                                initialQuality = defaultVideoQuality,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                showControls = state.showPlayerControls,
+                                onShowControlsChange = { state.showPlayerControls = it },
+                                isSubMenuOpen = state.isPlayerSubMenuOpen,
+                                onSubMenuToggle = { state.isPlayerSubMenuOpen = it },
+                                isSceneSearchOpen = state.isPlayerSceneSearchOpen,
+                                onSceneSearchToggle = { state.isPlayerSceneSearchOpen = it },
+                                onBackPressed = {
+                                    state.selectedProgram = null; state.isReturningFromPlayer = true
+                                },
+                                onUpdateWatchHistory = { prog, pos ->
+                                    recordViewModel.updateWatchHistory(
+                                        prog,
+                                        pos
+                                    )
+                                },
+                                onShowToast = { state.toastMessage = it })
+                        }
+
+                        state.isSeriesListOpen -> {
+                            SeriesListScreen(
+                                onSeriesClick = { searchKeyword, displayTitle ->
+                                    recordViewModel.searchRecordings(
+                                        searchKeyword
+                                    ); state.openedSeriesTitle =
+                                    displayTitle; state.isSeriesListOpen =
+                                    false; state.isRecordListOpen = true
+                                },
+                                onBack = {
+                                    state.isSeriesListOpen =
+                                        false; recordViewModel.searchRecordings("")
+                                })
+                        }
+
+                        state.isRecordListOpen -> {
+                            RecordListScreen(
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                onProgramClick = { program ->
+                                    if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen;
+                                    val history =
+                                        watchHistory.find { it.program.id.toString() == program.id.toString() };
+                                    val duration =
+                                        program.recordedVideo.duration; state.initialPlaybackPositionMs =
+                                    if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
+                                        (history.playback_position * 1000).toLong()
+                                    } else 0L; state.selectedProgram =
+                                    program; state.lastSelectedProgramId = program.id.toString()
+                                },
+                                customTitle = state.openedSeriesTitle,
+                                onBack = {
+                                    state.isRecordListOpen =
+                                        false; if (state.openedSeriesTitle != null) {
+                                    state.isSeriesListOpen = true; state.openedSeriesTitle = null
+                                }; recordViewModel.searchRecordings("")
+                                })
+                        }
+
+                        else -> {
+                            HomeLauncherScreen(
+                                channelViewModel = channelViewModel,
+                                homeViewModel = homeViewModel,
+                                epgViewModel = epgViewModel,
+                                recordViewModel = recordViewModel,
+                                reserveViewModel = reserveViewModel,
+                                groupedChannels = groupedChannels,
+                                mirakurunIp = mirakurunIp,
+                                mirakurunPort = mirakurunPort,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                initialTabIndex = state.currentTabIndex,
+                                onTabChange = { state.currentTabIndex = it },
+                                selectedChannel = state.selectedChannel,
+                                onChannelClick = { channel ->
+                                    state.selectedChannel = channel; if (channel != null) {
+                                    state.lastSelectedChannelId =
+                                        channel.id; state.lastSelectedProgramId =
+                                        null; homeViewModel.saveLastChannel(channel); state.isReturningFromPlayer =
+                                        false
+                                }
+                                },
+                                selectedProgram = state.selectedProgram,
+                                onProgramSelected = { program ->
+                                    if (program != null) {
+                                        if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen;
+                                        val history =
+                                            watchHistory.find { it.program.id.toString() == program.id.toString() };
+                                        val duration =
+                                            program.recordedVideo.duration; state.initialPlaybackPositionMs =
+                                            if (history != null && history.playback_position > 5.0 && (duration <= 0.0 || history.playback_position < (duration - 10.0))) {
+                                                (history.playback_position * 1000).toLong()
+                                            } else 0L; state.selectedProgram =
+                                            program; state.lastSelectedProgramId =
+                                            program.id.toString(); state.lastSelectedChannelId =
+                                            null; state.showPlayerControls =
+                                            true; state.isReturningFromPlayer = false
+                                    }
+                                },
+                                onReserveSelected = { reserveItem ->
+                                    state.selectedReserve = reserveItem
+                                },
+                                isReserveOverlayOpen = state.selectedReserve != null,
+                                epgSelectedProgram = state.epgSelectedProgram,
+                                onEpgProgramSelected = { state.epgSelectedProgram = it },
+                                isEpgJumpMenuOpen = state.isEpgJumpMenuOpen,
+                                onEpgJumpMenuStateChanged = { state.isEpgJumpMenuOpen = it },
+                                triggerBack = state.triggerHomeBack,
+                                onBackTriggered = { state.triggerHomeBack = false },
+                                onFinalBack = onExitApp,
+                                onUiReady = { },
+                                onNavigateToPlayer = { channelId, _, _ ->
+                                    val channel = groupedChannels.values.flatten()
+                                        .find { it.id == channelId }; if (channel != null) {
+                                    state.selectedChannel = channel; state.lastSelectedChannelId =
+                                        channelId; state.lastSelectedProgramId =
+                                        null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram =
+                                        null; state.isEpgJumpMenuOpen =
+                                        false; state.isReturningFromPlayer = false
+                                }
+                                },
+                                lastPlayerChannelId = state.lastSelectedChannelId,
+                                lastPlayerProgramId = state.lastSelectedProgramId,
+                                isSettingsOpen = state.isSettingsOpen,
+                                onSettingsToggle = { state.isSettingsOpen = it },
+                                isRecordListOpen = state.isRecordListOpen,
+                                onShowAllRecordings = { state.isRecordListOpen = true },
+                                onCloseRecordList = { state.isRecordListOpen = false },
+                                onShowSeriesList = { state.isSeriesListOpen = true },
+                                isReturningFromPlayer = state.isReturningFromPlayer,
+                                onReturnFocusConsumed = { state.isReturningFromPlayer = false })
+                        }
                     }
                 }
             }
-            if (!showMainContent && !state.showConnectionErrorDialog) { LoadingScreen() }
+            if (!showMainContent && !state.showConnectionErrorDialog) {
+                LoadingScreen()
+            }
 
-            if (state.selectedReserve != null) { val program = remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }; ProgramDetailScreen(program = program, mode = ProgramDetailMode.RESERVE, isReserved = true, onBackClick = { state.selectedReserve = null }, onDeleteReserveClick = { _ -> state.reserveToDelete = state.selectedReserve }, onEditReserveClick = { _ -> reserveViewModel.refreshReserveItem(state.selectedReserve!!.id) { latest -> state.editingReserveItem = latest ?: state.selectedReserve } }, initialFocusRequester = detailFocusRequester) }
-            if (state.epgSelectedProgram != null) { val relatedReserve = reserves.find { it.program.id == state.epgSelectedProgram!!.id }; val isReserved = relatedReserve != null; ProgramDetailScreen(program = state.epgSelectedProgram!!, mode = ProgramDetailMode.EPG, isReserved = isReserved, onPlayClick = { val channel = groupedChannels.values.flatten().find { ch -> ch.id == it.channel_id }; if (channel != null) { state.selectedChannel = channel; state.lastSelectedChannelId = channel.id; state.lastSelectedProgramId = null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram = null; state.isReturningFromPlayer = false } }, onRecordClick = { program -> reserveViewModel.addReserve(program.id) { scope.launch { state.epgSelectedProgram = null; delay(300); val now = OffsetDateTime.now(); val start = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }; val end = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }; val isBroadcasting = now.isAfter(start) && now.isBefore(end); state.toastMessage = if (isBroadcasting) "録画を開始しました" else "予約しました" } } }, onRecordDetailClick = { program -> state.editingNewProgram = program }, onEditReserveClick = { _ -> if (relatedReserve != null) { reserveViewModel.refreshReserveItem(relatedReserve.id) { latest -> state.editingReserveItem = latest ?: relatedReserve } } }, onDeleteReserveClick = { _ -> if (relatedReserve != null) { state.reserveToDelete = relatedReserve } }, onBackClick = { state.epgSelectedProgram = null }, initialFocusRequester = detailFocusRequester) }
-            if (state.editingReserveItem != null) { ReserveSettingsDialog(programTitle = state.editingReserveItem!!.program.title, initialSettings = state.editingReserveItem!!.recordSettings, isNewReservation = false, onConfirm = { newSettings -> reserveViewModel.updateReservation(state.editingReserveItem!!, newSettings) { scope.launch { state.editingReserveItem = null; state.toastMessage = "予約設定を更新しました"; delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } } }, onDismiss = { state.editingReserveItem = null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } }) }
-            if (state.editingNewProgram != null) { val defaultSettings = remember { ReserveRecordSettings(isEnabled = true, priority = 3, recordingMode = "SpecifiedService", isEventRelayFollowEnabled = true) }; ReserveSettingsDialog(programTitle = state.editingNewProgram!!.title, initialSettings = defaultSettings, isNewReservation = true, onConfirm = { newSettings -> reserveViewModel.addReserveWithSettings(state.editingNewProgram!!.id, newSettings) { scope.launch { state.editingNewProgram = null; state.epgSelectedProgram = null; delay(300); state.toastMessage = "予約しました" } } }, onDismiss = { state.editingNewProgram = null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") } }) }
+            if (state.selectedReserve != null) {
+                val program =
+                    remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }; ProgramDetailScreen(
+                    program = program,
+                    mode = ProgramDetailMode.RESERVE,
+                    isReserved = true,
+                    onBackClick = { state.selectedReserve = null },
+                    onDeleteReserveClick = { _ -> state.reserveToDelete = state.selectedReserve },
+                    onEditReserveClick = { _ ->
+                        reserveViewModel.refreshReserveItem(state.selectedReserve!!.id) { latest ->
+                            state.editingReserveItem = latest ?: state.selectedReserve
+                        }
+                    },
+                    initialFocusRequester = detailFocusRequester
+                )
+            }
+            if (state.epgSelectedProgram != null) {
+                val relatedReserve =
+                    reserves.find { it.program.id == state.epgSelectedProgram!!.id };
+                val isReserved = relatedReserve != null; ProgramDetailScreen(
+                    program = state.epgSelectedProgram!!,
+                    mode = ProgramDetailMode.EPG,
+                    isReserved = isReserved,
+                    onPlayClick = {
+                        val channel = groupedChannels.values.flatten()
+                            .find { ch -> ch.id == it.channel_id }; if (channel != null) {
+                        state.selectedChannel = channel; state.lastSelectedChannelId =
+                            channel.id; state.lastSelectedProgramId =
+                            null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram =
+                            null; state.isReturningFromPlayer = false
+                    }
+                    },
+                    onRecordClick = { program ->
+                        reserveViewModel.addReserve(program.id) {
+                            scope.launch {
+                                state.epgSelectedProgram = null; delay(300);
+                                val now = OffsetDateTime.now();
+                                val start = try {
+                                    OffsetDateTime.parse(program.start_time)
+                                } catch (e: Exception) {
+                                    now
+                                };
+                                val end = try {
+                                    OffsetDateTime.parse(program.end_time)
+                                } catch (e: Exception) {
+                                    now
+                                };
+                                val isBroadcasting =
+                                    now.isAfter(start) && now.isBefore(end); state.toastMessage =
+                                if (isBroadcasting) "録画を開始しました" else "予約しました"
+                            }
+                        }
+                    },
+                    onRecordDetailClick = { program -> state.editingNewProgram = program },
+                    onEditReserveClick = { _ ->
+                        if (relatedReserve != null) {
+                            reserveViewModel.refreshReserveItem(relatedReserve.id) { latest ->
+                                state.editingReserveItem = latest ?: relatedReserve
+                            }
+                        }
+                    },
+                    onDeleteReserveClick = { _ ->
+                        if (relatedReserve != null) {
+                            state.reserveToDelete = relatedReserve
+                        }
+                    },
+                    onBackClick = { state.epgSelectedProgram = null },
+                    initialFocusRequester = detailFocusRequester
+                )
+            }
+            if (state.editingReserveItem != null) {
+                ReserveSettingsDialog(
+                    programTitle = state.editingReserveItem!!.program.title,
+                    initialSettings = state.editingReserveItem!!.recordSettings,
+                    isNewReservation = false,
+                    onConfirm = { newSettings ->
+                        reserveViewModel.updateReservation(
+                            state.editingReserveItem!!,
+                            newSettings
+                        ) {
+                            scope.launch {
+                                state.editingReserveItem = null; state.toastMessage =
+                                "予約設定を更新しました"; delay(200); detailFocusRequester.safeRequestFocus(
+                                "ProgramDetail"
+                            )
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        state.editingReserveItem =
+                            null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
+                    })
+            }
+            if (state.editingNewProgram != null) {
+                val defaultSettings = remember {
+                    ReserveRecordSettings(
+                        isEnabled = true,
+                        priority = 3,
+                        recordingMode = "SpecifiedService",
+                        isEventRelayFollowEnabled = true
+                    )
+                }; ReserveSettingsDialog(
+                    programTitle = state.editingNewProgram!!.title,
+                    initialSettings = defaultSettings,
+                    isNewReservation = true,
+                    onConfirm = { newSettings ->
+                        reserveViewModel.addReserveWithSettings(
+                            state.editingNewProgram!!.id,
+                            newSettings
+                        ) {
+                            scope.launch {
+                                state.editingNewProgram = null; state.epgSelectedProgram =
+                                null; delay(300); state.toastMessage = "予約しました"
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        state.editingNewProgram =
+                            null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
+                    })
+            }
 
-            if (state.reserveToDelete != null) { DeleteConfirmationDialog(title = "予約の削除", message = "この予約を削除してもよろしいですか？\n${state.reserveToDelete?.program?.title ?: ""}", onConfirm = { val id = state.reserveToDelete!!.id; reserveViewModel.deleteReservation(id) { scope.launch { state.reserveToDelete = null; if (state.selectedReserve != null) state.selectedReserve = null; if (state.epgSelectedProgram != null) state.epgSelectedProgram = null; delay(300); state.toastMessage = "予約を削除しました" } } }, onCancel = { state.reserveToDelete = null }) }
-            if (!isSettingsInitialized && !state.isSettingsOpen && state.isSplashFinished) { InitialSetupDialog(onConfirm = { state.isSettingsOpen = true }) }
-            if (state.showConnectionErrorDialog && isSettingsInitialized && !state.isSettingsOpen) { ConnectionErrorDialog(onGoToSettings = { state.showConnectionErrorDialog = false; state.isSettingsOpen = true }, onExit = onExitApp) }
+            if (state.reserveToDelete != null) {
+                DeleteConfirmationDialog(
+                    title = "予約の削除",
+                    message = "この予約を削除してもよろしいですか？\n${state.reserveToDelete?.program?.title ?: ""}",
+                    onConfirm = {
+                        val id =
+                            state.reserveToDelete!!.id; reserveViewModel.deleteReservation(id) {
+                        scope.launch {
+                            state.reserveToDelete =
+                                null; if (state.selectedReserve != null) state.selectedReserve =
+                            null; if (state.epgSelectedProgram != null) state.epgSelectedProgram =
+                            null; delay(300); state.toastMessage = "予約を削除しました"
+                        }
+                    }
+                    },
+                    onCancel = { state.reserveToDelete = null })
+            }
+            if (!isSettingsInitialized && !state.isSettingsOpen && state.isSplashFinished) {
+                InitialSetupDialog(onConfirm = { state.isSettingsOpen = true })
+            }
+            if (state.showConnectionErrorDialog && isSettingsInitialized && !state.isSettingsOpen) {
+                ConnectionErrorDialog(onGoToSettings = {
+                    state.showConnectionErrorDialog = false; state.isSettingsOpen = true
+                }, onExit = onExitApp)
+            }
 
             if (state.isSettingsOpen) {
                 SettingsScreen(
                     onBack = closeSettingsAndRefresh,
-                    onClearLastChannel = { homeViewModel.clearLastChannelHistory(); state.toastMessage = "チャンネル履歴を削除しました" },
-                    onClearWatchHistory = { recordViewModel.clearWatchHistory(); state.toastMessage = "視聴履歴を削除しました" }
+                    onClearLastChannel = {
+                        homeViewModel.clearLastChannelHistory(); state.toastMessage =
+                        "チャンネル履歴を削除しました"
+                    },
+                    onClearWatchHistory = {
+                        recordViewModel.clearWatchHistory(); state.toastMessage =
+                        "視聴履歴を削除しました"
+                    }
                 )
             }
             GlobalToast(message = state.toastMessage)

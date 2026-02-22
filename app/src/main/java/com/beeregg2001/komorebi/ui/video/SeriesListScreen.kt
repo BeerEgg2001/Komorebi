@@ -17,6 +17,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.grid.*
 import androidx.tv.foundation.lazy.list.TvLazyRow
 import androidx.tv.foundation.lazy.list.itemsIndexed
@@ -24,15 +25,19 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.util.EpgUtils
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
 
 @Composable
 fun SeriesListScreen(
-    groupedSeries: Map<String, List<Pair<String, String>>>,
-    isLoading: Boolean,
+    viewModel: RecordViewModel = hiltViewModel(), // ★ViewModelを直接受け取る
     onSeriesClick: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
+    // ★親ではなく、ここでデータを監視する
+    val groupedSeries by viewModel.groupedSeries.collectAsState()
+    val isLoading by viewModel.isSeriesLoading.collectAsState()
+
     var selectedGenre by remember(groupedSeries) { mutableStateOf(groupedSeries.keys.firstOrNull()) }
     val colors = KomorebiTheme.colors
     val backButtonRequester = remember { FocusRequester() }
@@ -40,6 +45,11 @@ fun SeriesListScreen(
     val firstItemRequester = remember { FocusRequester() }
 
     var initialFocusSet by remember { mutableStateOf(false) }
+
+    // ★画面表示時にシリーズのインデックス構築をリクエスト
+    LaunchedEffect(Unit) {
+        viewModel.buildSeriesIndex()
+    }
 
     LaunchedEffect(isLoading, groupedSeries) {
         if (!isLoading && !initialFocusSet) {

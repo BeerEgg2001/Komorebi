@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.grid.*
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.itemsIndexed
@@ -44,6 +45,7 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -53,18 +55,19 @@ private const val TAG = "RecordListScreen"
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun RecordListScreen(
-    recentRecordings: List<RecordedProgram>,
-    searchHistory: List<String>,
+    viewModel: RecordViewModel = hiltViewModel(), // ★ViewModelを直接受け取る
     konomiIp: String,
     konomiPort: String,
-    onProgramClick: (RecordedProgram) -> Unit,
-    onLoadMore: () -> Unit,
-    isLoadingInitial: Boolean,
-    isLoadingMore: Boolean,
     customTitle: String? = null,
-    onBack: () -> Unit,
-    onSearch: (String) -> Unit
+    onProgramClick: (RecordedProgram) -> Unit,
+    onBack: () -> Unit
 ) {
+    // ★親ではなく、ここでデータを監視する
+    val recentRecordings by viewModel.recentRecordings.collectAsState()
+    val searchHistory by viewModel.searchHistory.collectAsState()
+    val isLoadingInitial by viewModel.isRecordingLoading.collectAsState()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+
     val colors = KomorebiTheme.colors
     var searchQuery by remember { mutableStateOf("") }
     var activeSearchQuery by remember { mutableStateOf("") }
@@ -98,7 +101,7 @@ fun RecordListScreen(
         isKeyboardActive = false
         activeSearchQuery = query
         currentDisplayTitle = null
-        onSearch(query)
+        viewModel.searchRecordings(query) // ★ViewModelの検索を直接呼ぶ
         keyboardController?.hide()
         isSearchBarVisible = false
         scope.launch {
@@ -119,7 +122,7 @@ fun RecordListScreen(
                 scope.launch { delay(50); searchOpenButtonFocusRequester.safeRequestFocus(TAG) }
             }
             activeSearchQuery.isNotEmpty() -> {
-                activeSearchQuery = ""; onSearch("")
+                activeSearchQuery = ""; viewModel.searchRecordings("") // ★ViewModelの検索をクリア
                 scope.launch { delay(50); backButtonFocusRequester.safeRequestFocus(TAG) }
             }
             else -> { if (isBackButtonFocused) onBack() else backButtonFocusRequester.safeRequestFocus(TAG) }
@@ -195,7 +198,8 @@ fun RecordListScreen(
                     modifier = Modifier.fillMaxSize().focusProperties { if (isSearchBarVisible || isKeyboardActive) { enter = { FocusRequester.Cancel } } }
                 ) {
                     itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                        if (!isLoadingMore && index >= recentRecordings.size - 4) { SideEffect { onLoadMore() } }
+                        // ★スクロール終端検知時にViewModelの次ページ読み込みを直接呼ぶ
+                        if (!isLoadingMore && index >= recentRecordings.size - 4) { SideEffect { viewModel.loadNextPage() } }
                         RecordedCard(program = program, konomiIp = konomiIp, konomiPort = konomiPort, onClick = { onProgramClick(program) }, modifier = Modifier.aspectRatio(16f / 9f).then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier).focusProperties { if (index < 4) { up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester } })
                     }
                     if (isLoadingMore) { item(span = { TvGridItemSpan(maxLineSpan) }) { Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = colors.textPrimary) } } }
