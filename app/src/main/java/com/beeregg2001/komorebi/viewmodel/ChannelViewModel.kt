@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,7 +23,6 @@ class ChannelViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
-    // UIが購読する最終的な「計算済み」リスト
     private val _liveRows = MutableStateFlow<List<LiveRowState>>(emptyList())
     val liveRows: StateFlow<List<LiveRowState>> = _liveRows.asStateFlow()
 
@@ -43,12 +43,9 @@ class ChannelViewModel @Inject constructor(
 
     init {
         startPolling()
-        startProgressUpdater() // プログレスバー更新タイマー開始
+        startProgressUpdater()
     }
 
-    /**
-     * 進行度(Progress)とUI表示用モデルをバックグラウンドで一括生成
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> = withContext(Dispatchers.Default) {
         val now = System.currentTimeMillis()
@@ -77,7 +74,8 @@ class ChannelViewModel @Inject constructor(
                         name = ch.name,
                         programTitle = ch.programPresent?.title ?: "放送休止中",
                         progress = progress,
-                        hasProgram = ch.programPresent != null
+                        hasProgram = ch.programPresent != null,
+                        jikkyoForce = ch.jikkyoForce // ★修正: 勢い情報を UI モデルにセット
                     )
                 }
             )
@@ -88,20 +86,13 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
-            // ★修正: 単一の ChannelApiResponse オブジェクトを取得
             val response = repository.getChannels()
 
             val processed = withContext(Dispatchers.Default) {
-                // ★修正: 各放送波のリストを結合して1つのリストにする
                 val rawChannels = listOfNotNull(
-                    response.terrestrial,
-                    response.bs,
-                    response.cs,
-                    response.sky,
-                    response.bs4k
+                    response.terrestrial, response.bs, response.cs, response.sky, response.bs4k
                 ).flatten()
 
-                // Domainモデル(Channel)に変換
                 val allChannels = rawChannels.map { apiChannel ->
                     Channel(
                         id = apiChannel.id,
@@ -115,16 +106,20 @@ class ChannelViewModel @Inject constructor(
                         isDisplay = apiChannel.isDisplay,
                         programPresent = apiChannel.programPresent,
                         programFollowing = apiChannel.programFollowing,
-                        remocon_Id = apiChannel.remocon_Id
+                        remocon_Id = apiChannel.remocon_Id,
+                        jikkyoForce = apiChannel.jikkyoForce // ★修正: APIレスポンスから勢い情報をマッピング
                     )
                 }
-                // タイプ別にグループ化
+
+                val hotCount = allChannels.count { (it.jikkyoForce ?: 0) > 0 }
+                Log.i("ChannelViewModel", "Fetched channels. Total: ${allChannels.size}, Hot(force > 0): $hotCount")
+
                 allChannels.filter { it.isDisplay }.groupBy { it.type }
             }
             _groupedChannels.value = processed
             _liveRows.value = transformToUiState(processed)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("ChannelViewModel", "Error fetching channels", e)
             _connectionError.value = true
         } finally {
             _isLoading.value = false
@@ -157,7 +152,7 @@ class ChannelViewModel @Inject constructor(
                 val response = repository.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("ChannelViewModel", "Error recordings", e)
             } finally {
                 _isRecordingLoading.value = false
             }

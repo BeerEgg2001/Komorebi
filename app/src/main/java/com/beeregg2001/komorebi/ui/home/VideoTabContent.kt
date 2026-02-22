@@ -27,7 +27,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme // ★追加
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 
@@ -49,15 +49,23 @@ fun VideoTabContent(
     onShowSeriesList: () -> Unit = {}
 ) {
     val listState = rememberTvLazyListState()
-    var isContentReady by remember { mutableStateOf(false) }
-    val colors = KomorebiTheme.colors // ★追加
 
-    LaunchedEffect(Unit) { yield(); delay(300); isContentReady = true }
+    // ★修正: すでに表示できるデータがある場合は、最初から Ready 状態にして待機時間をなくす
+    var isContentReady by remember { mutableStateOf(recentRecordings.isNotEmpty() || watchHistory.isNotEmpty()) }
+    val colors = KomorebiTheme.colors
+
+    LaunchedEffect(Unit) {
+        if (!isContentReady) {
+            yield()
+            delay(300)
+            isContentReady = true
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (!isContentReady) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f)) // ★修正
+                CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f))
             }
         } else {
             TvLazyColumn(
@@ -119,7 +127,7 @@ fun VideoTabContent(
                                 containerColor = colors.surface,
                                 contentColor = colors.textPrimary
                             )
-                        ) { // ★修正
+                        ) {
                             Icon(
                                 Icons.Default.List,
                                 null,
@@ -135,10 +143,10 @@ fun VideoTabContent(
                                 containerColor = colors.surface,
                                 contentColor = colors.textPrimary
                             )
-                        ) { // ★修正
+                        ) {
                             Icon(Icons.Default.LibraryBooks, null, Modifier.size(20.dp)); Spacer(
-                                Modifier.width(8.dp)
-                            ); Text("シリーズから探す")
+                            Modifier.width(8.dp)
+                        ); Text("シリーズから探す")
                         }
                     }
                 }
@@ -154,7 +162,7 @@ fun VideoSectionRow(
     isFirstSection: Boolean = false, topNavFocusRequester: FocusRequester? = null
 ) {
     val watchedProgramFocusRequester = remember { FocusRequester() }
-    val colors = KomorebiTheme.colors // ★追加
+    val colors = KomorebiTheme.colors
     LaunchedEffect(selectedProgramId) {
         if (selectedProgramId != null && items.any { it.id == selectedProgramId }) {
             delay(300); runCatching { watchedProgramFocusRequester.requestFocus() }
@@ -167,7 +175,7 @@ fun VideoSectionRow(
                 style = MaterialTheme.typography.headlineSmall,
                 color = colors.textSecondary,
                 modifier = Modifier.padding(start = 32.dp, bottom = 12.dp)
-            ) // ★修正
+            )
         }
         TvLazyRow(
             contentPadding = PaddingValues(horizontal = 32.dp),

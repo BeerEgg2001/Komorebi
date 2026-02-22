@@ -25,6 +25,7 @@ data class Channel(
     @SerializedName("program_present") val programPresent: Program?,
     @SerializedName("program_following") val programFollowing: Program?,
     @SerializedName("remocon_id") val remocon_Id: Int,
+    @SerializedName("jikkyo_force") val jikkyoForce: Int? = null // ★追加
 )
 
 // 番組情報
