@@ -34,9 +34,6 @@ class SettingPreferences(
     val currentThemeName: String
 )
 
-/**
- * DataStore(Repository)のFlowを一括で購読し、SettingPreferencesとして返す
- */
 @Composable
 fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferences {
     return SettingPreferences(
@@ -76,6 +73,9 @@ class SettingUiState {
     var restoreFocusRequester by mutableStateOf<FocusRequester?>(null)
     var restoreCategoryIndex by mutableIntStateOf(-1)
     var isSidebarFocused by mutableStateOf(true)
+
+    // ★追加: 復帰中にサイドバーのフォーカス権限を一時的に剥奪するためのフラグ
+    var isRestoringFocus by mutableStateOf(false)
 }
 
 @Composable

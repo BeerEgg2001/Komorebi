@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
+import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
@@ -64,22 +65,14 @@ fun SettingsScreen(
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
 
-    // 各項目のFocusRequesterを配列で管理 (カテゴリごとのインデックスでアクセス)
     val itemFocusRequesters = remember {
         listOf(
-            // 0: General
             listOf(FocusRequester(), FocusRequester()),
-            // 1: Connection
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
-            // 2: Playback
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
-            // 3: Display
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
-            // 4: Comment
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
-            // 5: Lab
             listOf(FocusRequester(), FocusRequester(), FocusRequester()),
-            // 6: App Info
             listOf(FocusRequester())
         )
     }
@@ -90,32 +83,40 @@ fun SettingsScreen(
     LaunchedEffect(uiState.selectedCategoryIndex) { mainScrollState.scrollTo(0) }
     LaunchedEffect(Unit) {
         delay(300)
-        if (uiState.restoreFocusRequester == null) {
-            categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.safeRequestFocus()
-        }
+        categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.safeRequestFocus("Settings_Initial")
     }
 
+    // ★修正: 「引き算」の思考に基づいたクローズ処理
     val closeDialog = {
+        Log.d("SettingScreen", "=== [PHYSICAL GUARD] closeDialog Start ===")
+
+        // 1. 【ガード発動】サイドバーをフォーカスサーチの対象から一時的に「除外」する
+        // これにより、システムが左側に飛ばそうとしても、サイドバーが拒否するため右側の項目が選ばれやすくなります。
+        uiState.isRestoringFocus = true
+
+        // 2. ダイアログを消す
+        uiState.activeDialog = SettingDialogState.None
+        Log.d("SettingScreen", "Dialog visibility set to None.")
+
         scope.launch {
-            if (uiState.restoreCategoryIndex != -1 && uiState.selectedCategoryIndex != uiState.restoreCategoryIndex) {
-                uiState.selectedCategoryIndex = uiState.restoreCategoryIndex
-                uiState.activeDialog = SettingDialogState.None
-                delay(100)
-                uiState.restoreFocusRequester?.safeRequestFocus()
-            } else {
-                uiState.restoreFocusRequester?.safeRequestFocus()
-                uiState.activeDialog = SettingDialogState.None
-            }
+            // 3. リコンポーズ（SettingItemの再生成）とレイアウトの確定をしっかり待つ
+            // 100ms〜300ms程度が安定します。
+            delay(250)
+
+            // 4. フォーカスを要求
+            val result = uiState.restoreFocusRequester?.safeRequestFocus("SettingScreen_Restore")
+            Log.d("SettingScreen", "Focus Restoration Attempt Result: $result")
+
+            // 5. フォーカスが右側で安定したことを確認して、サイドバーのガードを解除
+            delay(150)
+            uiState.isRestoringFocus = false
+            Log.d("SettingScreen", "=== [PHYSICAL GUARD] closeDialog Finished (Sidebar Unlocked) ===")
         }
     }
 
     val isDarkMode = prefs.currentThemeName in listOf("MONOTONE", "WINTER_DARK", "SPRING", "SUMMER", "AUTUMN")
     val themeSeason = when (prefs.currentThemeName) {
-        "SPRING", "SPRING_LIGHT" -> "SPRING"
-        "SUMMER", "SUMMER_LIGHT" -> "SUMMER"
-        "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"
-        "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"
-        else -> "DEFAULT"
+        "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
     }
 
     Row(
@@ -126,42 +127,33 @@ fun SettingsScreen(
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && (it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK || it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_ESCAPE)) {
                     if (!uiState.isSidebarFocused) {
-                        categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.safeRequestFocus()
+                        categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.safeRequestFocus("Back_To_Sidebar")
                         return@onKeyEvent true
                     }
                 }
                 false
             }) {
-        // サイドバー領域
+        // --- サイドバー領域 ---
         Column(
             modifier = Modifier
                 .width(280.dp)
                 .fillMaxHeight()
                 .background(colors.surface.copy(alpha = 0.6f))
                 .padding(top = 32.dp, bottom = 32.dp, start = 24.dp, end = 24.dp)
-                .onFocusChanged { uiState.isSidebarFocused = it.hasFocus }) {
+                .onFocusChanged { uiState.isSidebarFocused = it.hasFocus }
+                // ★修正点1: 復帰中はサイドバー全体がフォーカスを受け付けないように物理的にロック
+                .focusProperties { canFocus = !uiState.isRestoringFocus }
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 24.dp, start = 8.dp)
             ) {
-                Icon(
-                    Icons.Default.Settings,
-                    null,
-                    tint = colors.textPrimary,
-                    modifier = Modifier.size(32.dp)
-                )
+                Icon(Icons.Default.Settings, null, tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 Spacer(Modifier.width(16.dp))
-                Text(
-                    AppStrings.SETTINGS_TITLE,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = colors.textPrimary,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(AppStrings.SETTINGS_TITLE, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold)
             }
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(sidebarScrollState),
+                modifier = Modifier.weight(1f).verticalScroll(sidebarScrollState),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 categories.forEachIndexed { index, category ->
@@ -170,11 +162,15 @@ fun SettingsScreen(
                         title = category.name,
                         icon = category.icon,
                         isSelected = uiState.selectedCategoryIndex == index,
-                        onFocused = { uiState.selectedCategoryIndex = index },
-                        onClick = { targetR.safeRequestFocus() },
+                        // ★修正点2: サイドバー自体がフォーカスを持っている時だけカテゴリを切り替える
+                        // これにより、システムが迷子になって一瞬左に飛んでもUIが崩れない
+                        onFocused = { if (uiState.isSidebarFocused) uiState.selectedCategoryIndex = index },
+                        onClick = { targetR.safeRequestFocus("CategoryItem_Click") },
+                        enabled = !uiState.isRestoringFocus, // ガード
                         modifier = Modifier
                             .focusRequester(categoryFocusRequesters[index])
-                            .focusProperties { right = targetR })
+                            .focusProperties { right = targetR }
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -187,339 +183,67 @@ fun SettingsScreen(
             )
         }
 
-        // メインコンテンツ領域
+        // --- メインコンテンツ領域 ---
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .padding(vertical = 48.dp, horizontal = 64.dp)
-                .focusProperties {
-                    left = categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex) ?: FocusRequester.Default
-                }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(mainScrollState)
-            ) {
+                .focusProperties { left = categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex) ?: FocusRequester.Default }
+        ) {
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(mainScrollState)) {
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
-                        onClearChannel = {
-                            uiState.activeDialog = SettingDialogState.ConfirmClear(
-                                AppStrings.DIALOG_CLEAR_HISTORY_TITLE,
-                                AppStrings.DIALOG_CLEAR_CHANNEL_HISTORY_MSG
-                            ) { onClearLastChannel() }
-                        },
-                        onClearHistory = {
-                            uiState.activeDialog = SettingDialogState.ConfirmClear(
-                                AppStrings.DIALOG_CLEAR_HISTORY_TITLE,
-                                AppStrings.DIALOG_CLEAR_WATCH_HISTORY_MSG
-                            ) { onClearWatchHistory() }
-                        },
+                        onClearChannel = { uiState.activeDialog = SettingDialogState.ConfirmClear(AppStrings.DIALOG_CLEAR_HISTORY_TITLE, AppStrings.DIALOG_CLEAR_CHANNEL_HISTORY_MSG) { onClearLastChannel() } },
+                        onClearHistory = { uiState.activeDialog = SettingDialogState.ConfirmClear(AppStrings.DIALOG_CLEAR_HISTORY_TITLE, AppStrings.DIALOG_CLEAR_WATCH_HISTORY_MSG) { onClearWatchHistory() } },
                         itemFocusRequesters[0][0], itemFocusRequesters[0][1]
                     ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 0 }
 
                     1 -> ConnectionSettingsContent(
-                        prefs.konomiIp,
-                        prefs.konomiPort,
-                        prefs.mirakurunIp,
-                        prefs.mirakurunPort,
-                        prefs.preferredSource,
-                        { t, v ->
-                            uiState.activeDialog = SettingDialogState.Input(t, v) {
-                                scope.launch {
-                                    repository.saveString(
-                                        when (t) {
-                                            AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS -> SettingsRepository.KONOMI_IP; AppStrings.SETTINGS_INPUT_KONOMITV_PORT -> SettingsRepository.KONOMI_PORT; AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS -> SettingsRepository.MIRAKURUN_IP; else -> SettingsRepository.MIRAKURUN_PORT
-                                        },
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV",
-                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
-                                ),
-                                prefs.preferredSource
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.PREFERRED_STREAM_SOURCE,
-                                        it
-                                    )
-                                }
-                            }
-                        },
+                        prefs.konomiIp, prefs.konomiPort, prefs.mirakurunIp, prefs.mirakurunPort, prefs.preferredSource,
+                        { t, v -> uiState.activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) SettingsRepository.KONOMI_IP else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) SettingsRepository.KONOMI_PORT else if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT, it) } } },
+                        { uiState.activeDialog = SettingDialogState.Selection(AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE, listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV", AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"), prefs.preferredSource) { scope.launch { repository.saveString(SettingsRepository.PREFERRED_STREAM_SOURCE, it) } } },
                         itemFocusRequesters[1][0], itemFocusRequesters[1][1], itemFocusRequesters[1][2], itemFocusRequesters[1][3], itemFocusRequesters[1][4]
                     ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1 }
 
                     2 -> PlaybackSettingsContent(
-                        prefs.liveQuality,
-                        prefs.videoQuality,
-                        prefs.liveSubtitleDefault,
-                        prefs.videoSubtitleDefault,
-                        prefs.subtitleCommentLayer,
+                        prefs.liveQuality, prefs.videoQuality, prefs.liveSubtitleDefault, prefs.videoSubtitleDefault, prefs.subtitleCommentLayer,
                         itemFocusRequesters[2][0], itemFocusRequesters[2][1], itemFocusRequesters[2][2], itemFocusRequesters[2][3], itemFocusRequesters[2][4],
-                        {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_QUALITY_TITLE,
-                                StreamQuality.entries.map { it.label to it.value },
-                                prefs.liveQuality
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.LIVE_QUALITY,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_QUALITY_TITLE,
-                                StreamQuality.entries.map { it.label to it.value },
-                                prefs.videoQuality
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.VIDEO_QUALITY,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.LIVE_SUBTITLE_DEFAULT,
-                                    if (prefs.liveSubtitleDefault == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.VIDEO_SUBTITLE_DEFAULT,
-                                    if (prefs.videoSubtitleDefault == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_LAYER_ORDER_TITLE,
-                                listOf(
-                                    AppStrings.DIALOG_LAYER_COMMENT_TOP to "CommentOnTop",
-                                    AppStrings.DIALOG_LAYER_SUBTITLE_TOP to "SubtitleOnTop"
-                                ),
-                                prefs.subtitleCommentLayer
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.SUBTITLE_COMMENT_LAYER,
-                                        it
-                                    )
-                                }
-                            }
-                        })
-                    { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2 }
+                        { uiState.activeDialog = SettingDialogState.Selection(AppStrings.DIALOG_QUALITY_TITLE, StreamQuality.entries.map { it.label to it.value }, prefs.liveQuality) { scope.launch { repository.saveString(SettingsRepository.LIVE_QUALITY, it) } } },
+                        { uiState.activeDialog = SettingDialogState.Selection(AppStrings.DIALOG_QUALITY_TITLE, StreamQuality.entries.map { it.label to it.value }, prefs.videoQuality) { scope.launch { repository.saveString(SettingsRepository.VIDEO_QUALITY, it) } } },
+                        { scope.launch { repository.saveString(SettingsRepository.LIVE_SUBTITLE_DEFAULT, if (prefs.liveSubtitleDefault == "ON") "OFF" else "ON") } },
+                        { scope.launch { repository.saveString(SettingsRepository.VIDEO_SUBTITLE_DEFAULT, if (prefs.videoSubtitleDefault == "ON") "OFF" else "ON") } },
+                        { uiState.activeDialog = SettingDialogState.Selection(AppStrings.DIALOG_LAYER_ORDER_TITLE, listOf(AppStrings.DIALOG_LAYER_COMMENT_TOP to "CommentOnTop", AppStrings.DIALOG_LAYER_SUBTITLE_TOP to "SubtitleOnTop"), prefs.subtitleCommentLayer) { scope.launch { repository.saveString(SettingsRepository.SUBTITLE_COMMENT_LAYER, it) } } }
+                    ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2 }
 
                     3 -> HomeDisplaySettingsContent(
-                        isDarkMode,
-                        themeSeason,
-                        prefs.pickupGenre,
-                        prefs.excludePaid,
-                        prefs.pickupTime,
-                        prefs.startupTab,
+                        isDarkMode, themeSeason, prefs.pickupGenre, prefs.excludePaid, prefs.pickupTime, prefs.startupTab,
                         itemFocusRequesters[3][0], itemFocusRequesters[3][1], itemFocusRequesters[3][2], itemFocusRequesters[3][3], itemFocusRequesters[3][4], itemFocusRequesters[3][5],
-                        onMode = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_BASE_THEME,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
-                                    AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"
-                                ),
-                                if (isDarkMode) "DARK" else "LIGHT"
-                            ) {
-                                val newTheme = getThemeFromModeAndSeason(
-                                    it == "DARK",
-                                    themeSeason
-                                ); scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.APP_THEME,
-                                    newTheme
-                                )
-                            }
-                            }
-                        },
-                        onColor = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
-                                    AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
-                                    AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
-                                ),
-                                themeSeason
-                            ) {
-                                val newTheme = getThemeFromModeAndSeason(
-                                    isDarkMode,
-                                    it
-                                ); scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.APP_THEME,
-                                    newTheme
-                                )
-                            }
-                            }
-                        },
-                        onStart = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
-                                    AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
-                                    AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
-                                    AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
-                                    AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
-                                ),
-                                prefs.startupTab
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.STARTUP_TAB,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onG = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_PICKUP_GENRE_TITLE,
-                                listOf(
-                                    AppStrings.SETTINGS_GENRE_ANIME to "アニメ",
-                                    AppStrings.SETTINGS_GENRE_MOVIE to "映画",
-                                    AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ",
-                                    AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ",
-                                    AppStrings.SETTINGS_GENRE_MUSIC to "音楽",
-                                    AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ",
-                                    AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"
-                                ),
-                                prefs.pickupGenre
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.HOME_PICKUP_GENRE,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onTime = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_PICKUP_TIME_TITLE,
-                                listOf(
-                                    AppStrings.SETTINGS_TIME_AUTO to "自動",
-                                    AppStrings.SETTINGS_TIME_MORNING to "朝",
-                                    AppStrings.SETTINGS_TIME_NOON to "昼",
-                                    AppStrings.SETTINGS_TIME_NIGHT to "夜"
-                                ),
-                                prefs.pickupTime
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.HOME_PICKUP_TIME,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onExPaid = {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.EXCLUDE_PAID_BROADCASTS,
-                                    if (prefs.excludePaid == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3
-                        }
+                        onMode = { uiState.activeDialog = SettingDialogState.Selection(AppStrings.SETTINGS_ITEM_BASE_THEME, listOf(AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK", AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"), if (isDarkMode) "DARK" else "LIGHT") { val nt = getThemeFromModeAndSeason(it == "DARK", themeSeason); scope.launch { repository.saveString(SettingsRepository.APP_THEME, nt) } } },
+                        onColor = { uiState.activeDialog = SettingDialogState.Selection(AppStrings.SETTINGS_ITEM_THEME_COLOR, listOf(AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT", AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING", AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER", AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN", AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"), themeSeason) { val nt = getThemeFromModeAndSeason(isDarkMode, it); scope.launch { repository.saveString(SettingsRepository.APP_THEME, nt) } } },
+                        onStart = { uiState.activeDialog = SettingDialogState.Selection(AppStrings.SETTINGS_ITEM_STARTUP_TAB, listOf(AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム", AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ", AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ", AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表", AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"), prefs.startupTab) { scope.launch { repository.saveString(SettingsRepository.STARTUP_TAB, it) } } },
+                        onG = { uiState.activeDialog = SettingDialogState.Selection(AppStrings.DIALOG_PICKUP_GENRE_TITLE, listOf(AppStrings.SETTINGS_GENRE_ANIME to "アニメ", AppStrings.SETTINGS_GENRE_MOVIE to "映画", AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ", AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ", AppStrings.SETTINGS_GENRE_MUSIC to "音楽", AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ", AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"), prefs.pickupGenre) { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_GENRE, it) } } },
+                        onTime = { uiState.activeDialog = SettingDialogState.Selection(AppStrings.DIALOG_PICKUP_TIME_TITLE, listOf(AppStrings.SETTINGS_TIME_AUTO to "自動", AppStrings.SETTINGS_TIME_MORNING to "朝", AppStrings.SETTINGS_TIME_NOON to "昼", AppStrings.SETTINGS_TIME_NIGHT to "夜"), prefs.pickupTime) { scope.launch { repository.saveString(SettingsRepository.HOME_PICKUP_TIME, it) } } },
+                        onExPaid = { scope.launch { repository.saveString(SettingsRepository.EXCLUDE_PAID_BROADCASTS, if (prefs.excludePaid == "ON") "OFF" else "ON") } },
+                        onClick = { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3 }
                     )
 
                     4 -> DisplaySettingsContent(
-                        prefs.commentDefaultDisplay,
-                        prefs.commentSpeed,
-                        prefs.commentFontSize,
-                        prefs.commentOpacity,
-                        prefs.commentMaxLines,
-                        { t, v ->
-                            uiState.activeDialog = SettingDialogState.Input(t, v) {
-                                scope.launch {
-                                    repository.saveString(
-                                        when (t) {
-                                            AppStrings.SETTINGS_INPUT_COMMENT_SPEED -> SettingsRepository.COMMENT_SPEED; AppStrings.SETTINGS_INPUT_COMMENT_SIZE -> SettingsRepository.COMMENT_FONT_SIZE; AppStrings.SETTINGS_INPUT_COMMENT_OPACITY -> SettingsRepository.COMMENT_OPACITY; else -> SettingsRepository.COMMENT_MAX_LINES
-                                        },
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.COMMENT_DEFAULT_DISPLAY,
-                                    if (prefs.commentDefaultDisplay == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
+                        prefs.commentDefaultDisplay, prefs.commentSpeed, prefs.commentFontSize, prefs.commentOpacity, prefs.commentMaxLines,
+                        { t, v -> uiState.activeDialog = SettingDialogState.Input(t, v) { scope.launch { repository.saveString(if (t == AppStrings.SETTINGS_INPUT_COMMENT_SPEED) SettingsRepository.COMMENT_SPEED else if (t == AppStrings.SETTINGS_INPUT_COMMENT_SIZE) SettingsRepository.COMMENT_FONT_SIZE else if (t == AppStrings.SETTINGS_INPUT_COMMENT_OPACITY) SettingsRepository.COMMENT_OPACITY else SettingsRepository.COMMENT_MAX_LINES, it) } } },
+                        { scope.launch { repository.saveString(SettingsRepository.COMMENT_DEFAULT_DISPLAY, if (prefs.commentDefaultDisplay == "ON") "OFF" else "ON") } },
                         itemFocusRequesters[4][0], itemFocusRequesters[4][1], itemFocusRequesters[4][2], itemFocusRequesters[4][3], itemFocusRequesters[4][4]
                     ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4 }
 
                     5 -> LabSettingsContent(
-                        prefs.labAnnict,
-                        prefs.labShobocal,
-                        prefs.defaultPostCommand,
+                        prefs.labAnnict, prefs.labShobocal, prefs.defaultPostCommand,
                         itemFocusRequesters[5][0], itemFocusRequesters[5][1], itemFocusRequesters[5][2],
-                        {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.LAB_ANNICT_INTEGRATION,
-                                    if (prefs.labAnnict == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.LAB_SHOBOCAL_INTEGRATION,
-                                    if (prefs.labShobocal == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        {
-                            uiState.activeDialog = SettingDialogState.Input(
-                                AppStrings.SETTINGS_INPUT_POST_COMMAND,
-                                prefs.defaultPostCommand
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.DEFAULT_POST_COMMAND,
-                                        it
-                                    )
-                                }
-                            }
-                        })
-                    { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
+                        { scope.launch { repository.saveString(SettingsRepository.LAB_ANNICT_INTEGRATION, if (prefs.labAnnict == "ON") "OFF" else "ON") } },
+                        { scope.launch { repository.saveString(SettingsRepository.LAB_SHOBOCAL_INTEGRATION, if (prefs.labShobocal == "ON") "OFF" else "ON") } },
+                        { uiState.activeDialog = SettingDialogState.Input(AppStrings.SETTINGS_INPUT_POST_COMMAND, prefs.defaultPostCommand) { scope.launch { repository.saveString(SettingsRepository.DEFAULT_POST_COMMAND, it) } } }
+                    ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
-                    6 -> AppInfoContent(
-                        { uiState.activeDialog = SettingDialogState.Licenses },
-                        itemFocusRequesters[6][0]
-                    ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6 }
+                    6 -> AppInfoContent({ uiState.activeDialog = SettingDialogState.Licenses }, itemFocusRequesters[6][0]) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6 }
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -528,25 +252,9 @@ fun SettingsScreen(
 
     when (val state = uiState.activeDialog) {
         is SettingDialogState.None -> {}
-        is SettingDialogState.Input -> InputDialog(
-            title = state.title,
-            initialValue = state.initialValue,
-            onDismiss = { closeDialog() },
-            onConfirm = { state.onConfirm(it); closeDialog() })
-
-        is SettingDialogState.Selection -> SelectionDialog(
-            title = state.title,
-            options = state.options,
-            current = state.current,
-            onDismiss = { closeDialog() },
-            onSelect = { state.onSelect(it); closeDialog() })
-
-        is SettingDialogState.ConfirmClear -> ConfirmClearDialog(
-            title = state.title,
-            message = state.message,
-            onConfirm = { state.onConfirm(); closeDialog() },
-            onDismiss = { closeDialog() })
-
+        is SettingDialogState.Input -> InputDialog(title = state.title, initialValue = state.initialValue, onDismiss = { closeDialog() }, onConfirm = { state.onConfirm(it); closeDialog() })
+        is SettingDialogState.Selection -> SelectionDialog(title = state.title, options = state.options, current = state.current, onDismiss = { closeDialog() }, onSelect = { state.onSelect(it); closeDialog() })
+        is SettingDialogState.ConfirmClear -> ConfirmClearDialog(title = state.title, message = state.message, onConfirm = { state.onConfirm(); closeDialog() }, onDismiss = { closeDialog() })
         is SettingDialogState.Licenses -> OpenSourceLicensesScreen(onBack = { closeDialog() })
     }
 }

@@ -76,26 +76,28 @@ fun CategoryItem(
     isSelected: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
+    enabled: Boolean = true, // ★修正: enabledを追加
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
     Surface(
         selected = isSelected,
-        onClick = onClick,
+        onClick = { if (enabled) onClick() }, // ★修正
         modifier = modifier
             .fillMaxWidth()
-            .onFocusChanged { isFocused = it.isFocused; if (it.isFocused) onFocused() },
+            .focusProperties { canFocus = enabled } // ★修正
+            .onFocusChanged { isFocused = it.isFocused; if (it.isFocused && enabled) onFocused() }, // ★修正
         colors = SelectableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             selectedContainerColor = colors.textPrimary.copy(0.1f),
             focusedContainerColor = colors.textPrimary.copy(0.2f),
-            contentColor = colors.textSecondary,
+            contentColor = if (enabled) colors.textSecondary else colors.textSecondary.copy(alpha = 0.3f),
             selectedContentColor = colors.textPrimary,
             focusedContentColor = colors.textPrimary
         ),
         shape = SelectableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        scale = SelectableSurfaceDefaults.scale(focusedScale = 1.05f)
+        scale = SelectableSurfaceDefaults.scale(focusedScale = if (enabled) 1.05f else 1.0f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
@@ -105,7 +107,7 @@ fun CategoryItem(
                 icon,
                 null,
                 modifier = Modifier.size(20.dp),
-                tint = if (isSelected || isFocused) colors.textPrimary else colors.textSecondary
+                tint = if (isSelected || isFocused) colors.textPrimary else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.3f)
             )
             Spacer(Modifier.width(16.dp))
             Text(title, style = MaterialTheme.typography.titleMedium)
