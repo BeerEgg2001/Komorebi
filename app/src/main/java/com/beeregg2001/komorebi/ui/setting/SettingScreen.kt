@@ -75,7 +75,9 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
+            // ★修正: カテゴリ2(Playback)に音声出力用のFocusRequesterを追加(計6つ)
             listOf(
+                FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
@@ -113,24 +115,14 @@ fun SettingsScreen(
     }
 
     val closeDialog = {
-        Log.d("SettingScreen", "=== [STABLE GUARD] closeDialog Start ===")
         uiState.isRestoringFocus = true
         uiState.activeDialog = SettingDialogState.None
-
         scope.launch {
             delay(300)
-            val result = uiState.restoreFocusRequester?.safeRequestFocus("SettingScreen_Restore")
-            Log.d("SettingScreen", "Focus Restoration Attempt: $result")
+            uiState.restoreFocusRequester?.safeRequestFocus("SettingScreen_Restore")
             delay(100)
             uiState.isRestoringFocus = false
-            Log.d("SettingScreen", "=== [STABLE GUARD] closeDialog Finished ===")
         }
-    }
-
-    val isDarkMode =
-        prefs.currentThemeName in listOf("MONOTONE", "WINTER_DARK", "SPRING", "SUMMER", "AUTUMN")
-    val themeSeason = when (prefs.currentThemeName) {
-        "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
     }
 
     Row(
@@ -140,13 +132,10 @@ fun SettingsScreen(
             .background(backgroundBrush)
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && (it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK || it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_ESCAPE)) {
-                    // ★修正: 戻るキーの挙動を明確化し、2回でホームに戻れるようにする
                     if (!uiState.isSidebarFocused) {
-                        // 1回目: 右メニューにいる場合は、左メニューの現在のカテゴリにフォーカスを戻す
                         categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
                             ?.safeRequestFocus("Back_To_Sidebar")
                     } else {
-                        // 2回目: 左メニューにいる場合は、即座にホーム画面へ戻る
                         onBack()
                     }
                     return@onKeyEvent true
@@ -154,7 +143,7 @@ fun SettingsScreen(
                 false
             }) {
 
-        // --- サイドバー領域 ---
+        // サイドバー
         Column(
             modifier = Modifier
                 .width(280.dp)
@@ -207,9 +196,6 @@ fun SettingsScreen(
                 }
             }
             Spacer(Modifier.height(16.dp))
-            val currentContentR =
-                itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
-                    ?: FocusRequester.Default
             CategoryItem(
                 title = AppStrings.SETTINGS_BACK_TO_HOME,
                 icon = Icons.Default.Home,
@@ -219,26 +205,23 @@ fun SettingsScreen(
                 enabled = !uiState.isRestoringFocus,
                 modifier = Modifier.focusProperties {
                     up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
-                    right = currentContentR
+                    right =
+                        itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
+                            ?: FocusRequester.Default
                 }
             )
         }
 
-        // --- メインコンテンツ領域 ---
+        // メインコンテンツ
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .padding(vertical = 48.dp, horizontal = 64.dp)
-                .focusProperties {
-                    left = categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
-                        ?: FocusRequester.Default
-                }
         ) {
             Column(modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(mainScrollState)) {
-                // ★修正: 全ての Content 呼び出しにおいて、名前付き引数を使用して sidebarR を確実に渡す
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
                         onClearChannel = {
@@ -255,7 +238,7 @@ fun SettingsScreen(
                         },
                         clearChannelR = itemFocusRequesters[0][0],
                         clearHistoryR = itemFocusRequesters[0][1],
-                        sidebarR = categoryFocusRequesters[0], // 確実に左メニューへの戻り先を渡す
+                        sidebarR = categoryFocusRequesters[0],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 0
                         }
@@ -314,11 +297,13 @@ fun SettingsScreen(
                         liveSub = prefs.liveSubtitleDefault,
                         videoSub = prefs.videoSubtitleDefault,
                         layerOrder = prefs.subtitleCommentLayer,
+                        audioMode = prefs.audioOutputMode, // ★追加
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
                         liveSubR = itemFocusRequesters[2][2],
                         videoSubR = itemFocusRequesters[2][3],
-                        layerR = itemFocusRequesters[2][4],
+                        audioR = itemFocusRequesters[2][4], // ★追加
+                        layerR = itemFocusRequesters[2][5], // ★インデックス修正
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
                             uiState.activeDialog = SettingDialogState.Selection(
@@ -381,14 +366,37 @@ fun SettingsScreen(
                                 }
                             }
                         },
+                        // ★追加: 音声モード選択
+                        onAudioMode = {
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                AppStrings.DIALOG_AUDIO_OUTPUT_TITLE,
+                                listOf(
+                                    AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX_DESC to "DOWNMIX",
+                                    AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC to "PASSTHROUGH"
+                                ),
+                                prefs.audioOutputMode
+                            ) {
+                                scope.launch {
+                                    repository.saveString(SettingsRepository.AUDIO_OUTPUT_MODE, it)
+                                }
+                            }
+                        },
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2
                         }
                     )
 
                     3 -> HomeDisplaySettingsContent(
-                        isDarkMode = isDarkMode,
-                        themeSeason = themeSeason,
+                        isDarkMode = (prefs.currentThemeName in listOf(
+                            "MONOTONE",
+                            "WINTER_DARK",
+                            "SPRING",
+                            "SUMMER",
+                            "AUTUMN"
+                        )),
+                        themeSeason = when (prefs.currentThemeName) {
+                            "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
+                        },
                         genre = prefs.pickupGenre,
                         excludePaid = prefs.excludePaid,
                         pickupTime = prefs.pickupTime,
@@ -407,11 +415,12 @@ fun SettingsScreen(
                                     AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
                                     AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"
                                 ),
-                                if (isDarkMode) "DARK" else "LIGHT"
+                                if (prefs.currentThemeName.contains("LIGHT")) "LIGHT" else "DARK"
                             ) {
                                 val nt = getThemeFromModeAndSeason(
-                                    it == "DARK",
-                                    themeSeason
+                                    it == "DARK", when (prefs.currentThemeName) {
+                                        "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
+                                    }
                                 ); scope.launch {
                                 repository.saveString(
                                     SettingsRepository.APP_THEME,
@@ -430,10 +439,12 @@ fun SettingsScreen(
                                     AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
                                     AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
                                 ),
-                                themeSeason
+                                when (prefs.currentThemeName) {
+                                    "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
+                                }
                             ) {
                                 val nt = getThemeFromModeAndSeason(
-                                    isDarkMode,
+                                    !prefs.currentThemeName.contains("LIGHT"),
                                     it
                                 ); scope.launch {
                                 repository.saveString(
@@ -598,13 +609,14 @@ fun SettingsScreen(
                     )
 
                     6 -> AppInfoContent(
-                        onShow = { uiState.activeDialog = SettingDialogState.Licenses },
+                        onShow = {
+                            uiState.activeDialog = SettingDialogState.Licenses
+                        },
                         licR = itemFocusRequesters[6][0],
                         sidebarR = categoryFocusRequesters[6],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
-                        }
-                    )
+                        })
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -612,7 +624,6 @@ fun SettingsScreen(
     }
 
     when (val state = uiState.activeDialog) {
-        is SettingDialogState.None -> {}
         is SettingDialogState.Input -> InputDialog(
             title = state.title,
             initialValue = state.initialValue,
@@ -633,5 +644,6 @@ fun SettingsScreen(
             onDismiss = { closeDialog() })
 
         is SettingDialogState.Licenses -> OpenSourceLicensesScreen(onBack = { closeDialog() })
+        else -> {}
     }
 }

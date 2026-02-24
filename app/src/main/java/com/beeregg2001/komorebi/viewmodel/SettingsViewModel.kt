@@ -47,7 +47,10 @@ class SettingsViewModel @Inject constructor(
     val subtitleCommentLayer: StateFlow<String> = settingsRepository.subtitleCommentLayer
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "CommentOnTop")
 
-    // ★追加: アドオン・ラボ用StateFlow
+    // ★追加: 音声出力モード
+    val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
+
     val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val labShobocalIntegration: StateFlow<String> = settingsRepository.labShobocalIntegration

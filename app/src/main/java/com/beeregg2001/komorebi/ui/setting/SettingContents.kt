@@ -151,17 +151,20 @@ fun PlaybackSettingsContent(
     liveSub: String,
     videoSub: String,
     layerOrder: String,
+    audioMode: String, // ★追加
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
     layerR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    audioR: FocusRequester, // ★追加
+    sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
     onLiveSub: () -> Unit,
     onVideoSub: () -> Unit,
     onLayer: () -> Unit,
+    onAudioMode: () -> Unit, // ★追加
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -204,8 +207,6 @@ fun PlaybackSettingsContent(
                     .focusRequester(videoSubR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(videoSubR); onVideoSub() })
-        }
-        SettingsSection(AppStrings.SETTINGS_SECTION_LAYER) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_LAYER_ORDER,
                 if (layerOrder == "CommentOnTop") AppStrings.SETTINGS_VALUE_LAYER_COMMENT_TOP else AppStrings.SETTINGS_VALUE_LAYER_SUBTITLE_TOP,
@@ -214,6 +215,18 @@ fun PlaybackSettingsContent(
                     .focusRequester(layerR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(layerR); onLayer() })
+        }
+        // ★追加: 音声出力設定セクション
+        // ★修正: AppStrings を使用
+        SettingsSection(AppStrings.SETTINGS_SECTION_AUDIO_OUTPUT) {
+            SettingItem(
+                title = AppStrings.SETTINGS_ITEM_AUDIO_OUTPUT_MODE,
+                value = if (audioMode == "DOWNMIX") AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX_REC else AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH,
+                icon = Icons.Default.VolumeUp,
+                modifier = Modifier
+                    .focusRequester(audioR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(audioR); onAudioMode() })
         }
     }
 }

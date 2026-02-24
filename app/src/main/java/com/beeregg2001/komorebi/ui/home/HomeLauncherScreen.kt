@@ -95,7 +95,6 @@ fun HomeLauncherScreen(
         recordViewModel,
         reserveViewModel
     )
-
     val colors = KomorebiTheme.colors
     val tabs = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
     val scope = rememberCoroutineScope()
@@ -104,14 +103,11 @@ fun HomeLauncherScreen(
 
     // 初期起動時のデータ取得とフォーカス初期化
     LaunchedEffect(Unit) {
-        Log.i(TAG, "Screen Initialized. selectedTabIndex: ${ui.selectedTabIndex}")
         if (ui.selectedTabIndex == 0) {
             homeViewModel.refreshHomeData()
             channelViewModel.fetchChannels()
         }
-
-        // ★修正: 初回起動時に最下部へ飛ばないよう、まずTabRowにフォーカスを当てる
-        delay(600)
+        delay(300) // 起動時のフォーカス安定化
         if (!isReturningFromPlayer && ui.isFullScreen(
                 selectedChannel,
                 selectedProgram,
@@ -121,7 +117,6 @@ fun HomeLauncherScreen(
                 isReserveOverlayOpen
             ).not()
         ) {
-            Log.i(TAG, "Requesting initial focus to Tab ${ui.selectedTabIndex}")
             ui.tabFocusRequesters.getOrNull(ui.selectedTabIndex)?.safeRequestFocus(TAG)
         }
     }
@@ -138,7 +133,6 @@ fun HomeLauncherScreen(
     // フルスクリーン解除時のフォーカス復帰
     LaunchedEffect(isFullScreenMode) {
         if (!isFullScreenMode) {
-            Log.i(TAG, "FullScreen closed. Restoring focus.")
             delay(300)
             if (ui.selectedTabIndex == 4) ui.contentFirstItemRequesters[4].safeRequestFocus(TAG)
             else if (ui.selectedTabIndex != 3) ui.tabFocusRequesters.getOrNull(ui.selectedTabIndex)
@@ -186,6 +180,7 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = ui.selectedTabIndex == index,
                                 onFocus = {
+                                    // ★修正：高速切り替え時のタブ選択ロジックを安全に呼び出す
                                     ui.onTabSelected(
                                         index,
                                         onTabChange,
@@ -198,8 +193,8 @@ fun HomeLauncherScreen(
                                 modifier = Modifier
                                     .focusRequester(ui.tabFocusRequesters[index])
                                     .focusProperties {
-                                        down = ui.contentFirstItemRequesters[index]; canFocus =
-                                        !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
+                                        down = ui.contentFirstItemRequesters[index]
+                                        canFocus = !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
                                     }
                             ) {
                                 Text(
@@ -265,8 +260,10 @@ fun HomeLauncherScreen(
                                 reserveViewModel
                             )
                         },
-                        konomiIp = konomiIp, konomiPort = konomiPort,
-                        mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        mirakurunIp = mirakurunIp,
+                        mirakurunPort = mirakurunPort,
                         tabFocusRequester = ui.tabFocusRequesters[0],
                         externalFocusRequester = ui.contentFirstItemRequesters[0],
                         lastFocusedChannelId = ui.internalLastPlayerChannelId,
@@ -303,11 +300,11 @@ fun HomeLauncherScreen(
                         topNavFocusRequester = ui.tabFocusRequesters[2],
                         contentFirstItemRequester = ui.contentFirstItemRequesters[2],
                         onProgramClick = { program ->
-                            val betterProgram =
-                                ui.recentRecordings.find { it.id == program.id }; onProgramSelected(
-                            betterProgram?.copy(playbackPosition = program.playbackPosition)
-                                ?: program
-                        )
+                            val betterProgram = ui.recentRecordings.find { it.id == program.id }
+                            onProgramSelected(
+                                betterProgram?.copy(playbackPosition = program.playbackPosition)
+                                    ?: program
+                            )
                         },
                         onLoadMore = { recordViewModel.loadNextPage() },
                         isLoadingMore = ui.isLoadingMore,
