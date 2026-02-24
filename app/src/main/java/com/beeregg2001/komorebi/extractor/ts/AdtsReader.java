@@ -12,6 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified to skip UNSET timestamps for ISDB-T stability
+ * Modified by Komorebi Project
  */
 package com.beeregg2001.komorebi.extractor.ts;
 
