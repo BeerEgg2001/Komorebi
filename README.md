@@ -1,0 +1,236 @@
+# Komorebi
+
+**Komorebi** は、Mirakurun および KonomiTV バックエンドに対応した、Android TV 向けの高機能視聴クライアントアプリです。
+モダンな UI と PS3 ライクなシーンサーチ、高度なストリーミング制御を組み合わせ、これまでにない快適なテレビ視聴体験を提供します。
+
+## 📋 目次
+1. [はじめに](#-はじめに)
+2. [動作環境](#動作環境)
+3. [実装済み機能](#-実装済み機能)
+    * [ホームタブ](#-ホームタブ)
+    * [ライブタブ](#-ライブタブ)
+    * [番組表タブ](#-番組表タブ)
+    * [ビデオタブ](#-ビデオタブ)
+    * [録画予約タブ](#-録画予約タブ)
+    * [設定タブ](#-設定タブ)
+4. [視聴体験](#-視聴体験)
+    * [ライブ視聴画面](#-ライブ視聴画面)
+    * [ビデオ視聴画面](#-ビデオ視聴画面)
+5. [パフォーマンスへのこだわり](#-パフォーマンスへのこだわり)
+6. [将来実装予定の機能](#-将来実装予定の機能)
+7. [バグ対応等](#バグ対応等)
+8. [SpecialThanks!](#-specialthanks)
+9. [技術構成](#-技術構成)
+10. [ビルド方法](#-ビルド方法)
+
+---
+
+## 🚀 はじめに
+**重要**: インストール後の初回起動時は、**KonomiTV** および **Mirakurun（オプション）** のサーバー設定が必要です。
+画面の指示に従って、バックエンドのアドレス情報（IPアドレスやポート番号）を入力してください。
+また、バックエンドにMirakurunを使用していない場合（EDCBなどを利用中の場合）は、MirakurunのIPアドレスとポート番号の入力は不要です。
+
+---
+
+## 動作環境
+
+以下の環境で動作確認しております。Android 8.0、Fire OS 7以上のOSが必要です。（おおよそ2021年以降の機種であれば利用できると思います）
+機種ごとの確認報告などは作者X([@tamago0602](https://x.com/tamago0602)))へご連絡いただければ、とても嬉しいです
+
+* REGZA 55X8900K (Android TV 10)
+* Fire Tv Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
+
+---
+
+## ✨ 実装済み機能
+
+### 🏠 ホームタブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/ba372c31-9b23-48b8-938d-6955dd993e78" />
+
+* **チャンネル視聴記録**: 視聴した放送局の履歴をローカル DB に自動記録します。
+* **録画視聴履歴の保存**: 録画番組の再生位置を自動保存し、いつでも続きから再生可能です。
+* **パーソナライズ・ピックアップ**: 設定したジャンルに基づき、おすすめ番組を時間帯（朝・昼・夜）に合わせた美しい背景色と共に表示します。
+
+### 📡 ライブタブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/8e22cebe-2b37-4346-86e1-9f3d9b412bc8" />
+
+* **放送波別チャンネルリスト**: 地デジ、BS、CS、BS4K、スカパーを種別ごとに整理して表示します。
+* **番組進行状況の可視化**: 放送中の番組タイトルと共に、終了までの進捗をバーで表示します。
+
+### 📅 番組表タブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/bd89b7dc-37d6-475f-9733-344a9ae6421e" />
+
+* **マルチ放送波対応**: 放送波種別ごとに最適化された番組表をシームレスに閲覧できます。戻るキー長押しで現在時刻へ即座に戻ります。
+* **詳細表示 & 予約・視聴**: 番組詳細の確認から、ライブ視聴や録画予約へのスムーズな遷移が可能です。
+* **日時指定ジャンプ**: 任意の日時へ素早く移動し、先々の番組チェックが可能です。
+
+### 🎥 ビデオタブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/9593c924-7dda-4210-b543-8be5274a43e7" />
+
+* **シリーズ(作品名)から探す**: 膨大な録画を独自のアルゴリズムで自動グループ化。話数や記号を整理し、作品ごとに美しくまとめて表示します。
+
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/203d7acc-a959-4f69-84c8-41e3b7c953cb" />
+
+* **視聴履歴 & 最近の録画**: 直近の視聴番組や新着録画をすぐに確認できます。
+* **録画高速検索**: タイトルによるインクリメンタルサーチが可能です。
+
+### 🔴 録画予約タブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/a869cab3-00d4-433a-b4ac-3616d726ffa1" />
+
+* **予約一覧管理**: 現在予約されている番組を時系列で一括管理できます。
+* **詳細予約設定**: 優先度、録画モード、イベントリレー追従など、レコーダーとして必須の項目を細かく指定可能です。
+
+### ⚙️ 設定タブ
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/bb7d6088-3610-4289-9786-5335c531ecc2" />
+
+* **起動時のデフォルトタブ設定**: アプリ起動時にどの画面を最初に表示するか選択可能です。
+* **表示・再生設定**: 実況コメントの不透明度や速度、ストリーミング画質、ピックアップ対象ジャンルなどを詳細にカスタマイズできます。
+* **接続設定**: KonomiTV および Mirakurun のアドレス指定が可能です。
+
+---
+
+## 📺 視聴体験
+
+### 🔴 ライブ視聴画面
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/2ed64c36-0541-44df-b637-bca534348b68" />
+
+* **情報オーバーレイ**: 決定ボタンで詳細情報を表示。２度押しで情報を固定表示します。
+* **ミニチャンネルリスト**: 下キーで視聴を継続しながら他局をザッピングできます。
+* **即時録画**: サブメニューから視聴中の番組をボタン一つで録画開始できます。
+* **ニコニコ実況表示**: コメント表示に対応し、リアルタイムの盛り上がりを共有できます。
+* **高度な音声・字幕**: デュアルモノ切り替え、aribb24 ロジックによる高品質な字幕に対応しています。
+
+### 🎞️ ビデオ視聴画面
+<img width="1280" height="720" alt="Image" src="https://github.com/user-attachments/assets/078a2b61-bdf2-4be4-addd-5e9ebc1f42e7" />
+
+* **直感的シーク**: 左右キーによる 30 秒スキップ / 10 秒戻しに対応。
+* **PS3 風シーンサーチ**: 下キーで起動。10 秒間隔のタイル画像から鮮明なコマを切り出し、見たい場面をすぐに見つけられます。
+* **マーキー表示**: 長い番組名も自動スクロールでフル表示します。
+
+---
+
+## 🚀 パフォーマンスへのこだわり
+Android TV 特有の制約（低スペックなSoC、限られたメモリ）で快適に動作させるため、以下のチューニングを行っています。
+
+* **オフラインファースト EPG**: 番組表をローカル DB にキャッシュすることで、開いた瞬間の「待ち時間ゼロ」を実現しています。
+* **非同期遅延読み込み**: 起動時の負荷を分散し、UI の応答性を最優先する設計を採用しています。
+* **メモリ最適化 (Coil)**: サムネイル画像を UI サイズに合わせて適切に縮小デコードし、メモリ不足によるクラッシュを防ぎます。
+* **DB バルク処理**: データベースへのアクセスを一括化（N+1問題の解消）し、システム全体の負荷を軽減しています。
+
+---
+
+## 🚀 将来実装予定の機能
+* **管理機能**: 録画済み番組の削除機能、キーワード自動録画。
+* **画質・パフォーマンス**: Amatsukaze 出力 txt によるチャプタースキップ。
+* **UI**: カスタムテーマ、L 字クロップ、KonomiTV ユーザー連携。
+* **操作性改善**: ライブ視聴中の左右キー選局。
+
+---
+
+## バグ対応等
+* 操作中にアプリクラッシュなどが発生した場合は、Githubのissueへ記載もしくは、作者X([@tamago0602](https://x.com/tamago0602)))へご連絡ください。動作環境と操作した履歴、現象を詳しく記載いただけると助かります。
+
+---
+
+## 🤝 SpecialThanks!
+本アプリの開発にあたり、以下の素晴らしいプロジェクトと成果物を活用させていただいております。
+
+* **[tsreadex](https://github.com/xtne6f/tsreadex)**: TS ストリーム解析および読み込み処理の基盤。
+* **[aribb24.js](https://github.com/monyone/aribb24.js)**: 高精度な字幕描画ロジックの提供。
+* **[KonomiTV](https://github.com/tsukumijima/KonomiTV)**: 強力な API バックエンドおよび配信プラットフォーム。
+* **[Mirakurun](https://github.com/Chinachu/Mirakurun)**: チューナー管理および配信 API。
+* **[DanmakuFlameMaster](https://github.com/bilibili/DanmakuFlameMaster)**: ニコニコ実況およびNX-Jikkyoのコメント表示。
+* **[SCRename](https://github.com/rigaya/SCRenamePy)**: シリーズから探すの正規表現の参考にさせていただきました。
+
+---
+
+## 🛠️ 技術構成
+* **UI**: Jetpack Compose for TV
+* **Database**: Room (with JSON Caching)
+* **Player**: ExoPlayer / Media3
+* **Image**: Coil (Custom Size Downsampling)
+* **DI**: Dagger Hilt
+
+---
+
+## ビルド前の準備
+
+フォントファイルと FFmpeg のバイナリは `.gitignore` に含まれているため、ビルド前に手動での準備が必要です。
+
+### 1. フォントファイルの準備
+
+フォントファイルは、手動でのダウンロードが必要です。
+
+```sh
+FONT_CSS=$(curl -fsSL "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100;300;400;500;600;700" -A "Mozilla/5.0")
+URLS=($(echo "$FONT_CSS" | grep -oP 'url\(\K[^)]+'))
+curl -fsSL "${URLS[0]}" -o app/src/main/res/font/notosansjp_thin.ttf
+curl -fsSL "${URLS[1]}" -o app/src/main/res/font/notosansjp_light.ttf
+curl -fsSL "${URLS[2]}" -o app/src/main/res/font/notosansjp_regular.ttf
+curl -fsSL "${URLS[3]}" -o app/src/main/res/font/notosansjp_medium.ttf
+curl -fsSL "${URLS[4]}" -o app/src/main/res/font/notosansjp_semibold.ttf
+curl -fsSL "${URLS[5]}" -o app/src/main/res/font/notosansjp_bold.ttf
+```
+
+### 2. media-decoder-ffmpeg のセットアップ
+
+FFmpeg デコーダーは以下の手順での準備が必要です。プロジェクトルート直下の `media/` に配置します（`.gitignore` に含まれています）。
+
+#### 2.1 AndroidX Media3 のクローン
+
+プロジェクトのルートディレクトリで実行してください。
+
+```sh
+git clone --branch 1.4.1 --depth 1 https://github.com/androidx/media.git media
+```
+
+#### 2.2 Media3 1.4.1 の不足ファイルを補完
+
+Media3 1.4.1 にはいくつかのファイルが欠落しているため、スタブを作成します。
+
+```sh
+# datasource_httpengine ディレクトリが欠落しているため作成
+mkdir -p media/libraries/datasource_httpengine
+
+# 多くのモジュールで proguard-rules.txt が欠落しているため空ファイルを作成
+for dir in media/libraries/*/; do
+    [ ! -f "$dir/proguard-rules.txt" ] && touch "$dir/proguard-rules.txt"
+done
+```
+
+#### 2.3 FFmpeg のクロスコンパイル
+
+NDK のパスは環境によって異なります。Android Studio の場合は SDK Manager > SDK Tools > NDK (Side by side) からインストールでき、インストール先は以下が一般的です。
+
+| OS | 一般的なパス |
+|---|---|
+| Linux | `~/Android/Sdk/ndk/<version>` |
+| Mac | `~/Library/Android/sdk/ndk/<version>` |
+
+コマンドラインで確認する場合:
+```sh
+ls ~/Android/Sdk/ndk/        # Linux
+ls ~/Library/Android/sdk/ndk/  # Mac
+```
+
+```sh
+# FFmpeg ソースを decoder_ffmpeg が参照する場所に直接クローン
+git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git media/libraries/decoder_ffmpeg/src/main/jni/ffmpeg
+
+# クロスコンパイル（NDK_PATH は自身の環境に合わせて変更してください）
+NDK_PATH=/path/to/ndk/<version>  # 例: ~/Android/Sdk/ndk/28.2.13676358
+HOST_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)  # linux-x86_64 / darwin-x86_64 / darwin-arm64
+MODULE_PATH=media/libraries/decoder_ffmpeg/src/main
+
+bash "${MODULE_PATH}/jni/build_ffmpeg.sh" \
+    "${MODULE_PATH}" \
+    "${NDK_PATH}" \
+    ${HOST_PLATFORM} \
+    21 \
+    vorbis opus flac mp3 ac3 eac3
+```
+
+
+---
+**Komorebi** の最新の進化をぜひお楽しみください！
+さらなる改善案やバグ報告、特定のデバイスでの動作報告も、GitHub Issue や X にてお待ちしております。
