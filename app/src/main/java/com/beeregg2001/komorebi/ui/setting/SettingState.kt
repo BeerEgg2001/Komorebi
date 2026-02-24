@@ -4,9 +4,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.data.SettingsRepository
 
-/**
- * SettingsRepository から取得するすべての設定値を保持するデータクラス
- */
 @Stable
 class SettingPreferences(
     val konomiIp: String,
@@ -24,6 +21,7 @@ class SettingPreferences(
     val liveSubtitleDefault: String,
     val videoSubtitleDefault: String,
     val subtitleCommentLayer: String,
+    val audioOutputMode: String, // ★追加
     val labAnnict: String,
     val labShobocal: String,
     val defaultPostCommand: String,
@@ -52,6 +50,7 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         liveSubtitleDefault = repository.liveSubtitleDefault.collectAsState(initial = "OFF").value,
         videoSubtitleDefault = repository.videoSubtitleDefault.collectAsState(initial = "OFF").value,
         subtitleCommentLayer = repository.subtitleCommentLayer.collectAsState(initial = "CommentOnTop").value,
+        audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value, // ★追加
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
@@ -63,9 +62,6 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
     )
 }
 
-/**
- * 設定画面のUIの表示状態（ダイアログの開閉や選択中のカテゴリなど）を管理するクラス
- */
 @Stable
 class SettingUiState {
     var activeDialog by mutableStateOf<SettingDialogState>(SettingDialogState.None)
@@ -73,8 +69,6 @@ class SettingUiState {
     var restoreFocusRequester by mutableStateOf<FocusRequester?>(null)
     var restoreCategoryIndex by mutableIntStateOf(-1)
     var isSidebarFocused by mutableStateOf(true)
-
-    // ★追加: 復帰中にサイドバーのフォーカス権限を一時的に剥奪するためのフラグ
     var isRestoringFocus by mutableStateOf(false)
 }
 

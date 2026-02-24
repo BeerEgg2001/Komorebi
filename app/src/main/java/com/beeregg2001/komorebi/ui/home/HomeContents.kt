@@ -3,7 +3,6 @@
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
-import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -16,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Brush
@@ -67,17 +67,10 @@ fun HomeContents(
     lastFocusedChannelId: String? = null,
     lastFocusedProgramId: String? = null
 ) {
-    // ★ラグ対策：データが揃うまで一瞬待機し、UIのジャンプを防ぐ
-    var isInitialLoading by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        delay(600) // DBとAPIの初回応答を待つ
-        isInitialLoading = false
-    }
-
-    val isKonomiTvMode =
-        mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
-    val typeLabels =
-        mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+    // ★修正：クラッシュ防止のため、FocusRequesterが紐付くTvLazyColumnを即座に表示する
+    // delay(600)によるコンポーネントの隠蔽を削除し、常にUIツリーに存在させる
+    val isKonomiTvMode = mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
+    val typeLabels = mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
     val channelItemRequester = remember { FocusRequester() }
     val lazyListState = rememberTvLazyListState()
     val colors = KomorebiTheme.colors
@@ -89,107 +82,56 @@ fun HomeContents(
         }
     }
 
-    // ローディング中は何も表示せず、揃ったタイミングでアニメーション表示
-    AnimatedVisibility(
-        visible = !isInitialLoading,
-        enter = fadeIn() + expandVertically(),
-        modifier = modifier.fillMaxSize()
+    // TvLazyColumnをAnimatedVisibilityの外に出すことで、フォーカス要求を常に受け入れ可能にする
+    TvLazyColumn(
+        state = lazyListState,
+        modifier = modifier
+            .fillMaxSize()
+            .focusRequester(externalFocusRequester),
+        contentPadding = PaddingValues(top = 24.dp, bottom = 80.dp),
+        verticalArrangement = Arrangement.spacedBy(32.dp)
     ) {
-        TvLazyColumn(
-            state = lazyListState,
-            modifier = Modifier.focusRequester(externalFocusRequester),
-            contentPadding = PaddingValues(top = 24.dp, bottom = 80.dp),
-            verticalArrangement = Arrangement.spacedBy(32.dp) // 隙間を40dpから32dpに微調整
-        ) {
-            // --- 1. 前回視聴したチャンネル ---
-            if (lastWatchedChannels.isNotEmpty()) {
-                item(key = "section_last_watched") {
-                    Column {
-                        SectionHeader(
-                            "前回視聴したチャンネル",
-                            Icons.Default.History,
-                            Modifier.padding(horizontal = 32.dp)
-                        )
-                        TvLazyRow(
-                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            itemsIndexed(
-                                lastWatchedChannels,
-                                key = { _, ch -> "ch_${ch.id}" }) { _, channel ->
-                                val inverseColor = if (colors.isDark) Color.Black else Color.White
-                                val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(
-                                    konomiIp,
-                                    konomiPort,
-                                    channel.displayChannelId
-                                )
-                                else UrlBuilder.getMirakurunLogoUrl(
-                                    mirakurunIp,
-                                    mirakurunPort,
-                                    channel.networkId,
-                                    channel.serviceId
-                                )
+        // --- 1. 前回視聴したチャンネル ---
+        if (lastWatchedChannels.isNotEmpty()) {
+            item(key = "section_last_watched") {
+                Column(modifier = Modifier.animateContentSize()) {
+                    SectionHeader("前回視聴したチャンネル", Icons.Default.History, Modifier.padding(horizontal = 32.dp))
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        itemsIndexed(lastWatchedChannels, key = { _, ch -> "ch_${ch.id}" }) { _, channel ->
+                            val inverseColor = if (colors.isDark) Color.Black else Color.White
+                            val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
+                            else UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId)
 
-                                Surface(
-                                    onClick = { onChannelClick(channel) },
-                                    modifier = Modifier
-                                        .width(220.dp)
-                                        .height(100.dp)
-                                        .then(
-                                            if (channel.id == lastFocusedChannelId) Modifier.focusRequester(
-                                                channelItemRequester
-                                            ) else Modifier
+                            Surface(
+                                onClick = { onChannelClick(channel) },
+                                modifier = Modifier
+                                    .width(220.dp)
+                                    .height(100.dp)
+                                    .then(if (channel.id == lastFocusedChannelId) Modifier.focusRequester(channelItemRequester) else Modifier)
+                                    .focusProperties { up = tabFocusRequester },
+                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
+                                colors = ClickableSurfaceDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(0.05f),
+                                    focusedContainerColor = colors.textPrimary,
+                                    contentColor = colors.textPrimary,
+                                    focusedContentColor = inverseColor
+                                ),
+                                shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
+                            ) {
+                                Row(Modifier.fillMaxSize().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(72.dp, 40.dp).clip(RoundedCornerShape(4.dp)).background(colors.background.copy(0.5f)), contentAlignment = Alignment.Center) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current).data(logoUrl).size(coil.size.Size(144, 80)).build(),
+                                            contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
                                         )
-                                        .focusProperties { up = tabFocusRequester },
-                                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
-                                    colors = ClickableSurfaceDefaults.colors(
-                                        containerColor = colors.textPrimary.copy(
-                                            0.05f
-                                        ),
-                                        focusedContainerColor = colors.textPrimary,
-                                        contentColor = colors.textPrimary,
-                                        focusedContentColor = inverseColor
-                                    ),
-                                    shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium)
-                                ) {
-                                    Row(
-                                        Modifier
-                                            .fillMaxSize()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // ロゴの16:9クロップ
-                                        Box(
-                                            modifier = Modifier
-                                                .size(72.dp, 40.dp)
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(colors.background.copy(0.5f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            AsyncImage(
-                                                model = ImageRequest.Builder(LocalContext.current)
-                                                    .data(logoUrl).size(coil.size.Size(144, 80))
-                                                    .build(),
-                                                contentDescription = null,
-                                                modifier = Modifier.fillMaxSize(),
-                                                contentScale = ContentScale.Crop
-                                            )
-                                        }
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(
-                                                channel.name,
-                                                style = MaterialTheme.typography.titleSmall,
-                                                maxLines = 2,
-                                                fontWeight = FontWeight.Bold,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                "${typeLabels[channel.type] ?: channel.type} ${channel.channelNumber}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = LocalContentColor.current.copy(0.7f)
-                                            )
-                                        }
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(channel.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, fontWeight = FontWeight.Bold, overflow = TextOverflow.Ellipsis)
+                                        Text("${typeLabels[channel.type] ?: channel.type} ${channel.channelNumber}", style = MaterialTheme.typography.labelSmall, color = LocalContentColor.current.copy(0.7f))
                                     }
                                 }
                             }
@@ -197,112 +139,74 @@ fun HomeContents(
                     }
                 }
             }
+        }
 
-            // --- 2. 今、盛り上がっているチャンネル ---
-            if (hotChannels.isNotEmpty()) {
-                item(key = "section_hot") {
-                    Column {
-                        SectionHeader(
-                            "今、盛り上がっているチャンネル",
-                            Icons.Default.TrendingUp,
-                            Modifier.padding(horizontal = 32.dp)
-                        )
-                        TvLazyRow(
-                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(hotChannels, key = { "hot_${it.channel.id}" }) { uiState ->
-                                HotChannelCard(
-                                    uiState,
-                                    konomiIp,
-                                    konomiPort,
-                                    onClick = { onChannelClick(uiState.channel) })
-                            }
+        // --- 2. 今、盛り上がっているチャンネル ---
+        if (hotChannels.isNotEmpty()) {
+            item(key = "section_hot") {
+                Column(modifier = Modifier.animateContentSize()) {
+                    SectionHeader("今、盛り上がっているチャンネル", Icons.Default.TrendingUp, Modifier.padding(horizontal = 32.dp))
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(hotChannels, key = { "hot_${it.channel.id}" }) { uiState ->
+                            HotChannelCard(uiState, konomiIp, konomiPort, onClick = { onChannelClick(uiState.channel) })
                         }
                     }
                 }
             }
+        }
 
-            // --- 3. これからの録画予約 ---
-            if (upcomingReserves.isNotEmpty()) {
-                item(key = "section_upcoming") {
-                    Column {
-                        SectionHeader(
-                            "これからの録画予約",
-                            Icons.Default.RadioButtonChecked,
-                            Modifier.padding(horizontal = 32.dp)
-                        )
-                        TvLazyRow(
-                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(upcomingReserves, key = { "res_${it.id}" }) { reserve ->
-                                UpcomingReserveCard(reserve, onClick = { onReserveClick(reserve) })
-                            }
+        // --- 3. これからの録画予約 ---
+        if (upcomingReserves.isNotEmpty()) {
+            item(key = "section_upcoming") {
+                Column(modifier = Modifier.animateContentSize()) {
+                    SectionHeader("これからの録画予約", Icons.Default.RadioButtonChecked, Modifier.padding(horizontal = 32.dp))
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(upcomingReserves, key = { "res_${it.id}" }) { reserve ->
+                            UpcomingReserveCard(reserve, onClick = { onReserveClick(reserve) })
                         }
-                        NavigationLinkButton(
-                            "録画予約リストを表示",
-                            Icons.Default.List,
-                            onClick = { onNavigateToTab(4) })
                     }
+                    NavigationLinkButton("録画予約リストを表示", Icons.Default.List, onClick = { onNavigateToTab(4) })
                 }
             }
+        }
 
-            // --- 4. ピックアップ ---
-            if (genrePickup.isNotEmpty()) {
-                item(key = "section_pickup") {
-                    Column {
-                        val timePrefix = when (pickupTimeSlot) {
-                            "朝" -> "今朝の"; "昼" -> "今日の"; else -> "今夜の"
+        // --- 4. ピックアップ ---
+        if (genrePickup.isNotEmpty()) {
+            item(key = "section_pickup") {
+                Column(modifier = Modifier.animateContentSize()) {
+                    val timePrefix = when (pickupTimeSlot) { "朝" -> "今朝の"; "昼" -> "今日の"; else -> "今夜の" }
+                    val seasonalIcon = getSeasonalIcon(KomorebiTheme.theme)
+                    SectionHeader("${timePrefix}${pickupGenreName}ピックアップ $seasonalIcon", Icons.Default.Star, Modifier.padding(horizontal = 32.dp))
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(genrePickup, key = { "pick_${it.first.id}" }) { (program, channelName) ->
+                            GenrePickupCard(program = program, channelName = channelName, timeSlot = pickupTimeSlot, onClick = { onProgramClick(program) })
                         }
-                        val seasonalIcon = getSeasonalIcon(KomorebiTheme.theme)
-                        SectionHeader(
-                            "${timePrefix}${pickupGenreName}ピックアップ $seasonalIcon",
-                            Icons.Default.Star,
-                            Modifier.padding(horizontal = 32.dp)
-                        )
-                        TvLazyRow(
-                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(
-                                genrePickup,
-                                key = { "pick_${it.first.id}" }) { (program, channelName) ->
-                                GenrePickupCard(
-                                    program = program,
-                                    channelName = channelName,
-                                    timeSlot = pickupTimeSlot,
-                                    onClick = { onProgramClick(program) })
-                            }
-                        }
-                        NavigationLinkButton(
-                            "番組表を開く",
-                            Icons.Default.CalendarToday,
-                            onClick = { onNavigateToTab(3) })
                     }
+                    NavigationLinkButton("番組表を開く", Icons.Default.CalendarToday, onClick = { onNavigateToTab(3) })
                 }
             }
+        }
 
-            // --- 5. 録画視聴履歴 ---
-            if (watchHistory.isNotEmpty()) {
-                item(key = "section_history") {
-                    Column {
-                        SectionHeader(
-                            "録画の視聴履歴",
-                            Icons.Default.PlayCircle,
-                            Modifier.padding(start = 32.dp, bottom = 12.dp)
-                        )
-                        TvLazyRow(
-                            contentPadding = PaddingValues(horizontal = 32.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            items(watchHistory, key = { "hist_${it.program.id}" }) { history ->
-                                WatchHistoryCard(
-                                    history,
-                                    konomiIp,
-                                    konomiPort,
-                                    onClick = { onHistoryClick(history) })
-                            }
+        // --- 5. 録画視聴履歴 ---
+        if (watchHistory.isNotEmpty()) {
+            item(key = "section_history") {
+                Column(modifier = Modifier.animateContentSize()) {
+                    SectionHeader("録画の視聴履歴", Icons.Default.PlayCircle, Modifier.padding(start = 32.dp, bottom = 12.dp))
+                    TvLazyRow(
+                        contentPadding = PaddingValues(horizontal = 32.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(watchHistory, key = { "hist_${it.program.id}" }) { history ->
+                            WatchHistoryCard(history, konomiIp, konomiPort, onClick = { onHistoryClick(history) })
                         }
                     }
                 }
@@ -310,6 +214,8 @@ fun HomeContents(
         }
     }
 }
+
+// ... 以降のコンポーネント (HotChannelCard 等) は変更なし
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable

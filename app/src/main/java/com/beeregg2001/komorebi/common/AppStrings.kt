@@ -112,6 +112,15 @@ object AppStrings {
     const val DIALOG_LAYER_SUBTITLE_TOP = "字幕を上に表示"
     const val DIALOG_QUALITY_TITLE = "視聴画質"
 
+    // ★追加: 音声出力設定関連
+    const val SETTINGS_SECTION_AUDIO_OUTPUT = "音声出力"
+    const val SETTINGS_ITEM_AUDIO_OUTPUT_MODE = "音声出力モード"
+    const val SETTINGS_VALUE_AUDIO_DOWNMIX_REC = "ダウンミックス (推奨)"
+    const val SETTINGS_VALUE_AUDIO_PASSTHROUGH = "パススルー"
+    const val DIALOG_AUDIO_OUTPUT_TITLE = "音声出力モード"
+    const val SETTINGS_VALUE_AUDIO_DOWNMIX_DESC = "ダウンミックス (2ch固定)"
+    const val SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC = "パススルー (5.1ch維持)"
+
     // 表示設定
     const val SETTINGS_SECTION_GENERAL = "全般"
     const val SETTINGS_ITEM_BASE_THEME = "基本テーマ"

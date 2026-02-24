@@ -129,12 +129,12 @@ dependencies {
     ksp("androidx.room:room-compiler:$room_version") // kaptからkspへ
 
     // --- Media3 ---
-    val media3_version = "1.4.1"
+    val media3_version = "1.5.0"
     implementation("androidx.media3:media3-exoplayer:$media3_version")
     implementation("androidx.media3:media3-ui:$media3_version")
     implementation("androidx.media3:media3-common:$media3_version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
-    implementation(project(":media3-lib-decoder-ffmpeg"))
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
 
     // --- その他 ---
     implementation("io.coil-kt:coil-compose:2.5.0")
@@ -150,5 +150,7 @@ dependencies {
     implementation("com.github.ctiao:ndkbitmap-armv7a:0.9.21")
     implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
     implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
+
+    compileOnly("org.checkerframework:checker-qual:3.33.0")
 
 }
