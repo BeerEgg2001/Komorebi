@@ -7,6 +7,7 @@ import android.util.Base64
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
@@ -141,49 +142,49 @@ fun VideoPlayerScreen(
             .setAllowCrossProtocolRedirects(true)
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
-            val mediaItem = MediaItem.Builder().setUri(
-                UrlBuilder.getVideoPlaylistUrl(
-                    konomiIp,
-                    konomiPort,
-                    program.recordedVideo.id,
-                    currentSessionId,
-                    vs.currentQuality.value
+                val mediaItem = MediaItem.Builder().setUri(
+                    UrlBuilder.getVideoPlaylistUrl(
+                        konomiIp,
+                        konomiPort,
+                        program.recordedVideo.id,
+                        currentSessionId,
+                        vs.currentQuality.value
+                    )
+                ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+                setMediaItem(mediaItem)
+                setAudioAttributes(
+                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .setUsage(C.USAGE_MEDIA).build(), true
                 )
-            ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-            setMediaItem(mediaItem)
-            setAudioAttributes(
-                AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .setUsage(C.USAGE_MEDIA).build(), true
-            )
-            addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(playing: Boolean) {
-                    vs.isPlayerPlaying = playing
-                }
+                addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        vs.isPlayerPlaying = playing
+                    }
 
-                override fun onMetadata(metadata: Metadata) {
-                    if (!vs.isSubtitleEnabled) return
-                    for (i in 0 until metadata.length()) {
-                        val entry = metadata.get(i)
-                        if (entry is PrivFrame && (entry.owner.contains(
-                                "aribb24",
-                                true
-                            ) || entry.owner.contains("B24", true))
-                        ) {
-                            val base64Data =
-                                Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                            webViewRef.value?.post {
-                                webViewRef.value?.evaluateJavascript(
-                                    "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                    null
-                                )
+                    override fun onMetadata(metadata: Metadata) {
+                        if (!vs.isSubtitleEnabled) return
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is PrivFrame && (entry.owner.contains(
+                                    "aribb24",
+                                    true
+                                ) || entry.owner.contains("B24", true))
+                            ) {
+                                val base64Data =
+                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                                webViewRef.value?.post {
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
+                                        null
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            })
-            if (initialPositionMs > 0) seekTo(initialPositionMs)
-            prepare(); playWhenReady = true
-        }
+                })
+                if (initialPositionMs > 0) seekTo(initialPositionMs)
+                prepare(); playWhenReady = true
+            }
     }
 
     // シーンサーチ連動
@@ -192,6 +193,15 @@ fun VideoPlayerScreen(
             vs.wasPlayingBeforeSceneSearch =
                 exoPlayer.isPlaying; if (vs.wasPlayingBeforeSceneSearch) exoPlayer.pause()
         } else if (vs.wasPlayingBeforeSceneSearch) exoPlayer.play()
+    }
+
+    // ★追加: 中央オーバーレイ（インジケーター）の自動非表示ロジック
+    // vs.indicatorState が更新されるたびにタイマーが起動し、2秒後に null にリセットします
+    LaunchedEffect(vs.indicatorState) {
+        if (vs.indicatorState != null) {
+            delay(2000)
+            vs.indicatorState = null
+        }
     }
 
     // ストリーム維持
@@ -218,51 +228,54 @@ fun VideoPlayerScreen(
     )
     }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(colors.background)
-        .onKeyEvent { keyEvent ->
-            if (keyEvent.type != KeyEventType.KeyDown || isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
-            onShowControlsChange(true); vs.lastInteractionTime = System.currentTimeMillis()
-            when (keyEvent.nativeKeyEvent.keyCode) {
-                NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                    vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play(); true
-                }
-
-                NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    exoPlayer.seekTo(exoPlayer.currentPosition + 30000); vs.updateIndicator(
-                        Icons.Default.FastForward,
-                        "+30s"
-                    ); true
-                }
-
-                NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
-                    exoPlayer.seekTo(exoPlayer.currentPosition - 10000); vs.updateIndicator(
-                        Icons.Default.FastRewind,
-                        "-10s"
-                    ); true
-                }
-
-                NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                    onSubMenuToggle(true); true
-                }
-
-                NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                    onSceneSearchToggle(true); true
-                }
-
-                else -> false
-            }
-        }) {
-        AndroidView(factory = {
-            PlayerView(it).apply {
-                player = exoPlayer; useController = false; resizeMode =
-                AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true
-            }
-        }, modifier = Modifier
+    Box(
+        modifier = Modifier
             .fillMaxSize()
-            .focusRequester(mainFocusRequester)
-            .focusable())
+            .background(colors.background)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown || isSubMenuOpen || isSceneSearchOpen) return@onKeyEvent false
+                onShowControlsChange(true); vs.lastInteractionTime = System.currentTimeMillis()
+                when (keyEvent.nativeKeyEvent.keyCode) {
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                        vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play(); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        exoPlayer.seekTo(exoPlayer.currentPosition + 30000); vs.updateIndicator(
+                            Icons.Default.FastForward,
+                            "+30s"
+                        ); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        exoPlayer.seekTo(exoPlayer.currentPosition - 10000); vs.updateIndicator(
+                            Icons.Default.FastRewind,
+                            "-10s"
+                        ); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                        onSubMenuToggle(true); true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        onSceneSearchToggle(true); true
+                    }
+
+                    else -> false
+                }
+            }) {
+        AndroidView(
+            factory = {
+                PlayerView(it).apply {
+                    player = exoPlayer; useController = false; resizeMode =
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true
+                }
+            }, modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(mainFocusRequester)
+                .focusable()
+        )
 
         val commentLayer = @Composable {
             if (isHeavyUiReady) {
@@ -355,11 +368,11 @@ fun VideoPlayerScreen(
                         exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                     exoPlayer.trackSelectionParameters.buildUpon()
                         .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                        TrackSelectionOverride(
-                            tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                            0
+                            TrackSelectionOverride(
+                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
+                            )
                         )
-                    )
                         .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 {
