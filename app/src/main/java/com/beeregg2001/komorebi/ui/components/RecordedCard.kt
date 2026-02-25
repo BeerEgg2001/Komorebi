@@ -28,24 +28,6 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
-// ★チューニング4: 放送波のブランドカラーなど、普遍的な色はトップレベルで一度だけ定義してメモリを節約
-private val COLOR_GR = Color(0xFF1E88E5)
-private val COLOR_BS = Color(0xFFE53935)
-private val COLOR_CS = Color(0xFFFB8C00)
-private val COLOR_DEFAULT = Color.Gray
-
-// ★チューニング2: 重い String.format を廃止し、最速の文字列連結に変更
-private fun formatTimeFast(seconds: Long): String {
-    val h = seconds / 3600
-    val m = (seconds % 3600) / 60
-    val s = seconds % 60
-    return if (h > 0) {
-        "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
-    } else {
-        "${m}:${s.toString().padStart(2, '0')}"
-    }
-}
-
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -54,7 +36,8 @@ fun RecordedCard(
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showResumeLabel: Boolean = false // ★追加：続きから見る表記を切り替えるフラグ
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -63,18 +46,31 @@ fun RecordedCard(
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
-        "GR" -> "地デジ" to COLOR_GR
-        "BS" -> "BS" to COLOR_BS
-        "CS" -> "CS" to COLOR_CS
-        else -> (program.channel?.type ?: "") to COLOR_DEFAULT
+        "GR" -> "地デジ" to Color(0xFF1E88E5)
+        "BS" -> "BS" to Color(0xFFE53935)
+        "CS" -> "CS" to Color(0xFFFB8C00)
+        else -> (program.channel?.type ?: "") to Color.Gray
+    }
+
+    fun formatTime(seconds: Long): String {
+        val h = seconds / 3600;
+        val m = (seconds % 3600) / 60;
+        val s = seconds % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
     }
 
     val totalDuration = program.recordedVideo.duration.toLong()
     val currentPosition = program.playbackPosition.toLong()
-    val durationDisplay =
-        if (currentPosition > 5) "続きから ${formatTimeFast(currentPosition)}" else formatTimeFast(
-            totalDuration
-        )
+
+    // ★修正：フラグと再生位置に基づいてテキストを切り替え
+    val durationDisplay = if (showResumeLabel && currentPosition > 5) {
+        "続きから見る ${formatTime(currentPosition)}"
+    } else if (currentPosition > 5) {
+        "続きから ${formatTime(currentPosition)}"
+    } else {
+        formatTime(totalDuration)
+    }
+
     val progress =
         if (totalDuration > 0) (currentPosition.toFloat() / totalDuration.toFloat()).coerceIn(
             0f,
@@ -82,26 +78,6 @@ fun RecordedCard(
         ) else 0f
 
     val inverseColor = if (colors.isDark) Color.Black else Color.White
-    val context = LocalContext.current
-
-    // ★チューニング3: ImageRequestのキャッシュ
-    val imageRequest = remember(thumbnailUrl) {
-        ImageRequest.Builder(context)
-            .data(thumbnailUrl)
-            .size(300, 168)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .build()
-    }
-
-    // ★KomorebiTheme完全適用のための動的カラー計算 (フォーカス状態に連動)
-    val bgAlpha = if (isFocused) 0.1f else 0.4f
-    val bottomBgColor = if (isFocused) colors.textPrimary else colors.surface.copy(alpha = 0.85f)
-    val primaryTextColor = if (isFocused) inverseColor else colors.textPrimary
-    val secondaryTextColor =
-        if (isFocused) inverseColor.copy(alpha = 0.8f) else colors.textPrimary.copy(alpha = 0.8f)
-    val badgeBgColor =
-        if (isFocused) colors.textPrimary.copy(alpha = 0.9f) else colors.surface.copy(alpha = 0.8f)
-    val badgeTextColor = if (isFocused) inverseColor else colors.textPrimary
 
     Surface(
         onClick = { if (isAnalyzed) onClick() },
@@ -127,80 +103,79 @@ fun RecordedCard(
         )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-
             AsyncImage(
-                model = imageRequest,
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnailUrl)
+                    .size(coil.size.Size(300, 168))
+                    .crossfade(true)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .build(),
                 contentDescription = null,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.surface),
+                modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(colors.background.copy(alpha = bgAlpha))
+                    .background(colors.background.copy(alpha = if (isFocused) 0.1f else 0.4f))
             )
 
-            // 右上のバッジ領域 (録画中 / 解析中)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp)
-            ) {
+            Box(modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)) {
                 if (program.isRecording) {
                     Row(
                         modifier = Modifier
                             .background(
-                                color = badgeBgColor,
+                                color = Color.Black.copy(alpha = 0.7f),
                                 shape = RoundedCornerShape(4.dp)
                             )
                             .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(colors.accent, CircleShape) // テーマのアクセントカラーを使用
-                        )
+                        Box(modifier = Modifier
+                            .size(6.dp)
+                            .background(Color.Red, CircleShape))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "録画中",
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 8.sp,
-                            color = badgeTextColor
+                            color = Color.White
                         )
                     }
                 } else if (!isAnalyzed) {
                     Box(
                         modifier = Modifier
-                            .background(color = badgeBgColor, shape = RoundedCornerShape(4.dp))
+                            .background(
+                                color = Color(0xFFE65100).copy(alpha = 0.8f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
                             .padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = "メタデータ解析中",
                             style = MaterialTheme.typography.labelSmall,
                             fontSize = 8.sp,
-                            color = badgeTextColor
+                            color = Color.White
                         )
                     }
                 }
             }
 
-            // 下部の情報領域
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
-                    .background(bottomBgColor) // フォーカス時に背景色が反転
+                    .background(colors.surface.copy(alpha = 0.85f))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
                     text = program.title,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = primaryTextColor, // フォーカス時に文字色が反転
+                    color = colors.textPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.then(
@@ -226,7 +201,7 @@ fun RecordedCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White // チャンネルバッジの視認性確保のため白固定
+                                color = Color.White
                             )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
@@ -235,7 +210,7 @@ fun RecordedCard(
                         text = program.channel?.name ?: "",
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 9.sp,
-                        color = secondaryTextColor,
+                        color = colors.textPrimary.copy(alpha = 0.8f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
@@ -244,13 +219,14 @@ fun RecordedCard(
                         text = durationDisplay,
                         style = MaterialTheme.typography.labelSmall,
                         fontSize = 9.sp,
-                        color = if (currentPosition > 5) colors.accent else secondaryTextColor,
+                        color = if (currentPosition > 5) colors.accent else colors.textPrimary.copy(
+                            alpha = 0.8f
+                        ),
                         textAlign = TextAlign.End
                     )
                 }
             }
 
-            // プログレスバー
             if (currentPosition > 5) {
                 Box(
                     modifier = Modifier

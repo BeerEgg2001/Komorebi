@@ -295,6 +295,7 @@ fun HomeLauncherScreen(
                         watchHistory = ui.watchHistoryPrograms,
                         selectedProgram = selectedProgram,
                         restoreProgramId = if (isReturningFromPlayer && ui.selectedTabIndex == 2) lastPlayerProgramId?.toIntOrNull() else null,
+                        isLoading = ui.isLoadingInitial, // ★不足していたパラメータ
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         topNavFocusRequester = ui.tabFocusRequesters[2],
@@ -306,6 +307,7 @@ fun HomeLauncherScreen(
                                     ?: program
                             )
                         },
+                        onViewAllClick = onShowAllRecordings, // ★不足していたパラメータ
                         onLoadMore = { recordViewModel.loadNextPage() },
                         isLoadingMore = ui.isLoadingMore,
                         onShowAllRecordings = onShowAllRecordings,

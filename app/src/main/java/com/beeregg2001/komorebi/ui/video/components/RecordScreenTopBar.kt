@@ -4,14 +4,21 @@ package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -42,6 +49,7 @@ fun RecordScreenTopBar(
     activeSearchQuery: String,
     currentDisplayTitle: String?,
     hasHistory: Boolean,
+    isListView: Boolean, // ★追加: 現在の表示モード
     searchCloseButtonFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     innerTextFieldFocusRequester: FocusRequester,
@@ -49,10 +57,12 @@ fun RecordScreenTopBar(
     firstItemFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     searchOpenButtonFocusRequester: FocusRequester,
+    viewToggleButtonFocusRequester: FocusRequester, // ★追加: トグルボタン用のFocusRequester
     onSearchQueryChange: (String) -> Unit,
     onExecuteSearch: (String) -> Unit,
     onBackPress: () -> Unit,
     onSearchOpen: () -> Unit,
+    onViewToggle: () -> Unit, // ★追加: 切り替えアクション
     onKeyboardActiveClick: () -> Unit,
     onBackButtonFocusChanged: (Boolean) -> Unit
 ) {
@@ -181,6 +191,7 @@ fun RecordScreenTopBar(
                     Icon(Icons.Default.ArrowBack, "戻る")
                 }
                 Spacer(Modifier.width(16.dp))
+
                 Text(
                     text = currentDisplayTitle
                         ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
@@ -188,8 +199,57 @@ fun RecordScreenTopBar(
                     fontSize = 20.sp,
                     color = colors.textPrimary,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f) // ここが余白を埋めるため、以降の要素は右寄せになります
                 )
+
+                // ★追加: リスト/グリッド表示切り替えトグルボタン (ピル型)
+                var isToggleFocused by remember { mutableStateOf(false) }
+                Surface(
+                    onClick = onViewToggle,
+                    modifier = Modifier
+                        .focusRequester(viewToggleButtonFocusRequester)
+                        .onFocusChanged { isToggleFocused = it.isFocused },
+                    shape = ClickableSurfaceDefaults.shape(CircleShape), // 横幅が高さより大きいのでピル型になります
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                        focusedContainerColor = colors.textPrimary,
+                        contentColor = colors.textPrimary,
+                        focusedContentColor = if (colors.isDark) Color.Black else Color.White
+                    ),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // フォーカス状態と現在のモードに応じて色を計算
+                        val activeTint = if (isToggleFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
+                        val inactiveTint = if (isToggleFocused) (if (colors.isDark) Color.Black.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.4f)) else colors.textPrimary.copy(alpha = 0.4f)
+
+                        Icon(
+                            imageVector = Icons.Default.List,
+                            contentDescription = "リスト表示",
+                            tint = if (isListView) activeTint else inactiveTint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "|",
+                            color = inactiveTint,
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Light
+                        )
+                        Icon(
+                            imageVector = Icons.Default.GridView,
+                            contentDescription = "グリッド表示",
+                            tint = if (!isListView) activeTint else inactiveTint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(16.dp))
+
                 IconButton(
                     onClick = onSearchOpen,
                     modifier = Modifier.focusRequester(searchOpenButtonFocusRequester),

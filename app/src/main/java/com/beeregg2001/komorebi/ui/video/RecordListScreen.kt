@@ -19,6 +19,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.video.components.RecordGridContent
+import com.beeregg2001.komorebi.ui.video.components.RecordListContent
 import com.beeregg2001.komorebi.ui.video.components.RecordScreenTopBar
 import com.beeregg2001.komorebi.ui.video.components.RecordSearchHistoryDropdown
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
@@ -48,6 +49,9 @@ fun RecordListScreen(
     var isKeyboardActive by remember { mutableStateOf(false) }
     var isBackButtonFocused by remember { mutableStateOf(false) }
 
+    // ★追加: 表示モードの切り替えステート (初期値は今回作成したリスト表示)
+    var isListView by remember { mutableStateOf(true) }
+
     var currentDisplayTitle by remember(customTitle) { mutableStateOf(customTitle) }
 
     val scope = rememberCoroutineScope()
@@ -62,6 +66,7 @@ fun RecordListScreen(
     val backButtonFocusRequester = remember { FocusRequester() }
     val searchOpenButtonFocusRequester = remember { FocusRequester() }
     val searchCloseButtonFocusRequester = remember { FocusRequester() }
+    val viewToggleButtonFocusRequester = remember { FocusRequester() } // ★追加: トグルボタン用
 
     val executeSearch: (String) -> Unit = { query ->
         isKeyboardActive = false
@@ -125,6 +130,7 @@ fun RecordListScreen(
             activeSearchQuery = activeSearchQuery,
             currentDisplayTitle = currentDisplayTitle,
             hasHistory = limitedHistory.isNotEmpty(),
+            isListView = isListView, // ★追加: 現在の表示モードを渡す
             searchCloseButtonFocusRequester = searchCloseButtonFocusRequester,
             searchInputFocusRequester = searchInputFocusRequester,
             innerTextFieldFocusRequester = innerTextFieldFocusRequester,
@@ -132,10 +138,12 @@ fun RecordListScreen(
             firstItemFocusRequester = firstItemFocusRequester,
             backButtonFocusRequester = backButtonFocusRequester,
             searchOpenButtonFocusRequester = searchOpenButtonFocusRequester,
+            viewToggleButtonFocusRequester = viewToggleButtonFocusRequester, // ★追加: FocusRequesterを渡す
             onSearchQueryChange = { searchQuery = it },
             onExecuteSearch = executeSearch,
             onBackPress = handleBackPress,
             onSearchOpen = { isSearchBarVisible = true },
+            onViewToggle = { isListView = !isListView }, // ★追加: トグル時のアクション
             onKeyboardActiveClick = { isKeyboardActive = true },
             onBackButtonFocusChanged = { isBackButtonFocused = it }
         )
@@ -147,22 +155,39 @@ fun RecordListScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            // 将来的にここでリストとグリッドを切り替えることができます
-            RecordGridContent(
-                recentRecordings = recentRecordings,
-                isLoadingInitial = isLoadingInitial,
-                isLoadingMore = isLoadingMore,
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                gridState = gridState,
-                isSearchBarVisible = isSearchBarVisible,
-                isKeyboardActive = isKeyboardActive,
-                firstItemFocusRequester = firstItemFocusRequester,
-                searchInputFocusRequester = searchInputFocusRequester,
-                backButtonFocusRequester = backButtonFocusRequester,
-                onProgramClick = onProgramClick,
-                onLoadMore = { viewModel.loadNextPage() }
-            )
+            // isListView の状態によってリストとグリッドを切り替え
+            if (isListView) {
+                RecordListContent(
+                    recentRecordings = recentRecordings,
+                    isLoadingInitial = isLoadingInitial,
+                    isLoadingMore = isLoadingMore,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    isSearchBarVisible = isSearchBarVisible,
+                    isKeyboardActive = isKeyboardActive,
+                    firstItemFocusRequester = firstItemFocusRequester,
+                    searchInputFocusRequester = searchInputFocusRequester,
+                    backButtonFocusRequester = backButtonFocusRequester,
+                    onProgramClick = onProgramClick,
+                    onLoadMore = { viewModel.loadNextPage() }
+                )
+            } else {
+                RecordGridContent(
+                    recentRecordings = recentRecordings,
+                    isLoadingInitial = isLoadingInitial,
+                    isLoadingMore = isLoadingMore,
+                    konomiIp = konomiIp,
+                    konomiPort = konomiPort,
+                    gridState = gridState,
+                    isSearchBarVisible = isSearchBarVisible,
+                    isKeyboardActive = isKeyboardActive,
+                    firstItemFocusRequester = firstItemFocusRequester,
+                    searchInputFocusRequester = searchInputFocusRequester,
+                    backButtonFocusRequester = backButtonFocusRequester,
+                    onProgramClick = onProgramClick,
+                    onLoadMore = { viewModel.loadNextPage() }
+                )
+            }
 
             if (isSearchBarVisible && limitedHistory.isNotEmpty()) {
                 RecordSearchHistoryDropdown(
