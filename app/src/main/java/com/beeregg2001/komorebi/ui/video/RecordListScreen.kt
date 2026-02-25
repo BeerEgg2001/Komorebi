@@ -55,14 +55,13 @@ private const val TAG = "RecordListScreen"
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun RecordListScreen(
-    viewModel: RecordViewModel = hiltViewModel(), // ★ViewModelを直接受け取る
+    viewModel: RecordViewModel = hiltViewModel(),
     konomiIp: String,
     konomiPort: String,
     customTitle: String? = null,
     onProgramClick: (RecordedProgram) -> Unit,
     onBack: () -> Unit
 ) {
-    // ★親ではなく、ここでデータを監視する
     val recentRecordings by viewModel.recentRecordings.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val isLoadingInitial by viewModel.isRecordingLoading.collectAsState()
@@ -90,7 +89,6 @@ fun RecordListScreen(
     val searchOpenButtonFocusRequester = remember { FocusRequester() }
     val searchCloseButtonFocusRequester = remember { FocusRequester() }
 
-    // ボタンの共通フォーカス色設定
     val iconButtonColors = IconButtonDefaults.colors(
         focusedContainerColor = colors.textPrimary,
         focusedContentColor = if (colors.isDark) Color.Black else Color.White,
@@ -101,7 +99,7 @@ fun RecordListScreen(
         isKeyboardActive = false
         activeSearchQuery = query
         currentDisplayTitle = null
-        viewModel.searchRecordings(query) // ★ViewModelの検索を直接呼ぶ
+        viewModel.searchRecordings(query)
         keyboardController?.hide()
         isSearchBarVisible = false
         scope.launch {
@@ -124,7 +122,7 @@ fun RecordListScreen(
             }
 
             activeSearchQuery.isNotEmpty() -> {
-                activeSearchQuery = ""; viewModel.searchRecordings("") // ★ViewModelの検索をクリア
+                activeSearchQuery = ""; viewModel.searchRecordings("")
                 scope.launch { delay(50); backButtonFocusRequester.safeRequestFocus(TAG) }
             }
 
@@ -312,11 +310,18 @@ fun RecordListScreen(
                 ) {
                     itemsIndexed(
                         items = recentRecordings,
-                        key = { _, item -> item.id }) { index, program ->
-                        // ★スクロール終端検知時にViewModelの次ページ読み込みを直接呼ぶ
-                        if (!isLoadingMore && index >= recentRecordings.size - 4) {
-                            SideEffect { viewModel.loadNextPage() }
+                        key = { _, item -> item.id },
+                        // ★チューニング1：contentTypeの明示指定によるUIノードのリサイクル強制（爆速化の要）
+                        contentType = { _, _ -> "RecordedCard" }
+                    ) { index, program ->
+
+                        // ★チューニング2：メインスレッドのUI描画をブロックしないよう非同期(LaunchedEffect)でページ読み込みをトリガー
+                        LaunchedEffect(index) {
+                            if (!isLoadingMore && index >= recentRecordings.size - 4) {
+                                viewModel.loadNextPage()
+                            }
                         }
+
                         RecordedCard(
                             program = program,
                             konomiIp = konomiIp,
@@ -335,7 +340,7 @@ fun RecordListScreen(
                                 })
                     }
                     if (isLoadingMore) {
-                        item(span = { TvGridItemSpan(maxLineSpan) }) {
+                        item(span = { TvGridItemSpan(maxLineSpan) }, contentType = "LoadingIndicator") {
                             Box(
                                 Modifier
                                     .fillMaxWidth()
@@ -366,7 +371,10 @@ fun RecordListScreen(
                     TvLazyColumn(modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 320.dp)) {
-                        itemsIndexed(limitedHistory) { index, historyItem ->
+                        itemsIndexed(
+                            items = limitedHistory,
+                            contentType = { _, _ -> "HistoryItem" } // 履歴にもcontentTypeを指定
+                        ) { index, historyItem ->
                             Surface(
                                 onClick = { executeSearch(historyItem) },
                                 modifier = Modifier
