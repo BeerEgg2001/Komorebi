@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -12,7 +12,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import kotlinx.coroutines.delay
 
 @Composable
 fun PlaybackIndicator(state: IndicatorState?) {

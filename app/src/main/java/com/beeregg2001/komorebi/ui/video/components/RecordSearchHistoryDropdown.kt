@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -13,10 +14,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.material3.*
@@ -30,16 +33,22 @@ private const val TAG = "RecordSearchHistoryDropdown"
 fun RecordSearchHistoryDropdown(
     limitedHistory: List<String>,
     historyListFocusRequester: FocusRequester,
+    historyFirstItemFocusRequester: FocusRequester, // ★追加：最初のアイテム用
     searchInputFocusRequester: FocusRequester,
-    firstItemFocusRequester: FocusRequester,
+    firstItemFocusRequester: FocusRequester, // これは下の番組リストの1番目
     onExecuteSearch: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    if (limitedHistory.isEmpty()) return
+
     val colors = KomorebiTheme.colors
 
     Box(
         modifier = modifier
-            .fillMaxWidth() // 親側で padding(horizontal) が指定されるため、これで検索バーと一致する
+            .fillMaxWidth()
+            .zIndex(100f)
+            .onFocusChanged { onFocusChanged(it.isFocused || it.hasFocus) }
             .background(
                 colors.surface,
                 RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
@@ -53,6 +62,7 @@ fun RecordSearchHistoryDropdown(
         TvLazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
+                .focusGroup() // ★重要：グループ化してフォーカスを逃がさないようにする
                 .focusRequester(historyListFocusRequester)
         ) {
             itemsIndexed(limitedHistory) { index, historyItem ->
@@ -60,6 +70,11 @@ fun RecordSearchHistoryDropdown(
                     onClick = { onExecuteSearch(historyItem) },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(
+                            // ★追加：最初のアイテムにRequesterを付与
+                            if (index == 0) Modifier.focusRequester(historyFirstItemFocusRequester)
+                            else Modifier
+                        )
                         .onKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown) {
                                 when (event.key) {
@@ -69,6 +84,7 @@ fun RecordSearchHistoryDropdown(
                                             return@onKeyEvent true
                                         }
                                     }
+
                                     Key.DirectionDown -> {
                                         if (index == limitedHistory.size - 1) {
                                             firstItemFocusRequester.safeRequestFocus(TAG)
@@ -80,7 +96,13 @@ fun RecordSearchHistoryDropdown(
                             false
                         }
                         .focusProperties {
-                            if (index == limitedHistory.size - 1) down = firstItemFocusRequester
+                            // 明示的に上下の繋がりを固定する
+                            if (index == limitedHistory.size - 1) {
+                                down = firstItemFocusRequester
+                            }
+                            if (index == 0) {
+                                up = searchInputFocusRequester
+                            }
                         },
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
                     border = ClickableSurfaceDefaults.border(

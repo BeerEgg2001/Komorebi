@@ -1,9 +1,12 @@
 @file:OptIn(UnstableApi::class, ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
 
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
+import android.content.Context
+import android.graphics.Color
 import android.os.Build
 import android.util.Base64
+import android.view.View
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -15,7 +18,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.input.key.*
@@ -36,12 +38,12 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,7 +104,7 @@ fun VideoPlayerScreen(
     LaunchedEffect(Unit) { delay(800); isHeavyUiReady = true }
 
     val allComments =
-        remember { mutableStateListOf<com.beeregg2001.komorebi.data.model.ArchivedComment>() }
+        remember { mutableStateListOf<ArchivedComment>() }
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(vs.currentQuality) { UUID.randomUUID().toString() }
@@ -131,7 +133,7 @@ fun VideoPlayerScreen(
             }
 
             override fun buildAudioSink(
-                ctx: android.content.Context,
+                ctx: Context,
                 enableFloat: Boolean,
                 enableParams: Boolean
             ): DefaultAudioSink? =
@@ -301,7 +303,7 @@ fun VideoPlayerScreen(
                             layoutParams = ViewGroup.LayoutParams(
                                 -1,
                                 -1
-                            ); setBackgroundColor(android.graphics.Color.TRANSPARENT); settings.apply {
+                            ); setBackgroundColor(Color.TRANSPARENT); settings.apply {
                             javaScriptEnabled = true; domStorageEnabled = true
                         }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value =
                             this
@@ -309,7 +311,7 @@ fun VideoPlayerScreen(
                     },
                     update = {
                         it.visibility =
-                            if (vs.isSubtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                            if (vs.isSubtitleEnabled) View.VISIBLE else View.INVISIBLE
                     },
                     modifier = Modifier.fillMaxSize()
                 )

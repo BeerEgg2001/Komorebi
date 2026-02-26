@@ -1,7 +1,8 @@
 @file:OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
 
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
+import android.view.KeyEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -80,8 +81,8 @@ fun VideoTopSubMenuUI(
             // Backキーで展開を閉じる制御
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
-                    (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
-                            keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
+                    (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK ||
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)) {
                     if (selectedCategory != null) {
                         selectedCategory = null
                         // 閉じた時は画質ボタンにフォーカスを戻す

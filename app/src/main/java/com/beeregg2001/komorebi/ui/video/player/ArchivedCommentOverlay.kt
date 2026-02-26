@@ -1,6 +1,7 @@
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
 import android.util.Log
+import android.view.View
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.beeregg2001.komorebi.data.model.ArchivedComment
@@ -69,7 +70,7 @@ fun ArchivedCommentOverlay(
                     comments.forEach { comment ->
                         if (comment.time > lastEmittedTime && comment.time <= currentSec) {
                             danmakuViewRef.value?.let { view ->
-                                (view as? android.view.View)?.post {
+                                (view as? View)?.post {
                                     if (!view.isPrepared) return@post
                                     addDanmakuToView(view, comment, commentFontSizeScale)
                                 }
@@ -110,7 +111,7 @@ private fun addDanmakuToView(view: IDanmakuView, comment: ArchivedComment, fontS
     danmaku.text = comment.text
     danmaku.padding = 5
 
-    val viewContext = (view as? android.view.View)?.context ?: return
+    val viewContext = (view as? View)?.context ?: return
     val density = viewContext.resources.displayMetrics.density
 
     danmaku.textSize = (32f * fontSizeScale) * density

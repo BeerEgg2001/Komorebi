@@ -9,16 +9,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.LibraryBooks
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +27,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
@@ -39,6 +36,7 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -51,27 +49,50 @@ fun RecordListContent(
     konomiPort: String,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
-    firstItemFocusRequester: FocusRequester,
+    firstItemFocusRequester: FocusRequester, // ★元通りアイテム用のRequesterとして使用
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
     onSeriesSearch: (String) -> Unit,
-    onLoadMore: () -> Unit
+    onLoadMore: () -> Unit,
+    isDetailVisible: Boolean,
+    onDetailStateChange: (Boolean) -> Unit,
+    onBackPress: () -> Unit,
+    listState: LazyListState = rememberLazyListState(),
+    onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
-    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var isMenuFocused by remember { mutableStateOf(false) }
-    var isDetailVisible by remember { mutableStateOf(false) }
 
-    val menuFocusRequester = remember { FocusRequester() }
+    val menuFirstItemRequester = remember { FocusRequester() }
+    val listItemReturnRequester = remember { FocusRequester() }
     val detailPanelFocusRequester = remember { FocusRequester() }
-    val listItemReturnFocusRequester = remember { FocusRequester() }
 
-    androidx.activity.compose.BackHandler(enabled = isDetailVisible || isMenuFocused) {
-        listItemReturnFocusRequester.safeRequestFocus("BackToItem")
-        if (isDetailVisible) isDetailVisible = false
+    // ★重要: 現在「完全に」画面に表示されている最上位のアイテムのインデックスを計算する
+    val firstFullyVisibleIndex by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) -1
+            else {
+                val first = visibleItems.first()
+                // アイテムの上端が画面外に少しでも隠れていて、次にアイテムがある場合は次を対象とする
+                if (first.offset < 0 && visibleItems.size > 1) {
+                    visibleItems[1].index
+                } else {
+                    first.index
+                }
+            }
+        }
+    }
+
+    val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+
+    LaunchedEffect(isListReady) {
+        onFirstItemBound(isListReady)
     }
 
     val panelWidth by animateDpAsState(
@@ -83,6 +104,20 @@ fun RecordListContent(
         animationSpec = tween(durationMillis = 250), label = "PanelWidth"
     )
 
+    LaunchedEffect(isMenuFocused) {
+        if (isMenuFocused && !isDetailVisible) {
+            delay(50)
+            menuFirstItemRequester.safeRequestFocus("SideMenuEntry")
+        }
+    }
+
+    LaunchedEffect(isDetailVisible) {
+        if (isDetailVisible) {
+            delay(50)
+            detailPanelFocusRequester.safeRequestFocus("DetailPanelEntry")
+        }
+    }
+
     if (isLoadingInitial && recentRecordings.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = colors.textPrimary)
@@ -93,14 +128,12 @@ fun RecordListContent(
                 state = listState,
                 contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 60.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .focusProperties {
-                        if (isSearchBarVisible || isKeyboardActive) enter = { FocusRequester.Cancel }
-                        right = if (isDetailVisible) FocusRequester.Cancel else menuFocusRequester
-                    }
+                modifier = Modifier.fillMaxSize()
             ) {
-                itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
+                itemsIndexed(
+                    items = recentRecordings,
+                    key = { _, item -> item.id }) { index, program ->
+
                     LaunchedEffect(index) {
                         if (!isLoadingMore && index >= recentRecordings.size - 4) onLoadMore()
                     }
@@ -111,13 +144,32 @@ fun RecordListContent(
                         onClick = { onProgramClick(program, null) },
                         isPersistentFocused = (isMenuFocused || isDetailVisible) && focusedProgram?.id == program.id,
                         modifier = Modifier
+                            .onKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
+                                    onBackPress()
+                                    true
+                                } else false
+                            }
                             .onFocusChanged { if (it.isFocused) focusedProgram = program }
-                            .then(if (focusedProgram?.id == program.id) Modifier.focusRequester(listItemReturnFocusRequester) else Modifier)
-                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(
+                                if (focusedProgram?.id == program.id) Modifier.focusRequester(
+                                    listItemReturnRequester
+                                ) else Modifier
+                            )
+                            // ★修正: 他から飛んでくるターゲットは、完全に表示されている一番上のアイテムに付与する
+                            .then(
+                                if (index == firstFullyVisibleIndex) Modifier.focusRequester(
+                                    firstItemFocusRequester
+                                ) else Modifier
+                            )
                             .focusProperties {
+                                // ★修正: 上へ飛び出せるのは「本当にリストの最初の要素(index 0)」のみに限定！
+                                // これで高速スクロール中に上へすっぽ抜ける現象がなくなります
                                 if (index == 0) {
-                                    up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                                    up =
+                                        if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
                                 }
+                                right = menuFirstItemRequester
                             }
                     )
                 }
@@ -130,9 +182,12 @@ fun RecordListContent(
                     .align(Alignment.CenterEnd)
                     .onFocusChanged { isMenuFocused = it.hasFocus }
                     .focusGroup()
-                    .focusProperties {
-                        left = listItemReturnFocusRequester
-                        if (isDetailVisible) up = FocusRequester.Cancel
+                    .focusProperties { left = listItemReturnRequester }
+                    .onKeyEvent { event ->
+                        if (isMenuFocused && !isDetailVisible && event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
+                            scope.launch { listItemReturnRequester.safeRequestFocus("BackFromSideMenuKey") }
+                            true
+                        } else false
                     },
                 colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.95f)),
                 shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
@@ -145,15 +200,13 @@ fun RecordListContent(
                         konomiPort = konomiPort,
                         focusRequester = detailPanelFocusRequester,
                         onClose = {
-                            listItemReturnFocusRequester.safeRequestFocus("DetailBack")
-                            isDetailVisible = false
+                            listItemReturnRequester.safeRequestFocus("BackFromDetailToListItem")
+                            onDetailStateChange(false)
                         },
                         modifier = Modifier.fillMaxSize()
                     )
-                    LaunchedEffect(Unit) { detailPanelFocusRequester.safeRequestFocus("DetailOpen") }
                 } else {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        // 左端中央に固定された「＜」マーク
                         if (isMenuFocused) {
                             Icon(
                                 imageVector = Icons.Filled.KeyboardArrowLeft,
@@ -166,24 +219,18 @@ fun RecordListContent(
                             )
                         }
 
-                        // メニュー項目
                         Column(
                             modifier = Modifier
                                 .fillMaxHeight()
-                                // ★修正: メニュー展開時のみパディングを適用し、閉じている時は中央に配置されるように
-                                .padding(
-                                    start = if (isMenuFocused) 36.dp else 0.dp,
-                                    end = if (isMenuFocused) 8.dp else 0.dp
-                                ),
+                                .padding(start = if (isMenuFocused) 36.dp else 0.dp, end = 8.dp),
                             verticalArrangement = Arrangement.Center,
-                            // ★修正: 閉じている時は中央揃え
                             horizontalAlignment = if (isMenuFocused) Alignment.Start else Alignment.CenterHorizontally
                         ) {
                             SideMenuItem(
                                 icon = Icons.Default.PlayArrow,
                                 label = "再生する",
                                 isExpanded = isMenuFocused,
-                                modifier = Modifier.focusRequester(menuFocusRequester),
+                                modifier = Modifier.focusRequester(menuFirstItemRequester),
                                 enabled = focusedProgram != null,
                                 onClick = { focusedProgram?.let { onProgramClick(it, null) } }
                             )
@@ -201,7 +248,8 @@ fun RecordListContent(
                                 label = "番組詳細",
                                 isExpanded = isMenuFocused,
                                 enabled = focusedProgram != null,
-                                onClick = { isDetailVisible = true })
+                                onClick = { onDetailStateChange(true) }
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
                             SideMenuItem(
                                 icon = Icons.Default.LibraryBooks,
@@ -210,9 +258,11 @@ fun RecordListContent(
                                 enabled = focusedProgram != null,
                                 onClick = {
                                     focusedProgram?.let {
-                                        isDetailVisible = false
-                                        val keyword = TitleNormalizer.extractSearchKeyword(it.title)
-                                        onSeriesSearch(keyword)
+                                        onSeriesSearch(
+                                            TitleNormalizer.extractSearchKeyword(
+                                                it.title
+                                            )
+                                        )
                                     }
                                 }
                             )
@@ -244,8 +294,7 @@ private fun SideMenuItem(
 ) {
     val colors = KomorebiTheme.colors
     Surface(
-        onClick = onClick,
-        enabled = enabled,
+        onClick = onClick, enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
             .height(44.dp)
@@ -263,7 +312,7 @@ private fun SideMenuItem(
                 .fillMaxSize()
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (isExpanded) Arrangement.Start else Arrangement.Center
+            horizontalArrangement = Arrangement.Start
         ) {
             Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(24.dp))
             if (isExpanded) {

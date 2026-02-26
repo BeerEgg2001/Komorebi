@@ -8,7 +8,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowRight // ★Filledに変更
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +33,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+// チャンネル種別ごとの定数値
 private val COLOR_GR = Color(0xFF1E88E5)
 private val COLOR_BS = Color(0xFFE53935)
 private val COLOR_CS = Color(0xFFFB8C00)
@@ -47,11 +48,16 @@ fun RecordListItem(
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    isPersistentFocused: Boolean = false
+    isPersistentFocused: Boolean = false // 右メニュー操作中もハイライトを維持するためのフラグ
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    val isAnalyzed = program.recordedVideo.hasKeyFrames
+
+    // 再生可能な状態か判定（キーフレームがあるか、または録画中か）
+    val isAnalyzed =
+        program.recordedVideo.hasKeyFrames || program.recordedVideo.status == "Recording"
+
+    // 自身がフォーカスされているか、または右メニュー操作中でハイライトを維持すべきか
     val isVisualFocused = isFocused || isPersistentFocused
 
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
@@ -79,6 +85,7 @@ fun RecordListItem(
     val secondaryTextColor =
         if (isVisualFocused) inverseColor.copy(alpha = 0.8f) else colors.textSecondary
 
+    // 日時フォーマット
     val displayDate = remember(program.startTime) {
         try {
             val zdt = ZonedDateTime.parse(program.startTime)
@@ -89,6 +96,7 @@ fun RecordListItem(
         }
     }
 
+    // 放送時間フォーマット
     val durationDisplay = remember(program.recordedVideo.duration) {
         val totalSec = program.recordedVideo.duration.toLong()
         val h = totalSec / 3600
@@ -111,9 +119,9 @@ fun RecordListItem(
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isPersistentFocused) colors.textPrimary else Color.Transparent,
+            containerColor = if (isVisualFocused) colors.textPrimary else Color.Transparent,
             focusedContainerColor = colors.textPrimary,
-            contentColor = if (isPersistentFocused) inverseColor else colors.textPrimary,
+            contentColor = if (isVisualFocused) inverseColor else colors.textPrimary,
             focusedContentColor = inverseColor
         ),
         border = ClickableSurfaceDefaults.border(
@@ -133,6 +141,7 @@ fun RecordListItem(
             modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // --- サムネイルエリア ---
             Box(
                 modifier = Modifier
                     .width(100.dp)
@@ -146,6 +155,7 @@ fun RecordListItem(
                     contentScale = ContentScale.Crop
                 )
 
+                // チャンネル種別ラベル
                 if (channelLabel.isNotEmpty()) {
                     Box(
                         modifier = Modifier
@@ -164,6 +174,7 @@ fun RecordListItem(
                     }
                 }
 
+                // 再生プログレスバー
                 if (currentPosition > 5) {
                     val totalDur = program.recordedVideo.duration
                     val progress =
@@ -190,6 +201,7 @@ fun RecordListItem(
 
             Spacer(modifier = Modifier.width(12.dp))
 
+            // --- 番組情報エリア ---
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -226,6 +238,7 @@ fun RecordListItem(
                         modifier = Modifier.weight(1f)
                     )
 
+                    // ステータス表示
                     if (program.isRecording) {
                         Text(
                             text = "録画中",
@@ -237,7 +250,7 @@ fun RecordListItem(
                     } else if (!isAnalyzed) {
                         Text(
                             text = "メタデータ解析中",
-                            color = if (isVisualFocused) inverseColor else COLOR_CS,
+                            color = if (isVisualFocused) inverseColor else Color(0xFFFB8C00), // COLOR_CS
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(start = 8.dp)
@@ -246,11 +259,12 @@ fun RecordListItem(
                 }
             }
 
-            // ★修正: フォーカス時のみ表示し、サイズを 32.dp に拡大
+            // --- メニュー誘導ガイド ---
+            // 直接フォーカス時のみ表示し、右キーでメニューが開けることを示唆
             if (isFocused) {
                 Icon(
                     imageVector = Icons.Filled.KeyboardArrowRight,
-                    contentDescription = null,
+                    contentDescription = "Menu",
                     tint = inverseColor.copy(alpha = 0.7f),
                     modifier = Modifier
                         .size(32.dp)

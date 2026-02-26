@@ -14,11 +14,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -35,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -48,6 +45,7 @@ fun RecordScreenTopBar(
     searchQuery: String,
     activeSearchQuery: String,
     currentDisplayTitle: String?,
+    searchHistory: List<String>,
     hasHistory: Boolean,
     isListView: Boolean,
     searchCloseButtonFocusRequester: FocusRequester,
@@ -65,10 +63,22 @@ fun RecordScreenTopBar(
     onViewToggle: () -> Unit,
     onKeyboardActiveClick: () -> Unit,
     onBackButtonFocusChanged: (Boolean) -> Unit,
-    modifier: Modifier = Modifier // ★引数を追加
+    modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    var isSearchInputFocused by remember { mutableStateOf(false) }
+    var isHistoryFocused by remember { mutableStateOf(false) }
+
+    // ★追加：履歴の最初のアイテムを直接狙い撃ちするためのRequester
+    val historyFirstItemFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(isSearchBarVisible) {
+        if (isSearchBarVisible) {
+            searchInputFocusRequester.safeRequestFocus(TAG)
+        }
+    }
 
     val iconButtonColors = IconButtonDefaults.colors(
         focusedContainerColor = colors.textPrimary,
@@ -76,124 +86,159 @@ fun RecordScreenTopBar(
         contentColor = colors.textPrimary
     )
 
-    // ★ 渡された modifier をルートの Box に適用
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(48.dp)
-    ) {
+    Box(modifier = modifier.fillMaxWidth()) {
         if (isSearchBarVisible) {
-            // ... (既存の検索バー実装: 変更なし)
-            Row(
-                modifier = Modifier.fillMaxSize(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { onBackPress() },
-                    modifier = Modifier.focusRequester(searchCloseButtonFocusRequester),
-                    colors = iconButtonColors
-                ) {
-                    Icon(Icons.Default.ArrowBack, "閉じる")
-                }
-                Spacer(Modifier.width(16.dp))
-
-                Surface(
-                    onClick = {
-                        onKeyboardActiveClick()
-                        innerTextFieldFocusRequester.safeRequestFocus(TAG)
-                        keyboardController?.show()
-                    },
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .focusRequester(searchInputFocusRequester)
-                        .onKeyEvent {
-                            if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                                if (hasHistory) {
-                                    historyListFocusRequester.safeRequestFocus(TAG)
-                                    return@onKeyEvent true
-                                } else {
-                                    firstItemFocusRequester.safeRequestFocus(TAG)
-                                    return@onKeyEvent true
-                                }
-                            }
-                            false
-                        }
-                        .focusProperties {
-                            left = searchCloseButtonFocusRequester
-                            down = if (hasHistory) historyListFocusRequester else firstItemFocusRequester
-                        },
-                    colors = ClickableSurfaceDefaults.colors(
-                        containerColor = colors.textPrimary.copy(alpha = 0.1f),
-                        focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f)
-                    ),
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
-                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                    border = ClickableSurfaceDefaults.border(
-                        border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.3f))),
-                        focusedBorder = Border(BorderStroke(2.dp, colors.accent))
-                    )
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        contentAlignment = Alignment.CenterStart,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp)
+                    IconButton(
+                        onClick = { onBackPress() },
+                        modifier = Modifier.focusRequester(searchCloseButtonFocusRequester),
+                        colors = iconButtonColors
                     ) {
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = onSearchQueryChange,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(innerTextFieldFocusRequester),
-                            textStyle = TextStyle(color = colors.textPrimary, fontSize = 20.sp),
-                            cursorBrush = SolidColor(colors.textPrimary),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = {
-                                onExecuteSearch(searchQuery)
-                            }),
-                            decorationBox = { innerTextField ->
-                                Box(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    if (searchQuery.isEmpty()) {
-                                        Text(
-                                            text = "番組名を検索...",
-                                            color = colors.textSecondary,
-                                            fontSize = 18.sp
-                                        )
+                        Icon(Icons.Default.ArrowBack, "閉じる")
+                    }
+
+                    Spacer(Modifier.width(16.dp))
+
+                    Surface(
+                        onClick = {
+                            onKeyboardActiveClick()
+                            innerTextFieldFocusRequester.safeRequestFocus(TAG)
+                            keyboardController?.show()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .focusRequester(searchInputFocusRequester)
+                            .onFocusChanged { isSearchInputFocused = it.isFocused || it.hasFocus }
+                            .onKeyEvent {
+                                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                                    if (hasHistory) {
+                                        // ★修正：リスト全体ではなく最初のアイテムに飛ばす
+                                        historyFirstItemFocusRequester.safeRequestFocus(TAG)
+                                        return@onKeyEvent true
+                                    } else {
+                                        firstItemFocusRequester.safeRequestFocus(TAG)
+                                        return@onKeyEvent true
                                     }
-                                    innerTextField()
                                 }
+                                false
                             }
+                            .focusProperties {
+                                left = searchCloseButtonFocusRequester
+                                // ★修正：下方向も最初のアイテムを明示
+                                down =
+                                    if (hasHistory) historyFirstItemFocusRequester else firstItemFocusRequester
+                            },
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            focusedContainerColor = colors.textPrimary.copy(alpha = 0.15f)
+                        ),
+                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                        border = ClickableSurfaceDefaults.border(
+                            border = Border(
+                                BorderStroke(
+                                    1.dp,
+                                    colors.textPrimary.copy(alpha = 0.3f)
+                                )
+                            ),
+                            focusedBorder = Border(BorderStroke(2.dp, colors.accent))
                         )
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.CenterStart,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = onSearchQueryChange,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(innerTextFieldFocusRequester)
+                                    .onFocusChanged {
+                                        if (it.isFocused) isSearchInputFocused = true
+                                    },
+                                textStyle = TextStyle(color = colors.textPrimary, fontSize = 20.sp),
+                                cursorBrush = SolidColor(colors.textPrimary),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = {
+                                    onExecuteSearch(searchQuery)
+                                }),
+                                decorationBox = { innerTextField ->
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                text = "番組名を検索...",
+                                                color = colors.textSecondary,
+                                                fontSize = 18.sp
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.width(16.dp))
+
+                    IconButton(
+                        onClick = { onExecuteSearch(searchQuery) },
+                        colors = iconButtonColors
+                    ) {
+                        Icon(Icons.Default.Search, "検索実行")
                     }
                 }
-                Spacer(Modifier.width(16.dp))
-                IconButton(
-                    onClick = { onExecuteSearch(searchQuery) },
-                    colors = iconButtonColors
-                ) {
-                    Icon(Icons.Default.Search, "検索実行")
+
+                if ((isSearchInputFocused || isHistoryFocused) && searchHistory.isNotEmpty()) {
+                    RecordSearchHistoryDropdown(
+                        limitedHistory = searchHistory.take(5),
+                        historyListFocusRequester = historyListFocusRequester,
+                        historyFirstItemFocusRequester = historyFirstItemFocusRequester, // ★追加
+                        searchInputFocusRequester = searchInputFocusRequester,
+                        firstItemFocusRequester = firstItemFocusRequester,
+                        onExecuteSearch = onExecuteSearch,
+                        onFocusChanged = { isHistoryFocused = it },
+                        modifier = Modifier
+                            .zIndex(100f)
+                            .padding(top = 48.dp, start = 64.dp, end = 64.dp)
+                    )
                 }
             }
         } else {
-            // ... (既存の通常バー実装: 変更なし)
+            // タイトルモード（変更なし）
             Row(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
                     onClick = { onBackPress() },
                     modifier = Modifier
                         .focusRequester(backButtonFocusRequester)
-                        .onFocusChanged { onBackButtonFocusChanged(it.isFocused) },
+                        .onFocusChanged { onBackButtonFocusChanged(it.isFocused) }
+                        .focusProperties {
+                            down = firstItemFocusRequester
+                            left = FocusRequester.Cancel
+                        },
                     colors = iconButtonColors
                 ) {
                     Icon(Icons.Default.ArrowBack, "戻る")
                 }
+
                 Spacer(Modifier.width(16.dp))
 
                 Text(
@@ -211,7 +256,8 @@ fun RecordScreenTopBar(
                     onClick = onViewToggle,
                     modifier = Modifier
                         .focusRequester(viewToggleButtonFocusRequester)
-                        .onFocusChanged { isToggleFocused = it.isFocused },
+                        .onFocusChanged { isToggleFocused = it.isFocused }
+                        .focusProperties { down = firstItemFocusRequester },
                     shape = ClickableSurfaceDefaults.shape(CircleShape),
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = colors.textPrimary.copy(alpha = 0.1f),
@@ -225,8 +271,12 @@ fun RecordScreenTopBar(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val activeTint = if (isToggleFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
-                        val inactiveTint = if (isToggleFocused) (if (colors.isDark) Color.Black.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.4f)) else colors.textPrimary.copy(alpha = 0.4f)
+                        val activeTint =
+                            if (isToggleFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
+                        val inactiveTint =
+                            if (isToggleFocused) (if (colors.isDark) Color.Black.copy(alpha = 0.4f) else Color.White.copy(
+                                alpha = 0.4f
+                            )) else colors.textPrimary.copy(alpha = 0.4f)
 
                         Icon(
                             imageVector = Icons.Default.List,
@@ -254,7 +304,9 @@ fun RecordScreenTopBar(
 
                 IconButton(
                     onClick = onSearchOpen,
-                    modifier = Modifier.focusRequester(searchOpenButtonFocusRequester),
+                    modifier = Modifier
+                        .focusRequester(searchOpenButtonFocusRequester)
+                        .focusProperties { down = firstItemFocusRequester },
                     colors = iconButtonColors
                 ) {
                     Icon(Icons.Default.Search, "検索")

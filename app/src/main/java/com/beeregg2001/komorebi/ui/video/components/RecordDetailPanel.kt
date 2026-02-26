@@ -8,7 +8,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft // ★追加
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,7 +42,7 @@ fun RecordDetailPanel(
     konomiIp: String,
     konomiPort: String,
     focusRequester: FocusRequester,
-    onClose: () -> Unit, // ★追加: 戻る操作用コールバック
+    onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
@@ -63,24 +63,26 @@ fun RecordDetailPanel(
         }
     }
 
-    // ★Boxで包んで、矢印を固定配置
     Box(
         modifier = modifier
             .focusRequester(focusRequester)
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
-                        // ★左キーでリストに戻る
-                        Key.DirectionLeft -> {
-                            onClose(); true
+                        // ★修正: 左キーだけでなく、戻るキーでも確実に閉じる
+                        Key.DirectionLeft, Key.Back, Key.Escape -> {
+                            onClose()
+                            true
                         }
 
                         Key.DirectionDown -> {
-                            coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; true
+                            coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
+                            true
                         }
 
                         Key.DirectionUp -> {
-                            coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; true
+                            coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
+                            true
                         }
 
                         else -> false
@@ -89,7 +91,6 @@ fun RecordDetailPanel(
             }
             .focusable()
     ) {
-        // ★固定配置の「＜」マーク
         Icon(
             imageVector = Icons.Filled.KeyboardArrowLeft,
             contentDescription = null,
@@ -100,7 +101,6 @@ fun RecordDetailPanel(
                 .size(32.dp)
         )
 
-        // スクロール可能な詳細コンテンツ
         Column(
             modifier = Modifier
                 .fillMaxSize()

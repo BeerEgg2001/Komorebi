@@ -5,7 +5,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft // ★追加
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,139 +19,140 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.tv.foundation.lazy.grid.TvGridCells
+import androidx.tv.foundation.lazy.grid.TvLazyGridState
 import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import androidx.tv.foundation.lazy.grid.itemsIndexed
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.itemsIndexed
+import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.*
-import com.beeregg2001.komorebi.data.util.EpgUtils
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun RecordSeriesContent(
-    groupedSeries: Map<String, List<Pair<String, String>>>,
+    seriesList: List<Pair<String, String>>,
     isLoading: Boolean,
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     isListView: Boolean,
-    firstItemFocusRequester: FocusRequester,
+    firstItemFocusRequester: FocusRequester, // ★元通りアイテム用のRequesterとして使用
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
-    isSearchBarVisible: Boolean
+    isSearchBarVisible: Boolean,
+    onBackPress: () -> Unit,
+    gridState: TvLazyGridState = rememberTvLazyGridState(),
+    onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
-    var selectedGenre by remember(groupedSeries) { mutableStateOf(groupedSeries.keys.firstOrNull()) }
-    val firstGenreRequester = remember { FocusRequester() }
 
-    if (isLoading && groupedSeries.isEmpty()) {
+    // ★重要: 現在「完全に」画面に表示されている最上位のアイテムのインデックスを計算する
+    val firstFullyVisibleIndex by remember {
+        derivedStateOf {
+            val layoutInfo = gridState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) -1
+            else {
+                val first = visibleItems.first()
+                // アイテムの上端が画面外に少しでも隠れていて、次にアイテムがある場合は完全に見えている行の先頭を取得
+                if (first.offset.y < 0) {
+                    visibleItems.firstOrNull { it.offset.y >= 0 }?.index ?: first.index
+                } else {
+                    first.index
+                }
+            }
+        }
+    }
+
+    val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+
+    LaunchedEffect(isListReady) {
+        onFirstItemBound(isListReady)
+    }
+
+    if (isLoading && seriesList.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = colors.textPrimary)
         }
         return
     }
 
-    // 全体をBoxで包み、アイコンを重ねられるようにする
     Box(modifier = Modifier.fillMaxSize()) {
-        // --- メインコンテンツ ---
-        Column(modifier = Modifier.fillMaxSize()) {
-            // 1. ジャンル選択チップ
-            TvLazyRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                itemsIndexed(groupedSeries.keys.toList()) { index, genre ->
-                    val genreColor = EpgUtils.getGenreColor(genre)
-                    val inverseColor = if (colors.isDark) Color.Black else Color.White
+        TvLazyVerticalGrid(
+            state = gridState,
+            columns = TvGridCells.Fixed(3),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(
+                start = 12.dp,
+                top = 16.dp,
+                end = 12.dp,
+                bottom = 32.dp
+            ),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            itemsIndexed(seriesList) { index, pair ->
+                var isFocused by remember { mutableStateOf(false) }
 
-                    FilterChip(
-                        selected = selectedGenre == genre,
-                        onClick = { selectedGenre = genre },
-                        modifier = Modifier
-                            .then(if (index == 0) Modifier.focusRequester(firstGenreRequester) else Modifier)
-                            .focusProperties {
-                                up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-                                down = firstItemFocusRequester
-                            }
-                            .onKeyEvent { event ->
-                                if (!isListView && event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index == 0) {
-                                    onOpenNavPane()
-                                    true
-                                } else false
-                            },
-                        scale = FilterChipDefaults.scale(focusedScale = 1.05f),
-                        colors = FilterChipDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.05f),
-                            contentColor = colors.textSecondary,
-                            focusedContainerColor = colors.textPrimary,
-                            focusedContentColor = inverseColor,
-                            selectedContainerColor = genreColor.copy(alpha = 0.2f),
-                            selectedContentColor = colors.textPrimary,
-                            focusedSelectedContainerColor = colors.textPrimary,
-                            focusedSelectedContentColor = inverseColor
-                        ),
-                        border = FilterChipDefaults.border(
-                            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f))),
-                            focusedBorder = Border(BorderStroke(2.dp, colors.accent)),
-                            selectedBorder = Border(BorderStroke(1.dp, genreColor))
+                Surface(
+                    onClick = { onSeriesClick(pair.second) },
+                    modifier = Modifier
+                        .onFocusChanged { isFocused = it.isFocused }
+                        // ★修正: 他から飛んでくるターゲットは、完全に表示されている一番上のアイテムに付与する
+                        .then(
+                            if (index == firstFullyVisibleIndex) Modifier.focusRequester(
+                                firstItemFocusRequester
+                            ) else Modifier
                         )
-                    ) {
-                        Text(text = genre)
-                    }
+                        .focusProperties {
+                            // ★修正: 上へ飛び出せるのは「本当にリストの先頭行(indexが3未満)」のみ！
+                            // 高速スクロール中にワープするのを防ぎます
+                            if (index < 3) {
+                                up =
+                                    if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                            }
+                        }
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
+                                onBackPress()
+                                true
+                            } else if (!isListView && event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index % 3 == 0) {
+                                onOpenNavPane()
+                                true
+                            } else false
+                        },
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = colors.textPrimary.copy(alpha = 0.05f),
+                        focusedContainerColor = colors.textPrimary,
+                        contentColor = colors.textPrimary,
+                        focusedContentColor = if (colors.isDark) Color.Black else Color.White
+                    ),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                    border = ClickableSurfaceDefaults.border(
+                        focusedBorder = Border(BorderStroke(2.dp, colors.accent))
+                    )
+                ) {
+                    Text(
+                        text = pair.first, modifier = Modifier
+                            .padding(16.dp)
+                            .then(if (isFocused) Modifier.basicMarquee() else Modifier),
+                        maxLines = 1, style = MaterialTheme.typography.titleMedium
+                    )
                 }
             }
+        }
 
-            // 2. 作品名グリッド
-            TvLazyVerticalGrid(
-                columns = TvGridCells.Fixed(3),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 32.dp),
-                modifier = Modifier.weight(1f)
+        if (!isListView) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .align(Alignment.CenterStart)
+                    .width(28.dp),
+                contentAlignment = Alignment.Center
             ) {
-                val seriesList = groupedSeries[selectedGenre] ?: emptyList()
-                itemsIndexed(seriesList) { index, pair ->
-                    var isFocused by remember { mutableStateOf(false) }
-
-                    Surface(
-                        onClick = { onSeriesClick(pair.second) },
-                        modifier = Modifier
-                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                            .onFocusChanged { isFocused = it.isFocused }
-                            .focusProperties {
-                                if (index < 3) {
-                                    up = firstGenreRequester
-                                }
-                            }
-                            .onKeyEvent { event ->
-                                if (!isListView && event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index % 3 == 0) {
-                                    onOpenNavPane()
-                                    true
-                                } else false
-                            },
-                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.05f),
-                            focusedContainerColor = colors.textPrimary,
-                            contentColor = colors.textPrimary,
-                            focusedContentColor = if (colors.isDark) Color.Black else Color.White
-                        ),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        border = ClickableSurfaceDefaults.border(
-                            focusedBorder = Border(BorderStroke(2.dp, colors.accent))
-                        )
-                    ) {
-                        Text(
-                            text = pair.first,
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .then(if (isFocused) Modifier.basicMarquee() else Modifier),
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                }
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowLeft, contentDescription = null,
+                    tint = colors.textPrimary.copy(alpha = 0.5f), modifier = Modifier.size(40.dp)
+                )
             }
         }
     }
