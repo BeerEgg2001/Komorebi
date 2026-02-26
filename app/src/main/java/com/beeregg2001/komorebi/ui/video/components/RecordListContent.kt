@@ -144,6 +144,10 @@ fun RecordListContent(
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         focusRequester = detailPanelFocusRequester,
+                        onClose = {
+                            listItemReturnFocusRequester.safeRequestFocus("DetailBack")
+                            isDetailVisible = false
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                     LaunchedEffect(Unit) { detailPanelFocusRequester.safeRequestFocus("DetailOpen") }

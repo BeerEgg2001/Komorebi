@@ -17,6 +17,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
+import androidx.compose.ui.input.key.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -36,7 +37,8 @@ fun RecordGridContent(
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit, // ★修正: シグネチャを統一
-    onLoadMore: () -> Unit
+    onLoadMore: () -> Unit,
+    onOpenNavPane: () -> Unit // ★追加
 ) {
     val colors = KomorebiTheme.colors
 
@@ -86,6 +88,13 @@ fun RecordGridContent(
                             if (index < 4) {
                                 up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
                             }
+                        }
+                        .onKeyEvent { event ->
+                            // ★一番左の列(4列なら index % 4 == 0)で左キーが押されたらメニュー起動
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index % 4 == 0) {
+                                onOpenNavPane()
+                                true
+                            } else false
                         }
                 )
             }

@@ -49,7 +49,7 @@ fun RecordScreenTopBar(
     activeSearchQuery: String,
     currentDisplayTitle: String?,
     hasHistory: Boolean,
-    isListView: Boolean, // ★追加: 現在の表示モード
+    isListView: Boolean,
     searchCloseButtonFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     innerTextFieldFocusRequester: FocusRequester,
@@ -57,14 +57,15 @@ fun RecordScreenTopBar(
     firstItemFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     searchOpenButtonFocusRequester: FocusRequester,
-    viewToggleButtonFocusRequester: FocusRequester, // ★追加: トグルボタン用のFocusRequester
+    viewToggleButtonFocusRequester: FocusRequester,
     onSearchQueryChange: (String) -> Unit,
     onExecuteSearch: (String) -> Unit,
     onBackPress: () -> Unit,
     onSearchOpen: () -> Unit,
-    onViewToggle: () -> Unit, // ★追加: 切り替えアクション
+    onViewToggle: () -> Unit,
     onKeyboardActiveClick: () -> Unit,
-    onBackButtonFocusChanged: (Boolean) -> Unit
+    onBackButtonFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier // ★引数を追加
 ) {
     val colors = KomorebiTheme.colors
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -75,12 +76,14 @@ fun RecordScreenTopBar(
         contentColor = colors.textPrimary
     )
 
+    // ★ 渡された modifier をルートの Box に適用
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
     ) {
         if (isSearchBarVisible) {
+            // ... (既存の検索バー実装: 変更なし)
             Row(
                 modifier = Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically
@@ -177,6 +180,7 @@ fun RecordScreenTopBar(
                 }
             }
         } else {
+            // ... (既存の通常バー実装: 変更なし)
             Row(
                 modifier = Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically
@@ -199,17 +203,16 @@ fun RecordScreenTopBar(
                     fontSize = 20.sp,
                     color = colors.textPrimary,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f) // ここが余白を埋めるため、以降の要素は右寄せになります
+                    modifier = Modifier.weight(1f)
                 )
 
-                // ★追加: リスト/グリッド表示切り替えトグルボタン (ピル型)
                 var isToggleFocused by remember { mutableStateOf(false) }
                 Surface(
                     onClick = onViewToggle,
                     modifier = Modifier
                         .focusRequester(viewToggleButtonFocusRequester)
                         .onFocusChanged { isToggleFocused = it.isFocused },
-                    shape = ClickableSurfaceDefaults.shape(CircleShape), // 横幅が高さより大きいのでピル型になります
+                    shape = ClickableSurfaceDefaults.shape(CircleShape),
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = colors.textPrimary.copy(alpha = 0.1f),
                         focusedContainerColor = colors.textPrimary,
@@ -222,7 +225,6 @@ fun RecordScreenTopBar(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // フォーカス状態と現在のモードに応じて色を計算
                         val activeTint = if (isToggleFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
                         val inactiveTint = if (isToggleFocused) (if (colors.isDark) Color.Black.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.4f)) else colors.textPrimary.copy(alpha = 0.4f)
 

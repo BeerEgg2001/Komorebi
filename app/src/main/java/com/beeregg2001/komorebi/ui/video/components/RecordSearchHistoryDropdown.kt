@@ -39,8 +39,7 @@ fun RecordSearchHistoryDropdown(
 
     Box(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 64.dp)
+            .fillMaxWidth() // 親側で padding(horizontal) が指定されるため、これで検索バーと一致する
             .background(
                 colors.surface,
                 RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
@@ -54,23 +53,29 @@ fun RecordSearchHistoryDropdown(
         TvLazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 320.dp)
+                .focusRequester(historyListFocusRequester)
         ) {
-            itemsIndexed(
-                items = limitedHistory,
-                contentType = { _, _ -> "HistoryItem" }
-            ) { index, historyItem ->
+            itemsIndexed(limitedHistory) { index, historyItem ->
                 Surface(
                     onClick = { onExecuteSearch(historyItem) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(
-                            if (index == 0) Modifier.focusRequester(historyListFocusRequester) else Modifier
-                        )
-                        .onKeyEvent {
-                            if (index == 0 && it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) {
-                                searchInputFocusRequester.safeRequestFocus(TAG)
-                                return@onKeyEvent true
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown) {
+                                when (event.key) {
+                                    Key.DirectionUp -> {
+                                        if (index == 0) {
+                                            searchInputFocusRequester.safeRequestFocus(TAG)
+                                            return@onKeyEvent true
+                                        }
+                                    }
+                                    Key.DirectionDown -> {
+                                        if (index == limitedHistory.size - 1) {
+                                            firstItemFocusRequester.safeRequestFocus(TAG)
+                                            return@onKeyEvent true
+                                        }
+                                    }
+                                }
                             }
                             false
                         }
@@ -87,20 +92,23 @@ fun RecordSearchHistoryDropdown(
                     )
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             Icons.Default.History,
                             null,
-                            Modifier.size(18.dp),
+                            Modifier.size(20.dp),
                             tint = colors.textSecondary
                         )
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(16.dp))
                         Text(
                             text = historyItem,
                             color = colors.textPrimary,
-                            fontSize = 16.sp
+                            fontSize = 18.sp,
+                            maxLines = 1
                         )
                     }
                 }
