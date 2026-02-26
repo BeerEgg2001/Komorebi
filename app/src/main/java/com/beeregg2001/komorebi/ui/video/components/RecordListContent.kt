@@ -1,9 +1,13 @@
 package com.beeregg2001.komorebi.ui.video.components
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
@@ -13,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -25,9 +30,11 @@ import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
+@RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun RecordListContent(
@@ -47,61 +54,70 @@ fun RecordListContent(
     val colors = KomorebiTheme.colors
     val listState = rememberTvLazyListState()
 
-    // サブメニューのフォーカス管理用
+    var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var isMenuFocused by remember { mutableStateOf(false) }
-    val menuFocusRequester = remember { FocusRequester() }
+    var isDetailVisible by remember { mutableStateOf(false) }
 
-    // サブメニューの幅（フォーカスが当たったら広がる）
-    val menuWidth by animateDpAsState(
-        targetValue = if (isMenuFocused) 200.dp else 64.dp,
-        animationSpec = tween(durationMillis = 200), label = "MenuWidth"
+    val menuFocusRequester = remember { FocusRequester() }
+    val detailPanelFocusRequester = remember { FocusRequester() }
+
+    // ★修正: 詳細を閉じた際に安全にフォーカスを戻す
+    LaunchedEffect(isDetailVisible) {
+        if (!isDetailVisible && isMenuFocused) {
+            // UIの更新を待ってから、安全にメニューの「詳細ボタン」へ戻す
+            menuFocusRequester.safeRequestFocus("DetailClose")
+        }
+    }
+
+    androidx.activity.compose.BackHandler(enabled = isDetailVisible) {
+        isDetailVisible = false
+    }
+
+    // ★パネル幅をさらにスリム化 (詳細時: 320dp)
+    val panelWidth by animateDpAsState(
+        targetValue = when {
+            isDetailVisible -> 320.dp
+            isMenuFocused -> 180.dp
+            else -> 48.dp
+        },
+        animationSpec = tween(durationMillis = 250), label = "PanelWidth"
     )
 
     if (isLoadingInitial && recentRecordings.isEmpty()) {
-        Box(
-            Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) { CircularProgressIndicator(color = colors.textPrimary) }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = colors.textPrimary)
+        }
     } else {
-        Row(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // メインのリスト領域
+        // ★RowをBoxに変更してオーバーレイ構造を実現
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 1. 下層: リスト領域 (全画面)
             TvLazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
+                // メニューに隠れないよう右側に余白を確保
+                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 64.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxSize()
                     .focusProperties {
                         if (isSearchBarVisible || isKeyboardActive) {
                             enter = { FocusRequester.Cancel }
                         }
-                        right = menuFocusRequester // 右キーでサブメニューへ
+                        right = if (isDetailVisible) FocusRequester.Cancel else menuFocusRequester
                     }
             ) {
-                itemsIndexed(
-                    items = recentRecordings,
-                    key = { _, item -> item.id },
-                    contentType = { _, _ -> "RecordListItem" }
-                ) { index, program ->
-
+                itemsIndexed(recentRecordings, key = { _, item -> item.id }) { index, program ->
                     LaunchedEffect(index) {
-                        if (!isLoadingMore && index >= recentRecordings.size - 4) {
-                            onLoadMore()
-                        }
+                        if (!isLoadingMore && index >= recentRecordings.size - 4) { onLoadMore() }
                     }
-
                     RecordListItem(
                         program = program,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         onClick = { onProgramClick(program) },
+                        // 詳細表示中もリストのハイライトを維持
+                        isPersistentFocused = (isMenuFocused || isDetailVisible) && focusedProgram?.id == program.id,
                         modifier = Modifier
-                            .then(
-                                if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                            )
+                            .onFocusChanged { if (it.isFocused) focusedProgram = program }
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
                             .focusProperties {
                                 if (index == 0) {
                                     up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -109,54 +125,67 @@ fun RecordListContent(
                             }
                     )
                 }
-                if (isLoadingMore) {
-                    item(contentType = "LoadingIndicator") {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(80.dp),
-                            contentAlignment = Alignment.Center
-                        ) { CircularProgressIndicator(color = colors.textPrimary) }
-                    }
-                }
             }
 
-            // 右側のサブメニューペイン
-            Column(
+            // 2. 上層: オーバーレイペイン
+            Surface(
                 modifier = Modifier
-                    .width(menuWidth)
+                    .width(panelWidth)
                     .fillMaxHeight()
-                    .background(colors.surface.copy(alpha = 0.5f))
-                    .padding(vertical = 16.dp, horizontal = 8.dp)
-                    .onFocusChanged { isMenuFocused = it.hasFocus } // Column内の要素がフォーカスを持ったら広げる
+                    .align(Alignment.CenterEnd) // 右端固定
+                    .onFocusChanged { isMenuFocused = it.hasFocus },
+                colors = SurfaceDefaults.colors(
+                    containerColor = colors.surface.copy(alpha = 0.95f) // リストが透けるように調整
+                ),
+                shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+                border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
             ) {
-                // 仮のメニュー項目
-                SideMenuItem(
-                    icon = Icons.Default.PlayArrow,
-                    label = "再生する",
-                    isExpanded = isMenuFocused,
-                    modifier = Modifier.focusRequester(menuFocusRequester),
-                    onClick = { /* TODO */ }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SideMenuItem(
-                    icon = Icons.Default.Info,
-                    label = "番組詳細",
-                    isExpanded = isMenuFocused,
-                    onClick = { /* TODO */ }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SideMenuItem(
-                    icon = Icons.Default.Delete,
-                    label = "削除する",
-                    isExpanded = isMenuFocused,
-                    onClick = { /* TODO */ }
-                )
+                if (isDetailVisible) {
+                    // ★詳細パネル (スクロール可能)
+                    RecordDetailPanel(
+                        program = focusedProgram,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        focusRequester = detailPanelFocusRequester,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    // 表示されたら強制的にフォーカスさせてスクロールを有効化
+                    LaunchedEffect(Unit) {
+                        detailPanelFocusRequester.safeRequestFocus("DetailOpen")
+                    }
+                } else {
+                    // サブメニュー (通常モード)
+                    Column(modifier = Modifier.padding(vertical = 16.dp, horizontal = 4.dp)) {
+                        SideMenuItem(
+                            icon = Icons.Default.PlayArrow,
+                            label = "再生する",
+                            isExpanded = isMenuFocused,
+                            modifier = Modifier.focusRequester(menuFocusRequester),
+                            enabled = focusedProgram != null,
+                            onClick = { focusedProgram?.let { onProgramClick(it) } }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SideMenuItem(
+                            icon = Icons.Default.Info,
+                            label = "番組詳細",
+                            isExpanded = isMenuFocused,
+                            enabled = focusedProgram != null,
+                            onClick = { isDetailVisible = true }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SideMenuItem(
+                            icon = Icons.Default.Delete,
+                            label = "削除する",
+                            isExpanded = isMenuFocused,
+                            enabled = false,
+                            onClick = { }
+                        )
+                    }
+                }
             }
         }
     }
 }
-
 // サブメニューの各ボタン
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -165,28 +194,34 @@ private fun SideMenuItem(
     label: String,
     isExpanded: Boolean,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true, // 有効・無効の状態を追加
     onClick: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
 
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp),
+            .height(40.dp)
+            .alpha(if (enabled) 1f else 0.5f), // 無効時は半透明にして視覚的に伝える
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             focusedContainerColor = colors.textPrimary,
             contentColor = colors.textPrimary,
-            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = colors.textSecondary
         ),
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (isExpanded) Arrangement.Start else Arrangement.Center
         ) {
             Icon(
                 imageVector = icon,
@@ -194,11 +229,11 @@ private fun SideMenuItem(
                 modifier = Modifier.size(24.dp)
             )
             if (isExpanded) {
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelLarge,
-                    fontSize = 16.sp,
+                    fontSize = 14.sp,
                     maxLines = 1
                 )
             }
