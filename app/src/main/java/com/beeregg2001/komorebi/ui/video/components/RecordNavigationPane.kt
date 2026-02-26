@@ -1,13 +1,15 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.* // ★追加
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
@@ -43,11 +45,12 @@ fun RecordNavigationPane(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.Start
         ) {
-            RecordCategory.values().forEach { category ->
+            RecordCategory.values().forEachIndexed { index, category ->
                 NavigationItem(
                     category = category,
                     isSelected = selectedCategory == category,
-                    isOverlay = isOverlay, // ★追加
+                    isOverlay = isOverlay,
+                    modifier = if (index == 0) Modifier.padding(top = 0.dp) else Modifier,
                     onClick = { onCategorySelect(category) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -61,25 +64,25 @@ fun RecordNavigationPane(
 private fun NavigationItem(
     category: RecordCategory,
     isSelected: Boolean,
-    isOverlay: Boolean, // ★追加
+    isOverlay: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
 
     Surface(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
             .padding(horizontal = 12.dp)
-            // ★追加: 右キーで決定して閉じる挙動
+            .onFocusChanged { isFocused = it.isFocused }
             .onKeyEvent { event ->
                 if (isOverlay && event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
-                    onClick() // 選択を確定させる
+                    onClick()
                     true
-                } else {
-                    false
-                }
+                } else false
             },
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (isSelected) colors.accent.copy(alpha = 0.2f) else Color.Transparent,
@@ -105,7 +108,9 @@ private fun NavigationItem(
                 text = category.label,
                 fontSize = 15.sp,
                 maxLines = 1,
-                style = MaterialTheme.typography.labelLarge
+                style = MaterialTheme.typography.labelLarge,
+                // ★フォーカス時のみマーキーを有効化
+                modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier)
             )
         }
     }

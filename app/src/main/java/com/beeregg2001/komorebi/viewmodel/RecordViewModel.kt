@@ -39,16 +39,25 @@ class RecordViewModel @Inject constructor(
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
 
-    // UIに表示するフィルタリング済みのリスト
-    val recentRecordings: StateFlow<List<RecordedProgram>> = combine(_allRecordings, _selectedCategory) { recordings, category ->
-        Log.d(TAG, "Filtering logic started: Category=${category.name}, DataSize=${recordings.size}")
+    private val _selectedGenre = MutableStateFlow<String?>(null)
+    val selectedGenre: StateFlow<String?> = _selectedGenre.asStateFlow()
 
+    val recentRecordings: StateFlow<List<RecordedProgram>> = combine(
+        _allRecordings,
+        _selectedCategory,
+        _selectedGenre
+    ) { recordings, category, genre ->
         when (category) {
             RecordCategory.ALL -> recordings
             RecordCategory.UNWATCHED -> {
-                val filtered = recordings.filter { it.playbackPosition < 5.0 }
-                Log.d(TAG, "Unwatched result: ${filtered.size} items")
-                filtered
+                recordings.filter { it.playbackPosition < 5.0 }
+            }
+            RecordCategory.GENRE -> {
+                // ★修正: ジャンルが空文字列またはnullの場合はフィルタリングせず全件表示
+                if (genre.isNullOrEmpty()) recordings
+                else recordings.filter { prog ->
+                    prog.genres?.any { g -> g.major == genre } == true
+                }
             }
             else -> recordings
         }
@@ -62,6 +71,13 @@ class RecordViewModel @Inject constructor(
 
     private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
     val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
+
+    val availableGenres: StateFlow<List<String>> = _allRecordings.map { recordings ->
+        recordings.flatMap { it.genres ?: emptyList() }
+            .map { it.major }
+            .distinct()
+            .sorted()
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
@@ -81,10 +97,14 @@ class RecordViewModel @Inject constructor(
     }
 
     fun updateCategory(category: RecordCategory) {
-        Log.i(TAG, "Category changed: ${category.name}")
         if (_selectedCategory.value == category) return
         _selectedCategory.value = category
+        _selectedGenre.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
+    }
+
+    fun updateGenre(genre: String?) {
+        _selectedGenre.value = genre
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
@@ -96,8 +116,8 @@ class RecordViewModel @Inject constructor(
     fun searchRecordings(query: String) {
         currentSearchQuery = query
         if (query.isNotBlank()) addSearchHistory(query)
-        // 検索時は自動的に「全て」のカテゴリに戻す
         _selectedCategory.value = RecordCategory.ALL
+        _selectedGenre.value = null
         fetchInitialRecordings(clearData = true)
     }
 
@@ -116,13 +136,9 @@ class RecordViewModel @Inject constructor(
 
                 totalItems = response.total
                 val programs = response.recordedPrograms
-
-                // ★修正: associateByの代わりにassociateを使用し、型を明示
                 val ids = programs.map { it.id }
                 val historyEntities = repository.getHistoryEntitiesByIds(ids)
                 val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition }
-
-                Log.d(TAG, "Initial load: Mapped ${historyMap.size} history items")
 
                 val initialList = programs.map { program ->
                     program.copy(
@@ -158,8 +174,6 @@ class RecordViewModel @Inject constructor(
                 val programs = response.recordedPrograms
                 val ids = programs.map { it.id }
                 val historyEntities = repository.getHistoryEntitiesByIds(ids)
-
-                // ★修正: ここも型を明示
                 val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition}
 
                 val newItems = programs.map { program ->
