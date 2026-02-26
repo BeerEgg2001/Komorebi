@@ -1,6 +1,11 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells // ★標準のGridCellsを使用
+import androidx.compose.foundation.lazy.grid.GridItemSpan // ★標準のGridItemSpanを使用
+import androidx.compose.foundation.lazy.grid.LazyGridState // ★標準のLazyGridStateを使用
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid // ★標準のLazyVerticalGridを使用
+import androidx.compose.foundation.lazy.grid.itemsIndexed // ★標準のitemsIndexedを使用
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -11,7 +16,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.grid.*
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -24,13 +29,13 @@ fun RecordGridContent(
     isLoadingMore: Boolean,
     konomiIp: String,
     konomiPort: String,
-    gridState: TvLazyGridState,
+    gridState: LazyGridState, // ★修正: 標準のStateを受け取る
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
-    onProgramClick: (RecordedProgram) -> Unit,
+    onProgramClick: (RecordedProgram, Double?) -> Unit, // ★修正: シグネチャを統一
     onLoadMore: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
@@ -41,9 +46,10 @@ fun RecordGridContent(
             contentAlignment = Alignment.Center
         ) { CircularProgressIndicator(color = colors.textPrimary) }
     } else {
-        TvLazyVerticalGrid(
+        // ★修正: TvLazyVerticalGrid から標準の LazyVerticalGrid へ変更
+        LazyVerticalGrid(
             state = gridState,
-            columns = TvGridCells.Fixed(4),
+            columns = GridCells.Fixed(4),
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -57,8 +63,7 @@ fun RecordGridContent(
         ) {
             itemsIndexed(
                 items = recentRecordings,
-                key = { _, item -> item.id },
-                contentType = { _, _ -> "RecordedCard" }
+                key = { _, item -> item.id } // 標準のLazyコンポーネントにより型推論が正常動作
             ) { index, program ->
 
                 LaunchedEffect(index) {
@@ -71,7 +76,7 @@ fun RecordGridContent(
                     program = program,
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
-                    onClick = { onProgramClick(program) },
+                    onClick = { onProgramClick(program, null) }, // ★修正: nullを渡してレジュームを優先
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
                         .then(
@@ -84,8 +89,10 @@ fun RecordGridContent(
                         }
                 )
             }
+
             if (isLoadingMore) {
-                item(span = { TvGridItemSpan(maxLineSpan) }, contentType = "LoadingIndicator") {
+                // ★修正: 標準の GridItemSpan を使用
+                item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(
                         Modifier
                             .fillMaxWidth()

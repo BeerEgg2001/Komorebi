@@ -12,6 +12,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -19,6 +23,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.common.AppStrings
@@ -288,16 +293,25 @@ fun MainRootScreen(
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
                                 customTitle = state.openedSeriesTitle,
-                                onProgramClick = { program ->
-                                    if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen;
+                                // ★修正: 2引数を受け取るように変更し、レジュームロジックを強化
+                                onProgramClick = { program, forcedPosition ->
+                                    if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
+
+                                    val duration = program.recordedVideo.duration
                                     val history =
-                                        watchHistory.find { it.program.id.toString() == program.id.toString() };
-                                    val duration =
-                                        program.recordedVideo.duration; state.initialPlaybackPositionMs =
-                                    if (history != null && history.playback_position > 5 && history.playback_position < (duration - 10)) {
-                                        (history.playback_position * 1000).toLong()
-                                    } else 0L; state.selectedProgram =
-                                    program; state.lastSelectedProgramId = program.id.toString()
+                                        watchHistory.find { it.program.id.toString() == program.id.toString() }
+
+                                    // ★優先順位: 1.強制指定(最初から再生等) 2.プログラム本体の保持位置 3.ローカル履歴
+                                    val resumePos = when {
+                                        forcedPosition != null -> forcedPosition
+                                        program.playbackPosition > 5.0 && (duration <= 0 || program.playbackPosition < (duration - 10)) -> program.playbackPosition
+                                        history != null && history.playback_position > 5.0 && (duration <= 0 || history.playback_position < (duration - 10)) -> history.playback_position
+                                        else -> 0.0
+                                    }
+
+                                    state.initialPlaybackPositionMs = (resumePos * 1000).toLong()
+                                    state.selectedProgram = program
+                                    state.lastSelectedProgramId = program.id.toString()
                                 },
                                 onBack = {
                                     state.isRecordListOpen =

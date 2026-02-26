@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState // ★標準のStateを使用
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -14,7 +15,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -35,7 +35,7 @@ fun RecordListScreen(
     konomiIp: String,
     konomiPort: String,
     customTitle: String? = null,
-    onProgramClick: (RecordedProgram) -> Unit,
+    onProgramClick: (RecordedProgram, Double?) -> Unit,
     onBack: () -> Unit
 ) {
     val recentRecordings by viewModel.recentRecordings.collectAsState()
@@ -48,16 +48,15 @@ fun RecordListScreen(
     var isSearchBarVisible by remember { mutableStateOf(false) }
     var isKeyboardActive by remember { mutableStateOf(false) }
     var isBackButtonFocused by remember { mutableStateOf(false) }
-
-    // ★追加: 表示モードの切り替えステート (初期値は今回作成したリスト表示)
     var isListView by remember { mutableStateOf(true) }
-
     var currentDisplayTitle by remember(customTitle) { mutableStateOf(customTitle) }
 
     val scope = rememberCoroutineScope()
     val limitedHistory = remember(searchHistory) { searchHistory.take(5) }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val gridState = rememberTvLazyGridState()
+
+    // ★修正: 標準の LazyGridState を使用
+    val gridState = rememberLazyGridState()
 
     val searchInputFocusRequester = remember { FocusRequester() }
     val innerTextFieldFocusRequester = remember { FocusRequester() }
@@ -66,7 +65,7 @@ fun RecordListScreen(
     val backButtonFocusRequester = remember { FocusRequester() }
     val searchOpenButtonFocusRequester = remember { FocusRequester() }
     val searchCloseButtonFocusRequester = remember { FocusRequester() }
-    val viewToggleButtonFocusRequester = remember { FocusRequester() } // ★追加: トグルボタン用
+    val viewToggleButtonFocusRequester = remember { FocusRequester() }
 
     val executeSearch: (String) -> Unit = { query ->
         isKeyboardActive = false
@@ -75,28 +74,25 @@ fun RecordListScreen(
         viewModel.searchRecordings(query)
         keyboardController?.hide()
         isSearchBarVisible = false
-        scope.launch {
-            delay(150)
-            backButtonFocusRequester.safeRequestFocus(TAG)
-        }
+        scope.launch { delay(150); backButtonFocusRequester.safeRequestFocus(TAG) }
     }
 
     val handleBackPress: () -> Unit = {
         when {
             isKeyboardActive -> {
-                isKeyboardActive = false
-                keyboardController?.hide()
-                scope.launch { delay(100); searchInputFocusRequester.safeRequestFocus(TAG) }
+                isKeyboardActive = false; keyboardController?.hide(); scope.launch {
+                    delay(100); searchInputFocusRequester.safeRequestFocus(TAG)
+                }
             }
             isSearchBarVisible -> {
-                isSearchBarVisible = false
-                searchQuery = ""
-                scope.launch { delay(50); searchOpenButtonFocusRequester.safeRequestFocus(TAG) }
+                isSearchBarVisible = false; searchQuery = ""; scope.launch {
+                    delay(50); searchOpenButtonFocusRequester.safeRequestFocus(TAG)
+                }
             }
             activeSearchQuery.isNotEmpty() -> {
-                activeSearchQuery = ""
-                viewModel.searchRecordings("")
-                scope.launch { delay(50); backButtonFocusRequester.safeRequestFocus(TAG) }
+                activeSearchQuery = ""; viewModel.searchRecordings(""); scope.launch {
+                    delay(50); backButtonFocusRequester.safeRequestFocus(TAG)
+                }
             }
             else -> {
                 if (isBackButtonFocused) onBack() else backButtonFocusRequester.safeRequestFocus(TAG)
@@ -111,26 +107,18 @@ fun RecordListScreen(
             delay(150); searchInputFocusRequester.safeRequestFocus(TAG)
         }
     }
-
     LaunchedEffect(Unit) {
-        delay(300)
-        if (!isSearchBarVisible && activeSearchQuery.isEmpty()) {
-            backButtonFocusRequester.safeRequestFocus(TAG)
-        }
+        delay(300); if (!isSearchBarVisible && activeSearchQuery.isEmpty()) backButtonFocusRequester.safeRequestFocus(TAG)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 40.dp, vertical = 20.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 20.dp)) {
         RecordScreenTopBar(
             isSearchBarVisible = isSearchBarVisible,
             searchQuery = searchQuery,
             activeSearchQuery = activeSearchQuery,
             currentDisplayTitle = currentDisplayTitle,
             hasHistory = limitedHistory.isNotEmpty(),
-            isListView = isListView, // ★追加: 現在の表示モードを渡す
+            isListView = isListView,
             searchCloseButtonFocusRequester = searchCloseButtonFocusRequester,
             searchInputFocusRequester = searchInputFocusRequester,
             innerTextFieldFocusRequester = innerTextFieldFocusRequester,
@@ -138,24 +126,18 @@ fun RecordListScreen(
             firstItemFocusRequester = firstItemFocusRequester,
             backButtonFocusRequester = backButtonFocusRequester,
             searchOpenButtonFocusRequester = searchOpenButtonFocusRequester,
-            viewToggleButtonFocusRequester = viewToggleButtonFocusRequester, // ★追加: FocusRequesterを渡す
+            viewToggleButtonFocusRequester = viewToggleButtonFocusRequester,
             onSearchQueryChange = { searchQuery = it },
             onExecuteSearch = executeSearch,
             onBackPress = handleBackPress,
             onSearchOpen = { isSearchBarVisible = true },
-            onViewToggle = { isListView = !isListView }, // ★追加: トグル時のアクション
+            onViewToggle = { isListView = !isListView },
             onKeyboardActiveClick = { isKeyboardActive = true },
-            onBackButtonFocusChanged = { isBackButtonFocused = it }
-        )
+            onBackButtonFocusChanged = { isBackButtonFocused = it })
 
         Spacer(Modifier.height(8.dp))
 
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            // isListView の状態によってリストとグリッドを切り替え
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (isListView) {
                 RecordListContent(
                     recentRecordings = recentRecordings,
@@ -168,7 +150,7 @@ fun RecordListScreen(
                     firstItemFocusRequester = firstItemFocusRequester,
                     searchInputFocusRequester = searchInputFocusRequester,
                     backButtonFocusRequester = backButtonFocusRequester,
-                    onProgramClick = onProgramClick,
+                    onProgramClick = { program, position -> onProgramClick(program, position) },
                     onLoadMore = { viewModel.loadNextPage() }
                 )
             } else {
@@ -184,7 +166,8 @@ fun RecordListScreen(
                     firstItemFocusRequester = firstItemFocusRequester,
                     searchInputFocusRequester = searchInputFocusRequester,
                     backButtonFocusRequester = backButtonFocusRequester,
-                    onProgramClick = onProgramClick,
+                    // ★修正: null を渡してレジュームを優先
+                    onProgramClick = { program, position -> onProgramClick(program, position) },
                     onLoadMore = { viewModel.loadNextPage() }
                 )
             }
