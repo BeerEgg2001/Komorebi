@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "160292253643",
+    "project_id": "komorebi-f25f9",
+    "storage_bucket": "komorebi-f25f9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:160292253643:android:276d0950c0accb6caa504e",
+        "android_client_info": {
+          "package_name": "com.beeregg2001.komorebi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUaHAYb0yVyLMwP-yND30ORlOM95dRryI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
