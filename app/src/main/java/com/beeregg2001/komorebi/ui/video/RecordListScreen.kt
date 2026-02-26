@@ -6,7 +6,7 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState // ★標準のStateを使用
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -54,8 +54,6 @@ fun RecordListScreen(
     val scope = rememberCoroutineScope()
     val limitedHistory = remember(searchHistory) { searchHistory.take(5) }
     val keyboardController = LocalSoftwareKeyboardController.current
-
-    // ★修正: 標準の LazyGridState を使用
     val gridState = rememberLazyGridState()
 
     val searchInputFocusRequester = remember { FocusRequester() }
@@ -84,16 +82,19 @@ fun RecordListScreen(
                     delay(100); searchInputFocusRequester.safeRequestFocus(TAG)
                 }
             }
+
             isSearchBarVisible -> {
                 isSearchBarVisible = false; searchQuery = ""; scope.launch {
                     delay(50); searchOpenButtonFocusRequester.safeRequestFocus(TAG)
                 }
             }
+
             activeSearchQuery.isNotEmpty() -> {
                 activeSearchQuery = ""; viewModel.searchRecordings(""); scope.launch {
                     delay(50); backButtonFocusRequester.safeRequestFocus(TAG)
                 }
             }
+
             else -> {
                 if (isBackButtonFocused) onBack() else backButtonFocusRequester.safeRequestFocus(TAG)
             }
@@ -108,10 +109,14 @@ fun RecordListScreen(
         }
     }
     LaunchedEffect(Unit) {
-        delay(300); if (!isSearchBarVisible && activeSearchQuery.isEmpty()) backButtonFocusRequester.safeRequestFocus(TAG)
+        delay(300); if (!isSearchBarVisible && activeSearchQuery.isEmpty()) backButtonFocusRequester.safeRequestFocus(
+        TAG
+    )
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 40.dp, vertical = 20.dp)) {
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 40.dp, vertical = 20.dp)) {
         RecordScreenTopBar(
             isSearchBarVisible = isSearchBarVisible,
             searchQuery = searchQuery,
@@ -137,7 +142,9 @@ fun RecordListScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()) {
             if (isListView) {
                 RecordListContent(
                     recentRecordings = recentRecordings,
@@ -151,6 +158,7 @@ fun RecordListScreen(
                     searchInputFocusRequester = searchInputFocusRequester,
                     backButtonFocusRequester = backButtonFocusRequester,
                     onProgramClick = { program, position -> onProgramClick(program, position) },
+                    onSeriesSearch = { query -> executeSearch(query) }, // ★サブメニューからの要求を実行
                     onLoadMore = { viewModel.loadNextPage() }
                 )
             } else {
@@ -166,7 +174,6 @@ fun RecordListScreen(
                     firstItemFocusRequester = firstItemFocusRequester,
                     searchInputFocusRequester = searchInputFocusRequester,
                     backButtonFocusRequester = backButtonFocusRequester,
-                    // ★修正: null を渡してレジュームを優先
                     onProgramClick = { program, position -> onProgramClick(program, position) },
                     onLoadMore = { viewModel.loadNextPage() }
                 )

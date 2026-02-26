@@ -8,13 +8,14 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn // ★標準のLazyColumnを使用
-import androidx.compose.foundation.lazy.itemsIndexed // ★標準のitemsIndexedを使用
-import androidx.compose.foundation.lazy.rememberLazyListState // ★標準のStateを使用
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,6 +36,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.util.TitleNormalizer // ★追加: 正規化ツールのインポート
 import kotlinx.coroutines.delay
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -52,10 +54,10 @@ fun RecordListContent(
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
+    onSeriesSearch: (String) -> Unit,
     onLoadMore: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    // ★修正: 標準の LazyListState を使用
     val listState = rememberLazyListState()
 
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
@@ -86,8 +88,6 @@ fun RecordListContent(
         }
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
-            // ★修正: TvLazyColumn ではなく標準の LazyColumn を使用
-            // 現在の TV SDK では、標準の LazyColumn が TV フォーカスを最適に扱います
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 60.dp),
@@ -95,9 +95,8 @@ fun RecordListContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .focusProperties {
-                        if (isSearchBarVisible || isKeyboardActive) {
-                            enter = { FocusRequester.Cancel }
-                        }
+                        if (isSearchBarVisible || isKeyboardActive) enter =
+                            { FocusRequester.Cancel }
                         right = if (isDetailVisible) FocusRequester.Cancel else menuFocusRequester
                     }
             ) {
@@ -184,6 +183,22 @@ fun RecordListContent(
                             isExpanded = isMenuFocused,
                             enabled = focusedProgram != null,
                             onClick = { isDetailVisible = true })
+                        Spacer(modifier = Modifier.height(12.dp))
+                        // シリーズ検索ボタン
+                        SideMenuItem(
+                            icon = Icons.Default.LibraryBooks,
+                            label = "シリーズ検索",
+                            isExpanded = isMenuFocused,
+                            enabled = focusedProgram != null,
+                            onClick = {
+                                focusedProgram?.let {
+                                    isDetailVisible = false
+                                    // ★修正: タイトルを正規化してから検索を実行
+                                    val keyword = TitleNormalizer.extractSearchKeyword(it.title)
+                                    onSeriesSearch(keyword)
+                                }
+                            }
+                        )
                         Spacer(modifier = Modifier.height(12.dp))
                         SideMenuItem(
                             icon = Icons.Default.Delete,

@@ -293,7 +293,6 @@ fun MainRootScreen(
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
                                 customTitle = state.openedSeriesTitle,
-                                // ★修正: 2引数を受け取るように変更し、レジュームロジックを強化
                                 onProgramClick = { program, forcedPosition ->
                                     if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
 
@@ -301,7 +300,6 @@ fun MainRootScreen(
                                     val history =
                                         watchHistory.find { it.program.id.toString() == program.id.toString() }
 
-                                    // ★優先順位: 1.強制指定(最初から再生等) 2.プログラム本体の保持位置 3.ローカル履歴
                                     val resumePos = when {
                                         forcedPosition != null -> forcedPosition
                                         program.playbackPosition > 5.0 && (duration <= 0 || program.playbackPosition < (duration - 10)) -> program.playbackPosition
@@ -312,6 +310,8 @@ fun MainRootScreen(
                                     state.initialPlaybackPositionMs = (resumePos * 1000).toLong()
                                     state.selectedProgram = program
                                     state.lastSelectedProgramId = program.id.toString()
+                                    state.showPlayerControls = true
+                                    state.isReturningFromPlayer = false
                                 },
                                 onBack = {
                                     state.isRecordListOpen =
