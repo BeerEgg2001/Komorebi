@@ -10,7 +10,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,17 +59,15 @@ fun RecordDetailPanel(
         }
     }
 
-    // ★ Column自体にフォーカスを持たせることでリモコンの上下キーによるスクロールを有効にします
     Column(
         modifier = modifier
             .fillMaxHeight()
             .focusRequester(focusRequester)
-            .focusable() // 必須：これが無いと上下キーを受け取りません
+            .focusable()
             .verticalScroll(scrollState)
             .padding(16.dp),
         horizontalAlignment = Alignment.Start
     ) {
-        // ★サムネイルをさらに小型化 (220dp) し、テキスト領域を確保
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(thumbnailUrl)
@@ -87,7 +84,6 @@ fun RecordDetailPanel(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // タイトル
         Text(
             text = program.title,
             style = MaterialTheme.typography.titleLarge,
@@ -99,7 +95,6 @@ fun RecordDetailPanel(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // 基本情報
         Text(
             text = displayDate,
             style = MaterialTheme.typography.bodyMedium,
@@ -118,7 +113,6 @@ fun RecordDetailPanel(
         HorizontalDivider(modifier = Modifier.alpha(0.1f), color = colors.textSecondary)
         Spacer(modifier = Modifier.height(12.dp))
 
-        // 番組概要
         Text(
             text = "番組概要",
             style = MaterialTheme.typography.labelLarge,
@@ -131,11 +125,31 @@ fun RecordDetailPanel(
             text = program.description,
             style = MaterialTheme.typography.bodyMedium,
             color = colors.textPrimary,
-            lineHeight = 22.sp,
+            lineHeight = 20.sp,
             fontSize = 14.sp
         )
 
-        // 最後に十分な余白を置くことで下まで読みやすくする
-        Spacer(modifier = Modifier.height(100.dp))
+        // ★追加: 番組詳細のループ表示
+        if (!program.detail.isNullOrEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            program.detail.forEach { (key, value) ->
+                Text(
+                    text = key,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.accent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+                Text(
+                    text = value,
+                    color = colors.textPrimary,
+                    lineHeight = 20.sp,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(80.dp))
     }
 }

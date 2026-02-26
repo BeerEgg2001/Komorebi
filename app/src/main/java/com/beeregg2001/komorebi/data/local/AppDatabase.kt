@@ -2,6 +2,8 @@ package com.beeregg2001.komorebi.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import com.beeregg2001.komorebi.data.db.Converters
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
@@ -15,7 +17,7 @@ import com.beeregg2001.komorebi.data.local.entity.EpgCacheEntity
         LastChannelEntity::class,
         EpgCacheEntity::class // ★キャッシュ用Entityを追加
     ],
-    version = 7, // ★バージョンを6から7へアップ
+    version = 8, // ★バージョンを7から8へアップ
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

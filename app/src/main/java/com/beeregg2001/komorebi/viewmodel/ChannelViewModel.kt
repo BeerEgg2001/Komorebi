@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
+import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -75,7 +75,7 @@ class ChannelViewModel @Inject constructor(
                         programTitle = ch.programPresent?.title ?: "放送休止中",
                         progress = progress,
                         hasProgram = ch.programPresent != null,
-                        jikkyoForce = ch.jikkyoForce // ★修正: 勢い情報を UI モデルにセット
+                        jikkyoForce = ch.jikkyoForce
                     )
                 }
             )
@@ -107,7 +107,7 @@ class ChannelViewModel @Inject constructor(
                         programPresent = apiChannel.programPresent,
                         programFollowing = apiChannel.programFollowing,
                         remocon_Id = apiChannel.remocon_Id,
-                        jikkyoForce = apiChannel.jikkyoForce // ★修正: APIレスポンスから勢い情報をマッピング
+                        jikkyoForce = apiChannel.jikkyoForce
                     )
                 }
 
@@ -180,13 +180,10 @@ class ChannelViewModel @Inject constructor(
         stopPolling()
     }
 
+    // ★修正箇所: Entityを直接作成せず、Mapperを使用します
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
-            val entity = WatchHistoryEntity(
-                id = program.id, title = program.title, description = program.description,
-                startTime = program.startTime, endTime = program.endTime, duration = program.duration,
-                videoId = program.recordedVideo.id, watchedAt = System.currentTimeMillis()
-            )
+            val entity = KonomiDataMapper.toEntity(program)
             repository.saveToLocalHistory(entity)
         }
     }
