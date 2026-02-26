@@ -2,7 +2,6 @@ package com.beeregg2001.komorebi.viewmodel
 
 import android.content.Context
 import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
@@ -10,13 +9,12 @@ import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
+import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -36,8 +34,25 @@ class RecordViewModel @Inject constructor(
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-    private val _recentRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
-    val recentRecordings: StateFlow<List<RecordedProgram>> = _recentRecordings.asStateFlow()
+    private val _allRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
+
+    private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
+    val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
+
+    // UIに表示するフィルタリング済みのリスト
+    val recentRecordings: StateFlow<List<RecordedProgram>> = combine(_allRecordings, _selectedCategory) { recordings, category ->
+        Log.d(TAG, "Filtering logic started: Category=${category.name}, DataSize=${recordings.size}")
+
+        when (category) {
+            RecordCategory.ALL -> recordings
+            RecordCategory.UNWATCHED -> {
+                val filtered = recordings.filter { it.playbackPosition < 5.0 }
+                Log.d(TAG, "Unwatched result: ${filtered.size} items")
+                filtered
+            }
+            else -> recordings
+        }
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _isRecordingLoading = MutableStateFlow(true)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
@@ -45,10 +60,8 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    private val _groupedSeries =
-        MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
-    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> =
-        _groupedSeries.asStateFlow()
+    private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
+    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
 
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
@@ -60,7 +73,6 @@ class RecordViewModel @Inject constructor(
     private var totalItems = 0
     private var hasMorePages = true
     private val pageSize = 30
-
     private var currentSearchQuery: String = ""
     private var maintenanceJob: Job? = null
 
@@ -68,76 +80,34 @@ class RecordViewModel @Inject constructor(
         loadSearchHistory()
     }
 
-    fun buildSeriesIndex() {
-        if (_groupedSeries.value.isNotEmpty() || _isSeriesLoading.value) return
-
-        viewModelScope.launch(Dispatchers.IO) {
-            _isSeriesLoading.value = true
-            val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
-            var page = 1
-
-            try {
-                while (true) {
-                    val response = repository.getRecordedPrograms(page = page)
-                    if (response.recordedPrograms.isEmpty()) break
-
-                    response.recordedPrograms.forEach { prog ->
-                        val genre = prog.genres?.firstOrNull()?.major ?: "その他"
-                        val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
-                        val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
-
-                        if (displayTitle.isNotEmpty()) {
-                            val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
-                            if (!genreMap.containsKey(displayTitle)) {
-                                genreMap[displayTitle] = Pair(displayTitle, searchKeyword)
-                            }
-                        }
-                    }
-
-                    if (response.recordedPrograms.size < 30) break
-                    page++
-                }
-
-                _groupedSeries.value = allSeriesMap.mapValues { entry ->
-                    entry.value.values.sortedBy { it.first }
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Series Index build failed", e)
-            } finally {
-                _isSeriesLoading.value = false
-            }
-        }
+    fun updateCategory(category: RecordCategory) {
+        Log.i(TAG, "Category changed: ${category.name}")
+        if (_selectedCategory.value == category) return
+        _selectedCategory.value = category
+        if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
         if (!forceRefresh && currentSearchQuery.isNotEmpty()) return
         currentSearchQuery = ""
-        // ★修正: タブ遷移時などは既存リストを消さずにバックグラウンドで更新する
         fetchInitialRecordings(clearData = false)
     }
 
     fun searchRecordings(query: String) {
         currentSearchQuery = query
-        if (query.isNotBlank()) {
-            addSearchHistory(query)
-        }
-        // ★修正: 明示的な検索実行時はリストをクリアする
+        if (query.isNotBlank()) addSearchHistory(query)
+        // 検索時は自動的に「全て」のカテゴリに戻す
+        _selectedCategory.value = RecordCategory.ALL
         fetchInitialRecordings(clearData = true)
     }
 
-    // ★修正: clearData フラグを追加
     private fun fetchInitialRecordings(clearData: Boolean = true) {
         viewModelScope.launch {
             _isRecordingLoading.value = true
-            if (clearData) {
-                _recentRecordings.value = emptyList()
-            }
-
+            if (clearData) _allRecordings.value = emptyList()
             try {
                 currentPage = 1
                 hasMorePages = true
-
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
                 } else {
@@ -145,19 +115,28 @@ class RecordViewModel @Inject constructor(
                 }
 
                 totalItems = response.total
+                val programs = response.recordedPrograms
 
-                val initialList = response.recordedPrograms.map { program ->
-                    program.copy(isRecording = program.recordedVideo.status == "Recording")
+                // ★修正: associateByの代わりにassociateを使用し、型を明示
+                val ids = programs.map { it.id }
+                val historyEntities = repository.getHistoryEntitiesByIds(ids)
+                val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition }
+
+                Log.d(TAG, "Initial load: Mapped ${historyMap.size} history items")
+
+                val initialList = programs.map { program ->
+                    program.copy(
+                        isRecording = program.recordedVideo.status == "Recording",
+                        playbackPosition = historyMap[program.id] ?: 0.0
+                    )
                 }
 
                 if (initialList.size < pageSize || (totalItems > 0 && initialList.size >= totalItems)) {
                     hasMorePages = false
                 }
-
-                _recentRecordings.value = initialList
-
+                _allRecordings.value = initialList
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching recordings", e)
+                Log.e(TAG, "Initial fetch failed", e)
             } finally {
                 _isRecordingLoading.value = false
             }
@@ -166,7 +145,6 @@ class RecordViewModel @Inject constructor(
 
     fun loadNextPage() {
         if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) return
-
         viewModelScope.launch {
             _isLoadingMore.value = true
             try {
@@ -177,22 +155,31 @@ class RecordViewModel @Inject constructor(
                     repository.getRecordedPrograms(page = nextPage)
                 }
 
-                val newItems = response.recordedPrograms.map { program ->
-                    program.copy(isRecording = program.recordedVideo.status == "Recording")
+                val programs = response.recordedPrograms
+                val ids = programs.map { it.id }
+                val historyEntities = repository.getHistoryEntitiesByIds(ids)
+
+                // ★修正: ここも型を明示
+                val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition}
+
+                val newItems = programs.map { program ->
+                    program.copy(
+                        isRecording = program.recordedVideo.status == "Recording",
+                        playbackPosition = historyMap[program.id] ?: 0.0
+                    )
                 }
 
                 if (newItems.isNotEmpty()) {
-                    val currentList = _recentRecordings.value.toMutableList()
+                    val currentList = _allRecordings.value.toMutableList()
                     currentList.addAll(newItems)
-                    _recentRecordings.value = currentList
+                    _allRecordings.value = currentList
                     currentPage = nextPage
                 }
-
-                if (newItems.size < pageSize || (totalItems > 0 && _recentRecordings.value.size >= totalItems)) {
+                if (newItems.size < pageSize || (totalItems > 0 && _allRecordings.value.size >= totalItems)) {
                     hasMorePages = false
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Load next page failed", e)
+                Log.e(TAG, "Pagination load failed", e)
             } finally {
                 _isLoadingMore.value = false
             }
@@ -205,9 +192,7 @@ class RecordViewModel @Inject constructor(
             val jsonString = prefs.getString(KEY_HISTORY, "[]")
             val jsonArray = JSONArray(jsonString)
             val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) {
-                list.add(jsonArray.getString(i))
-            }
+            for (i in 0 until jsonArray.length()) { list.add(jsonArray.getString(i)) }
             _searchHistory.value = list
         } catch (e: Exception) {
             _searchHistory.value = emptyList()
@@ -237,8 +222,7 @@ class RecordViewModel @Inject constructor(
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
                 prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
-            } catch (e: Exception) {
-            }
+            } catch (e: Exception) { }
         }
     }
 
@@ -264,10 +248,6 @@ class RecordViewModel @Inject constructor(
         getPositionSeconds: () -> Double
     ) {
         stopStreamMaintenance()
-
-        val hasTile = program.recordedVideo.thumbnailInfo?.tile != null
-        Log.i(TAG, "Start maintenance for ID=${program.id}. Has Tile Info? $hasTile")
-
         maintenanceJob = viewModelScope.launch {
             while (isActive) {
                 try {
@@ -297,6 +277,41 @@ class RecordViewModel @Inject constructor(
             repository.getArchivedJikkyo(videoId)
                 .getOrDefault(emptyList())
                 .sortedBy { it.time }
+        }
+    }
+
+    fun buildSeriesIndex() {
+        if (_groupedSeries.value.isNotEmpty() || _isSeriesLoading.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSeriesLoading.value = true
+            val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+            var page = 1
+            try {
+                while (true) {
+                    val response = repository.getRecordedPrograms(page = page)
+                    if (response.recordedPrograms.isEmpty()) break
+                    response.recordedPrograms.forEach { prog ->
+                        val genre = prog.genres?.firstOrNull()?.major ?: "その他"
+                        val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
+                        val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
+                        if (displayTitle.isNotEmpty()) {
+                            val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
+                            if (!genreMap.containsKey(displayTitle)) {
+                                genreMap[displayTitle] = Pair(displayTitle, searchKeyword)
+                            }
+                        }
+                    }
+                    if (response.recordedPrograms.size < 30) break
+                    page++
+                }
+                _groupedSeries.value = allSeriesMap.mapValues { entry ->
+                    entry.value.values.sortedBy { it.first }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Series build error", e)
+            } finally {
+                _isSeriesLoading.value = false
+            }
         }
     }
 }
