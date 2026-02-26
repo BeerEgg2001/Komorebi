@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowRight // ★Filledに変更
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,13 +47,11 @@ fun RecordListItem(
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    isPersistentFocused: Boolean = false // サブメニュー操作中の疑似フォーカス
+    isPersistentFocused: Boolean = false
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
     val isAnalyzed = program.recordedVideo.hasKeyFrames
-
-    // システムフォーカスまたは疑似フォーカスがあれば視覚的に強調
     val isVisualFocused = isFocused || isPersistentFocused
 
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
@@ -117,7 +117,6 @@ fun RecordListItem(
             focusedContentColor = inverseColor
         ),
         border = ClickableSurfaceDefaults.border(
-            // ★修正箇所: 名前付き引数 shape = ... を使用して型不一致を解消
             border = if (isPersistentFocused) {
                 Border(
                     border = BorderStroke(width = 2.dp, color = colors.accent),
@@ -245,6 +244,18 @@ fun RecordListItem(
                         )
                     }
                 }
+            }
+
+            // ★修正: フォーカス時のみ表示し、サイズを 32.dp に拡大
+            if (isFocused) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = inverseColor.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .size(32.dp)
+                        .padding(end = 4.dp)
+                )
             }
         }
     }
