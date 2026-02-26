@@ -29,6 +29,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -68,10 +69,12 @@ fun RecordListScreen(
     val isLoadingInitial by viewModel.isRecordingLoading.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
 
-    // ViewModelから状態を取得
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val groupedSeries by viewModel.groupedSeries.collectAsState()
     val isSeriesLoading by viewModel.isSeriesLoading.collectAsState()
+
+    // ★修正: 検索を開始する前のカテゴリを記憶する状態
+    var categoryBeforeSearch by remember { mutableStateOf<RecordCategory?>(null) }
 
     var isNavPaneOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -107,9 +110,26 @@ fun RecordListScreen(
     }
 
     val executeSearch: (String) -> Unit = { query ->
-        isKeyboardActive = false; activeSearchQuery = query; currentDisplayTitle = null
-        viewModel.searchRecordings(query); keyboardController?.hide(); isSearchBarVisible = false
-        scope.launch { delay(150); backButtonFocusRequester.safeRequestFocus(TAG) }
+        isKeyboardActive = false
+
+        // ★修正: 検索がまだ実行されていない（新規検索）場合、現在のカテゴリを保存
+        if (activeSearchQuery.isEmpty()) {
+            categoryBeforeSearch = selectedCategory
+        }
+
+        activeSearchQuery = query
+        currentDisplayTitle = null
+
+        // 検索時は全件（ALL）カテゴリとして扱う
+        viewModel.updateCategory(RecordCategory.ALL)
+        viewModel.searchRecordings(query)
+
+        keyboardController?.hide()
+        isSearchBarVisible = false
+        scope.launch {
+            delay(150)
+            backButtonFocusRequester.safeRequestFocus(TAG)
+        }
     }
 
     val handleCategorySelect: (RecordCategory) -> Unit = { category ->
@@ -121,8 +141,21 @@ fun RecordListScreen(
     val handleBackPress: () -> Unit = {
         when {
             isNavPaneOpen -> isNavPaneOpen = false
-            isSearchBarVisible -> { isSearchBarVisible = false; searchQuery = "" }
-            activeSearchQuery.isNotEmpty() -> { activeSearchQuery = ""; viewModel.searchRecordings("") }
+            isSearchBarVisible -> {
+                isSearchBarVisible = false; searchQuery = ""
+            }
+
+            activeSearchQuery.isNotEmpty() -> {
+                // ★修正: 検索解除時に記憶していたカテゴリを復元
+                activeSearchQuery = ""
+                viewModel.searchRecordings("")
+
+                categoryBeforeSearch?.let {
+                    viewModel.updateCategory(it)
+                    categoryBeforeSearch = null // 復元後はリセット
+                }
+            }
+
             else -> onBack()
         }
     }
@@ -132,15 +165,25 @@ fun RecordListScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // 1. トップバー (全幅表示)
             RecordScreenTopBar(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 20.dp),
-                isSearchBarVisible = isSearchBarVisible, searchQuery = searchQuery, activeSearchQuery = activeSearchQuery,
-                currentDisplayTitle = currentDisplayTitle, hasHistory = limitedHistory.isNotEmpty(), isListView = isListView,
-                searchInputFocusRequester = searchInputFocusRequester, backButtonFocusRequester = backButtonFocusRequester,
-                onSearchQueryChange = { searchQuery = it }, onExecuteSearch = executeSearch, onBackPress = handleBackPress,
-                onSearchOpen = { isSearchBarVisible = true }, onViewToggle = { isListView = !isListView },
-                onKeyboardActiveClick = { isKeyboardActive = true }, onBackButtonFocusChanged = { isBackButtonFocused = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp, vertical = 20.dp),
+                isSearchBarVisible = isSearchBarVisible,
+                searchQuery = searchQuery,
+                activeSearchQuery = activeSearchQuery,
+                currentDisplayTitle = currentDisplayTitle,
+                hasHistory = limitedHistory.isNotEmpty(),
+                isListView = isListView,
+                searchInputFocusRequester = searchInputFocusRequester,
+                backButtonFocusRequester = backButtonFocusRequester,
+                onSearchQueryChange = { searchQuery = it },
+                onExecuteSearch = executeSearch,
+                onBackPress = handleBackPress,
+                onSearchOpen = { isSearchBarVisible = true },
+                onViewToggle = { isListView = !isListView },
+                onKeyboardActiveClick = { isKeyboardActive = true },
+                onBackButtonFocusChanged = { isBackButtonFocused = it },
                 searchCloseButtonFocusRequester = remember { FocusRequester() },
                 innerTextFieldFocusRequester = remember { FocusRequester() },
                 historyListFocusRequester = remember { FocusRequester() },
@@ -151,30 +194,35 @@ fun RecordListScreen(
 
             Spacer(Modifier.height(8.dp))
 
-            // 2. メインエリア
-            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Row(modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()) {
 
-                // ナビゲーションメニューの表示判定
-                val shouldShowNavPane = isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()
+                val shouldShowNavPane =
+                    isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()
                 val navPaneWidth by animateDpAsState(
                     targetValue = if (shouldShowNavPane) 200.dp else 0.dp,
                     animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
                     label = "NavPaneWidth"
                 )
 
-                // 左ナビゲーションパネル
-                Box(modifier = Modifier.width(navPaneWidth).fillMaxHeight().clipToBounds()) {
+                Box(modifier = Modifier
+                    .width(navPaneWidth)
+                    .fillMaxHeight()
+                    .clipToBounds()) {
                     if (navPaneWidth > 0.dp) {
                         RecordNavigationPane(
                             selectedCategory = selectedCategory,
                             onCategorySelect = handleCategorySelect,
                             isOverlay = false,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp).focusRequester(navPaneFocusRequester)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 20.dp)
+                                .focusRequester(navPaneFocusRequester)
                         )
                     }
                 }
 
-                // コンテンツ表示エリア (カテゴリによって切り替え)
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -186,19 +234,20 @@ fun RecordListScreen(
                         )
                 ) {
                     when {
-                        // シリーズ別が選択された場合の表示
                         selectedCategory == RecordCategory.SERIES -> {
                             RecordSeriesContent(
                                 groupedSeries = groupedSeries,
                                 isLoading = isSeriesLoading,
                                 onSeriesClick = { keyword -> executeSearch(keyword) },
+                                onOpenNavPane = { isNavPaneOpen = true }, // ★追加
+                                isListView = isListView,                  // ★追加
                                 firstItemFocusRequester = firstItemFocusRequester,
                                 searchInputFocusRequester = searchInputFocusRequester,
                                 backButtonFocusRequester = backButtonFocusRequester,
                                 isSearchBarVisible = isSearchBarVisible
                             )
                         }
-                        // リスト表示
+
                         isListView -> {
                             RecordListContent(
                                 recentRecordings = recentRecordings,
@@ -216,7 +265,7 @@ fun RecordListScreen(
                                 onLoadMore = { viewModel.loadNextPage() }
                             )
                         }
-                        // カード表示 (グリッド)
+
                         else -> {
                             RecordGridContent(
                                 recentRecordings = recentRecordings,
@@ -240,7 +289,6 @@ fun RecordListScreen(
             }
         }
 
-        // --- 検索履歴ドロップダウン ---
         if (isSearchBarVisible && limitedHistory.isNotEmpty()) {
             RecordSearchHistoryDropdown(
                 limitedHistory = limitedHistory,
@@ -254,9 +302,13 @@ fun RecordListScreen(
             )
         }
 
-        // --- カード型用「＜」ガイド ---
-        if (!isListView && !isNavPaneOpen && activeSearchQuery.isEmpty() && selectedCategory != RecordCategory.SERIES) {
-            Box(modifier = Modifier.fillMaxHeight().width(28.dp), contentAlignment = Alignment.Center) {
+        if (!isListView && !isNavPaneOpen && activeSearchQuery.isEmpty() ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(28.dp),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
                     imageVector = Icons.Filled.KeyboardArrowLeft,
                     contentDescription = null,
@@ -266,7 +318,6 @@ fun RecordListScreen(
             }
         }
 
-        // --- カード型オーバーレイメニュー ---
         if (!isListView) {
             AnimatedVisibility(
                 visible = isNavPaneOpen,
@@ -277,115 +328,11 @@ fun RecordListScreen(
                     selectedCategory = selectedCategory,
                     onCategorySelect = handleCategorySelect,
                     isOverlay = true,
-                    modifier = Modifier.width(200.dp).padding(bottom = 20.dp).focusRequester(navPaneFocusRequester)
-                )
-            }
-        }
-    }
-}
-
-/**
- * シリーズ別表示用の内部コンポーネント
- */
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun RecordSeriesContent(
-    groupedSeries: Map<String, List<Pair<String, String>>>,
-    isLoading: Boolean,
-    onSeriesClick: (String) -> Unit,
-    firstItemFocusRequester: FocusRequester,
-    searchInputFocusRequester: FocusRequester,
-    backButtonFocusRequester: FocusRequester,
-    isSearchBarVisible: Boolean
-) {
-    val colors = KomorebiTheme.colors
-    var selectedGenre by remember(groupedSeries) { mutableStateOf(groupedSeries.keys.firstOrNull()) }
-
-    if (isLoading && groupedSeries.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = colors.textPrimary)
-        }
-        return
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ジャンルチップ
-        TvLazyRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 16.dp)
-        ) {
-            itemsIndexed(groupedSeries.keys.toList()) { index, genre ->
-                val genreColor = EpgUtils.getGenreColor(genre)
-                // 反転色（フォーカス時の文字色）の計算
-                val inverseColor = if (colors.isDark) Color.Black else Color.White
-
-                FilterChip(
-                    selected = selectedGenre == genre,
-                    onClick = { selectedGenre = genre },
-                    scale = FilterChipDefaults.scale(focusedScale = 1.05f),
-                    colors = FilterChipDefaults.colors(
-                        containerColor = colors.textPrimary.copy(alpha = 0.05f),
-                        contentColor = colors.textSecondary,
-                        focusedContainerColor = colors.textPrimary,
-                        focusedContentColor = inverseColor, // ★フォーカス時の文字色を反転
-                        selectedContainerColor = genreColor.copy(alpha = 0.2f),
-                        selectedContentColor = colors.textPrimary,
-                        focusedSelectedContainerColor = colors.textPrimary,
-                        focusedSelectedContentColor = inverseColor // ★選択＋フォーカス時も反転
-                    ),
-                    border = FilterChipDefaults.border(
-                        border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f))),
-                        focusedBorder = Border(BorderStroke(2.dp, colors.accent)),
-                        selectedBorder = Border(BorderStroke(1.dp, genreColor))
-                    )
-                ) {
-                    // ★Text側で色を指定せず、Chipのステートカラーに従わせる
-                    Text(text = genre)
-                }
-            }
-        }
-
-        // シリーズ名グリッド
-        TvLazyVerticalGrid(
-            columns = TvGridCells.Fixed(3),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            val seriesList = groupedSeries[selectedGenre] ?: emptyList()
-            itemsIndexed(seriesList) { index, pair ->
-                var isFocused by remember { mutableStateOf(false) }
-                Surface(
-                    onClick = { onSeriesClick(pair.second) },
                     modifier = Modifier
-                        .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                        .onFocusChanged { isFocused = it.isFocused }
-                        .focusProperties {
-                            if (index < 3) {
-                                up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-                            }
-                        },
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
-                    colors = ClickableSurfaceDefaults.colors(
-                        containerColor = colors.textPrimary.copy(alpha = 0.05f),
-                        focusedContainerColor = colors.textPrimary,
-                        contentColor = colors.textPrimary,
-                        focusedContentColor = if (colors.isDark) Color.Black else Color.White
-                    ),
-                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                    border = ClickableSurfaceDefaults.border(
-                        focusedBorder = Border(BorderStroke(2.dp, colors.accent))
-                    )
-                ) {
-                    Text(
-                        text = pair.first,
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .then(if (isFocused) Modifier.basicMarquee() else Modifier),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
+                        .width(200.dp)
+                        .padding(bottom = 20.dp)
+                        .focusRequester(navPaneFocusRequester)
+                )
             }
         }
     }

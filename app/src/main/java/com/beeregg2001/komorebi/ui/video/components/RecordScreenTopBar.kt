@@ -198,7 +198,7 @@ fun RecordScreenTopBar(
 
                 Text(
                     text = currentDisplayTitle
-                        ?: if (activeSearchQuery.isEmpty()) "録画一覧" else "「${activeSearchQuery}」の検索結果",
+                        ?: if (activeSearchQuery.isEmpty()) "録画リスト" else "「${activeSearchQuery}」の検索結果",
                     style = MaterialTheme.typography.headlineSmall,
                     fontSize = 20.sp,
                     color = colors.textPrimary,

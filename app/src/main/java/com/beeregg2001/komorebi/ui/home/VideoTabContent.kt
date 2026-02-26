@@ -70,17 +70,10 @@ fun VideoTabContent(
                 ) {
                     ActionButton(
                         icon = Icons.AutoMirrored.Filled.List,
-                        label = "録画番組一覧",
+                        label = "録画リスト",
                         focusRequester = contentFirstItemRequester,
                         topNavFocusRequester = topNavFocusRequester,
                         onClick = onShowAllRecordings
-                    )
-                    ActionButton(
-                        icon = Icons.AutoMirrored.Filled.LibraryBooks,
-                        label = "シリーズ(作品名)から探す",
-                        focusRequester = remember { FocusRequester() },
-                        topNavFocusRequester = topNavFocusRequester,
-                        onClick = onShowSeriesList
                     )
                 }
             }
