@@ -1,14 +1,13 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells // ★標準のGridCellsを使用
-import androidx.compose.foundation.lazy.grid.GridItemSpan // ★標準のGridItemSpanを使用
-import androidx.compose.foundation.lazy.grid.LazyGridState // ★標準のLazyGridStateを使用
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid // ★標準のLazyVerticalGridを使用
-import androidx.compose.foundation.lazy.grid.itemsIndexed // ★標準のitemsIndexedを使用
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -30,25 +29,34 @@ fun RecordGridContent(
     isLoadingMore: Boolean,
     konomiIp: String,
     konomiPort: String,
-    gridState: LazyGridState, // ★修正: 標準のStateを受け取る
+    gridState: LazyGridState,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
-    onProgramClick: (RecordedProgram, Double?) -> Unit, // ★修正: シグネチャを統一
+    onProgramClick: (RecordedProgram, Double?) -> Unit,
     onLoadMore: () -> Unit,
-    onOpenNavPane: () -> Unit // ★追加
+    onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
 
+    val firstVisibleIndex by remember {
+        derivedStateOf {
+            gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
+        }
+    }
+
+    val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    LaunchedEffect(isListReady, recentRecordings) {
+        onFirstItemBound(isListReady && recentRecordings.isNotEmpty())
+    }
+
     if (isLoadingInitial && recentRecordings.isEmpty()) {
-        Box(
-            Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) { CircularProgressIndicator(color = colors.textPrimary) }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = colors.textPrimary)
+        }
     } else {
-        // ★修正: TvLazyVerticalGrid から標準の LazyVerticalGrid へ変更
         LazyVerticalGrid(
             state = gridState,
             columns = GridCells.Fixed(4),
@@ -63,51 +71,42 @@ fun RecordGridContent(
                     }
                 }
         ) {
-            itemsIndexed(
-                items = recentRecordings,
-                key = { _, item -> item.id } // 標準のLazyコンポーネントにより型推論が正常動作
-            ) { index, program ->
+            itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
 
                 LaunchedEffect(index) {
-                    if (!isLoadingMore && index >= recentRecordings.size - 4) {
-                        onLoadMore()
-                    }
+                    if (!isLoadingMore && index >= recentRecordings.size - 4) onLoadMore()
                 }
 
                 RecordedCard(
-                    program = program,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    onClick = { onProgramClick(program, null) }, // ★修正: nullを渡してレジュームを優先
+                    program = program, konomiIp = konomiIp, konomiPort = konomiPort,
+                    onClick = { onProgramClick(program, null) },
                     modifier = Modifier
                         .aspectRatio(16f / 9f)
                         .then(
-                            if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                            if (index == firstVisibleIndex) Modifier.focusRequester(
+                                firstItemFocusRequester
+                            ) else Modifier
                         )
                         .focusProperties {
                             if (index < 4) {
-                                up = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                                up =
+                                    if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
                             }
-                        }
-                        .onKeyEvent { event ->
-                            // ★一番左の列(4列なら index % 4 == 0)で左キーが押されたらメニュー起動
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index % 4 == 0) {
-                                onOpenNavPane()
-                                true
-                            } else false
+                            // ★修正: グリッド表示では左キーでナビゲーションメニューを開かないように修正
                         }
                 )
             }
 
             if (isLoadingMore) {
-                // ★修正: 標準の GridItemSpan を使用
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .height(80.dp),
                         contentAlignment = Alignment.Center
-                    ) { CircularProgressIndicator(color = colors.textPrimary) }
+                    ) {
+                        CircularProgressIndicator(color = colors.textPrimary)
+                    }
                 }
             }
         }

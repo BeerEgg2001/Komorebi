@@ -6,10 +6,13 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
@@ -25,10 +28,18 @@ fun RecordGenrePane(
     genres: List<String>,
     selectedGenre: String?,
     onGenreSelect: (String) -> Unit,
-    onClosePane: () -> Unit, // ★追加: 左キーで戻るためのコールバック
+    onClosePane: () -> Unit,
+    firstItemFocusRequester: FocusRequester,
+    onFirstItemBound: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
+    val listState = rememberLazyListState()
+
+    val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    LaunchedEffect(isListReady) {
+        onFirstItemBound(isListReady)
+    }
 
     Surface(
         modifier = modifier.fillMaxHeight(),
@@ -47,6 +58,7 @@ fun RecordGenrePane(
             )
 
             LazyColumn(
+                state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
                 modifier = Modifier.fillMaxSize()
@@ -57,7 +69,8 @@ fun RecordGenrePane(
                         isSelected = selectedGenre.isNullOrEmpty(),
                         genreColor = colors.textSecondary,
                         onClick = { onGenreSelect("") },
-                        onBack = onClosePane // ★追加
+                        onBack = onClosePane,
+                        modifier = Modifier.focusRequester(firstItemFocusRequester)
                     )
                 }
 
@@ -67,7 +80,7 @@ fun RecordGenrePane(
                         isSelected = selectedGenre == genre,
                         genreColor = EpgUtils.getGenreColor(genre),
                         onClick = { onGenreSelect(genre) },
-                        onBack = onClosePane // ★追加
+                        onBack = onClosePane
                     )
                 }
             }
@@ -82,25 +95,19 @@ private fun GenreItem(
     isSelected: Boolean,
     genreColor: Color,
     onClick: () -> Unit,
-    onBack: () -> Unit // ★追加
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    val baseBorder = if (isSelected) {
-        Border(BorderStroke(1.5.dp, genreColor))
-    } else {
-        Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
-    }
-
     Surface(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .onKeyEvent { event ->
-                // ★左キーが押されたらパネルを閉じる（親に通知）
                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
                     onBack()
                     true
@@ -115,7 +122,9 @@ private fun GenreItem(
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
-            border = baseBorder,
+            border = if (isSelected) Border(BorderStroke(1.5.dp, genreColor)) else Border(
+                BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f))
+            ),
             focusedBorder = Border(BorderStroke(2.dp, colors.accent))
         )
     ) {
