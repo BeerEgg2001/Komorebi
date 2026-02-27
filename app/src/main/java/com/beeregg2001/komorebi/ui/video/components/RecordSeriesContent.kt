@@ -44,26 +44,30 @@ fun RecordSeriesContent(
 ) {
     val colors = KomorebiTheme.colors
 
+    // 描画されている最初のアイテムのインデックスを取得
     val firstVisibleIndex by remember {
         derivedStateOf {
             gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
         }
     }
+
+    // リストが物理的に表示されているか判定
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
     LaunchedEffect(isListReady, seriesList) {
+        // リストが存在し、かつ1件以上データがある場合に「準備完了」を親に通知
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading && seriesList.isEmpty()) {
-            Box(
-                Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator(color = colors.textPrimary) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = colors.textPrimary)
+            }
         } else {
             TvLazyVerticalGrid(
-                state = gridState, columns = TvGridCells.Fixed(3),
+                state = gridState,
+                columns = TvGridCells.Fixed(3),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = PaddingValues(
@@ -80,41 +84,39 @@ fun RecordSeriesContent(
                         onClick = { onSeriesClick(pair.second) },
                         modifier = Modifier
                             .onFocusChanged { isFocused = it.isFocused }
+                            // 最初の可視アイテムにリクエスターを付与
                             .then(
                                 if (index == firstVisibleIndex) Modifier.focusRequester(
                                     firstItemFocusRequester
                                 ) else Modifier
                             )
                             .focusProperties {
-                                if (index < 3) up =
-                                    if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                                if (index < 3) {
+                                    up =
+                                        if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+                                }
                             }
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     if (event.key == Key.Back || event.key == Key.Escape) {
-                                        onBackPress(); true
+                                        onBackPress()
+                                        true
                                     } else if (event.key == Key.DirectionLeft && index % 3 == 0) {
-                                        onOpenNavPane(); true
+                                        onOpenNavPane()
+                                        true
                                     } else false
                                 } else false
                             },
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
                         colors = ClickableSurfaceDefaults.colors(
-                            containerColor = colors.textPrimary.copy(
-                                alpha = 0.05f
-                            ),
+                            containerColor = colors.textPrimary.copy(alpha = 0.05f),
                             focusedContainerColor = colors.textPrimary,
                             contentColor = colors.textPrimary,
                             focusedContentColor = if (colors.isDark) Color.Black else Color.White
                         ),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
                         border = ClickableSurfaceDefaults.border(
-                            focusedBorder = Border(
-                                BorderStroke(
-                                    2.dp,
-                                    colors.accent
-                                )
-                            )
+                            focusedBorder = Border(BorderStroke(2.dp, colors.accent))
                         )
                     ) {
                         Text(

@@ -48,7 +48,7 @@ fun RecordNavigationPane(
             RecordCategory.values().forEachIndexed { index, category ->
                 NavigationItem(
                     category = category,
-                    isSelected = selectedCategory == category,
+                    isSelected = selectedCategory == category, // ★常に accent 表示を維持
                     isOverlay = isOverlay,
                     modifier = if (index == 0) Modifier.padding(top = 0.dp) else Modifier,
                     onClick = { onCategorySelect(category) }
@@ -85,6 +85,7 @@ private fun NavigationItem(
                 } else false
             },
         colors = ClickableSurfaceDefaults.colors(
+            // ★isSelected (selectedCategory と一致) の時にアクセントカラーを表示
             containerColor = if (isSelected) colors.accent.copy(alpha = 0.2f) else Color.Transparent,
             focusedContainerColor = colors.textPrimary,
             contentColor = if (isSelected) colors.accent else colors.textPrimary,
@@ -109,7 +110,6 @@ private fun NavigationItem(
                 fontSize = 15.sp,
                 maxLines = 1,
                 style = MaterialTheme.typography.labelLarge,
-                // ★フォーカス時のみマーキーを有効化
                 modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier)
             )
         }

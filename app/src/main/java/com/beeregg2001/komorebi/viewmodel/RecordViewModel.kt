@@ -1,7 +1,9 @@
 package com.beeregg2001.komorebi.viewmodel
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
@@ -22,6 +24,9 @@ import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import java.time.ZonedDateTime
+import java.time.format.TextStyle
+import java.util.Locale
 
 private const val TAG = "Komorebi_RecordVM"
 private const val PREF_NAME = "search_history_pref"
@@ -45,30 +50,38 @@ class RecordViewModel @Inject constructor(
     private val _selectedGenre = MutableStateFlow<String?>(null)
     val selectedGenre: StateFlow<String?> = _selectedGenre.asStateFlow()
 
+    // ★追加: 曜日フィルタ
+    private val _selectedDay = MutableStateFlow<String?>(null)
+    val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
+
+    @RequiresApi(Build.VERSION_CODES.O)
     val recentRecordings: StateFlow<List<RecordedProgram>> = combine(
         _allRecordings,
         _selectedCategory,
         _selectedGenre,
-        _selectedChannelId
-    ) { recordings, category, genre, channelId ->
+        _selectedChannelId,
+        _selectedDay // ★結合対象に追加
+    ) { recordings, category, genre, channelId, day ->
         when (category) {
             RecordCategory.ALL -> recordings
             RecordCategory.UNWATCHED -> {
                 recordings.filter { it.playbackPosition < 5.0 }
             }
-
             RecordCategory.GENRE -> {
                 if (genre.isNullOrEmpty()) recordings
                 else recordings.filter { prog ->
                     prog.genres?.any { g -> g.major == genre } == true
                 }
             }
-
             RecordCategory.CHANNEL -> {
                 if (channelId.isNullOrEmpty()) recordings
                 else recordings.filter { it.channel?.id == channelId }
             }
-
+            // ★曜日別のフィルタリング処理
+            RecordCategory.TIME -> {
+                if (day.isNullOrEmpty()) recordings
+                else recordings.filter { prog -> getDayOfWeekString(prog.startTime) == day }
+            }
             else -> recordings
         }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -109,6 +122,21 @@ class RecordViewModel @Inject constructor(
         loadSearchHistory()
         fetchRecentRecordings(forceRefresh = true)
         buildSeriesAndChannelMaps()
+    }
+
+    // 曜日判定用のヘルパー関数
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun getDayOfWeekString(startTime: String): String {
+        return try {
+            val zdt = ZonedDateTime.parse(startTime)
+            zdt.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.JAPANESE) // "月曜日" 形式
+        } catch (e: Exception) { "" }
+    }
+
+    // ★曜日更新
+    fun updateDay(day: String?) {
+        _selectedDay.value = day
+        _selectedCategory.value = RecordCategory.TIME
     }
 
     fun updateCategory(category: RecordCategory) {
@@ -383,7 +411,7 @@ class RecordViewModel @Inject constructor(
         viewModelScope.launch {
             _isSeriesLoading.value = true
             val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
-            val allChannelMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+            val allChannelMap = mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
             val genresSet = mutableSetOf<String>()
             var page = 1
 
@@ -415,7 +443,7 @@ class RecordViewModel @Inject constructor(
                             }
                             val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
                             if (!channelTypeMap.containsKey(ch.id)) {
-                                channelTypeMap[ch.id] = Pair(ch.name, ch.id)
+                                channelTypeMap[ch.id] = Triple(ch.name, ch.id, ch.displayChannelId)
                             }
                         }
                     }
@@ -438,7 +466,9 @@ class RecordViewModel @Inject constructor(
                         if (index != -1) index else typePriority.size
                     }
                     .associate { entry ->
-                        entry.key to entry.value.values.sortedBy { it.first }
+                        entry.key to entry.value.values
+                            .sortedBy { it.third }
+                            .map { Pair(it.first, it.second) }
                     }
 
             } catch (e: Exception) {

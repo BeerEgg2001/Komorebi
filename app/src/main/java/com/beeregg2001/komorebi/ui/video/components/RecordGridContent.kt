@@ -1,11 +1,7 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,7 +12,6 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
-import androidx.compose.ui.input.key.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -42,9 +37,7 @@ fun RecordGridContent(
     val colors = KomorebiTheme.colors
 
     val firstVisibleIndex by remember {
-        derivedStateOf {
-            gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
-        }
+        derivedStateOf { gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
     }
 
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
@@ -63,13 +56,7 @@ fun RecordGridContent(
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier
-                .fillMaxSize()
-                .focusProperties {
-                    if (isSearchBarVisible || isKeyboardActive) {
-                        enter = { FocusRequester.Cancel }
-                    }
-                }
+            modifier = Modifier.fillMaxSize()
         ) {
             itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
 
@@ -92,8 +79,9 @@ fun RecordGridContent(
                                 up =
                                     if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
                             }
-                            // ★修正: グリッド表示では左キーでナビゲーションメニューを開かないように修正
                         }
+                    // ★「引き算」：ここに存在した onKeyEvent(Key.Back) を削除しました。
+                    // これにより、画面全体の BackHandler との競合が解消されます。
                 )
             }
 

@@ -25,9 +25,9 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
-fun RecordChannelPane(
-    groupedChannels: Map<String, List<Pair<String, String>>>,
-    onChannelSelect: (String) -> Unit,
+fun RecordDayPane(
+    selectedDay: String?,
+    onDaySelect: (String) -> Unit,
     onClosePane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
     onFirstItemBound: (Boolean) -> Unit,
@@ -36,24 +36,11 @@ fun RecordChannelPane(
     val colors = KomorebiTheme.colors
     val listState = rememberLazyListState()
 
-    var selectedType by remember { mutableStateOf<String?>(null) }
-
-    val currentItems = remember(selectedType, groupedChannels) {
-        if (selectedType == null) {
-            groupedChannels.keys.toList()
-        } else {
-            groupedChannels[selectedType] ?: emptyList()
-        }
-    }
+    val days = listOf("月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日")
 
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
-    LaunchedEffect(isListReady, currentItems) {
+    LaunchedEffect(isListReady) {
         onFirstItemBound(isListReady)
-    }
-
-    LaunchedEffect(selectedType) {
-        delay(150)
-        firstItemFocusRequester.safeRequestFocus("ChannelPaneStateChange")
     }
 
     Surface(
@@ -66,7 +53,7 @@ fun RecordChannelPane(
             .fillMaxSize()
             .padding(horizontal = 16.dp)) {
             Text(
-                text = if (selectedType == null) "放送波種別" else "チャンネル選択 ($selectedType)",
+                text = "曜日を選択",
                 style = MaterialTheme.typography.titleSmall,
                 color = colors.textSecondary,
                 modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)
@@ -78,17 +65,10 @@ fun RecordChannelPane(
                 contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                itemsIndexed(currentItems) { index, item ->
-                    val label =
-                        if (item is Pair<*, *>) (item as Pair<String, String>).first else item.toString()
-                    val id =
-                        if (item is Pair<*, *>) (item as Pair<String, String>).second else item.toString()
-
+                itemsIndexed(days) { index, day ->
+                    val isSelected = selectedDay == day
                     Surface(
-                        onClick = {
-                            if (selectedType == null) selectedType = id
-                            else onChannelSelect(id)
-                        },
+                        onClick = { onDaySelect(day) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)
@@ -96,20 +76,15 @@ fun RecordChannelPane(
                             .focusProperties {
                                 // ★上下右のフォーカス逸脱をガード
                                 if (index == 0) up = FocusRequester.Cancel
-                                if (index == currentItems.lastIndex) down = FocusRequester.Cancel
+                                if (index == days.lastIndex) down = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
                             }
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     when (event.key) {
                                         Key.DirectionLeft, Key.Back, Key.Escape -> {
-                                            if (selectedType != null) {
-                                                selectedType = null
-                                                true
-                                            } else {
-                                                onClosePane()
-                                                true
-                                            }
+                                            onClosePane()
+                                            true
                                         }
 
                                         else -> false
@@ -118,9 +93,9 @@ fun RecordChannelPane(
                             },
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                         colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Color.Transparent,
+                            containerColor = if (isSelected) colors.accent.copy(alpha = 0.15f) else Color.Transparent,
                             focusedContainerColor = colors.textPrimary,
-                            contentColor = colors.textPrimary,
+                            contentColor = if (isSelected) colors.accent else colors.textPrimary,
                             focusedContentColor = if (colors.isDark) Color.Black else Color.White
                         ),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
@@ -140,7 +115,7 @@ fun RecordChannelPane(
                                 .padding(horizontal = 12.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
-                            Text(text = label, fontSize = 15.sp, maxLines = 1)
+                            Text(text = day, fontSize = 15.sp, maxLines = 1)
                         }
                     }
                 }

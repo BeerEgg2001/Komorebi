@@ -10,8 +10,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -22,7 +24,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.util.EpgUtils
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun RecordGenrePane(
     genres: List<String>,
@@ -64,23 +66,36 @@ fun RecordGenrePane(
                 modifier = Modifier.fillMaxSize()
             ) {
                 item {
+                    // ★一番上のアイテム：上方向と右方向をガード
                     GenreItem(
                         label = "全てのジャンル",
                         isSelected = selectedGenre.isNullOrEmpty(),
                         genreColor = colors.textSecondary,
                         onClick = { onGenreSelect("") },
                         onBack = onClosePane,
-                        modifier = Modifier.focusRequester(firstItemFocusRequester)
+                        modifier = Modifier
+                            .focusRequester(firstItemFocusRequester)
+                            .focusProperties {
+                                up = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
                     )
                 }
 
-                itemsIndexed(genres) { _, genre ->
+                itemsIndexed(genres) { index, genre ->
+                    // ★リスト内のアイテム：右方向、および最後尾の場合は下方向をガード
                     GenreItem(
                         label = genre,
                         isSelected = selectedGenre == genre,
                         genreColor = EpgUtils.getGenreColor(genre),
                         onClick = { onGenreSelect(genre) },
-                        onBack = onClosePane
+                        onBack = onClosePane,
+                        modifier = Modifier.focusProperties {
+                            right = FocusRequester.Cancel
+                            if (index == genres.lastIndex) {
+                                down = FocusRequester.Cancel
+                            }
+                        }
                     )
                 }
             }

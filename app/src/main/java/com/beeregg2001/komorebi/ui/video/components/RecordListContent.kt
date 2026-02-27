@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.ui.video.components
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -68,19 +69,16 @@ fun RecordListContent(
     var detailProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var isSideMenuOpen by remember { mutableStateOf(false) }
 
-    // リスト更新時にIDマップを再生成し、古い参照を消去
     val itemFocusRequesters = remember(recentRecordings) { mutableMapOf<Int, FocusRequester>() }
     val menuFirstItemRequester = remember { FocusRequester() }
     val detailPanelFocusRequester = remember { FocusRequester() }
 
-    // ★重要：現在画面に映っている最初のアイテムのインデックスを取得
     val firstVisibleIndex by remember {
         derivedStateOf {
             listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
         }
     }
 
-    // 準備完了状態の監視
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
     LaunchedEffect(isListReady, recentRecordings) {
         onFirstItemBound(isListReady && recentRecordings.isNotEmpty())
@@ -130,7 +128,6 @@ fun RecordListContent(
                             }
                             false
                         }
-                        // ★修正：「一番上の固定位置」ではなく「現在見えている先頭アイテム」にリクエスターを追従させる
                         .then(
                             if (index == firstVisibleIndex) Modifier.focusRequester(
                                 firstItemFocusRequester
@@ -160,19 +157,28 @@ fun RecordListContent(
                 if (isSideMenuOpen) {
                     delay(10); menuFirstItemRequester.safeRequestFocus("BackToSubMenu")
                 } else if (focusedProgram != null) {
-                    // IDマップに存在を確認してから安全にリクエスト
                     itemFocusRequesters[focusedProgram!!.id]?.safeRequestFocus("ReturnDetail")
                 }
             }
         }
 
-        if (isSideMenuOpen || isDetailVisible) {
+        // ★修正: if 文から AnimatedVisibility に変更し、右側への終了アニメーションを適用
+        AnimatedVisibility(
+            visible = isSideMenuOpen || isDetailVisible,
+            enter = slideInHorizontally(animationSpec = tween(250)) { it },
+            exit = slideOutHorizontally(animationSpec = tween(250)) { it } + fadeOut(
+                animationSpec = tween(
+                    150
+                )
+            ),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .zIndex(50f)
+        ) {
             Surface(
                 modifier = Modifier
                     .width(overlayWidth)
                     .fillMaxHeight()
-                    .align(Alignment.CenterEnd)
-                    .zIndex(50f)
                     .focusGroup()
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown) {
@@ -186,8 +192,6 @@ fun RecordListContent(
                                 onDetailStateChange(false)
                                 scope.launch {
                                     delay(10)
-                                    // 最後にフォーカスされていたアイテムへ戻る。
-                                    // もしそれが消えていれば(カテゴリ変更等)、システムが自動的にvisibleIndex(firstItemFocusRequester)を探します。
                                     focusedProgram?.let { prog ->
                                         itemFocusRequesters[prog.id]?.safeRequestFocus("ReturnFromSide")
                                     } ?: firstItemFocusRequester.safeRequestFocus("ReturnToTop")
