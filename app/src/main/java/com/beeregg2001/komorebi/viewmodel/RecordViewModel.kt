@@ -36,6 +36,9 @@ class RecordViewModel @Inject constructor(
 
     private val _allRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
 
+    private val _selectedChannelId = MutableStateFlow<String?>(null)
+    val selectedChannelId: StateFlow<String?> = _selectedChannelId.asStateFlow()
+
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
 
@@ -45,20 +48,27 @@ class RecordViewModel @Inject constructor(
     val recentRecordings: StateFlow<List<RecordedProgram>> = combine(
         _allRecordings,
         _selectedCategory,
-        _selectedGenre
-    ) { recordings, category, genre ->
+        _selectedGenre,
+        _selectedChannelId
+    ) { recordings, category, genre, channelId ->
         when (category) {
             RecordCategory.ALL -> recordings
             RecordCategory.UNWATCHED -> {
                 recordings.filter { it.playbackPosition < 5.0 }
             }
+
             RecordCategory.GENRE -> {
-                // ★修正: ジャンルが空文字列またはnullの場合はフィルタリングせず全件表示
                 if (genre.isNullOrEmpty()) recordings
                 else recordings.filter { prog ->
                     prog.genres?.any { g -> g.major == genre } == true
                 }
             }
+
+            RecordCategory.CHANNEL -> {
+                if (channelId.isNullOrEmpty()) recordings
+                else recordings.filter { it.channel?.id == channelId }
+            }
+
             else -> recordings
         }
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -69,21 +79,24 @@ class RecordViewModel @Inject constructor(
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
-    private val _groupedSeries = MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
-    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> = _groupedSeries.asStateFlow()
-
-    val availableGenres: StateFlow<List<String>> = _allRecordings.map { recordings ->
-        recordings.flatMap { it.genres ?: emptyList() }
-            .map { it.major }
-            .distinct()
-            .sorted()
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
 
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
+
+    private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
+    val availableGenres: StateFlow<List<String>> = _availableGenres.asStateFlow()
+
+    private val _groupedSeries =
+        MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
+    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> =
+        _groupedSeries.asStateFlow()
+
+    private val _groupedChannels =
+        MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
+    val groupedChannels: StateFlow<Map<String, List<Pair<String, String>>>> =
+        _groupedChannels.asStateFlow()
 
     private var currentPage = 1
     private var totalItems = 0
@@ -94,17 +107,28 @@ class RecordViewModel @Inject constructor(
 
     init {
         loadSearchHistory()
+        fetchRecentRecordings(forceRefresh = true)
+        buildSeriesAndChannelMaps()
     }
 
     fun updateCategory(category: RecordCategory) {
         if (_selectedCategory.value == category) return
         _selectedCategory.value = category
         _selectedGenre.value = null
+        _selectedChannelId.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
     fun updateGenre(genre: String?) {
         _selectedGenre.value = genre
+    }
+
+    fun updateChannel(channelId: String?) {
+        _selectedChannelId.value = channelId
+        _selectedCategory.value = RecordCategory.CHANNEL
+        _selectedGenre.value = null
+        currentSearchQuery = ""
+        fetchInitialRecordings()
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
@@ -128,6 +152,8 @@ class RecordViewModel @Inject constructor(
             try {
                 currentPage = 1
                 hasMorePages = true
+
+                // 1ページ目のリクエスト
                 val response = if (currentSearchQuery.isNotBlank()) {
                     repository.searchRecordedPrograms(keyword = currentSearchQuery, page = 1)
                 } else {
@@ -135,22 +161,40 @@ class RecordViewModel @Inject constructor(
                 }
 
                 totalItems = response.total
-                val programs = response.recordedPrograms
-                val ids = programs.map { it.id }
-                val historyEntities = repository.getHistoryEntitiesByIds(ids)
-                val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition }
+                val allFetchedPrograms = response.recordedPrograms.toMutableList()
 
-                val initialList = programs.map { program ->
+                // 総数に基づいて、残りの全ページをループで取得
+                val totalPages = if (totalItems <= 0) 1 else (totalItems + pageSize - 1) / pageSize
+                if (totalPages > 1) {
+                    for (p in 2..totalPages) {
+                        val nextResponse = if (currentSearchQuery.isNotBlank()) {
+                            repository.searchRecordedPrograms(keyword = currentSearchQuery, page = p)
+                        } else {
+                            repository.getRecordedPrograms(page = p)
+                        }
+                        allFetchedPrograms.addAll(nextResponse.recordedPrograms)
+                    }
+                }
+
+                // 全取得データのIDから、再生履歴情報を一括取得
+                val ids = allFetchedPrograms.map { it.id }
+                val historyEntities = repository.getHistoryEntitiesByIds(ids)
+                val historyMap: Map<Int, Double> =
+                    historyEntities.associate { it.id to it.playbackPosition }
+
+                // 番組情報にメタデータをマッピング
+                val initialList = allFetchedPrograms.map { program ->
                     program.copy(
                         isRecording = program.recordedVideo.status == "Recording",
                         playbackPosition = historyMap[program.id] ?: 0.0
                     )
                 }
 
-                if (initialList.size < pageSize || (totalItems > 0 && initialList.size >= totalItems)) {
-                    hasMorePages = false
-                }
+                // 全件取得したため、hasMorePagesはfalse、currentPageは最終ページに更新
+                hasMorePages = false
+                currentPage = totalPages
                 _allRecordings.value = initialList
+
             } catch (e: Exception) {
                 Log.e(TAG, "Initial fetch failed", e)
             } finally {
@@ -160,6 +204,8 @@ class RecordViewModel @Inject constructor(
     }
 
     fun loadNextPage() {
+        // fetchInitialRecordings で全件取得するようになったため、通常はここを通りませんが
+        // 安全のために既存ロジックをそのまま残します
         if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) return
         viewModelScope.launch {
             _isLoadingMore.value = true
@@ -174,7 +220,8 @@ class RecordViewModel @Inject constructor(
                 val programs = response.recordedPrograms
                 val ids = programs.map { it.id }
                 val historyEntities = repository.getHistoryEntitiesByIds(ids)
-                val historyMap: Map<Int, Double> = historyEntities.associate { it.id to it.playbackPosition}
+                val historyMap: Map<Int, Double> =
+                    historyEntities.associate { it.id to it.playbackPosition }
 
                 val newItems = programs.map { program ->
                     program.copy(
@@ -206,7 +253,9 @@ class RecordViewModel @Inject constructor(
             val jsonString = prefs.getString(KEY_HISTORY, "[]")
             val jsonArray = JSONArray(jsonString)
             val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) { list.add(jsonArray.getString(i)) }
+            for (i in 0 until jsonArray.length()) {
+                list.add(jsonArray.getString(i))
+            }
             _searchHistory.value = list
         } catch (e: Exception) {
             _searchHistory.value = emptyList()
@@ -236,7 +285,8 @@ class RecordViewModel @Inject constructor(
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
                 prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
-            } catch (e: Exception) { }
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -323,6 +373,76 @@ class RecordViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Series build error", e)
+            } finally {
+                _isSeriesLoading.value = false
+            }
+        }
+    }
+
+    private fun buildSeriesAndChannelMaps() {
+        viewModelScope.launch {
+            _isSeriesLoading.value = true
+            val allSeriesMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+            val allChannelMap = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
+            val genresSet = mutableSetOf<String>()
+            var page = 1
+
+            try {
+                while (true) {
+                    val response = repository.getRecordedPrograms(page = page)
+                    if (response.recordedPrograms.isEmpty()) break
+
+                    response.recordedPrograms.forEach { prog ->
+                        // 1. ジャンルの抽出
+                        val genre = prog.genres?.firstOrNull()?.major ?: "その他"
+                        genresSet.add(genre)
+
+                        val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
+                        val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
+
+                        if (displayTitle.isNotEmpty()) {
+                            val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
+                            if (!genreMap.containsKey(displayTitle)) {
+                                genreMap[displayTitle] = Pair(displayTitle, searchKeyword)
+                            }
+                        }
+
+                        // 2. 放送波の判定 (IDの接頭辞も考慮して確実に分類)
+                        prog.channel?.let { ch ->
+                            val type = when {
+                                ch.type == "GR" -> "地デジ"
+                                else -> ch.type
+                            }
+                            val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+                            if (!channelTypeMap.containsKey(ch.id)) {
+                                channelTypeMap[ch.id] = Pair(ch.name, ch.id)
+                            }
+                        }
+                    }
+                    // ★ 1ページ30件のため、30件未満なら終了とする
+                    if (response.recordedPrograms.size < 30) break
+                    page++
+                }
+
+                _availableGenres.value = genresSet.sorted()
+                _groupedSeries.value = allSeriesMap.mapValues { entry ->
+                    entry.value.values.sortedBy { it.first }
+                }
+
+                // 放送波種別の表示順を定義
+                val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
+
+                _groupedChannels.value = allChannelMap.entries
+                    .sortedBy { (type, _) ->
+                        val index = typePriority.indexOf(type)
+                        if (index != -1) index else typePriority.size
+                    }
+                    .associate { entry ->
+                        entry.key to entry.value.values.sortedBy { it.first }
+                    }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Map building error", e)
             } finally {
                 _isSeriesLoading.value = false
             }

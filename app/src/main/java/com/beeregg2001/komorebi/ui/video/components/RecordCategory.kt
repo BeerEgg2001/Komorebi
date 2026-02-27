@@ -10,5 +10,5 @@ enum class RecordCategory(val label: String, val icon: ImageVector) {
     SERIES("シリーズ別", Icons.Default.VideoLibrary),
     GENRE("ジャンル別", Icons.Default.Category),
     CHANNEL("チャンネル別", Icons.Default.Tv),
-    TIME("曜日・時間帯", Icons.Default.Schedule)
+    TIME("曜日別", Icons.Default.Schedule) // ★名称を変更
 }

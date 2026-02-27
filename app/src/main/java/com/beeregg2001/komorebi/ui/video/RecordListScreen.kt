@@ -61,6 +61,7 @@ fun RecordListScreen(
     val colors = KomorebiTheme.colors
     val recentRecordings by viewModel.recentRecordings.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
+    val groupedChannels by viewModel.groupedChannels.collectAsState()
     val isLoadingInitial by viewModel.isRecordingLoading.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
 
@@ -74,6 +75,7 @@ fun RecordListScreen(
     var isNavPaneOpen by remember { mutableStateOf(false) }
     var isGenrePaneOpen by remember { mutableStateOf(false) }
     var isSeriesGenrePaneOpen by remember { mutableStateOf(false) }
+    var isChannelPaneOpen by remember { mutableStateOf(false) }
     var selectedSeriesGenre by remember { mutableStateOf<String?>(null) }
 
     var isDetailActive by remember { mutableStateOf(false) }
@@ -83,6 +85,9 @@ fun RecordListScreen(
     var activeSearchQuery by remember { mutableStateOf("") }
     var isSearchBarVisible by remember { mutableStateOf(false) }
     var isListView by remember { mutableStateOf(true) }
+
+    // ★追加: 初回起動時のフォーカス判定フラグ
+    var isInitialFocusRequested by remember { mutableStateOf(true) }
 
     val currentDisplayTitle by remember(customTitle, selectedGenre) {
         mutableStateOf(if (!selectedGenre.isNullOrEmpty()) "${selectedGenre}の録画リスト" else customTitle)
@@ -103,21 +108,23 @@ fun RecordListScreen(
     val viewToggleButtonFocusRequester = remember { FocusRequester() }
     val navPaneFocusRequester = remember { FocusRequester() }
     val genrePaneFocusRequester = remember { FocusRequester() }
+    val channelPaneFocusRequester = remember { FocusRequester() }
     val seriesGenrePaneFocusRequester = remember { FocusRequester() }
     val firstItemFocusRequester = remember { FocusRequester() }
 
     val focusTrapRequester = remember { FocusRequester() }
-    val genreFirstItemFocusRequester = remember { FocusRequester() }
+    val paneFirstItemFocusRequester = remember { FocusRequester() }
     var isListFirstItemReady by remember { mutableStateOf(false) }
-    var isGenreListReady by remember { mutableStateOf(false) }
+    var isPaneListReady by remember { mutableStateOf(false) }
 
-    val isPaneOpen = isGenrePaneOpen || isSeriesGenrePaneOpen
+    val isPaneOpen = isGenrePaneOpen || isSeriesGenrePaneOpen || isChannelPaneOpen
 
     val isCategoryImplemented = remember(selectedCategory) {
         selectedCategory == RecordCategory.ALL ||
                 selectedCategory == RecordCategory.UNWATCHED ||
                 selectedCategory == RecordCategory.GENRE ||
-                selectedCategory == RecordCategory.SERIES
+                selectedCategory == RecordCategory.SERIES ||
+                selectedCategory == RecordCategory.CHANNEL
     }
 
     val hasContent = remember(
@@ -156,21 +163,33 @@ fun RecordListScreen(
     LaunchedEffect(isPaneOpen) {
         if (!isPaneOpen && !isLoadingInitial && !isSearchBarVisible && !isDetailActive) {
             delay(50)
-            if (isListView) navPaneFocusRequester.safeRequestFocus("ReturnFromGenrePane")
+            if (isListView) navPaneFocusRequester.safeRequestFocus("ReturnFromPane")
         }
     }
 
+    // ★修正: リスト描画完了後のフォーカス制御を強化
     LaunchedEffect(isListFirstItemReady) {
         if (isListFirstItemReady && !isPaneOpen && !isDetailActive) {
             delay(100)
-            firstItemFocusRequester.safeRequestFocus("ListReadyHandover")
+            if (isInitialFocusRequested) {
+                // 初回読み込み時はメニューにフォーカス
+                if (isListView) {
+                    navPaneFocusRequester.safeRequestFocus("InitialMenuFocus")
+                } else {
+                    firstItemFocusRequester.safeRequestFocus("InitialGridFocus")
+                }
+                isInitialFocusRequested = false
+            } else {
+                // メニューで項目を選択した後は、自動的にリストへフォーカスを飛ばす
+                firstItemFocusRequester.safeRequestFocus("ContentSelectedFocus")
+            }
         }
     }
 
-    LaunchedEffect(isGenreListReady, isPaneOpen) {
-        if (isGenreListReady && isPaneOpen) {
+    LaunchedEffect(isPaneListReady, isPaneOpen) {
+        if (isPaneListReady && isPaneOpen) {
             delay(100)
-            genreFirstItemFocusRequester.safeRequestFocus("GenreReadyHandover")
+            paneFirstItemFocusRequester.safeRequestFocus("PaneReadyHandover")
         }
     }
 
@@ -195,25 +214,16 @@ fun RecordListScreen(
         scope.launch {
             listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(0)
         }
-        when (category) {
-            RecordCategory.GENRE -> {
-                isGenrePaneOpen = true; isSeriesGenrePaneOpen = false
-            }
-
-            RecordCategory.SERIES -> {
-                isSeriesGenrePaneOpen = true; isGenrePaneOpen = false
-            }
-
-            else -> {
-                isGenrePaneOpen = false; isSeriesGenrePaneOpen = false
-            }
-        }
+        isGenrePaneOpen = (category == RecordCategory.GENRE)
+        isChannelPaneOpen = (category == RecordCategory.CHANNEL)
+        isSeriesGenrePaneOpen = (category == RecordCategory.SERIES)
     }
 
     val handleBackPress: () -> Unit = {
         when {
             isDetailActive -> isDetailActive = false
             isGenrePaneOpen -> isGenrePaneOpen = false
+            isChannelPaneOpen -> isChannelPaneOpen = false
             isSeriesGenrePaneOpen -> isSeriesGenrePaneOpen = false
             isNavPaneOpen -> {
                 firstItemFocusRequester.safeRequestFocus(TAG); isNavPaneOpen = false
@@ -249,22 +259,23 @@ fun RecordListScreen(
 
     val isNavVisible = isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()
     val contentStartPadding by animateDpAsState(
-        targetValue = if (isNavVisible) 228.dp else 28.dp,
+        targetValue = if (isNavVisible) 268.dp else 28.dp, // 240dp (width) + 28dp (gap)
         animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
         label = "ContentStartPadding"
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier
-            .size(1.dp)
-            .focusRequester(focusTrapRequester)
-            .focusable())
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .focusRequester(focusTrapRequester)
+                .focusable()
+        )
 
         Box(modifier = Modifier
             .fillMaxSize()
             .padding(top = 88.dp)) {
-
-            // 1. メインコンテンツ領域（Layer 1: 背面）
+            // 1. メインコンテンツ領域
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -334,7 +345,7 @@ fun RecordListScreen(
                 }
             }
 
-            // 2. ジャンル選択オーバーレイ（Layer 2: 中間 / 背面からスライド）
+            // 2. 選択オーバーレイ
             if (isListView) {
                 AnimatedVisibility(
                     visible = isPaneOpen,
@@ -346,7 +357,7 @@ fun RecordListScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .offset(x = 200.dp)
+                            .offset(x = 240.dp) // メニュー幅に合わせて調整
                             .width(220.dp)
                             .fillMaxHeight()
                             .padding(bottom = 20.dp)
@@ -360,14 +371,31 @@ fun RecordListScreen(
                                     false; isGenrePaneOpen = false
                                 },
                                 onClosePane = { isGenrePaneOpen = false },
-                                firstItemFocusRequester = genreFirstItemFocusRequester,
-                                onFirstItemBound = { isGenreListReady = it },
+                                firstItemFocusRequester = paneFirstItemFocusRequester,
+                                onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .focusRequester(genrePaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester
-                                        // ★修正：右キー操作を無効化し、フォーカスをオーバーレイ内に閉じ込める
+                                        right = FocusRequester.Cancel
+                                    }
+                            )
+                        } else if (isChannelPaneOpen) {
+                            RecordChannelPane(
+                                groupedChannels = groupedChannels,
+                                onChannelSelect = { channelId ->
+                                    viewModel.updateChannel(channelId); isListFirstItemReady =
+                                    false; isChannelPaneOpen = false
+                                },
+                                onClosePane = { isChannelPaneOpen = false },
+                                firstItemFocusRequester = paneFirstItemFocusRequester,
+                                onFirstItemBound = { isPaneListReady = it },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .focusRequester(channelPaneFocusRequester)
+                                    .focusProperties {
+                                        left = navPaneFocusRequester
                                         right = FocusRequester.Cancel
                                     }
                             )
@@ -380,14 +408,13 @@ fun RecordListScreen(
                                     false; isSeriesGenrePaneOpen = false
                                 },
                                 onClosePane = { isSeriesGenrePaneOpen = false },
-                                firstItemFocusRequester = genreFirstItemFocusRequester,
-                                onFirstItemBound = { isGenreListReady = it },
+                                firstItemFocusRequester = paneFirstItemFocusRequester,
+                                onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .focusRequester(seriesGenrePaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester
-                                        // ★修正：右キー操作を無効化
                                         right = FocusRequester.Cancel
                                     }
                             )
@@ -396,12 +423,12 @@ fun RecordListScreen(
                 }
             }
 
-            // 3. 左固定ナビゲーション（Layer 3: 最前面）
+            // 3. 左固定ナビゲーション
             if (isNavVisible) {
                 Box(
                     modifier = Modifier
                         .zIndex(2f)
-                        .width(200.dp)
+                        .width(240.dp)
                         .fillMaxHeight()
                         .padding(start = 28.dp, bottom = 20.dp)
                         .clip(RoundedCornerShape(16.dp))
@@ -419,6 +446,7 @@ fun RecordListScreen(
                                 canFocus = !isDetailActive && !isPaneOpen
                                 right = when {
                                     isGenrePaneOpen -> genrePaneFocusRequester
+                                    isChannelPaneOpen -> channelPaneFocusRequester
                                     isSeriesGenrePaneOpen -> seriesGenrePaneFocusRequester
                                     !hasContent || !isListFirstItemReady -> FocusRequester.Cancel
                                     else -> firstItemFocusRequester
@@ -464,36 +492,5 @@ fun RecordListScreen(
             onKeyboardActiveClick = { },
             onBackButtonFocusChanged = { isBackButtonFocused = it }
         )
-
-        if (!isListView) {
-            AnimatedVisibility(
-                visible = isNavPaneOpen,
-                enter = slideInHorizontally { -it },
-                exit = slideOutHorizontally { -it },
-                modifier = Modifier.zIndex(150f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(200.dp)
-                        .fillMaxHeight()
-                        .padding(start = 28.dp, bottom = 20.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(colors.surface.copy(alpha = 0.95f))
-                ) {
-                    RecordNavigationPane(
-                        selectedCategory = selectedCategory,
-                        onCategorySelect = handleCategorySelect,
-                        isOverlay = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(navPaneFocusRequester)
-                            .focusProperties {
-                                right =
-                                    if (!hasContent || !isListFirstItemReady) FocusRequester.Cancel else firstItemFocusRequester
-                            }
-                    )
-                }
-            }
-        }
     }
 }
