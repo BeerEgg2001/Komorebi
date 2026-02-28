@@ -97,9 +97,20 @@ fun HomeLauncherScreen(
     )
     val colors = KomorebiTheme.colors
     val tabs = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(lastPlayerChannelId) { ui.internalLastPlayerChannelId = lastPlayerChannelId }
+
+    // ★修正: タブに応じたポーリング（定期フェッチ）の開始・停止制御
+    LaunchedEffect(ui.selectedTabIndex) {
+        if (ui.selectedTabIndex == 0) {
+            // ホームタブ選択中のみポーリングを開始
+            channelViewModel.startPolling()
+            homeViewModel.refreshHomeData()
+        } else {
+            // 他のタブではポーリングを停止して通信を抑制
+            channelViewModel.stopPolling()
+        }
+    }
 
     // 初期起動時のデータ取得とフォーカス初期化
     LaunchedEffect(Unit) {
@@ -107,7 +118,7 @@ fun HomeLauncherScreen(
             homeViewModel.refreshHomeData()
             channelViewModel.fetchChannels()
         }
-        delay(300) // 起動時のフォーカス安定化
+        delay(300)
         if (!isReturningFromPlayer && ui.isFullScreen(
                 selectedChannel,
                 selectedProgram,
@@ -180,7 +191,6 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = ui.selectedTabIndex == index,
                                 onFocus = {
-                                    // ★修正：高速切り替え時のタブ選択ロジックを安全に呼び出す
                                     ui.onTabSelected(
                                         index,
                                         onTabChange,
@@ -295,7 +305,7 @@ fun HomeLauncherScreen(
                         watchHistory = ui.watchHistoryPrograms,
                         selectedProgram = selectedProgram,
                         restoreProgramId = if (isReturningFromPlayer && ui.selectedTabIndex == 2) lastPlayerProgramId?.toIntOrNull() else null,
-                        isLoading = ui.isLoadingInitial, // ★不足していたパラメータ
+                        isLoading = ui.isLoadingInitial,
                         konomiIp = konomiIp,
                         konomiPort = konomiPort,
                         topNavFocusRequester = ui.tabFocusRequesters[2],
@@ -307,7 +317,7 @@ fun HomeLauncherScreen(
                                     ?: program
                             )
                         },
-                        onViewAllClick = onShowAllRecordings, // ★不足していたパラメータ
+                        onViewAllClick = onShowAllRecordings,
                         onLoadMore = { recordViewModel.loadNextPage() },
                         isLoadingMore = ui.isLoadingMore,
                         onShowAllRecordings = onShowAllRecordings,

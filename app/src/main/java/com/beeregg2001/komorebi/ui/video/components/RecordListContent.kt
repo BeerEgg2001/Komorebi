@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.video.components
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -73,19 +74,34 @@ fun RecordListContent(
     val menuFirstItemRequester = remember { FocusRequester() }
     val detailPanelFocusRequester = remember { FocusRequester() }
 
+    val isAnyMenuOpen = isSideMenuOpen || isDetailVisible
+    val menuTransitionState =
+        remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
+
     val firstVisibleIndex by remember {
         derivedStateOf {
             listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
         }
     }
 
-    val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
-    LaunchedEffect(isListReady, recentRecordings) {
-        onFirstItemBound(isListReady && recentRecordings.isNotEmpty())
+    // ★修正: 1件目が見えていて、かつリストにデータがある状態を「準備完了」とする
+    val isListReady by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.isNotEmpty() && recentRecordings.isNotEmpty()
+        }
     }
 
-    LaunchedEffect(recentRecordings) {
-        focusedProgram = null
+    LaunchedEffect(isListReady) {
+        onFirstItemBound(isListReady)
+    }
+
+    LaunchedEffect(recentRecordings) { focusedProgram = null }
+
+    LaunchedEffect(menuTransitionState.isIdle, menuTransitionState.targetState) {
+        if (menuTransitionState.isIdle && menuTransitionState.targetState) {
+            if (isDetailVisible) detailPanelFocusRequester.safeRequestFocus("DetailOpened")
+            else if (isSideMenuOpen) menuFirstItemRequester.safeRequestFocus("SideMenuOpened")
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -95,12 +111,16 @@ fun RecordListContent(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxSize()
-                .focusProperties {
-                    canFocus = !isSideMenuOpen && !isDetailVisible
-                }
+                .focusProperties { canFocus = !isAnyMenuOpen }
+                .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
         ) {
             itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                val requester = itemFocusRequesters.getOrPut(program.id) { FocusRequester() }
+                // ★修正: 1番目のアイテムには明示的に firstItemFocusRequester を使用し、それ以外は個別Requester
+                val requester = if (index == firstVisibleIndex) {
+                    firstItemFocusRequester
+                } else {
+                    itemFocusRequesters.getOrPut(program.id) { FocusRequester() }
+                }
 
                 LaunchedEffect(index) {
                     if (!isLoadingMore && index >= recentRecordings.size - 4) onLoadMore()
@@ -114,8 +134,9 @@ fun RecordListContent(
                     modifier = Modifier
                         .focusRequester(requester)
                         .onFocusChanged {
-                            if (it.isFocused && !isSideMenuOpen && !isDetailVisible) focusedProgram =
-                                program
+                            if (it.isFocused && !isSideMenuOpen && !isDetailVisible) {
+                                focusedProgram = program
+                            }
                         }
                         .onKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown) {
@@ -128,48 +149,22 @@ fun RecordListContent(
                             }
                             false
                         }
-                        .then(
-                            if (index == firstVisibleIndex) Modifier.focusRequester(
-                                firstItemFocusRequester
-                            ) else Modifier
-                        )
                 )
             }
         }
 
         val overlayWidth by animateDpAsState(
             targetValue = when {
-                isDetailVisible -> 350.dp; isSideMenuOpen -> 180.dp; else -> 0.dp
+                isDetailVisible -> 350.dp; isSideMenuOpen -> 210.dp; else -> 0.dp
             },
             animationSpec = tween(250), label = "OverlayWidth"
         )
 
-        LaunchedEffect(isSideMenuOpen) {
-            if (isSideMenuOpen) {
-                delay(50); menuFirstItemRequester.safeRequestFocus("SideMenu")
-            }
-        }
-
-        LaunchedEffect(isDetailVisible) {
-            if (isDetailVisible) {
-                delay(50); detailPanelFocusRequester.safeRequestFocus("Detail")
-            } else {
-                if (isSideMenuOpen) {
-                    delay(10); menuFirstItemRequester.safeRequestFocus("BackToSubMenu")
-                } else if (focusedProgram != null) {
-                    itemFocusRequesters[focusedProgram!!.id]?.safeRequestFocus("ReturnDetail")
-                }
-            }
-        }
-
-        // ★修正: if 文から AnimatedVisibility に変更し、右側への終了アニメーションを適用
         AnimatedVisibility(
-            visible = isSideMenuOpen || isDetailVisible,
+            visibleState = menuTransitionState,
             enter = slideInHorizontally(animationSpec = tween(250)) { it },
             exit = slideOutHorizontally(animationSpec = tween(250)) { it } + fadeOut(
-                animationSpec = tween(
-                    150
-                )
+                animationSpec = tween(150)
             ),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -181,6 +176,8 @@ fun RecordListContent(
                     .fillMaxHeight()
                     .focusGroup()
                     .onKeyEvent { event ->
+                        if (!menuTransitionState.isIdle) return@onKeyEvent true
+
                         if (event.type == KeyEventType.KeyDown) {
                             val isLeftKey = event.key == Key.DirectionLeft
                             val isBackAction =
@@ -205,59 +202,101 @@ fun RecordListContent(
                 shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
                 border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
             ) {
-                if (isDetailVisible) {
-                    RecordDetailPanel(
-                        program = detailProgram,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        focusRequester = detailPanelFocusRequester,
-                        onClose = { onDetailStateChange(false) },
-                        modifier = Modifier.fillMaxSize()
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowLeft,
+                        contentDescription = null,
+                        tint = colors.textPrimary.copy(alpha = 0.4f),
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 4.dp)
+                            .size(24.dp)
                     )
-                } else {
-                    Column(
+
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 12.dp),
-                        verticalArrangement = Arrangement.Center
+                            .padding(start = 28.dp)
                     ) {
-                        SideMenuItem(
-                            icon = Icons.Default.PlayArrow, label = "再生する", isExpanded = true,
-                            modifier = Modifier.focusRequester(menuFirstItemRequester),
-                            onClick = { focusedProgram?.let { onProgramClick(it, null) } }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        SideMenuItem(
-                            icon = Icons.Default.Replay, label = "最初から再生", isExpanded = true,
-                            onClick = { focusedProgram?.let { onProgramClick(it, 0.0) } }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        SideMenuItem(
-                            icon = Icons.Default.Info, label = "番組詳細", isExpanded = true,
-                            onClick = { detailProgram = focusedProgram; onDetailStateChange(true) }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        SideMenuItem(
-                            icon = Icons.Default.LibraryBooks,
-                            label = "シリーズ検索",
-                            isExpanded = true,
-                            onClick = {
-                                focusedProgram?.let {
-                                    onSeriesSearch(
-                                        TitleNormalizer.extractSearchKeyword(
-                                            it.title
-                                        )
+                        if (isDetailVisible) {
+                            RecordDetailPanel(
+                                program = detailProgram,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                focusRequester = detailPanelFocusRequester,
+                                onClose = { onDetailStateChange(false) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 12.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                SideMenuItem(
+                                    icon = Icons.Default.PlayArrow,
+                                    label = "再生する",
+                                    isExpanded = true,
+                                    modifier = Modifier
+                                        .focusRequester(menuFirstItemRequester)
+                                        .focusProperties {
+                                            up = FocusRequester.Cancel
+                                            right = FocusRequester.Cancel
+                                        },
+                                    onClick = { focusedProgram?.let { onProgramClick(it, null) } }
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                SideMenuItem(
+                                    icon = Icons.Default.Replay,
+                                    label = "最初から再生",
+                                    isExpanded = true,
+                                    modifier = Modifier
+                                        .focusProperties { right = FocusRequester.Cancel },
+                                    onClick = { focusedProgram?.let { onProgramClick(it, 0.0) } }
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                SideMenuItem(
+                                    icon = Icons.Default.Info,
+                                    label = "番組詳細",
+                                    isExpanded = true,
+                                    modifier = Modifier
+                                        .focusProperties { right = FocusRequester.Cancel },
+                                    onClick = {
+                                        detailProgram = focusedProgram; onDetailStateChange(
+                                        true
                                     )
-                                }
+                                    }
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                SideMenuItem(
+                                    icon = Icons.Default.LibraryBooks,
+                                    modifier = Modifier
+                                        .focusProperties { right = FocusRequester.Cancel },
+                                    label = "シリーズ検索",
+                                    isExpanded = true,
+                                    onClick = {
+                                        focusedProgram?.let {
+                                            isSideMenuOpen = false
+                                            onSeriesSearch(TitleNormalizer.extractSearchKeyword(it.title))
+                                        }
+                                    }
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                SideMenuItem(
+                                    icon = Icons.Default.Delete,
+                                    label = "削除する",
+                                    isExpanded = true,
+                                    modifier = Modifier
+                                        .focusProperties {
+                                            down = FocusRequester.Cancel
+                                            right = FocusRequester.Cancel
+                                        },
+                                    enabled = false,
+                                    onClick = { }
+                                )
                             }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        SideMenuItem(
-                            icon = Icons.Default.Delete,
-                            label = "削除する",
-                            isExpanded = true,
-                            enabled = false,
-                            onClick = { })
+                        }
                     }
                 }
             }

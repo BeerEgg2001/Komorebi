@@ -74,6 +74,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.APP_THEME, themeName) }
     }
 
+    // ★追加
+    fun updateDefaultRecordListView(viewType: String) {
+        viewModelScope.launch { settingsRepository.saveString(SettingsRepository.DEFAULT_RECORD_LIST_VIEW, viewType) }
+    }
+
+
     suspend fun getStartupTabOnce(): String {
         return settingsRepository.getStartupTabOnce()
     }

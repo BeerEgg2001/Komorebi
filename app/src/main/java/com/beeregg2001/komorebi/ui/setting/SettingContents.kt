@@ -18,9 +18,11 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 @Composable
 fun GeneralSettingsContent(
-    onClearChannel: () -> Unit, onClearHistory: () -> Unit,
-    clearChannelR: FocusRequester, clearHistoryR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    onClearChannel: () -> Unit,
+    onClearHistory: () -> Unit,
+    clearChannelR: FocusRequester,
+    clearHistoryR: FocusRequester,
+    sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -32,17 +34,17 @@ fun GeneralSettingsContent(
         )
         SettingsSection(AppStrings.SETTINGS_SECTION_DATA_MANAGEMENT) {
             SettingItem(
-                title = AppStrings.SETTINGS_ITEM_CLEAR_CHANNEL_HISTORY,
-                value = AppStrings.SETTINGS_VALUE_DELETE,
-                icon = Icons.Default.Delete,
+                AppStrings.SETTINGS_ITEM_CLEAR_CHANNEL_HISTORY,
+                "",
+                Icons.Default.History,
                 modifier = Modifier
                     .focusRequester(clearChannelR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(clearChannelR); onClearChannel() })
             SettingItem(
-                title = AppStrings.SETTINGS_ITEM_CLEAR_WATCH_HISTORY,
-                value = AppStrings.SETTINGS_VALUE_DELETE,
-                icon = Icons.Default.Delete,
+                AppStrings.SETTINGS_ITEM_CLEAR_WATCH_HISTORY,
+                "",
+                Icons.Default.DeleteSweep,
                 modifier = Modifier
                     .focusRequester(clearHistoryR)
                     .focusProperties { left = sidebarR },
@@ -53,92 +55,39 @@ fun GeneralSettingsContent(
 
 @Composable
 fun ConnectionSettingsContent(
-    kIp: String,
-    kPort: String,
-    mIp: String,
-    mPort: String,
-    prefSrc: String,
+    kIp: String, kPort: String, mIp: String, mPort: String, prefSrc: String,
     onEdit: (String, String) -> Unit,
     onSelectSrc: () -> Unit,
-    kIpR: FocusRequester,
-    kPortR: FocusRequester,
-    mIpR: FocusRequester,
-    mPortR: FocusRequester,
-    prefSrcR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, prefSrcR: FocusRequester,
+    sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text(
-            AppStrings.SETTINGS_CATEGORY_CONNECTION,
-            style = MaterialTheme.typography.headlineMedium,
-            color = KomorebiTheme.colors.textPrimary,
-            fontWeight = FontWeight.Bold
-        )
+        Text(AppStrings.SETTINGS_CATEGORY_CONNECTION, style = MaterialTheme.typography.headlineMedium, color = KomorebiTheme.colors.textPrimary, fontWeight = FontWeight.Bold)
+
         SettingsSection(AppStrings.SETTINGS_SECTION_KONOMITV) {
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_ADDRESS,
-                kIp,
-                Icons.Default.Dns,
-                modifier = Modifier
-                    .focusRequester(kIpR)
-                    .focusProperties { left = sidebarR },
-                onClick = {
-                    onClick(kIpR); onEdit(
-                    AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS,
-                    kIp
-                )
-                })
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_PORT,
-                kPort,
-                modifier = Modifier
-                    .focusRequester(kPortR)
-                    .focusProperties { left = sidebarR },
-                onClick = {
-                    onClick(kPortR); onEdit(
-                    AppStrings.SETTINGS_INPUT_KONOMITV_PORT,
-                    kPort
-                )
-                })
+            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Dns, modifier = Modifier.focusRequester(kIpR).focusProperties { left = sidebarR }, onClick = { onClick(kIpR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS, kIp) })
+            SettingItem(AppStrings.SETTINGS_ITEM_PORT, kPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(kPortR).focusProperties { left = sidebarR }, onClick = { onClick(kPortR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_PORT, kPort) })
         }
+
         SettingsSection(AppStrings.SETTINGS_SECTION_MIRAKURUN) {
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_ADDRESS,
-                mIp,
-                Icons.Default.Dns,
-                modifier = Modifier
-                    .focusRequester(mIpR)
-                    .focusProperties { left = sidebarR },
-                onClick = {
-                    onClick(mIpR); onEdit(
-                    AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS,
-                    mIp
-                )
-                })
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_PORT,
-                mPort,
-                modifier = Modifier
-                    .focusRequester(mPortR)
-                    .focusProperties { left = sidebarR },
-                onClick = {
-                    onClick(mPortR); onEdit(
-                    AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT,
-                    mPort
-                )
-                })
+            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Router, modifier = Modifier.focusRequester(mIpR).focusProperties { left = sidebarR }, onClick = { onClick(mIpR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS, mIp) })
+            SettingItem(AppStrings.SETTINGS_ITEM_PORT, mPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(mPortR).focusProperties { left = sidebarR }, onClick = { onClick(mPortR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT, mPort) })
         }
-        SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_SOURCE) {
-            val isMirAvailable = mIp.isNotBlank() && mPort.isNotBlank()
+
+        SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_PRIORITY) {
+            // ★修正: 表示ラベルの動的切り替えロジックの修正（キーをKONOMITVに修正）
+            val label = if (mIp.isBlank()) {
+                AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED
+            } else {
+                if (prefSrc == "KONOMITV") AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED
+                else AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED
+            }
             SettingItem(
-                title = AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                value = if (!isMirAvailable) AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED else if (prefSrc == "MIRAKURUN") AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED else AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED,
-                icon = Icons.Default.PriorityHigh,
-                enabled = isMirAvailable,
-                modifier = Modifier
-                    .focusRequester(prefSrcR)
-                    .focusProperties { left = sidebarR },
+                AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
+                label,
+                Icons.Default.PriorityHigh,
+                modifier = Modifier.focusRequester(prefSrcR).focusProperties { left = sidebarR },
                 onClick = { onClick(prefSrcR); onSelectSrc() })
         }
     }
@@ -151,20 +100,20 @@ fun PlaybackSettingsContent(
     liveSub: String,
     videoSub: String,
     layerOrder: String,
-    audioMode: String, // ★追加
+    audioMode: String,
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
+    audioR: FocusRequester,
     layerR: FocusRequester,
-    audioR: FocusRequester, // ★追加
     sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
     onLiveSub: () -> Unit,
     onVideoSub: () -> Unit,
+    onAudioMode: () -> Unit,
     onLayer: () -> Unit,
-    onAudioMode: () -> Unit, // ★追加
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -178,7 +127,7 @@ fun PlaybackSettingsContent(
             SettingItem(
                 AppStrings.SETTINGS_ITEM_LIVE_QUALITY,
                 StreamQuality.fromValue(liveQ).label,
-                Icons.Default.HighQuality,
+                Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(liveR)
                     .focusProperties { left = sidebarR },
@@ -186,47 +135,47 @@ fun PlaybackSettingsContent(
             SettingItem(
                 AppStrings.SETTINGS_ITEM_VIDEO_QUALITY,
                 StreamQuality.fromValue(videoQ).label,
+                Icons.Default.VideoFile,
                 modifier = Modifier
                     .focusRequester(videoR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(videoR); onV() })
         }
-        SettingsSection(AppStrings.SETTINGS_SECTION_SUBTITLE) {
+        SettingsSection(AppStrings.SETTINGS_SECTION_SUBTITLE_AUDIO) {
             SettingItem(
-                AppStrings.SETTINGS_ITEM_LIVE_SUBTITLE,
-                if (liveSub == "ON") AppStrings.SETTINGS_VALUE_SHOW else AppStrings.SETTINGS_VALUE_HIDE,
-                Icons.Default.ClosedCaption,
+                AppStrings.SETTINGS_ITEM_LIVE_SUBTITLE_DEFAULT,
+                liveSub,
+                Icons.Default.Subtitles,
                 modifier = Modifier
                     .focusRequester(liveSubR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(liveSubR); onLiveSub() })
             SettingItem(
-                AppStrings.SETTINGS_ITEM_VIDEO_SUBTITLE,
-                if (videoSub == "ON") AppStrings.SETTINGS_VALUE_SHOW else AppStrings.SETTINGS_VALUE_HIDE,
+                AppStrings.SETTINGS_ITEM_VIDEO_SUBTITLE_DEFAULT,
+                videoSub,
+                Icons.Default.ClosedCaption,
                 modifier = Modifier
                     .focusRequester(videoSubR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(videoSubR); onVideoSub() })
             SettingItem(
-                AppStrings.SETTINGS_ITEM_LAYER_ORDER,
-                if (layerOrder == "CommentOnTop") AppStrings.SETTINGS_VALUE_LAYER_COMMENT_TOP else AppStrings.SETTINGS_VALUE_LAYER_SUBTITLE_TOP,
+                AppStrings.SETTINGS_ITEM_AUDIO_OUTPUT_MODE,
+                if (audioMode == "DOWNMIX") AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX else AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH,
+                Icons.Default.AudioFile,
+                modifier = Modifier
+                    .focusRequester(audioR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(audioR); onAudioMode() })
+        }
+        SettingsSection(AppStrings.SETTINGS_SECTION_COMMENT_LAYER) {
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_SUBTITLE_COMMENT_LAYER,
+                if (layerOrder == "CommentOnTop") AppStrings.DIALOG_LAYER_COMMENT_TOP else AppStrings.DIALOG_LAYER_SUBTITLE_TOP,
                 Icons.Default.Layers,
                 modifier = Modifier
                     .focusRequester(layerR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(layerR); onLayer() })
-        }
-        // ★追加: 音声出力設定セクション
-        // ★修正: AppStrings を使用
-        SettingsSection(AppStrings.SETTINGS_SECTION_AUDIO_OUTPUT) {
-            SettingItem(
-                title = AppStrings.SETTINGS_ITEM_AUDIO_OUTPUT_MODE,
-                value = if (audioMode == "DOWNMIX") AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX_REC else AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH,
-                icon = Icons.Default.VolumeUp,
-                modifier = Modifier
-                    .focusRequester(audioR)
-                    .focusProperties { left = sidebarR },
-                onClick = { onClick(audioR); onAudioMode() })
         }
     }
 }
@@ -245,7 +194,7 @@ fun HomeDisplaySettingsContent(
     genreR: FocusRequester,
     timeR: FocusRequester,
     exPaidR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    sidebarR: FocusRequester,
     onMode: () -> Unit,
     onColor: () -> Unit,
     onStart: () -> Unit,
@@ -256,12 +205,12 @@ fun HomeDisplaySettingsContent(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
-            AppStrings.SETTINGS_CATEGORY_DISPLAY,
+            AppStrings.SETTINGS_CATEGORY_HOME,
             style = MaterialTheme.typography.headlineMedium,
             color = KomorebiTheme.colors.textPrimary,
             fontWeight = FontWeight.Bold
         )
-        SettingsSection(AppStrings.SETTINGS_SECTION_GENERAL) {
+        SettingsSection(AppStrings.SETTINGS_SECTION_UI_CUSTOM) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_BASE_THEME,
                 if (isDarkMode) AppStrings.SETTINGS_VALUE_THEME_DARK else AppStrings.SETTINGS_VALUE_THEME_LIGHT,
@@ -270,30 +219,23 @@ fun HomeDisplaySettingsContent(
                     .focusRequester(modeR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(modeR); onMode() })
+            val seasonLabel = when (themeSeason) {
+                "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING; "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER; "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN; "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER; else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
+            }
             SettingItem(
                 AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                when (themeSeason) {
-                    "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING; "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER; "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN; "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER; else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
-                },
-                Icons.Default.Palette,
+                seasonLabel,
+                Icons.Default.ColorLens,
                 modifier = Modifier
                     .focusRequester(colorR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(colorR); onColor() })
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                startupTab,
-                Icons.Default.Home,
-                modifier = Modifier
-                    .focusRequester(startR)
-                    .focusProperties { left = sidebarR },
-                onClick = { onClick(startR); onStart() })
         }
         SettingsSection(AppStrings.SETTINGS_SECTION_HOME_PICKUP) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_PICKUP_GENRE,
                 genre,
-                Icons.Default.Category,
+                Icons.Default.AutoAwesome,
                 modifier = Modifier
                     .focusRequester(genreR)
                     .focusProperties { left = sidebarR },
@@ -308,8 +250,8 @@ fun HomeDisplaySettingsContent(
                 onClick = { onClick(timeR); onTime() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_EXCLUDE_PAID,
-                if (excludePaid == "ON") AppStrings.SETTINGS_VALUE_EXCLUDE_ON else AppStrings.SETTINGS_VALUE_EXCLUDE_OFF,
-                Icons.Default.Block,
+                excludePaid,
+                Icons.Default.Lock,
                 modifier = Modifier
                     .focusRequester(exPaidR)
                     .focusProperties { left = sidebarR },
@@ -320,6 +262,43 @@ fun HomeDisplaySettingsContent(
 
 @Composable
 fun DisplaySettingsContent(
+    preferences: SettingPreferences,
+    sidebarR: FocusRequester,
+    onEditTab: () -> Unit,
+    onEditDefaultView: () -> Unit,
+    itemRs: List<FocusRequester>,
+    onClick: (FocusRequester) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(
+            AppStrings.SETTINGS_CATEGORY_DISPLAY,
+            style = MaterialTheme.typography.headlineMedium,
+            color = KomorebiTheme.colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
+        SettingsSection(AppStrings.SETTINGS_SECTION_UI_CUSTOM) {
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
+                preferences.startupTab,
+                Icons.Default.Launch,
+                modifier = Modifier
+                    .focusRequester(itemRs[0])
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(itemRs[0]); onEditTab() })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
+                if (preferences.defaultRecordListView == "LIST") AppStrings.SETTINGS_VALUE_VIEW_LIST else AppStrings.SETTINGS_VALUE_VIEW_GRID,
+                Icons.Default.GridView,
+                modifier = Modifier
+                    .focusRequester(itemRs[1])
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(itemRs[1]); onEditDefaultView() })
+        }
+    }
+}
+
+@Composable
+fun CommentSettingsContent(
     def: String,
     speed: String,
     size: String,
@@ -332,7 +311,7 @@ fun DisplaySettingsContent(
     szR: FocusRequester,
     opR: FocusRequester,
     mxR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -345,22 +324,24 @@ fun DisplaySettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_COMMENT_DISPLAY) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_DEFAULT_DISPLAY,
-                if (def == "ON") AppStrings.SETTINGS_VALUE_SHOW else AppStrings.SETTINGS_VALUE_HIDE,
-                Icons.Default.Chat,
+                def,
+                Icons.Default.Visibility,
                 modifier = Modifier
                     .focusRequester(defR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(defR); onT() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_SPEED,
-                speed,
+                "${speed}x",
+                Icons.Default.Speed,
                 modifier = Modifier
                     .focusRequester(spR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(spR); onEdit(AppStrings.SETTINGS_INPUT_COMMENT_SPEED, speed) })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_SIZE,
-                size,
+                "${size}x",
+                Icons.Default.TextFormat,
                 modifier = Modifier
                     .focusRequester(szR)
                     .focusProperties { left = sidebarR },
@@ -368,6 +349,7 @@ fun DisplaySettingsContent(
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_OPACITY,
                 opacity,
+                Icons.Default.Opacity,
                 modifier = Modifier
                     .focusRequester(opR)
                     .focusProperties { left = sidebarR },
@@ -380,6 +362,7 @@ fun DisplaySettingsContent(
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_MAX_LINES,
                 max,
+                Icons.Default.VerticalAlignTop,
                 modifier = Modifier
                     .focusRequester(mxR)
                     .focusProperties { left = sidebarR },
@@ -397,7 +380,7 @@ fun DisplaySettingsContent(
 fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
-    sidebarR: FocusRequester, // ★追加
+    sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
@@ -411,16 +394,16 @@ fun LabSettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_EXTERNAL_INTEGRATION) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_ANNICT,
-                if (annict == "ON") AppStrings.SETTINGS_VALUE_ENABLE else AppStrings.SETTINGS_VALUE_DISABLE,
-                Icons.Default.Sync,
+                annict,
+                Icons.Default.Link,
                 modifier = Modifier
                     .focusRequester(annictR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(annictR); onAnnict() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_SHOBOCAL,
-                if (shobocal == "ON") AppStrings.SETTINGS_VALUE_ENABLE else AppStrings.SETTINGS_VALUE_DISABLE,
-                Icons.Default.CalendarMonth,
+                shobocal,
+                Icons.Default.EventNote,
                 modifier = Modifier
                     .focusRequester(shobocalR)
                     .focusProperties { left = sidebarR },
@@ -458,7 +441,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.4.0 beta2",
+            "Version 0.5.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

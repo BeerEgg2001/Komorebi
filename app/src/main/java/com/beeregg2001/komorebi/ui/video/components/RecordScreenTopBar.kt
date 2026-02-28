@@ -49,7 +49,7 @@ fun RecordScreenTopBar(
     searchInputFocusRequester: FocusRequester,
     innerTextFieldFocusRequester: FocusRequester,
     historyListFocusRequester: FocusRequester,
-    firstItemFocusRequester: FocusRequester, // 番組リスト先頭
+    firstItemFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     searchOpenButtonFocusRequester: FocusRequester,
     viewToggleButtonFocusRequester: FocusRequester,
@@ -65,15 +65,12 @@ fun RecordScreenTopBar(
     val colors = KomorebiTheme.colors
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // フォーカス状態の管理
     var isSearchInputFocused by remember { mutableStateOf(false) }
     var isHistoryFocused by remember { mutableStateOf(false) }
     var isViewToggleFocused by remember { mutableStateOf(false) }
 
-    // 履歴の最初のアイテム用Requester
     val historyFirstItemFocusRequester = remember { FocusRequester() }
 
-    // 検索バー表示時の初期フォーカス
     LaunchedEffect(isSearchBarVisible) {
         if (isSearchBarVisible) {
             searchInputFocusRequester.safeRequestFocus(TAG)
@@ -89,7 +86,6 @@ fun RecordScreenTopBar(
 
     Box(modifier = modifier.fillMaxWidth()) {
         if (isSearchBarVisible) {
-            // --- 検索モード ---
             Box(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
@@ -109,7 +105,6 @@ fun RecordScreenTopBar(
 
                     Spacer(Modifier.width(16.dp))
 
-                    // 以前のデザインを再現した検索Box
                     Surface(
                         onClick = {
                             onKeyboardActiveClick()
@@ -124,7 +119,8 @@ fun RecordScreenTopBar(
                             .focusProperties {
                                 up = FocusRequester.Cancel
                                 left = searchCloseButtonFocusRequester
-                                down = if (hasHistory) historyFirstItemFocusRequester else firstItemFocusRequester
+                                down =
+                                    if (hasHistory) historyFirstItemFocusRequester else firstItemFocusRequester
                             },
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = colors.textPrimary.copy(alpha = 0.1f),
@@ -133,7 +129,12 @@ fun RecordScreenTopBar(
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
                         border = ClickableSurfaceDefaults.border(
-                            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.3f))),
+                            border = Border(
+                                BorderStroke(
+                                    1.dp,
+                                    colors.textPrimary.copy(alpha = 0.3f)
+                                )
+                            ),
                             focusedBorder = Border(BorderStroke(2.dp, colors.accent))
                         )
                     ) {
@@ -151,8 +152,8 @@ fun RecordScreenTopBar(
                                     .focusRequester(innerTextFieldFocusRequester),
                                 textStyle = TextStyle(color = colors.textPrimary, fontSize = 18.sp),
                                 cursorBrush = SolidColor(colors.textPrimary),
-                                singleLine = true, // ★1行に制限
-                                maxLines = 1,      // ★1行に制限
+                                singleLine = true,
+                                maxLines = 1,
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 keyboardActions = KeyboardActions(onSearch = {
                                     onExecuteSearch(searchQuery)
@@ -183,7 +184,6 @@ fun RecordScreenTopBar(
                     }
                 }
 
-                // 履歴ドロップダウン (FireOS対応版制御)
                 if ((isSearchInputFocused || isHistoryFocused) && searchHistory.isNotEmpty()) {
                     RecordSearchHistoryDropdown(
                         limitedHistory = searchHistory.take(5),
@@ -200,7 +200,6 @@ fun RecordScreenTopBar(
                 }
             }
         } else {
-            // --- 通常タイトルモード ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -214,6 +213,7 @@ fun RecordScreenTopBar(
                         .onFocusChanged { onBackButtonFocusChanged(it.isFocused) }
                         .focusProperties {
                             up = FocusRequester.Cancel
+                            down = firstItemFocusRequester
                             left = FocusRequester.Cancel
                         },
                     colors = iconButtonColors
@@ -242,13 +242,15 @@ fun RecordScreenTopBar(
                     }
                 }
 
-                // 表示切替ボタン (以前の色ロジックを適用)
                 Surface(
                     onClick = onViewToggle,
                     modifier = Modifier
                         .focusRequester(viewToggleButtonFocusRequester)
                         .onFocusChanged { isViewToggleFocused = it.isFocused }
-                        .focusProperties { up = FocusRequester.Cancel },
+                        .focusProperties {
+                            up = FocusRequester.Cancel
+                            down = firstItemFocusRequester
+                        },
                     shape = ClickableSurfaceDefaults.shape(CircleShape),
                     colors = ClickableSurfaceDefaults.colors(
                         containerColor = colors.surface.copy(alpha = 0.5f),
@@ -264,7 +266,10 @@ fun RecordScreenTopBar(
                     ) {
                         val contrastColor = if (colors.isDark) Color.Black else Color.White
                         val activeColor = if (isViewToggleFocused) contrastColor else colors.accent
-                        val inactiveColor = if (isViewToggleFocused) contrastColor.copy(alpha = 0.4f) else colors.textPrimary.copy(alpha = 0.4f)
+                        val inactiveColor =
+                            if (isViewToggleFocused) contrastColor.copy(alpha = 0.4f) else colors.textPrimary.copy(
+                                alpha = 0.4f
+                            )
 
                         Icon(
                             imageVector = Icons.Default.List,
