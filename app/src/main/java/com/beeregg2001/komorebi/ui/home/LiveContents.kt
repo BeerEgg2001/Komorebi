@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed // ★追加
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -79,18 +79,18 @@ fun LiveContent(
     val isPlayerActive = selectedChannel != null
     val colors = KomorebiTheme.colors
 
-    var isContentReady by remember { mutableStateOf(false) }
+    // ★ 変更点: isContentReady と 300msの強制待機ロジックを完全に削除しました
+
     var isMiniListOpen by remember { mutableStateOf(false) }
     var showOverlay by remember { mutableStateOf(true) }
     var isManualOverlay by remember { mutableStateOf(false) }
     var isPinnedOverlay by remember { mutableStateOf(false) }
     var isSubMenuOpen by remember { mutableStateOf(false) }
 
-    // Heroエリア表示用の状態（Debounce制御用）
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
 
-    // Debounceロジック: 十字キーの連続移動時は300ms待ってからHeroエリアを更新
+    // 十字キーの連続移動時は300ms待ってからHeroエリアを更新 (これは維持。ザッピング時の軽快さのため)
     LaunchedEffect(pendingChannel) {
         if (pendingChannel != null) {
             delay(300)
@@ -104,21 +104,22 @@ fun LiveContent(
             val firstChannel = liveRows.firstOrNull()?.channels?.firstOrNull()
             if (firstChannel != null) {
                 pendingChannel = firstChannel
-                focusedChannel = firstChannel
             }
         }
     }
 
-    LaunchedEffect(Unit) { yield(); delay(300); isContentReady = true }
     LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
-    LaunchedEffect(isReturningFromPlayer, isContentReady) {
-        if (isReturningFromPlayer && isContentReady) {
+
+    // プレイヤーから戻ってきた時のフォーカス回復
+    LaunchedEffect(isReturningFromPlayer, liveRows.isNotEmpty()) {
+        if (isReturningFromPlayer && liveRows.isNotEmpty()) {
             delay(200); targetChannelFocusRequester.safeRequestFocus(TAG); onReturnFocusConsumed()
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (!isContentReady) {
+        // ★ 変更点: 強制待機ではなく、本当にデータがない時(起動直後など)のみローディングを表示
+        if (liveRows.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f))
             }
@@ -126,7 +127,6 @@ fun LiveContent(
             Column(
                 modifier = modifier
                     .fillMaxSize()
-                    // プレイヤーアクティブ時は裏側の十字キー移動を完全にブロック
                     .then(if (isPlayerActive) Modifier.focusProperties {
                         up = FocusRequester.Cancel
                         down = FocusRequester.Cancel
@@ -141,6 +141,8 @@ fun LiveContent(
                         .weight(0.55f)
                         .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 24.dp)
                 ) {
+                    // ★ ここがポイント: タブを開いた瞬間はfocusedChannelがnullなのでここは空。
+                    // 300ms後に描画されるため、タブ移動アニメーションの邪魔をしません。
                     if (focusedChannel != null) {
                         HeroDashboard(
                             uiState = focusedChannel!!,
@@ -178,12 +180,10 @@ fun LiveContent(
                                     .fillMaxWidth()
                                     .graphicsLayer(clip = false)
                             ) {
-                                // ★ 変更点: インデックスを取得するため itemsIndexed を使用
                                 itemsIndexed(
                                     row.channels,
                                     key = { _, item -> item.channel.id }) { index, uiState ->
                                     val isTarget = uiState.channel.id == lastFocusedChannelId
-                                    // 一番右端の要素かどうかを判定
                                     val isLastItem = index == row.channels.lastIndex
 
                                     CompactChannelCard(
@@ -201,7 +201,6 @@ fun LiveContent(
                                                 if (row.genreId == liveRows.firstOrNull()?.genreId) {
                                                     up = topNavFocusRequester
                                                 }
-                                                // ★ 変更点: 一番右のカードでさらに右キーを押した場合、フォーカス移動をせき止める
                                                 if (isLastItem) {
                                                     right = FocusRequester.Cancel
                                                 }
@@ -247,6 +246,10 @@ fun LiveContent(
         }
     }
 }
+
+// -------------------------------------------------------------------------
+// 以下の HeroDashboard と CompactChannelCard は前回から一切変更ありません
+// -------------------------------------------------------------------------
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
