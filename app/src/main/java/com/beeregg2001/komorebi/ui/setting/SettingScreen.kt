@@ -58,6 +58,7 @@ fun SettingsScreen(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
         Category(AppStrings.SETTINGS_CATEGORY_PLAYBACK, Icons.Default.PlayCircle),
+        Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
         Category(AppStrings.SETTINGS_CATEGORY_LAB, Icons.Default.Science),
@@ -75,7 +76,6 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            // ★修正: カテゴリ2(Playback)に音声出力用のFocusRequesterを追加(計6つ)
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -92,6 +92,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
+            listOf(FocusRequester(), FocusRequester()),
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -125,11 +126,14 @@ fun SettingsScreen(
         }
     }
 
+    val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
+
     Row(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .background(backgroundBrush)
+            .focusProperties { canFocus = !isDialogOpen }
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && (it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK || it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_ESCAPE)) {
                     if (!uiState.isSidebarFocused) {
@@ -138,11 +142,10 @@ fun SettingsScreen(
                     } else {
                         onBack()
                     }
-                    return@onKeyEvent true
-                }
-                false
-            }) {
-
+                    true
+                } else false
+            }
+    ) {
         // サイドバー
         Column(
             modifier = Modifier
@@ -204,12 +207,10 @@ fun SettingsScreen(
                 onClick = onBack,
                 enabled = !uiState.isRestoringFocus,
                 modifier = Modifier.focusProperties {
-                    up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
-                    right =
-                        itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
-                            ?: FocusRequester.Default
-                }
-            )
+                    up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default; right =
+                    itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
+                        ?: FocusRequester.Default
+                })
         }
 
         // メインコンテンツ
@@ -264,12 +265,18 @@ fun SettingsScreen(
                             }
                         },
                         onSelectSrc = {
+                            // ★修正: Mirakurunの入力状況に応じた動的な選択肢生成（キーをKONOMITVに修正）
+                            val options = if (prefs.mirakurunIp.isBlank()) {
+                                listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV")
+                            } else {
+                                listOf(
+                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED to "KONOMITV",
+                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
+                                )
+                            }
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV",
-                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
-                                ),
+                                options,
                                 prefs.preferredSource
                             ) {
                                 scope.launch {
@@ -297,13 +304,13 @@ fun SettingsScreen(
                         liveSub = prefs.liveSubtitleDefault,
                         videoSub = prefs.videoSubtitleDefault,
                         layerOrder = prefs.subtitleCommentLayer,
-                        audioMode = prefs.audioOutputMode, // ★追加
+                        audioMode = prefs.audioOutputMode,
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
                         liveSubR = itemFocusRequesters[2][2],
                         videoSubR = itemFocusRequesters[2][3],
-                        audioR = itemFocusRequesters[2][4], // ★追加
-                        layerR = itemFocusRequesters[2][5], // ★インデックス修正
+                        audioR = itemFocusRequesters[2][4],
+                        layerR = itemFocusRequesters[2][5],
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
                             uiState.activeDialog = SettingDialogState.Selection(
@@ -366,7 +373,6 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        // ★追加: 音声モード選択
                         onAudioMode = {
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_AUDIO_OUTPUT_TITLE,
@@ -377,7 +383,10 @@ fun SettingsScreen(
                                 prefs.audioOutputMode
                             ) {
                                 scope.launch {
-                                    repository.saveString(SettingsRepository.AUDIO_OUTPUT_MODE, it)
+                                    repository.saveString(
+                                        SettingsRepository.AUDIO_OUTPUT_MODE,
+                                        it
+                                    )
                                 }
                             }
                         },
@@ -387,13 +396,7 @@ fun SettingsScreen(
                     )
 
                     3 -> HomeDisplaySettingsContent(
-                        isDarkMode = (prefs.currentThemeName in listOf(
-                            "MONOTONE",
-                            "WINTER_DARK",
-                            "SPRING",
-                            "SUMMER",
-                            "AUTUMN"
-                        )),
+                        isDarkMode = !prefs.currentThemeName.contains("LIGHT"),
                         themeSeason = when (prefs.currentThemeName) {
                             "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
                         },
@@ -529,6 +532,52 @@ fun SettingsScreen(
                     )
 
                     4 -> DisplaySettingsContent(
+                        preferences = prefs,
+                        sidebarR = categoryFocusRequesters[4],
+                        onEditTab = {
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
+                                listOf(
+                                    AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
+                                    AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
+                                    AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
+                                    AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
+                                    AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
+                                ),
+                                prefs.startupTab
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.STARTUP_TAB,
+                                        it
+                                    )
+                                }
+                            }
+                        },
+                        onEditDefaultView = {
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
+                                listOf(
+                                    AppStrings.SETTINGS_VALUE_VIEW_LIST to "LIST",
+                                    AppStrings.SETTINGS_VALUE_VIEW_GRID to "GRID"
+                                ),
+                                prefs.defaultRecordListView
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.DEFAULT_RECORD_LIST_VIEW,
+                                        it
+                                    )
+                                }
+                            }
+                        },
+                        itemRs = itemFocusRequesters[4],
+                        onClick = {
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
+                        }
+                    )
+
+                    5 -> CommentSettingsContent(
                         def = prefs.commentDefaultDisplay,
                         speed = prefs.commentSpeed,
                         size = prefs.commentFontSize,
@@ -555,25 +604,25 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        defR = itemFocusRequesters[4][0],
-                        spR = itemFocusRequesters[4][1],
-                        szR = itemFocusRequesters[4][2],
-                        opR = itemFocusRequesters[4][3],
-                        mxR = itemFocusRequesters[4][4],
-                        sidebarR = categoryFocusRequesters[4],
+                        defR = itemFocusRequesters[5][0],
+                        spR = itemFocusRequesters[5][1],
+                        szR = itemFocusRequesters[5][2],
+                        opR = itemFocusRequesters[5][3],
+                        mxR = itemFocusRequesters[5][4],
+                        sidebarR = categoryFocusRequesters[5],
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
                         }
                     )
 
-                    5 -> LabSettingsContent(
+                    6 -> LabSettingsContent(
                         annict = prefs.labAnnict,
                         shobocal = prefs.labShobocal,
                         postCmd = prefs.defaultPostCommand,
-                        annictR = itemFocusRequesters[5][0],
-                        shobocalR = itemFocusRequesters[5][1],
-                        cmdR = itemFocusRequesters[5][2],
-                        sidebarR = categoryFocusRequesters[5],
+                        annictR = itemFocusRequesters[6][0],
+                        shobocalR = itemFocusRequesters[6][1],
+                        cmdR = itemFocusRequesters[6][2],
+                        sidebarR = categoryFocusRequesters[6],
                         onAnnict = {
                             scope.launch {
                                 repository.saveString(
@@ -604,19 +653,18 @@ fun SettingsScreen(
                             }
                         },
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
                         }
                     )
 
-                    6 -> AppInfoContent(
-                        onShow = {
-                            uiState.activeDialog = SettingDialogState.Licenses
-                        },
-                        licR = itemFocusRequesters[6][0],
-                        sidebarR = categoryFocusRequesters[6],
+                    7 -> AppInfoContent(
+                        onShow = { uiState.activeDialog = SettingDialogState.Licenses },
+                        licR = itemFocusRequesters[7][0],
+                        sidebarR = categoryFocusRequesters[7],
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
-                        })
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7
+                        }
+                    )
                 }
                 Spacer(Modifier.height(32.dp))
             }

@@ -36,7 +36,8 @@ fun RecordedCard(
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showResumeLabel: Boolean = false // ★追加：続きから見る表記を切り替えるフラグ
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -52,14 +53,29 @@ fun RecordedCard(
     }
 
     fun formatTime(seconds: Long): String {
-        val h = seconds / 3600; val m = (seconds % 3600) / 60; val s = seconds % 60
+        val h = seconds / 3600;
+        val m = (seconds % 3600) / 60;
+        val s = seconds % 60
         return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
     }
 
     val totalDuration = program.recordedVideo.duration.toLong()
     val currentPosition = program.playbackPosition.toLong()
-    val durationDisplay = if (currentPosition > 5) "続きから ${formatTime(currentPosition)}" else formatTime(totalDuration)
-    val progress = if (totalDuration > 0) (currentPosition.toFloat() / totalDuration.toFloat()).coerceIn(0f, 1f) else 0f
+
+    // ★修正：フラグと再生位置に基づいてテキストを切り替え
+    val durationDisplay = if (showResumeLabel && currentPosition > 5) {
+        "続きから見る ${formatTime(currentPosition)}"
+    } else if (currentPosition > 5) {
+        "続きから ${formatTime(currentPosition)}"
+    } else {
+        formatTime(totalDuration)
+    }
+
+    val progress =
+        if (totalDuration > 0) (currentPosition.toFloat() / totalDuration.toFloat()).coerceIn(
+            0f,
+            1f
+        ) else 0f
 
     val inverseColor = if (colors.isDark) Color.Black else Color.White
 
@@ -75,9 +91,9 @@ fun RecordedCard(
         scale = ClickableSurfaceDefaults.scale(focusedScale = if (isAnalyzed) 1.05f else 1.0f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = colors.surface,
-            focusedContainerColor = colors.textPrimary, // ★背景を反転色で塗りつぶす
+            focusedContainerColor = colors.textPrimary,
             contentColor = colors.textPrimary,
-            focusedContentColor = inverseColor // ★文字色を反転させる
+            focusedContentColor = inverseColor
         ),
         border = ClickableSurfaceDefaults.border(
             focusedBorder = Border(
@@ -87,42 +103,144 @@ fun RecordedCard(
         )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(model = ImageRequest.Builder(LocalContext.current).data(thumbnailUrl).size(coil.size.Size(300, 168)).crossfade(true).memoryCachePolicy(CachePolicy.ENABLED).build(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnailUrl)
+                    .size(coil.size.Size(300, 168))
+                    .crossfade(true)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
 
-            Box(modifier = Modifier.fillMaxSize().background(colors.background.copy(alpha = if (isFocused) 0.1f else 0.4f)))
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.background.copy(alpha = if (isFocused) 0.1f else 0.4f))
+            )
 
-            Box(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+            Box(modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)) {
                 if (program.isRecording) {
-                    Row(modifier = Modifier.background(color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(6.dp).background(Color.Red, CircleShape)); Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "録画中", style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, color = Color.White)
+                    Row(
+                        modifier = Modifier
+                            .background(
+                                color = Color.Black.copy(alpha = 0.7f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier
+                            .size(6.dp)
+                            .background(Color.Red, CircleShape))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "録画中",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 8.sp,
+                            color = Color.White
+                        )
                     }
                 } else if (!isAnalyzed) {
-                    Box(modifier = Modifier.background(color = Color(0xFFE65100).copy(alpha = 0.8f), shape = RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)) {
-                        Text(text = "メタデータ解析中", style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, color = Color.White)
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = Color(0xFFE65100).copy(alpha = 0.8f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "メタデータ解析中",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 8.sp,
+                            color = Color.White
+                        )
                     }
                 }
             }
 
-            // ★修正: 背景をテーマのSurface色にし、文字は Surface の LocalContentColor（自動反転）に任せる
-            Column(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(colors.surface.copy(alpha = 0.85f)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                Text(text = program.title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.then(if (isFocused) Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1000) else Modifier))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(colors.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = program.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.then(
+                        if (isFocused) Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            repeatDelayMillis = 1000
+                        ) else Modifier
+                    )
+                )
                 Spacer(modifier = Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     if (channelLabel.isNotEmpty()) {
-                        Box(modifier = Modifier.background(channelColor, RoundedCornerShape(2.dp)).padding(horizontal = 4.dp, vertical = 1.dp)) {
-                            Text(text = channelLabel, style = MaterialTheme.typography.labelSmall, fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color.White) // バッジの文字は白固定
+                        Box(
+                            modifier = Modifier
+                                .background(channelColor, RoundedCornerShape(2.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = channelLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    Text(text = program.channel?.name ?: "", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = colors.textPrimary.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Text(text = durationDisplay, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = if (currentPosition > 5) colors.accent else colors.textPrimary.copy(alpha = 0.8f), textAlign = TextAlign.End)
+                    Text(
+                        text = program.channel?.name ?: "",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        color = colors.textPrimary.copy(alpha = 0.8f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = durationDisplay,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
+                        color = if (currentPosition > 5) colors.accent else colors.textPrimary.copy(
+                            alpha = 0.8f
+                        ),
+                        textAlign = TextAlign.End
+                    )
                 }
             }
 
             if (currentPosition > 5) {
-                Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(colors.textSecondary.copy(alpha = 0.3f)).align(Alignment.BottomCenter)) {
-                    Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(colors.accent))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(colors.textSecondary.copy(alpha = 0.3f))
+                        .align(Alignment.BottomCenter)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .fillMaxHeight()
+                            .background(colors.accent)
+                    )
                 }
             }
         }

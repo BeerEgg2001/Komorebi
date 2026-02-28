@@ -29,7 +29,8 @@ class SettingPreferences(
     val excludePaid: String,
     val pickupTime: String,
     val startupTab: String,
-    val currentThemeName: String
+    val currentThemeName: String,
+    val defaultRecordListView: String // ★追加
 )
 
 @Composable
@@ -58,7 +59,8 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         excludePaid = repository.excludePaidBroadcasts.collectAsState(initial = "ON").value,
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
-        currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value
+        currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
+        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value // ★追加
     )
 }
 

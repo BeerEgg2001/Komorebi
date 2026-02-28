@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
+import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -47,40 +47,47 @@ class ChannelViewModel @Inject constructor(
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
-    private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> = withContext(Dispatchers.Default) {
-        val now = System.currentTimeMillis()
-        val orderedTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
+    private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> =
+        withContext(Dispatchers.Default) {
+            val now = System.currentTimeMillis()
+            val orderedTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
 
-        val sortedKeys = grouped.keys.sortedBy { key ->
-            val index = orderedTypes.indexOf(key)
-            if (index >= 0) index else Int.MAX_VALUE
+            val sortedKeys = grouped.keys.sortedBy { key ->
+                val index = orderedTypes.indexOf(key)
+                if (index >= 0) index else Int.MAX_VALUE
+            }
+
+            sortedKeys.mapNotNull { type ->
+                val channels = grouped[type] ?: return@mapNotNull null
+                LiveRowState(
+                    genreId = type,
+                    genreLabel = when (type) {
+                        "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> type
+                    },
+                    channels = channels.map { ch ->
+                        val start = ch.programPresent?.startTime?.let {
+                            runCatching {
+                                OffsetDateTime.parse(it).toInstant().toEpochMilli()
+                            }.getOrNull()
+                        } ?: 0L
+                        val dur = ch.programPresent?.duration ?: 0
+                        val progress = if (start > 0 && dur > 0) {
+                            ((now - start).toFloat() / (dur * 1000).toFloat()).coerceIn(0f, 1f)
+                        } else 0f
+
+                        UiChannelState(
+                            channel = ch,
+                            displayChannelId = ch.displayChannelId,
+                            name = ch.name,
+                            programTitle = ch.programPresent?.title ?: "放送休止中",
+                            progress = progress,
+                            hasProgram = ch.programPresent != null,
+                            jikkyoForce = ch.jikkyoForce
+                        )
+                    }
+                )
+            }
         }
-
-        sortedKeys.mapNotNull { type ->
-            val channels = grouped[type] ?: return@mapNotNull null
-            LiveRowState(
-                genreId = type,
-                genreLabel = when(type) { "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> type },
-                channels = channels.map { ch ->
-                    val start = ch.programPresent?.startTime?.let { runCatching { OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() } ?: 0L
-                    val dur = ch.programPresent?.duration ?: 0
-                    val progress = if (start > 0 && dur > 0) {
-                        ((now - start).toFloat() / (dur * 1000).toFloat()).coerceIn(0f, 1f)
-                    } else 0f
-
-                    UiChannelState(
-                        channel = ch,
-                        displayChannelId = ch.displayChannelId,
-                        name = ch.name,
-                        programTitle = ch.programPresent?.title ?: "放送休止中",
-                        progress = progress,
-                        hasProgram = ch.programPresent != null,
-                        jikkyoForce = ch.jikkyoForce // ★修正: 勢い情報を UI モデルにセット
-                    )
-                }
-            )
-        }
-    }
 
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchChannelsInternal() {
@@ -107,12 +114,15 @@ class ChannelViewModel @Inject constructor(
                         programPresent = apiChannel.programPresent,
                         programFollowing = apiChannel.programFollowing,
                         remocon_Id = apiChannel.remocon_Id,
-                        jikkyoForce = apiChannel.jikkyoForce // ★修正: APIレスポンスから勢い情報をマッピング
+                        jikkyoForce = apiChannel.jikkyoForce
                     )
                 }
 
                 val hotCount = allChannels.count { (it.jikkyoForce ?: 0) > 0 }
-                Log.i("ChannelViewModel", "Fetched channels. Total: ${allChannels.size}, Hot(force > 0): $hotCount")
+                Log.i(
+                    "ChannelViewModel",
+                    "Fetched channels. Total: ${allChannels.size}, Hot(force > 0): $hotCount"
+                )
 
                 allChannels.filter { it.isDisplay }.groupBy { it.type }
             }
@@ -180,13 +190,10 @@ class ChannelViewModel @Inject constructor(
         stopPolling()
     }
 
+    // ★修正箇所: Entityを直接作成せず、Mapperを使用します
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
-            val entity = WatchHistoryEntity(
-                id = program.id, title = program.title, description = program.description,
-                startTime = program.startTime, endTime = program.endTime, duration = program.duration,
-                videoId = program.recordedVideo.id, watchedAt = System.currentTimeMillis()
-            )
+            val entity = KonomiDataMapper.toEntity(program)
             repository.saveToLocalHistory(entity)
         }
     }
