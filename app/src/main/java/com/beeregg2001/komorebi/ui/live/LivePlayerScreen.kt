@@ -2,6 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.live
 
+import android.content.Context
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -37,7 +38,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON // ★変更: ONを使用
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -171,7 +171,7 @@ fun LivePlayerScreen(
     val isRecording = activeReserve != null
 
     val isEmulator =
-        remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
+        remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
     val processedCommentIds = remember { Collections.synchronizedSet(LinkedHashSet<String>()) }
     val scrollState = rememberScrollState()
     val nativeLib = remember { NativeLib() }
@@ -202,14 +202,13 @@ fun LivePlayerScreen(
     val updatedIsSubMenuOpen by rememberUpdatedState(isSubMenuOpen)
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
-
     val extractorsFactory = remember {
         ExtractorsFactory {
             arrayOf(
                 TsExtractor(
                     TsExtractor.MODE_SINGLE_PMT,
                     TimestampAdjuster(0),
-                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState)
+                    DefaultTsPayloadReaderFactory()
                 )
             )
         }
@@ -231,11 +230,9 @@ fun LivePlayerScreen(
 
     val exoPlayer =
         remember(ps.currentStreamSource, ps.retryKey, ps.currentQuality, audioOutputMode) {
-            Log.i(LOG_TAG, "--- ExoPlayer Initialization (Source: ${ps.currentStreamSource}) ---")
-
             val renderersFactory = object : DefaultRenderersFactory(context) {
                 override fun buildAudioSink(
-                    ctx: android.content.Context,
+                    ctx: Context,
                     enableFloat: Boolean,
                     enableParams: Boolean
                 ): DefaultAudioSink? {
@@ -246,8 +243,14 @@ fun LivePlayerScreen(
                     return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
                 }
             }.apply {
-                // ★重要修正: PREFERからONに変更。ハードウェアデコーダーを優先し、アスペクト比(SAR)の誤認識を防ぐ
-                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                // ★ CCwGTV 完璧対応: ソースに応じてデコーダーの「強制」と「拡張」を切り替える
+                if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                    // Mirakurun(生TS)はFire TV等の緑画面を避けるため FFmpeg を「最優先」にする
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                } else {
+                    // KonomiTV(HLS)はChromecastの4:3問題を避けるため FFmpeg を「無効」にしハードウェアに任せる
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                }
                 setEnableDecoderFallback(true)
             }
 
@@ -261,27 +264,18 @@ fun LivePlayerScreen(
                         .setFallbackMinPlaybackSpeed(0.96f).build()
                 )
                 .apply {
-                    if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
-                        setMediaSourceFactory(
-                            DefaultMediaSourceFactory(
-                                tsDataSourceFactory,
-                                extractorsFactory
-                            )
-                        )
-                    }
+                    if (ps.currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(
+                        DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory)
+                    )
                 }.build().apply {
                     playWhenReady = true
-                    // ★追加: スケーリングモードを明示
-                    videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                    addAnalyticsListener(EventLogger(null, "ExoPlayerFFmpegLog"))
-
+                    addAnalyticsListener(EventLogger(null, "ExoPlayerLog"))
                     addListener(object : Player.Listener {
                         override fun onIsPlayingChanged(playing: Boolean) {
                             ps.isPlayerPlaying = playing
                         }
 
                         override fun onPlayerError(error: PlaybackException) {
-                            Log.e(LOG_TAG, "Player Error: ${error.errorCodeName}", error)
                             if (ps.currentStreamSource == StreamSource.KONOMITV && ps.sseStatus == "Standby") return
                             ps.playerError = ps.analyzePlayerError(error)
                         }
@@ -437,8 +431,7 @@ fun LivePlayerScreen(
         MediaItem.fromUri(
             streamUrl
         )
-    )
-        exoPlayer.prepare(); exoPlayer.play()
+    ); exoPlayer.prepare(); exoPlayer.play()
         if (ps.playerError == null) {
             delay(300); mainFocusRequester.safeRequestFocus(TAG)
         }
@@ -580,10 +573,7 @@ fun LivePlayerScreen(
                     commentSpeed,
                     commentOpacity,
                     commentMaxLines
-                ) { view ->
-                    danmakuViewRef.value = view
-                    if (!ps.isPlayerPlaying) view.pause()
-                }
+                ) { view -> danmakuViewRef.value = view; if (!ps.isPlayerPlaying) view.pause() }
             }
         }
         val subtitleLayer = @Composable {
@@ -591,11 +581,12 @@ fun LivePlayerScreen(
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(
-                            android.graphics.Color.TRANSPARENT
-                        )
-                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
-                            loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value =
+                            layoutParams = ViewGroup.LayoutParams(
+                                -1,
+                                -1
+                            ); setBackgroundColor(android.graphics.Color.TRANSPARENT); settings.apply {
+                            javaScriptEnabled = true; domStorageEnabled = true
+                        }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value =
                             this
                         }
                     },
@@ -628,8 +619,7 @@ fun LivePlayerScreen(
                         color = colors.textPrimary,
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 3.dp
-                    )
-                    Spacer(Modifier.width(16.dp))
+                    ); Spacer(Modifier.width(16.dp))
                     Text(
                         text = ps.sseDetail,
                         color = colors.textPrimary,
@@ -641,7 +631,13 @@ fun LivePlayerScreen(
         }
 
         AnimatedVisibility(visible = isPinnedOverlay && ps.playerError == null) {
-            StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort)
+            StatusOverlay(
+                currentChannelItem,
+                mirakurunIp,
+                mirakurunPort,
+                konomiIp,
+                konomiPort
+            )
         }
 
         AnimatedVisibility(
@@ -670,13 +666,20 @@ fun LivePlayerScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
         ) {
-            ChannelListOverlay(groupedChannels, currentChannelItem.id, {
-                onChannelSelect(it); onMiniListToggle(false); scope.launch {
-                delay(200); mainFocusRequester.safeRequestFocus(
-                TAG
+            ChannelListOverlay(
+                groupedChannels,
+                currentChannelItem.id,
+                {
+                    onChannelSelect(it); onMiniListToggle(false); scope.launch {
+                    delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                }
+                },
+                mirakurunIp ?: "",
+                mirakurunPort ?: "",
+                konomiIp,
+                konomiPort,
+                listFocusRequester
             )
-            }
-            }, mirakurunIp ?: "", mirakurunPort ?: "", konomiIp, konomiPort, listFocusRequester)
         }
 
         AnimatedVisibility(
@@ -701,24 +704,22 @@ fun LivePlayerScreen(
                             )
                         }
                     } else currentProgramId?.let { reserveViewModel.addReserve(it) { onShowToast("録画を開始します") } }
-                        ?: onShowToast("番組情報不明")
-                    onSubMenuToggle(false)
+                        ?: onShowToast("番組情報不明"); onSubMenuToggle(false)
                 },
                 subMenuFocusRequester,
                 {
                     ps.currentAudioMode =
-                        if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
                     val audioGroups =
-                        exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                    if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters =
-                        exoPlayer.trackSelectionParameters.buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                            TrackSelectionOverride(
-                                audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                0
-                            )
-                        ).build()
-                    onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                        exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters =
+                    exoPlayer.trackSelectionParameters.buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
+                        TrackSelectionOverride(
+                            audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                            0
+                        )
+                    )
+                        .build(); onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 {
                     if (isMirakurunAvailable) {
@@ -743,7 +744,6 @@ fun LivePlayerScreen(
                 },
                 { onSubMenuToggle(false) })
         }
-
         if (ps.playerError != null) LiveErrorDialog(ps.playerError!!, { ps.retry() }, onBackPressed)
     }
 }
