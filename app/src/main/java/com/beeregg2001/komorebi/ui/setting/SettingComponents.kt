@@ -7,7 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,6 +23,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.NativeKeyEvent
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
@@ -36,9 +37,19 @@ import kotlinx.coroutines.delay
 
 sealed class SettingDialogState {
     object None : SettingDialogState()
-    data class Input(val title: String, val initialValue: String, val onConfirm: (String) -> Unit) : SettingDialogState()
-    data class Selection(val title: String, val options: List<Pair<String, String>>, val current: String, val onSelect: (String) -> Unit) : SettingDialogState()
-    data class ConfirmClear(val title: String, val message: String, val onConfirm: () -> Unit) : SettingDialogState()
+    data class Input(val title: String, val initialValue: String, val onConfirm: (String) -> Unit) :
+        SettingDialogState()
+
+    data class Selection(
+        val title: String,
+        val options: List<Pair<String, String>>,
+        val current: String,
+        val onSelect: (String) -> Unit
+    ) : SettingDialogState()
+
+    data class ConfirmClear(val title: String, val message: String, val onConfirm: () -> Unit) :
+        SettingDialogState()
+
     object Licenses : SettingDialogState()
 }
 
@@ -76,18 +87,18 @@ fun CategoryItem(
     isSelected: Boolean,
     onFocused: () -> Unit,
     onClick: () -> Unit,
-    enabled: Boolean = true, // ★修正: enabledを追加
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
     Surface(
         selected = isSelected,
-        onClick = { if (enabled) onClick() }, // ★修正
+        onClick = { if (enabled) onClick() },
         modifier = modifier
             .fillMaxWidth()
-            .focusProperties { canFocus = enabled } // ★修正
-            .onFocusChanged { isFocused = it.isFocused; if (it.isFocused && enabled) onFocused() }, // ★修正
+            .focusProperties { canFocus = enabled }
+            .onFocusChanged { isFocused = it.isFocused; if (it.isFocused && enabled) onFocused() },
         colors = SelectableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             selectedContainerColor = colors.textPrimary.copy(0.1f),
@@ -107,12 +118,19 @@ fun CategoryItem(
                 icon,
                 null,
                 modifier = Modifier.size(20.dp),
-                tint = if (isSelected || isFocused) colors.textPrimary else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.3f)
+                tint = if (isSelected || isFocused) colors.textPrimary else colors.textSecondary.copy(
+                    alpha = if (enabled) 1f else 0.3f
+                )
             )
             Spacer(Modifier.width(16.dp))
             Text(title, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
-            if (isSelected) Box(Modifier.width(4.dp).height(20.dp).background(colors.accent, MaterialTheme.shapes.small))
+            if (isSelected) Box(
+                Modifier
+                    .width(4.dp)
+                    .height(20.dp)
+                    .background(colors.accent, MaterialTheme.shapes.small)
+            )
         }
     }
 }
@@ -152,7 +170,9 @@ fun SettingItem(
                     icon,
                     null,
                     modifier = Modifier.size(24.dp),
-                    tint = if (isFocused && enabled) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(if (enabled) 0.7f else 0.3f)
+                    tint = if (isFocused && enabled) Color.Transparent.copy(0.7f) else colors.textPrimary.copy(
+                        if (enabled) 0.7f else 0.3f
+                    )
                 )
                 Spacer(Modifier.width(16.dp))
             }
@@ -161,7 +181,9 @@ fun SettingItem(
                 value,
                 textAlign = TextAlign.End,
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (isFocused && enabled) Color.Unspecified else colors.textSecondary.copy(alpha = if (enabled) 1f else 0.5f)
+                color = if (isFocused && enabled) Color.Unspecified else colors.textSecondary.copy(
+                    alpha = if (enabled) 1f else 0.5f
+                )
             )
         }
     }
@@ -180,6 +202,7 @@ fun SelectionDialog(
         options.indexOfFirst { it.second == current }.coerceAtLeast(0)
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -187,10 +210,11 @@ fun SelectionDialog(
             .focusProperties { exit = { FocusRequester.Cancel } }
             .focusGroup()
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                     onDismiss(); true
                 } else false
-            }, contentAlignment = Alignment.Center
+            },
+        contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -198,43 +222,29 @@ fun SelectionDialog(
             modifier = Modifier.width(400.dp)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = colors.textPrimary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+                Text(title, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
                 LazyColumn(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.heightIn(max = 400.dp)
                 ) {
-                    items(options) { (label, value) ->
+                    itemsIndexed(options) { index, (label, value) ->
                         val isSelected = value == current
                         val fR = remember { FocusRequester() }
-                        LaunchedEffect(isSelected) {
-                            if (isSelected) {
-                                delay(100); fR.safeRequestFocus()
+
+                        // ★修正: キーの不一致があっても、最初の項目には確実にフォーカスを当てる安全策
+                        LaunchedEffect(Unit) {
+                            if (isSelected || (index == 0)) {
+                                delay(150)
+                                fR.safeRequestFocus("SelectionDialog_Item")
                             }
                         }
-                        SelectionDialogItem(
-                            label,
-                            isSelected,
-                            { onSelect(value) },
-                            Modifier.focusRequester(fR)
-                        )
+
+                        SelectionDialogItem(label, isSelected, { onSelect(value) }, Modifier.focusRequester(fR))
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.colors(
-                        containerColor = colors.textPrimary.copy(0.1f),
-                        contentColor = colors.textPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(AppStrings.BUTTON_CANCEL) }
+                Button(onClick = onDismiss, colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(0.1f), contentColor = colors.textPrimary), modifier = Modifier.fillMaxWidth()) { Text(AppStrings.BUTTON_CANCEL) }
             }
         }
     }

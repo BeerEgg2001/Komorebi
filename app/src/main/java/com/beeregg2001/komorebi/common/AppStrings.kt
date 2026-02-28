@@ -63,6 +63,7 @@ object AppStrings {
     const val SETTINGS_CATEGORY_GENERAL = "基本設定"
     const val SETTINGS_CATEGORY_CONNECTION = "接続設定"
     const val SETTINGS_CATEGORY_PLAYBACK = "再生設定"
+    const val SETTINGS_CATEGORY_HOME = "ホーム設定"
     const val SETTINGS_CATEGORY_DISPLAY = "表示設定"
     const val SETTINGS_CATEGORY_COMMENT = "コメント設定"
     const val SETTINGS_CATEGORY_LAB = "アドオン・ラボ"
@@ -81,6 +82,7 @@ object AppStrings {
     const val SETTINGS_SECTION_KONOMITV = "KonomiTV"
     const val SETTINGS_SECTION_MIRAKURUN = "Mirakurun (オプション)"
     const val SETTINGS_SECTION_STREAM_SOURCE = "配信ソース設定"
+    const val SETTINGS_SECTION_STREAM_PRIORITY = "優先配信設定"
     const val SETTINGS_ITEM_ADDRESS = "アドレス"
     const val SETTINGS_ITEM_PORT = "ポート番号"
     const val SETTINGS_ITEM_PREFERRED_SOURCE = "優先するソース"
@@ -89,6 +91,7 @@ object AppStrings {
     const val SETTINGS_VALUE_SOURCE_KONOMITV_FIXED = "KonomiTV (固定)"
     const val SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED = "Mirakurun を優先"
     const val SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED = "KonomiTV を優先"
+    const val SETTINGS_VALUE_UNSET = "未設定"
     const val SETTINGS_INPUT_KONOMITV_ADDRESS = "KonomiTV アドレス"
     const val SETTINGS_INPUT_KONOMITV_PORT = "KonomiTV ポート番号"
     const val SETTINGS_INPUT_MIRAKURUN_ADDRESS = "Mirakurun IPアドレス"
@@ -98,13 +101,13 @@ object AppStrings {
     const val SETTINGS_SECTION_QUALITY = "画質設定"
     const val SETTINGS_ITEM_LIVE_QUALITY = "ライブ視聴画質"
     const val SETTINGS_ITEM_VIDEO_QUALITY = "録画視聴画質"
-    const val SETTINGS_SECTION_SUBTITLE = "字幕設定"
-    const val SETTINGS_ITEM_LIVE_SUBTITLE = "ライブ視聴 デフォルト表示"
-    const val SETTINGS_ITEM_VIDEO_SUBTITLE = "録画視聴 デフォルト表示"
+    const val SETTINGS_SECTION_SUBTITLE_AUDIO = "字幕・音声設定"
+    const val SETTINGS_ITEM_LIVE_SUBTITLE_DEFAULT = "ライブ視聴 デフォルト字幕"
+    const val SETTINGS_ITEM_VIDEO_SUBTITLE_DEFAULT = "録画視聴 デフォルト字幕"
     const val SETTINGS_VALUE_SHOW = "表示"
     const val SETTINGS_VALUE_HIDE = "非表示"
-    const val SETTINGS_SECTION_LAYER = "表示レイヤー設定"
-    const val SETTINGS_ITEM_LAYER_ORDER = "字幕とコメントの重なり"
+    const val SETTINGS_SECTION_COMMENT_LAYER = "実況表示レイヤー"
+    const val SETTINGS_ITEM_SUBTITLE_COMMENT_LAYER = "字幕とコメントの重なり"
     const val SETTINGS_VALUE_LAYER_COMMENT_TOP = "コメントを上に表示"
     const val SETTINGS_VALUE_LAYER_SUBTITLE_TOP = "字幕を上に表示"
     const val DIALOG_LAYER_ORDER_TITLE = "表示優先度"
@@ -112,21 +115,23 @@ object AppStrings {
     const val DIALOG_LAYER_SUBTITLE_TOP = "字幕を上に表示"
     const val DIALOG_QUALITY_TITLE = "視聴画質"
 
-    // ★追加: 音声出力設定関連
+    // 音声出力設定
     const val SETTINGS_SECTION_AUDIO_OUTPUT = "音声出力"
     const val SETTINGS_ITEM_AUDIO_OUTPUT_MODE = "音声出力モード"
-    const val SETTINGS_VALUE_AUDIO_DOWNMIX_REC = "ダウンミックス (推奨)"
+    const val SETTINGS_VALUE_AUDIO_DOWNMIX = "ダウンミックス"
     const val SETTINGS_VALUE_AUDIO_PASSTHROUGH = "パススルー"
-    const val DIALOG_AUDIO_OUTPUT_TITLE = "音声出力モード"
-    const val SETTINGS_VALUE_AUDIO_DOWNMIX_DESC = "ダウンミックス (2ch固定)"
-    const val SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC = "パススルー (5.1ch維持)"
+    const val DIALOG_AUDIO_OUTPUT_TITLE = "音声出力モードを選択"
+    const val SETTINGS_VALUE_AUDIO_DOWNMIX_DESC = "ダウンミックス (2ch固定・互換性優先)"
+    const val SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC = "パススルー (多チャンネル維持)"
 
     // 表示設定
-    const val SETTINGS_SECTION_GENERAL = "全般"
+    const val SETTINGS_SECTION_UI_CUSTOM = "インターフェース設定"
     const val SETTINGS_ITEM_BASE_THEME = "基本テーマ"
     const val SETTINGS_VALUE_THEME_DARK = "ダークモード"
     const val SETTINGS_VALUE_THEME_LIGHT = "ライトモード"
+    const val SETTINGS_SECTION_THEME = "テーマ設定" // ★追加
     const val SETTINGS_ITEM_THEME_COLOR = "テーマカラー・季節"
+    const val SETTINGS_ITEM_APP_THEME = "アプリのテーマ" // ★追加
     const val SETTINGS_VALUE_SEASON_SPRING = "春"
     const val SETTINGS_VALUE_SEASON_SUMMER = "夏"
     const val SETTINGS_VALUE_SEASON_AUTUMN = "秋"
@@ -139,8 +144,8 @@ object AppStrings {
     const val SETTINGS_VALUE_TAB_EPG = "番組表"
     const val SETTINGS_VALUE_TAB_RESERVE = "録画予約"
 
-    const val SETTINGS_SECTION_HOME_PICKUP = "ホーム画面設定 (おすすめピックアップ)"
-    const val SETTINGS_ITEM_PICKUP_GENRE = "ピックアップジャンル"
+    const val SETTINGS_SECTION_HOME_PICKUP = "ホーム画面ピックアップ設定"
+    const val SETTINGS_ITEM_PICKUP_GENRE = "対象ジャンル"
     const val DIALOG_PICKUP_GENRE_TITLE = "ジャンルを選択"
     const val SETTINGS_GENRE_ANIME = "アニメ"
     const val SETTINGS_GENRE_MOVIE = "映画"
@@ -150,16 +155,22 @@ object AppStrings {
     const val SETTINGS_GENRE_VARIETY = "バラエティ"
     const val SETTINGS_GENRE_DOCUMENTARY = "ドキュメンタリー"
 
-    const val SETTINGS_ITEM_PICKUP_TIME = "ピックアップ時間帯"
+    const val SETTINGS_ITEM_PICKUP_TIME = "対象時間帯"
     const val DIALOG_PICKUP_TIME_TITLE = "時間帯を選択"
     const val SETTINGS_TIME_AUTO = "自動"
     const val SETTINGS_TIME_MORNING = "朝"
     const val SETTINGS_TIME_NOON = "昼"
     const val SETTINGS_TIME_NIGHT = "夜"
 
-    const val SETTINGS_ITEM_EXCLUDE_PAID = "ピックアップから有料放送を除外する"
-    const val SETTINGS_VALUE_EXCLUDE_ON = "ON (除外する)"
-    const val SETTINGS_VALUE_EXCLUDE_OFF = "OFF (除外しない)"
+    const val SETTINGS_ITEM_EXCLUDE_PAID = "有料放送を除外する"
+    const val SETTINGS_VALUE_EXCLUDE_ON = "ON"
+    const val SETTINGS_VALUE_EXCLUDE_OFF = "OFF"
+
+    // 録画リスト設定
+    const val SETTINGS_SECTION_RECORD_LIST = "録画リスト" // ★修正
+    const val SETTINGS_ITEM_DEFAULT_RECORD_VIEW = "録画一覧の初期表示形式"
+    const val SETTINGS_VALUE_VIEW_LIST = "リスト形式"
+    const val SETTINGS_VALUE_VIEW_GRID = "グリッド形式"
 
     // コメント設定
     const val SETTINGS_SECTION_COMMENT_DISPLAY = "実況表示"
@@ -181,7 +192,6 @@ object AppStrings {
     const val SETTINGS_VALUE_DISABLE = "無効"
     const val SETTINGS_SECTION_RECORD_DETAIL = "録画詳細設定"
     const val SETTINGS_ITEM_POST_COMMAND = "デフォルト録画後実行コマンド"
-    const val SETTINGS_VALUE_UNSET = "未設定"
     const val SETTINGS_INPUT_POST_COMMAND = "録画後コマンド"
 
     // アプリ情報

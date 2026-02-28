@@ -28,6 +28,7 @@ object UrlBuilder {
     }
 
     // --- ロゴ関連 ---
+    @OptIn(UnstableApi::class)
     fun getMirakurunLogoUrl(ip: String, port: String, networkId: Long, serviceId: Long): String {
         val baseUrl = formatBaseUrl(ip, port, "http")
         val streamId = buildMirakurunStreamId(networkId, serviceId)
@@ -65,7 +66,7 @@ object UrlBuilder {
     @OptIn(UnstableApi::class)
     fun getVideoPlaylistUrl(ip: String, port: String, videoId: Int, sessionId: String, quality: String = "1080p-60fps"): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
-        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
+//        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
     }
 

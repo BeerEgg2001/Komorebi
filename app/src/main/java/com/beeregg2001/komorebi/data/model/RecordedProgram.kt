@@ -11,6 +11,7 @@ data class RecordedProgram(
     val id: Int,
     val title: String,
     val description: String,
+    val detail: Map<String, String>? = null, // ★追加: 番組詳細
     @SerializedName("start_time") val startTime: String,
     @SerializedName("end_time") val endTime: String,
     val duration: Double,

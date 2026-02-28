@@ -1,20 +1,18 @@
 package com.beeregg2001.komorebi.data.mapper
 
 import android.os.Build
-import android.util.Log
 import androidx.annotation.RequiresApi
 import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.model.*
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
-private const val TAG = "Komorebi_Debug_Mapper"
-
 object KonomiDataMapper {
+    private val gson = Gson()
+    private val mapType = object : TypeToken<Map<String, String>>() {}.type
 
-    /**
-     * APIから取得した履歴（KonomiHistoryProgram）をデータベース保存用（WatchHistoryEntity）に変換します。
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     fun toEntity(apiHistory: KonomiHistoryProgram): WatchHistoryEntity {
         val programId = apiHistory.program.id.toIntOrNull() ?: 0
@@ -24,13 +22,11 @@ object KonomiDataMapper {
             (end - start).toDouble()
         } catch (e: Exception) { 0.0 }
 
-        // API履歴にはタイル情報が含まれないため、ここでのログは「引継ぎ前」の状態確認用
-        Log.i(TAG, "toEntity(API->DB): ID=$programId, Title=${apiHistory.program.title}, ExistingTiles=${apiHistory.tileColumns}x${apiHistory.tileRows}")
-
         return WatchHistoryEntity(
             id = programId,
             title = apiHistory.program.title,
             description = apiHistory.program.description,
+            detailJson = gson.toJson(apiHistory.program.detail), // ★ 手動変換
             startTime = apiHistory.program.start_time,
             endTime = apiHistory.program.end_time,
             duration = calcDuration,
@@ -45,30 +41,19 @@ object KonomiDataMapper {
         )
     }
 
-    /**
-     * 再生中の番組（RecordedProgram）を、現在の再生位置を含めてデータベース保存用（WatchHistoryEntity）に変換します。
-     */
     fun toEntity(program: RecordedProgram, positionSeconds: Double = 0.0): WatchHistoryEntity {
         val tile = program.recordedVideo.thumbnailInfo?.tile
-
-        // ★重要ログ: ここで tile が null だと、DBにデフォルト値(1x1)が保存されてしまう
-        if (tile == null) {
-            Log.w(TAG, "toEntity(Domain->DB): WARNING! TileInfo is NULL for ID=${program.id}. Saving defaults.")
-        } else {
-            Log.i(TAG, "toEntity(Domain->DB): ID=${program.id}, Saving Tile: ${tile.columnCount}x${tile.rowCount}, Interval=${tile.intervalSec}")
-        }
-
         return WatchHistoryEntity(
             id = program.id,
             title = program.title,
             description = program.description,
+            detailJson = gson.toJson(program.detail), // ★ 手動変換
             startTime = program.startTime,
             endTime = program.endTime,
             duration = program.duration,
             videoId = program.recordedVideo.id,
             playbackPosition = positionSeconds,
             watchedAt = System.currentTimeMillis(),
-            // 再生時に保持していたタイル情報を確実にDBへ保存
             tileColumns = tile?.columnCount ?: 1,
             tileRows = tile?.rowCount ?: 1,
             tileInterval = tile?.intervalSec ?: 10.0,
@@ -77,9 +62,6 @@ object KonomiDataMapper {
         )
     }
 
-    /**
-     * データベースのエンティティを、UI表示用のAPI互換モデル（KonomiHistoryProgram）に変換します。
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     fun toUiModel(entity: WatchHistoryEntity): KonomiHistoryProgram {
         return KonomiHistoryProgram(
@@ -89,6 +71,7 @@ object KonomiDataMapper {
                 id = entity.id.toString(),
                 title = entity.title,
                 description = entity.description,
+                detail = gson.fromJson(entity.detailJson, mapType), // ★ 手動変換
                 start_time = entity.startTime,
                 end_time = entity.endTime,
                 channel_id = ""
@@ -102,24 +85,20 @@ object KonomiDataMapper {
         )
     }
 
-    /**
-     * UI向けの履歴データを、再生画面が必要とするドメインモデル（RecordedProgram）に変換します。
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     fun toDomainModel(uiHistory: KonomiHistoryProgram): RecordedProgram {
         val programId = uiHistory.program.id.toIntOrNull() ?: 0
         val calcDuration = try {
-            val start = java.time.Instant.parse(uiHistory.program.start_time).epochSecond
-            val end = java.time.Instant.parse(uiHistory.program.end_time).epochSecond
+            val start = Instant.parse(uiHistory.program.start_time).epochSecond
+            val end = Instant.parse(uiHistory.program.end_time).epochSecond
             (end - start).toDouble()
         } catch (e: Exception) { 0.0 }
-
-        Log.i(TAG, "toDomainModel(UI->Domain): Restoring Tile info for ID=$programId. Cols=${uiHistory.tileColumns}, Rows=${uiHistory.tileRows}")
 
         return RecordedProgram(
             id = programId,
             title = uiHistory.program.title,
             description = uiHistory.program.description,
+            detail = uiHistory.program.detail,
             startTime = uiHistory.program.start_time,
             endTime = uiHistory.program.end_time,
             duration = calcDuration,
@@ -136,7 +115,6 @@ object KonomiDataMapper {
                 videoCodec = "",
                 audioCodec = "",
                 hasKeyFrames = true,
-                // 保存されていたタイル情報を復元してメタデータとしてセット
                 thumbnailInfo = ThumbnailInfo(
                     version = 1,
                     tile = TileInfo(

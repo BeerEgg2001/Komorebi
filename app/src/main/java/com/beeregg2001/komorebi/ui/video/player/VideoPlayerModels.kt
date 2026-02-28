@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
 import androidx.compose.ui.graphics.vector.ImageVector
 

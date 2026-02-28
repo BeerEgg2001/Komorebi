@@ -1,4 +1,4 @@
-package com.beeregg2001.komorebi.ui.video
+package com.beeregg2001.komorebi.ui.video.player
 
 import androidx.annotation.OptIn
 import androidx.compose.animation.*

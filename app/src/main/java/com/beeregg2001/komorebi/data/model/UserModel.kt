@@ -23,6 +23,7 @@ data class KonomiProgram(
     val id: String,
     val title: String,
     val description: String,
+    val detail: Map<String, String>?, // ★追加: 番組詳細
     val start_time: String,
     val end_time: String,
     val channel_id: String,

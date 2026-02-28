@@ -37,14 +37,13 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON // ★変更: ONを使用
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
-// ★重要: 魔改造版パッケージ
 import com.beeregg2001.komorebi.extractor.ts.TsExtractor
 import com.beeregg2001.komorebi.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -123,8 +122,6 @@ fun LivePlayerScreen(
     val commentMaxLinesStr by settingsViewModel.commentMaxLines.collectAsState()
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
-
-    // ★追加: 設定から音声出力モードを取得
     val audioOutputMode by settingsViewModel.audioOutputMode.collectAsState()
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
@@ -206,7 +203,6 @@ fun LivePlayerScreen(
 
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
 
-    // 魔改造版 Extractor の構成
     val extractorsFactory = remember {
         ExtractorsFactory {
             arrayOf(
@@ -219,7 +215,6 @@ fun LivePlayerScreen(
         }
     }
 
-    // ダウンミックス用プロセッサ
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
             putChannelMixingMatrix(ChannelMixingMatrix(1, 2, floatArrayOf(1f, 1f)))
@@ -236,7 +231,7 @@ fun LivePlayerScreen(
 
     val exoPlayer =
         remember(ps.currentStreamSource, ps.retryKey, ps.currentQuality, audioOutputMode) {
-            Log.i(LOG_TAG, "--- ExoPlayer Initialization (Mode: $audioOutputMode) ---")
+            Log.i(LOG_TAG, "--- ExoPlayer Initialization (Source: ${ps.currentStreamSource}) ---")
 
             val renderersFactory = object : DefaultRenderersFactory(context) {
                 override fun buildAudioSink(
@@ -244,37 +239,26 @@ fun LivePlayerScreen(
                     enableFloat: Boolean,
                     enableParams: Boolean
                 ): DefaultAudioSink? {
-                    // ★修正: 設定に応じてプロセッサを切り替える
-                    // AudioProcessorが登録されると、ExoPlayerはパススルー(Offload)を自動で無効化します。
-                    val processors = if (audioOutputMode == "PASSTHROUGH") {
-                        Log.i(LOG_TAG, "Mode: PASSTHROUGH (No Processors)")
-                        emptyArray<AudioProcessor>()
-                    } else {
-                        Log.i(LOG_TAG, "Mode: DOWNMIX (Using ChannelMixingAudioProcessor)")
-                        arrayOf<AudioProcessor>(audioProcessor)
-                    }
-
-                    return DefaultAudioSink.Builder(ctx)
-                        .setAudioProcessors(processors)
-                        .build()
+                    val processors =
+                        if (audioOutputMode == "PASSTHROUGH") emptyArray<AudioProcessor>() else arrayOf<AudioProcessor>(
+                            audioProcessor
+                        )
+                    return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
                 }
             }.apply {
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
+                // ★重要修正: PREFERからONに変更。ハードウェアデコーダーを優先し、アスペクト比(SAR)の誤認識を防ぐ
+                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                 setEnableDecoderFallback(true)
             }
 
             ExoPlayer.Builder(context, renderersFactory)
                 .setLoadControl(
-                    DefaultLoadControl.Builder()
-                        .setBufferDurationsMs(30000, 50000, 500, 500)
-                        .setPrioritizeTimeOverSizeThresholds(true)
-                        .build()
+                    DefaultLoadControl.Builder().setBufferDurationsMs(30000, 50000, 500, 500)
+                        .setPrioritizeTimeOverSizeThresholds(true).build()
                 )
                 .setLivePlaybackSpeedControl(
-                    DefaultLivePlaybackSpeedControl.Builder()
-                        .setFallbackMaxPlaybackSpeed(1.04f)
-                        .setFallbackMinPlaybackSpeed(0.96f)
-                        .build()
+                    DefaultLivePlaybackSpeedControl.Builder().setFallbackMaxPlaybackSpeed(1.04f)
+                        .setFallbackMinPlaybackSpeed(0.96f).build()
                 )
                 .apply {
                     if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
@@ -287,19 +271,11 @@ fun LivePlayerScreen(
                     }
                 }.build().apply {
                     playWhenReady = true
+                    // ★追加: スケーリングモードを明示
+                    videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                     addAnalyticsListener(EventLogger(null, "ExoPlayerFFmpegLog"))
 
                     addListener(object : Player.Listener {
-                        override fun onPlaybackStateChanged(state: Int) {
-                            Log.i(
-                                LOG_TAG, "PlaybackState: ${
-                                    when (state) {
-                                        Player.STATE_BUFFERING -> "BUFFERING"; Player.STATE_READY -> "READY"; else -> "OTHER"
-                                    }
-                                }"
-                            )
-                        }
-
                         override fun onIsPlayingChanged(playing: Boolean) {
                             ps.isPlayerPlaying = playing
                         }
@@ -499,7 +475,7 @@ fun LivePlayerScreen(
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.e(TAG, "Parse Error", e)
+                Log.e(TAG, "Parse Error", e)
             }
         }
         onDispose { jikkyoClient.stop() }
@@ -665,13 +641,7 @@ fun LivePlayerScreen(
         }
 
         AnimatedVisibility(visible = isPinnedOverlay && ps.playerError == null) {
-            StatusOverlay(
-                currentChannelItem,
-                mirakurunIp,
-                mirakurunPort,
-                konomiIp,
-                konomiPort
-            )
+            StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort)
         }
 
         AnimatedVisibility(
@@ -730,8 +700,7 @@ fun LivePlayerScreen(
                                 "録画を停止しました"
                             )
                         }
-                    }
-                    else currentProgramId?.let { reserveViewModel.addReserve(it) { onShowToast("録画を開始します") } }
+                    } else currentProgramId?.let { reserveViewModel.addReserve(it) { onShowToast("録画を開始します") } }
                         ?: onShowToast("番組情報不明")
                     onSubMenuToggle(false)
                 },
@@ -744,11 +713,11 @@ fun LivePlayerScreen(
                     if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
-                            ).build()
+                            TrackSelectionOverride(
+                                audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
+                            )
+                        ).build()
                     onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 {

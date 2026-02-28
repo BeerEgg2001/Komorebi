@@ -36,6 +36,7 @@ class HomeLauncherState(
     var genrePickupTimeSlot by mutableStateOf("")
     var epgUiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
     var logoUrls by mutableStateOf<List<String>>(emptyList())
+    var isLoadingInitial by mutableStateOf(true)
 
     // --- フォーカスリクエスタ ---
     val tabFocusRequesters = List(5) { FocusRequester() }
@@ -131,6 +132,7 @@ fun rememberHomeLauncherState(
     state.watchHistory = homeViewModel.watchHistory.collectAsState().value
     state.lastChannels = homeViewModel.lastWatchedChannelFlow.collectAsState().value
     state.recentRecordings = recordViewModel.recentRecordings.collectAsState().value
+    state.isLoadingInitial = recordViewModel.isRecordingLoading.collectAsState().value
     state.isLoadingMore = recordViewModel.isLoadingMore.collectAsState().value
     state.reserves = reserveViewModel.reserves.collectAsState().value
 

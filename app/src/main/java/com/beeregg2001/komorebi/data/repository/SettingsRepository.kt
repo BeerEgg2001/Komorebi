@@ -51,6 +51,8 @@ class SettingsRepository @Inject constructor(
 
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
         val APP_THEME = stringPreferencesKey("app_theme")
+        // ★追加: 録画一覧の初期表示形式
+        val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
     }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
@@ -85,7 +87,8 @@ class SettingsRepository @Inject constructor(
 
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
-
+    // ★追加
+    val defaultRecordListView: Flow<String> = context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
     }

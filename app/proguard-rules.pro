@@ -1,21 +1,17 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ==========================================
+# Komorebi アプリの難読化回避ルール
+# ==========================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# 1. データモデルの保護（JSONパースエラーを防ぐ）
+# com.beeregg2001.komorebi.data.model パッケージ内のすべてのクラスと、
+# その中にあるすべての変数・メソッドの名前を変換・削除しないようにする。
+-keep class com.beeregg2001.komorebi.data.model.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# (もしAPIレスポンス用のクラスが別パッケージにある場合はそれも追加)
+# -keep class com.beeregg2001.komorebi.data.api.response.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# 2. Enum クラスの保護（品質やカテゴリーなどのEnumが壊れるのを防ぐ）
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}

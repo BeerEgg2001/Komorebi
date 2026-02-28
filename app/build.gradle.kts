@@ -5,6 +5,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("kotlin-kapt")
     id("com.google.devtools.ksp")
+    alias(libs.plugins.baselineprofile)
 }
 
 android {
@@ -87,7 +88,6 @@ configurations.all {
     }
 }
 
-// dependencies ブロックを以下のように書き換えてください
 dependencies {
     // 1. Compose BOM を最新に近いバージョンに更新 (ここが最重要)
     // 2023.10.01 だと Tv-Foundation 1.0.0-alpha11 と互換性がありません
@@ -110,6 +110,8 @@ dependencies {
     // --- Hilt ---
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("com.google.dagger:hilt-android:2.54")
+    implementation(libs.androidx.profileinstaller)
+    "baselineProfile"(project(":baselineprofile"))
     kapt("com.google.dagger:hilt-compiler:2.54")
 
     // --- Retrofit ---
@@ -153,4 +155,6 @@ dependencies {
 
     compileOnly("org.checkerframework:checker-qual:3.33.0")
 
+    // Baseline Profiles のインストールを管理するライブラリ
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 }
