@@ -248,6 +248,7 @@ fun HomeLauncherScreen(
                         genrePickup = ui.genrePickup,
                         pickupGenreName = ui.pickupGenreLabel,
                         pickupTimeSlot = ui.genrePickupTimeSlot,
+                        groupedChannels = groupedChannels, // ★ これを追加してください！
                         onChannelClick = onChannelClick,
                         onHistoryClick = { historyItem ->
                             val programId = historyItem.program.id.toIntOrNull()
@@ -277,7 +278,8 @@ fun HomeLauncherScreen(
                         tabFocusRequester = ui.tabFocusRequesters[0],
                         externalFocusRequester = ui.contentFirstItemRequesters[0],
                         lastFocusedChannelId = ui.internalLastPlayerChannelId,
-                        lastFocusedProgramId = lastPlayerProgramId
+                        lastFocusedProgramId = lastPlayerProgramId,
+                        isTopNavFocused = ui.topNavHasFocus
                     )
 
                     1 -> LiveContent(
