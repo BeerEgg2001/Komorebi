@@ -131,12 +131,12 @@ dependencies {
     ksp("androidx.room:room-compiler:$room_version") // kaptからkspへ
 
     // --- Media3 ---
-    val media3_version = "1.5.0"
+    val media3_version = "1.6.1"
     implementation("androidx.media3:media3-exoplayer:$media3_version")
     implementation("androidx.media3:media3-ui:$media3_version")
     implementation("androidx.media3:media3-common:$media3_version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.6.1+1")
 
     // --- その他 ---
     implementation("io.coil-kt:coil-compose:2.5.0")
