@@ -41,6 +41,9 @@ class ChannelViewModel @Inject constructor(
     private var pollingJob: Job? = null
     private var progressUpdateJob: Job? = null
 
+    // ★追加: 単発のフェッチ処理を管理するJob（ポーリングとは別枠にする）
+    private var fetchJob: Job? = null
+
     init {
         startPolling()
         startProgressUpdater()
@@ -128,6 +131,10 @@ class ChannelViewModel @Inject constructor(
             }
             _groupedChannels.value = processed
             _liveRows.value = transformToUiState(processed)
+        } catch (e: CancellationException) {
+            // ★追加: コルーチンキャンセルの場合はエラーとして扱わず、静かに終了する
+            Log.d("ChannelViewModel", "fetchChannelsInternal cancelled")
+            throw e
         } catch (e: Exception) {
             Log.e("ChannelViewModel", "Error fetching channels", e)
             _connectionError.value = true
@@ -149,10 +156,14 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
+    // ★修正: 単発のフェッチは、ポーリングがキャンセルされても生き残るように fetchJob に割り当てる
     @RequiresApi(Build.VERSION_CODES.O)
     fun fetchChannels() {
         _isLoading.value = true
-        viewModelScope.launch { fetchChannelsInternal() }
+        fetchJob?.cancel()
+        fetchJob = viewModelScope.launch {
+            fetchChannelsInternal()
+        }
     }
 
     fun fetchRecentRecordings() {
@@ -175,22 +186,24 @@ class ChannelViewModel @Inject constructor(
         pollingJob = viewModelScope.launch {
             while (isActive) {
                 fetchChannelsInternal()
-                delay(60_000L)
+                delay(60_000L) // 1分待機
             }
         }
     }
 
     fun stopPolling() {
         pollingJob?.cancel()
+        // progressUpdateJob はUIのプログレスバーを更新するものなので、他タブにいても止めるべきか要検討ですが、
+        // 今回は元の仕様通り止めておきます（リソース節約のため）。
         progressUpdateJob?.cancel()
     }
 
     override fun onCleared() {
         super.onCleared()
         stopPolling()
+        fetchJob?.cancel()
     }
 
-    // ★修正箇所: Entityを直接作成せず、Mapperを使用します
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
             val entity = KonomiDataMapper.toEntity(program)

@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -28,7 +29,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -51,7 +51,6 @@ import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.yield
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
@@ -79,8 +78,6 @@ fun LiveContent(
     val isPlayerActive = selectedChannel != null
     val colors = KomorebiTheme.colors
 
-    // ★ 変更点: isContentReady と 300msの強制待機ロジックを完全に削除しました
-
     var isMiniListOpen by remember { mutableStateOf(false) }
     var showOverlay by remember { mutableStateOf(true) }
     var isManualOverlay by remember { mutableStateOf(false) }
@@ -90,7 +87,6 @@ fun LiveContent(
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
 
-    // 十字キーの連続移動時は300ms待ってからHeroエリアを更新 (これは維持。ザッピング時の軽快さのため)
     LaunchedEffect(pendingChannel) {
         if (pendingChannel != null) {
             delay(300)
@@ -98,7 +94,6 @@ fun LiveContent(
         }
     }
 
-    // 初期化時、最初のチャンネルをHeroに設定
     LaunchedEffect(liveRows) {
         if (focusedChannel == null && liveRows.isNotEmpty()) {
             val firstChannel = liveRows.firstOrNull()?.channels?.firstOrNull()
@@ -110,7 +105,6 @@ fun LiveContent(
 
     LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
 
-    // プレイヤーから戻ってきた時のフォーカス回復
     LaunchedEffect(isReturningFromPlayer, liveRows.isNotEmpty()) {
         if (isReturningFromPlayer && liveRows.isNotEmpty()) {
             delay(200); targetChannelFocusRequester.safeRequestFocus(TAG); onReturnFocusConsumed()
@@ -118,7 +112,6 @@ fun LiveContent(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // ★ 変更点: 強制待機ではなく、本当にデータがない時(起動直後など)のみローディングを表示
         if (liveRows.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f))
@@ -141,8 +134,6 @@ fun LiveContent(
                         .weight(0.55f)
                         .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 24.dp)
                 ) {
-                    // ★ ここがポイント: タブを開いた瞬間はfocusedChannelがnullなのでここは空。
-                    // 300ms後に描画されるため、タブ移動アニメーションの邪魔をしません。
                     if (focusedChannel != null) {
                         HeroDashboard(
                             uiState = focusedChannel!!,
@@ -163,9 +154,11 @@ fun LiveContent(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(liveRows, key = { it.genreId }) { row ->
-                        Column(modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer(clip = false)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer(clip = false)
+                        ) {
                             Text(
                                 text = row.genreLabel,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
@@ -174,7 +167,7 @@ fun LiveContent(
                             )
 
                             LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 contentPadding = PaddingValues(horizontal = 48.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -247,10 +240,6 @@ fun LiveContent(
     }
 }
 
-// -------------------------------------------------------------------------
-// 以下の HeroDashboard と CompactChannelCard は前回から一切変更ありません
-// -------------------------------------------------------------------------
-
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HeroDashboard(
@@ -288,7 +277,6 @@ fun HeroDashboard(
                     .align(Alignment.CenterEnd)
                     .fillMaxWidth(0.35f)
                     .aspectRatio(16f / 9f)
-//                    .blur(10.dp)
                     .alpha(0.12f)
             )
 
@@ -344,7 +332,10 @@ fun HeroDashboard(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (state.hasProgram && present != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.height(24.dp)
+                        ) {
                             Text(
                                 text = formatTime(present.startTime),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
@@ -401,9 +392,13 @@ fun HeroDashboard(
                             style = MaterialTheme.typography.bodyLarge,
                             color = colors.textSecondary,
                             maxLines = 3,
+                            minLines = 3,
                             overflow = TextOverflow.Ellipsis,
-                            lineHeight = 24.sp
+                            lineHeight = 24.sp,
+                            modifier = Modifier.height(72.dp)
                         )
+                    } else {
+                        Spacer(modifier = Modifier.height(108.dp))
                     }
                 }
 
@@ -416,38 +411,50 @@ fun HeroDashboard(
                         .padding(bottom = 8.dp),
                     verticalArrangement = Arrangement.Bottom
                 ) {
-                    if (following != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(colors.accent.copy(alpha = 0.2f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    Box(modifier = Modifier.height(84.dp)) {
+                        if (following != null) {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Bottom
                             ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(colors.accent.copy(alpha = 0.2f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "NEXT",
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 1.sp
+                                            ),
+                                            color = colors.accent
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "${formatTime(following.startTime)} - ${
+                                            formatTime(
+                                                following.endTime
+                                            )
+                                        }",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = colors.textPrimary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "NEXT",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 1.sp
-                                    ),
-                                    color = colors.accent
+                                    text = following.title,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = colors.textPrimary,
+                                    maxLines = 2,
+                                    minLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${formatTime(following.startTime)} - ${formatTime(following.endTime)}",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = colors.textPrimary
-                            )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = following.title,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = colors.textPrimary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }
@@ -467,8 +474,9 @@ fun CompactChannelCard(
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
+
     val animatedScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.1f else 1.0f,
+        targetValue = if (isFocused) 1.08f else 1.0f,
         animationSpec = tween(durationMillis = 150),
         label = "cardScale"
     )
@@ -479,41 +487,41 @@ fun CompactChannelCard(
         onClick = onClick,
         modifier = modifier
             .width(140.dp)
-            .height(72.dp)
+            .height(76.dp)
             .graphicsLayer { scaleX = animatedScale; scaleY = animatedScale }
             .onFocusChanged { isFocused = it.isFocused },
-        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = colors.surface,
-            focusedContainerColor = colors.textPrimary,
+            containerColor = colors.surface.copy(alpha = if (isFocused) 1f else 0.6f),
+            focusedContainerColor = colors.surface,
             contentColor = colors.textPrimary,
-            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+            focusedContentColor = colors.textPrimary
+        ),
+        border = ClickableSurfaceDefaults.border(
+            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f))),
+            focusedBorder = Border(BorderStroke(2.5.dp, colors.accent))
         )
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(8.dp),
+                    .fillMaxSize()
+                    .padding(bottom = 4.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
                     modifier = Modifier
-                        .size(48.dp, 27.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(
-                            if (isFocused) colors.surface.copy(0.2f) else colors.textPrimary.copy(
-                                0.1f
-                            )
-                        ),
+                        .size(52.dp, 29.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.textPrimary.copy(alpha = 0.05f)),
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
                         model = logoUrl,
                         contentDescription = uiState.name,
+                        // ★修正: パディングを削除し、ContentScale.Crop に変更して16:9で上下をクロップ
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -525,21 +533,23 @@ fun CompactChannelCard(
                     fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = LocalContentColor.current
+                    color = if (isFocused) colors.textPrimary else colors.textPrimary.copy(alpha = 0.8f)
                 )
             }
+
             if (uiState.hasProgram) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(3.dp)
-                        .background(colors.textSecondary.copy(0.2f))
+                        .height(4.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(colors.textPrimary.copy(alpha = 0.1f))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(uiState.progress)
                             .fillMaxHeight()
-                            .background(if (isFocused) colors.accent else colors.accent.copy(alpha = 0.7f))
+                            .background(if (isFocused) colors.accent else colors.accent.copy(alpha = 0.6f))
                     )
                 }
             }
