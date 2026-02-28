@@ -79,20 +79,7 @@ fun RecordListContent(
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
 
     val firstVisibleIndex by remember {
-        derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
-        }
-    }
-
-    // ★修正: 1件目が見えていて、かつリストにデータがある状態を「準備完了」とする
-    val isListReady by remember {
-        derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.isNotEmpty() && recentRecordings.isNotEmpty()
-        }
-    }
-
-    LaunchedEffect(isListReady) {
-        onFirstItemBound(isListReady)
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
     }
 
     LaunchedEffect(recentRecordings) { focusedProgram = null }
@@ -115,7 +102,6 @@ fun RecordListContent(
                 .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
         ) {
             itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                // ★修正: 1番目のアイテムには明示的に firstItemFocusRequester を使用し、それ以外は個別Requester
                 val requester = if (index == firstVisibleIndex) {
                     firstItemFocusRequester
                 } else {
@@ -134,8 +120,10 @@ fun RecordListContent(
                     modifier = Modifier
                         .focusRequester(requester)
                         .onFocusChanged {
-                            if (it.isFocused && !isSideMenuOpen && !isDetailVisible) {
-                                focusedProgram = program
+                            if (it.isFocused) {
+                                if (!isSideMenuOpen && !isDetailVisible) {
+                                    focusedProgram = program
+                                }
                             }
                         }
                         .onKeyEvent { event ->
@@ -164,7 +152,9 @@ fun RecordListContent(
             visibleState = menuTransitionState,
             enter = slideInHorizontally(animationSpec = tween(250)) { it },
             exit = slideOutHorizontally(animationSpec = tween(250)) { it } + fadeOut(
-                animationSpec = tween(150)
+                animationSpec = tween(
+                    150
+                )
             ),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -184,7 +174,6 @@ fun RecordListContent(
                                 !isDetailVisible && (event.key == Key.Back || event.key == Key.Escape)
 
                             if (isLeftKey || isBackAction) {
-                                if (!isListReady) return@onKeyEvent true
                                 isSideMenuOpen = false
                                 onDetailStateChange(false)
                                 scope.launch {
@@ -213,11 +202,9 @@ fun RecordListContent(
                             .size(24.dp)
                     )
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = 28.dp)
-                    ) {
+                    Box(modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 28.dp)) {
                         if (isDetailVisible) {
                             RecordDetailPanel(
                                 program = detailProgram,
@@ -241,8 +228,8 @@ fun RecordListContent(
                                     modifier = Modifier
                                         .focusRequester(menuFirstItemRequester)
                                         .focusProperties {
-                                            up = FocusRequester.Cancel
-                                            right = FocusRequester.Cancel
+                                            up = FocusRequester.Cancel; right =
+                                            FocusRequester.Cancel
                                         },
                                     onClick = { focusedProgram?.let { onProgramClick(it, null) } }
                                 )
@@ -251,8 +238,9 @@ fun RecordListContent(
                                     icon = Icons.Default.Replay,
                                     label = "最初から再生",
                                     isExpanded = true,
-                                    modifier = Modifier
-                                        .focusProperties { right = FocusRequester.Cancel },
+                                    modifier = Modifier.focusProperties {
+                                        right = FocusRequester.Cancel
+                                    },
                                     onClick = { focusedProgram?.let { onProgramClick(it, 0.0) } }
                                 )
                                 Spacer(Modifier.height(12.dp))
@@ -260,8 +248,9 @@ fun RecordListContent(
                                     icon = Icons.Default.Info,
                                     label = "番組詳細",
                                     isExpanded = true,
-                                    modifier = Modifier
-                                        .focusProperties { right = FocusRequester.Cancel },
+                                    modifier = Modifier.focusProperties {
+                                        right = FocusRequester.Cancel
+                                    },
                                     onClick = {
                                         detailProgram = focusedProgram; onDetailStateChange(
                                         true
@@ -271,10 +260,11 @@ fun RecordListContent(
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
                                     icon = Icons.Default.LibraryBooks,
-                                    modifier = Modifier
-                                        .focusProperties { right = FocusRequester.Cancel },
                                     label = "シリーズ検索",
                                     isExpanded = true,
+                                    modifier = Modifier.focusProperties {
+                                        right = FocusRequester.Cancel
+                                    },
                                     onClick = {
                                         focusedProgram?.let {
                                             isSideMenuOpen = false
@@ -287,11 +277,9 @@ fun RecordListContent(
                                     icon = Icons.Default.Delete,
                                     label = "削除する",
                                     isExpanded = true,
-                                    modifier = Modifier
-                                        .focusProperties {
-                                            down = FocusRequester.Cancel
-                                            right = FocusRequester.Cancel
-                                        },
+                                    modifier = Modifier.focusProperties {
+                                        down = FocusRequester.Cancel; right = FocusRequester.Cancel
+                                    },
                                     enabled = false,
                                     onClick = { }
                                 )
@@ -333,7 +321,8 @@ private fun SideMenuItem(
         ) {
             Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(24.dp))
             if (isExpanded) {
-                Spacer(Modifier.width(12.dp)); Text(
+                Spacer(Modifier.width(12.dp))
+                Text(
                     text = label,
                     style = MaterialTheme.typography.labelLarge,
                     fontSize = 13.sp,

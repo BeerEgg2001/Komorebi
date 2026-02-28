@@ -7,6 +7,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
@@ -21,6 +23,7 @@ fun RecordNavigationPane(
     selectedCategory: RecordCategory,
     onCategorySelect: (RecordCategory) -> Unit,
     isOverlay: Boolean,
+    navPaneFocusRequester: FocusRequester, // ★追加: 親からフォーカスリクエスターを受け取る
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
@@ -46,11 +49,15 @@ fun RecordNavigationPane(
             horizontalAlignment = Alignment.Start
         ) {
             RecordCategory.values().forEachIndexed { index, category ->
+                val isSelected = selectedCategory == category
                 NavigationItem(
                     category = category,
-                    isSelected = selectedCategory == category, // ★常に accent 表示を維持
+                    isSelected = isSelected,
                     isOverlay = isOverlay,
-                    modifier = if (index == 0) Modifier.padding(top = 0.dp) else Modifier,
+                    modifier = Modifier
+                        .then(if (index == 0) Modifier.padding(top = 0.dp) else Modifier)
+                        // ★修正: 選択されているアイテム自身にフォーカスリクエスターを付与し、退避を確実に成功させる
+                        .then(if (isSelected) Modifier.focusRequester(navPaneFocusRequester) else Modifier),
                     onClick = { onCategorySelect(category) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -85,7 +92,6 @@ private fun NavigationItem(
                 } else false
             },
         colors = ClickableSurfaceDefaults.colors(
-            // ★isSelected (selectedCategory と一致) の時にアクセントカラーを表示
             containerColor = if (isSelected) colors.accent.copy(alpha = 0.2f) else Color.Transparent,
             focusedContainerColor = colors.textPrimary,
             contentColor = if (isSelected) colors.accent else colors.textPrimary,

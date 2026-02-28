@@ -288,7 +288,7 @@ fun HeroDashboard(
                     .align(Alignment.CenterEnd)
                     .fillMaxWidth(0.35f)
                     .aspectRatio(16f / 9f)
-                    .blur(40.dp)
+//                    .blur(10.dp)
                     .alpha(0.12f)
             )
 
