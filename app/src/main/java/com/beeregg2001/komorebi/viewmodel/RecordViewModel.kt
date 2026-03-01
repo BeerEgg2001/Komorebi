@@ -72,25 +72,22 @@ class RecordViewModel @Inject constructor(
 
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
-
     private val _selectedGenre = MutableStateFlow<String?>(null)
     val selectedGenre: StateFlow<String?> = _selectedGenre.asStateFlow()
-
     private val _selectedChannelId = MutableStateFlow<String?>(null)
     val selectedChannelId: StateFlow<String?> = _selectedChannelId.asStateFlow()
-
     private val _selectedDay = MutableStateFlow<String?>(null)
     val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
-
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
-
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
-
     private val _categoryBeforeSearch = MutableStateFlow<RecordCategory?>(null)
-    val categoryBeforeSearch: StateFlow<RecordCategory?> = _categoryBeforeSearch.asStateFlow()
-
+    private val _manualListViewOverride = MutableStateFlow<Boolean?>(null)
+    val isListView: StateFlow<Boolean> =
+        combine(settingsRepository.defaultRecordListView, _manualListViewOverride) { d, m ->
+            m ?: (d == "LIST")
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     private val _selectedSeriesGenre = MutableStateFlow<String?>(null)
     val selectedSeriesGenre: StateFlow<String?> = _selectedSeriesGenre.asStateFlow()
 
@@ -109,16 +106,10 @@ class RecordViewModel @Inject constructor(
 
     private val _isRecordingLoading = MutableStateFlow(false)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
-
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
-
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
-
-    private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
-    val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
-
     private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
     val availableGenres: StateFlow<List<String>> = _availableGenres.asStateFlow()
 
@@ -251,24 +242,20 @@ class RecordViewModel @Inject constructor(
     fun updateCategory(category: RecordCategory) {
         if (_selectedCategory.value == category) return
         _selectedCategory.value = category
-        _selectedGenre.value = null
-        _selectedChannelId.value = null
-        _selectedDay.value = null
+        _selectedGenre.value = null; _selectedChannelId.value = null; _selectedDay.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
     fun updateGenre(genre: String?) {
-        _selectedGenre.value = genre
-        _selectedCategory.value = RecordCategory.GENRE
+        _selectedGenre.value = genre; _selectedCategory.value = RecordCategory.GENRE
     }
 
     fun updateDay(day: String?) {
-        _selectedDay.value = day
-        _selectedCategory.value = RecordCategory.TIME
+        _selectedDay.value = day; _selectedCategory.value = RecordCategory.TIME
     }
 
-    fun updateChannel(channelId: String?) {
-        _selectedChannelId.value = channelId
+    fun updateChannel(channelName: String?) {
+        _selectedChannelId.value = channelName // 便宜上名称を入れる
         _selectedCategory.value = RecordCategory.CHANNEL
         _selectedGenre.value = null
         _selectedDay.value = null
@@ -276,12 +263,9 @@ class RecordViewModel @Inject constructor(
     }
 
     fun searchRecordings(query: String) {
-        if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) {
-            _categoryBeforeSearch.value = _selectedCategory.value
-        }
-        _activeSearchQuery.value = query
-        _searchQuery.value = query
-        currentSearchQuery = query
+        if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) _categoryBeforeSearch.value =
+            _selectedCategory.value
+        _activeSearchQuery.value = query; _searchQuery.value = query; currentSearchQuery = query
         if (query.isNotBlank()) addSearchHistory(query)
         _selectedCategory.value = RecordCategory.ALL
         _selectedGenre.value = null
@@ -290,16 +274,9 @@ class RecordViewModel @Inject constructor(
     }
 
     fun clearSearch() {
-        _activeSearchQuery.value = ""
-        _searchQuery.value = ""
-        currentSearchQuery = ""
-        if (!isListView.value) {
-            updateCategory(RecordCategory.ALL)
-        } else {
-            _categoryBeforeSearch.value?.let {
-                _selectedCategory.value = it
-                _categoryBeforeSearch.value = null
-            }
+        _activeSearchQuery.value = ""; _searchQuery.value = ""; currentSearchQuery = ""
+        _categoryBeforeSearch.value?.let {
+            _selectedCategory.value = it; _categoryBeforeSearch.value = null
         }
     }
 
@@ -315,9 +292,9 @@ class RecordViewModel @Inject constructor(
 
     private fun loadSearchHistory() {
         try {
-            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            val jsonString = prefs.getString(KEY_HISTORY, "[]")
-            val jsonArray = JSONArray(jsonString)
+            val json = context.getSharedPreferences("search_history_pref", Context.MODE_PRIVATE)
+                .getString("history_list", "[]")
+            val array = JSONArray(json);
             val list = ArrayList<String>()
             for (i in 0 until jsonArray.length()) {
                 list.add(jsonArray.getString(i))
@@ -329,22 +306,9 @@ class RecordViewModel @Inject constructor(
     }
 
     private fun addSearchHistory(query: String) {
-        val currentList = _searchHistory.value.toMutableList()
-        currentList.remove(query); currentList.add(0, query)
-        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex)
-        _searchHistory.value = currentList
-        saveSearchHistory(currentList)
-    }
-
-    fun removeSearchHistory(query: String) {
-        val currentList = _searchHistory.value.toMutableList()
-        if (currentList.remove(query)) {
-            _searchHistory.value = currentList
-            saveSearchHistory(currentList)
-        }
-    }
-
-    private fun saveSearchHistory(list: List<String>) {
+        val list = _searchHistory.value.toMutableList(); list.remove(query); list.add(0, query)
+        if (list.size > 5) list.removeAt(list.lastIndex)
+        _searchHistory.value = list
         viewModelScope.launch {
             try {
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -392,20 +356,13 @@ class RecordViewModel @Inject constructor(
     }
 
     fun stopStreamMaintenance() {
-        maintenanceJob?.cancel()
-        maintenanceJob = null
+        maintenanceJob?.cancel(); maintenanceJob = null
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        stopStreamMaintenance()
-    }
-
-    suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {
-        return withContext(Dispatchers.IO) {
+    suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> =
+        withContext(Dispatchers.IO) {
             repository.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
         }
-    }
 
     // --- メニュー構築 ---
 

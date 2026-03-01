@@ -1,3 +1,5 @@
+@file:OptIn(UnstableApi::class)
+
 package com.beeregg2001.komorebi.ui.live
 
 import android.util.Base64
@@ -18,7 +20,7 @@ class DirectSubtitlePayloadReader(
     private val webViewRef: MutableState<WebView?>,
     private val isSubtitleEnabledState: MutableState<Boolean>
 ) : TsPayloadReader {
-    private lateinit var timestampAdjuster: TimestampAdjuster
+    private var timestampAdjuster: TimestampAdjuster? = null
     private val buffer = ByteArrayOutputStream()
 
     override fun init(
@@ -57,7 +59,6 @@ class DirectSubtitlePayloadReader(
             }
         }
         if (id3StartIndex == -1) return
-
         try {
             var offset = id3StartIndex + 10
             while (offset < rawData.size - 10) {
@@ -69,13 +70,21 @@ class DirectSubtitlePayloadReader(
                     var ownerEnd = offset
                     while (ownerEnd < offset + frameSize && ownerEnd < rawData.size && rawData[ownerEnd].toInt() != 0) ownerEnd++
                     val ownerString = String(rawData, offset, ownerEnd - offset)
-                    if (ownerString.contains("aribb24", true) || ownerString.contains("B24", true)) {
+                    if (ownerString.contains("aribb24", true) || ownerString.contains(
+                            "B24",
+                            true
+                        )
+                    ) {
                         val privateDataStart = ownerEnd + 1
                         val privateDataLength = frameSize - (privateDataStart - offset)
                         if (privateDataStart + privateDataLength <= rawData.size) {
-                            val privateData = rawData.copyOfRange(privateDataStart, privateDataStart + privateDataLength)
+                            val privateData = rawData.copyOfRange(
+                                privateDataStart,
+                                privateDataStart + privateDataLength
+                            )
                             val base64Data = Base64.encodeToString(privateData, Base64.NO_WRAP)
-                            val currentPtsMs = (timestampAdjuster.lastAdjustedTimestampUs / 1000) + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
+                            val currentPtsMs = ((timestampAdjuster?.lastAdjustedTimestampUs
+                                ?: 0L) / 1000) + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
                             webViewRef.value?.post {
                                 webViewRef.value?.evaluateJavascript(
                                     "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPtsMs, '$base64Data'); }",
@@ -86,9 +95,10 @@ class DirectSubtitlePayloadReader(
                     }
                 }
                 offset += frameSize
+                if (frameSize <= 0) break
             }
         } catch (e: Exception) {
-            android.util.Log.e("LiveSubtitle", "Parse error", e)
+            android.util.Log.e("DirectSubtitle", "Parse error", e)
         }
     }
 }
@@ -99,15 +109,20 @@ class DirectSubtitlePayloadReaderFactory(
     private val isSubtitleEnabledState: MutableState<Boolean>
 ) : TsPayloadReader.Factory {
     private val defaultFactory = DefaultTsPayloadReaderFactory(
-        DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS or DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS
+        DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
     )
 
-    override fun createInitialPayloadReaders(): SparseArray<TsPayloadReader> = defaultFactory.createInitialPayloadReaders()
+    override fun createInitialPayloadReaders(): SparseArray<TsPayloadReader> =
+        defaultFactory.createInitialPayloadReaders()
 
-    override fun createPayloadReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? {
-        if (streamType == 0x06 || streamType == 0x15) {
-            return DirectSubtitlePayloadReader(webViewRef, isSubtitleEnabledState)
-        }
+    override fun createPayloadReader(
+        streamType: Int,
+        esInfo: TsPayloadReader.EsInfo
+    ): TsPayloadReader? {
+        if (streamType == 0x06 || streamType == 0x15) return DirectSubtitlePayloadReader(
+            webViewRef,
+            isSubtitleEnabledState
+        )
         return defaultFactory.createPayloadReader(streamType, esInfo)
     }
 }
