@@ -11,9 +11,10 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,7 +34,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.video.components.*
@@ -43,6 +47,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "RecordListScreen"
+
+enum class ListFocusTarget { NONE, LIST_TOP, NAV_PANE }
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.O)
@@ -56,11 +62,11 @@ fun RecordListScreen(
     onBack: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val recentRecordings by viewModel.recentRecordings.collectAsState()
+
+    val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
+
     val searchHistory by viewModel.searchHistory.collectAsState()
     val groupedChannels by viewModel.groupedChannels.collectAsState()
-    val isLoadingInitial by viewModel.isRecordingLoading.collectAsState()
-    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
 
     val selectedCategory by viewModel.selectedCategory.collectAsState()
     val selectedGenre by viewModel.selectedGenre.collectAsState()
@@ -68,38 +74,44 @@ fun RecordListScreen(
     val availableGenres by viewModel.availableGenres.collectAsState()
     val groupedSeries by viewModel.groupedSeries.collectAsState()
     val isSeriesLoading by viewModel.isSeriesLoading.collectAsState()
-
     val activeSearchQuery by viewModel.activeSearchQuery.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isListView by viewModel.isListView.collectAsState()
     val selectedSeriesGenre by viewModel.selectedSeriesGenre.collectAsState()
+    val programDetail by viewModel.programDetail.collectAsState()
 
     var isNavPaneOpen by remember { mutableStateOf(false) }
     var isGenrePaneOpen by remember { mutableStateOf(false) }
     var isSeriesGenrePaneOpen by remember { mutableStateOf(false) }
     var isChannelPaneOpen by remember { mutableStateOf(false) }
     var isDayPaneOpen by remember { mutableStateOf(false) }
-
     var isDetailActive by remember { mutableStateOf(false) }
     var isBackButtonFocused by remember { mutableStateOf(false) }
     var isSearchBarVisible by remember { mutableStateOf(false) }
-
     var isInitialFocusRequested by remember { mutableStateOf(true) }
     var isNavFocused by remember { mutableStateOf(false) }
-
     var isSelectionMade by remember { mutableStateOf(false) }
-    var jumpTriggerId by remember { mutableLongStateOf(0L) }
+
+    var listResetTrigger by remember { mutableLongStateOf(0L) }
+    var autoFocusTarget by remember { mutableStateOf(ListFocusTarget.NONE) }
+    var listResetKey by remember { mutableStateOf(0) }
 
     val isPaneOpen = isGenrePaneOpen || isSeriesGenrePaneOpen || isChannelPaneOpen || isDayPaneOpen
     val paneTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isPaneOpen }
+
+    val navPaneFocusRequester = remember { FocusRequester() }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 if (selectedCategory == RecordCategory.UNWATCHED) {
-                    viewModel.fetchRecentRecordings(forceRefresh = true)
+                    navPaneFocusRequester.safeRequestFocus("RetreatToNav")
+                    pagedRecordings.refresh()
+                    listResetKey++
+                    listResetTrigger = System.currentTimeMillis()
+                    autoFocusTarget = ListFocusTarget.LIST_TOP
                 }
             }
         }
@@ -108,28 +120,30 @@ fun RecordListScreen(
     }
 
     val currentDisplayTitle by remember(
-        isListView, selectedCategory, selectedGenre, selectedDay, selectedSeriesGenre, customTitle
+        selectedCategory,
+        selectedGenre,
+        selectedDay,
+        selectedSeriesGenre,
+        customTitle
     ) {
         mutableStateOf(
-            if (!isListView) "録画リスト"
-            else {
-                when (selectedCategory) {
-                    RecordCategory.ALL -> customTitle ?: "録画リスト"
-                    RecordCategory.UNWATCHED -> "未視聴の録画リスト"
-                    RecordCategory.SERIES -> if (!selectedSeriesGenre.isNullOrEmpty()) "${selectedSeriesGenre}のシリーズ一覧" else "シリーズ一覧"
-                    RecordCategory.GENRE -> if (!selectedGenre.isNullOrEmpty()) "${selectedGenre}の録画リスト" else "ジャンル別の録画リスト"
-                    RecordCategory.TIME -> if (!selectedDay.isNullOrEmpty()) "${selectedDay}の録画リスト" else "曜日別の録画リスト"
-                    RecordCategory.CHANNEL -> "チャンネル別の録画リスト"
-                    else -> customTitle ?: "録画リスト"
-                }
+            when (selectedCategory) {
+                RecordCategory.ALL -> customTitle ?: "録画リスト"
+                RecordCategory.UNWATCHED -> "未視聴の録画リスト"
+                RecordCategory.SERIES -> if (!selectedSeriesGenre.isNullOrEmpty()) "${selectedSeriesGenre}のシリーズ一覧" else "シリーズ一覧"
+                RecordCategory.GENRE -> if (!selectedGenre.isNullOrEmpty()) "${selectedGenre}の録画リスト" else "ジャンル別の録画リスト"
+                RecordCategory.TIME -> if (!selectedDay.isNullOrEmpty()) "${selectedDay}の録画リスト" else "曜日別の録画リスト"
+                RecordCategory.CHANNEL -> "チャンネル別の録画リスト"
+                else -> customTitle ?: "録画リスト"
             }
         )
     }
 
     val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
-    val gridState = rememberLazyGridState()
-    val seriesGridState = rememberTvLazyGridState()
+
+    val listState = key(listResetKey) { rememberLazyListState() }
+    val gridState = key(listResetKey) { rememberTvLazyGridState() }
+    val seriesListState = key(listResetKey) { rememberLazyListState() }
 
     val searchCloseButtonFocusRequester = remember { FocusRequester() }
     val searchInputFocusRequester = remember { FocusRequester() }
@@ -138,29 +152,26 @@ fun RecordListScreen(
     val backButtonFocusRequester = remember { FocusRequester() }
     val searchOpenButtonFocusRequester = remember { FocusRequester() }
     val viewToggleButtonFocusRequester = remember { FocusRequester() }
-    val navPaneFocusRequester = remember { FocusRequester() }
+
     val genrePaneFocusRequester = remember { FocusRequester() }
     val channelPaneFocusRequester = remember { FocusRequester() }
     val dayPaneFocusRequester = remember { FocusRequester() }
     val seriesGenrePaneFocusRequester = remember { FocusRequester() }
     val firstItemFocusRequester = remember { FocusRequester() }
     val paneFirstItemFocusRequester = remember { FocusRequester() }
-
     var isPaneListReady by remember { mutableStateOf(false) }
 
     val isListFirstItemReady by remember(
         selectedCategory,
         isListView,
-        recentRecordings,
+        pagedRecordings.itemCount,
         groupedSeries
     ) {
         derivedStateOf {
             if (isListView) {
-                if (selectedCategory == RecordCategory.SERIES) seriesGridState.layoutInfo.visibleItemsInfo.isNotEmpty()
+                if (selectedCategory == RecordCategory.SERIES) seriesListState.layoutInfo.visibleItemsInfo.isNotEmpty()
                 else listState.layoutInfo.visibleItemsInfo.isNotEmpty()
-            } else {
-                gridState.layoutInfo.visibleItemsInfo.isNotEmpty()
-            }
+            } else gridState.layoutInfo.visibleItemsInfo.isNotEmpty()
         }
     }
 
@@ -172,7 +183,7 @@ fun RecordListScreen(
 
     val hasContent = remember(
         selectedCategory,
-        recentRecordings,
+        pagedRecordings.itemCount,
         groupedSeries,
         selectedSeriesGenre,
         isCategoryImplemented
@@ -180,28 +191,80 @@ fun RecordListScreen(
         if (!isCategoryImplemented) false
         else {
             when (selectedCategory) {
-                RecordCategory.SERIES -> {
-                    val list =
-                        if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                            ?: emptyList() else groupedSeries.values.flatten()
-                    list.isNotEmpty()
-                }
+                RecordCategory.SERIES -> (if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                    ?: emptyList() else groupedSeries.values.flatten()).isNotEmpty()
 
-                else -> recentRecordings.isNotEmpty()
+                else -> pagedRecordings.itemCount > 0
             }
         }
-    }
 
-    val topBarDownRequester = remember(hasContent, isCategoryImplemented, isListView) {
-        if (!isCategoryImplemented || !hasContent) {
-            if (isListView) navPaneFocusRequester else FocusRequester.Cancel
-        } else {
-            firstItemFocusRequester
+    val topBarDownRequester =
+        remember(hasContent, isCategoryImplemented, isListView, isListFirstItemReady) {
+            if (!isCategoryImplemented || !hasContent) {
+                if (isListView) navPaneFocusRequester else FocusRequester.Cancel
+            } else if (isListFirstItemReady) {
+                firstItemFocusRequester
+            } else {
+                if (isListView) navPaneFocusRequester else FocusRequester.Cancel
+            }
+        }
+
+    val isNavVisible = isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()
+    val isNavOverlayVisible = !isListView && isNavPaneOpen
+
+    LaunchedEffect(isNavOverlayVisible) {
+        if (isNavOverlayVisible) {
+            delay(50)
+            navPaneFocusRequester.safeRequestFocus("OverlayMenuOpened")
         }
     }
 
-    LaunchedEffect(isListFirstItemReady) {
-        if (isInitialFocusRequested && isListFirstItemReady && !isPaneOpen && !isDetailActive) {
+    LaunchedEffect(listResetTrigger) {
+        if (listResetTrigger > 0L) {
+            delay(100)
+
+            if (autoFocusTarget == ListFocusTarget.LIST_TOP && selectedCategory != RecordCategory.SERIES) {
+                var waitLoadRetry = 0
+                while (waitLoadRetry < 30) {
+                    if (pagedRecordings.loadState.refresh is LoadState.NotLoading) break
+                    delay(50)
+                    waitLoadRetry++
+                }
+            }
+
+            try {
+                listState.scrollToItem(0)
+                gridState.scrollToItem(0)
+                seriesListState.scrollToItem(0)
+            } catch (e: Exception) {
+            }
+
+            if (autoFocusTarget == ListFocusTarget.LIST_TOP) {
+                if (hasContent) {
+                    var focusRetry = 0
+                    while (focusRetry < 10) {
+                        if (isListFirstItemReady) {
+                            delay(50)
+                            firstItemFocusRequester.safeRequestFocus("FocusToListTop")
+                            break
+                        }
+                        delay(50)
+                        focusRetry++
+                    }
+                } else {
+                    if (isListView) navPaneFocusRequester.safeRequestFocus("EmptyListFocusNav")
+                }
+            } else if (autoFocusTarget == ListFocusTarget.NAV_PANE) {
+                delay(50)
+                navPaneFocusRequester.safeRequestFocus("FocusToNavPane")
+            }
+
+            autoFocusTarget = ListFocusTarget.NONE
+        }
+    }
+
+    LaunchedEffect(pagedRecordings.itemCount) {
+        if (isInitialFocusRequested && pagedRecordings.itemCount > 0 && !isPaneOpen && !isDetailActive) {
             delay(100)
             if (isListView && activeSearchQuery.isEmpty()) navPaneFocusRequester.safeRequestFocus("InitialMenuFocus")
             else firstItemFocusRequester.safeRequestFocus("InitialContentFocus")
@@ -209,51 +272,14 @@ fun RecordListScreen(
         }
     }
 
-    // ★ 修正: タイムアウトを最大5秒に延長し、より粘り強い待機ロジックに変更
-    LaunchedEffect(jumpTriggerId) {
-        if (jumpTriggerId > 0L) {
-            var totalWaitTime = 0L
-            val maxWaitTime = 5000L // 最大5秒待機
-            var emptyContentWaitTime = 0L
-
-            while (totalWaitTime < maxWaitTime) {
-                if (!isLoadingInitial) {
-                    if (hasContent && isListFirstItemReady) {
-                        delay(100) // アタッチメントの確実な猶予
-                        try {
-                            firstItemFocusRequester.requestFocus()
-                            jumpTriggerId = 0L
-                            break
-                        } catch (e: Exception) {
-                            // アタッチが間に合わなかったら次へ
-                        }
-                    } else if (!hasContent) {
-                        // ロードが終わっているのにコンテンツが無い場合、500ms待ってから諦める
-                        emptyContentWaitTime += 50L
-                        if (emptyContentWaitTime > 500L) {
-                            jumpTriggerId = 0L
-                            break
-                        }
-                    }
-                }
-                delay(50)
-                totalWaitTime += 50L
-            }
-            jumpTriggerId = 0L // 最終的なリセット
-        }
-    }
-
     LaunchedEffect(isPaneOpen, isPaneListReady) {
         if (isPaneOpen && isPaneListReady) {
-            delay(50)
-            paneFirstItemFocusRequester.safeRequestFocus("PaneOpenedHandover")
+            delay(50); paneFirstItemFocusRequester.safeRequestFocus("PaneOpenedHandover")
         }
     }
-
     LaunchedEffect(isPaneOpen) {
-        if (!isPaneOpen && !isSelectionMade && !isSearchBarVisible && !isDetailActive) {
-            delay(50)
-            if (isListView) navPaneFocusRequester.safeRequestFocus("CancelReturnToMenu")
+        if (!isPaneOpen && !isSelectionMade && !isSearchBarVisible && !isDetailActive && isListView) {
+            delay(50); navPaneFocusRequester.safeRequestFocus("CancelReturnToMenu")
         }
     }
 
@@ -261,40 +287,27 @@ fun RecordListScreen(
         viewModel.searchRecordings(query)
         isSearchBarVisible = false
         isDetailActive = false
-        jumpTriggerId = System.currentTimeMillis()
-        scope.launch {
-            try {
-                listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(0)
-            } catch (e: Exception) {
-            }
-        }
+        listResetKey++
+        listResetTrigger = System.currentTimeMillis()
+        autoFocusTarget = ListFocusTarget.LIST_TOP
+    }
     }
 
-    val handleCategorySelect: (RecordCategory) -> Unit = handleCategorySelect@{ category ->
+    val handleCategorySelect: (RecordCategory) -> Unit = { category ->
         val isSameCategory = selectedCategory == category
         isSelectionMade = false
-
-        val isPaneCategory =
-            category == RecordCategory.GENRE || category == RecordCategory.CHANNEL ||
-                    category == RecordCategory.SERIES || category == RecordCategory.TIME
-
         if (isSameCategory) {
             when (category) {
-                RecordCategory.GENRE -> isGenrePaneOpen = true
-                RecordCategory.CHANNEL -> isChannelPaneOpen = true
-                RecordCategory.SERIES -> isSeriesGenrePaneOpen = true
-                RecordCategory.TIME -> isDayPaneOpen = true
+                RecordCategory.GENRE -> isGenrePaneOpen =
+                    true; RecordCategory.CHANNEL -> isChannelPaneOpen = true
+                RecordCategory.SERIES -> isSeriesGenrePaneOpen =
+                    true; RecordCategory.TIME -> isDayPaneOpen = true
                 else -> {
-                    viewModel.fetchRecentRecordings(forceRefresh = true)
-                    jumpTriggerId = System.currentTimeMillis()
-                    scope.launch {
-                        try {
-                            listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(
-                                0
-                            )
-                        } catch (e: Exception) {
-                        }
-                    }
+                    pagedRecordings.refresh()
+                    listResetKey++
+                    listResetTrigger = System.currentTimeMillis()
+                    autoFocusTarget = ListFocusTarget.LIST_TOP
+                    isNavPaneOpen = false
                 }
             }
             return@handleCategorySelect
@@ -303,24 +316,15 @@ fun RecordListScreen(
         viewModel.updateCategory(category)
 
         if (!isPaneCategory) {
-            jumpTriggerId = System.currentTimeMillis()
-            scope.launch {
-                try {
-                    listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(
-                        0
-                    )
-                } catch (e: Exception) {
-                }
-            }
+            isGenrePaneOpen = false
+            isChannelPaneOpen = false
+            isSeriesGenrePaneOpen = false
+            isDayPaneOpen = false
+            listResetKey++
+            listResetTrigger = System.currentTimeMillis()
+            autoFocusTarget = ListFocusTarget.LIST_TOP
+            isNavPaneOpen = false
         } else {
-            scope.launch {
-                try {
-                    listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(
-                        0
-                    )
-                } catch (e: Exception) {
-                }
-            }
             isGenrePaneOpen = (category == RecordCategory.GENRE)
             isChannelPaneOpen = (category == RecordCategory.CHANNEL)
             isSeriesGenrePaneOpen = (category == RecordCategory.SERIES)
@@ -347,28 +351,37 @@ fun RecordListScreen(
                 isSeriesGenrePaneOpen = false; navPaneFocusRequester.safeRequestFocus()
             }
 
-            isNavPaneOpen -> isNavPaneOpen = false
+            isNavPaneOpen -> {
+                isNavPaneOpen = false
+                firstItemFocusRequester.safeRequestFocus("CloseNavOverlay")
+            }
+
             isSearchBarVisible -> {
-                isSearchBarVisible = false
-                scope.launch {
-                    delay(50)
-                    if (activeSearchQuery.isNotEmpty()) firstItemFocusRequester.safeRequestFocus("SearchHide")
-                    else if (isListView) navPaneFocusRequester.safeRequestFocus("SearchHideMenu")
-                    else firstItemFocusRequester.safeRequestFocus("SearchHideGrid")
+                isSearchBarVisible = false; scope.launch {
+                    delay(50); if (activeSearchQuery.isNotEmpty()) firstItemFocusRequester.safeRequestFocus(
+                    "SearchHide"
+                ) else if (isListView) navPaneFocusRequester.safeRequestFocus("SearchHideMenu") else firstItemFocusRequester.safeRequestFocus(
+                    "SearchHideGrid"
+                )
                 }
             }
 
+            // ★修正: 検索結果表示中に戻るボタンが押された際の挙動
             activeSearchQuery.isNotEmpty() -> {
-                viewModel.clearSearch()
-                jumpTriggerId = System.currentTimeMillis()
-                scope.launch {
-                    try {
-                        listState.scrollToItem(0); gridState.scrollToItem(0); seriesGridState.scrollToItem(
-                            0
-                        )
-                    } catch (e: Exception) {
-                    }
+                // シリーズ別かつグリッド型の場合、あるいはリスト型の場合の共通処理
+                if (isListView) {
+                    navPaneFocusRequester.safeRequestFocus("BackToNavPane")
+                } else {
+                    // グリッド型でシリーズ選択中から戻る場合、シリーズ一覧に戻る
+                    firstItemFocusRequester.safeRequestFocus("BackToGrid")
                 }
+                viewModel.clearSearch()
+                listResetKey++
+                listResetTrigger = System.currentTimeMillis()
+
+                // シリーズ一覧へ戻る際、左メニューではなくコンテンツ（シリーズ一覧）へフォーカスを向ける設定
+                autoFocusTarget =
+                    if (isListView && selectedCategory != RecordCategory.SERIES) ListFocusTarget.NAV_PANE else ListFocusTarget.LIST_TOP
             }
 
             isBackButtonFocused -> onBack()
@@ -379,10 +392,9 @@ fun RecordListScreen(
 
     BackHandler(enabled = !isDetailActive) { handleBackPress() }
 
-    val isNavVisible = isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()
     val contentStartPadding by animateDpAsState(
-        targetValue = if (isNavVisible) 268.dp else 28.dp,
-        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
+        targetValue = if (isListView && !isSearchBarVisible && activeSearchQuery.isEmpty()) 268.dp else 28.dp,
+        animationSpec = tween(350, easing = FastOutSlowInEasing),
         label = "ContentStartPadding"
     )
 
@@ -391,17 +403,25 @@ fun RecordListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = 88.dp)
-                .onKeyEvent { if (!paneTransitionState.isIdle) true else false }
-        ) {
+                .onKeyEvent { if (!paneTransitionState.isIdle) true else false }) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(start = contentStartPadding, end = 28.dp, bottom = 20.dp)
                     .focusProperties {
-                        if (isPaneOpen || isDetailActive) {
+                        if (isPaneOpen || isDetailActive || isNavOverlayVisible) {
                             up = FocusRequester.Cancel; down = FocusRequester.Cancel
                             left = FocusRequester.Cancel; right = FocusRequester.Cancel
                         }
+                    }) {
+                // ★ 修正: コンテンツがない場合のメッセージ表示
+                if (!isLoadingInitial && !hasContent) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "録画番組がありません",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = colors.textSecondary.copy(alpha = 0.6f)
+                        )
                     }
             ) {
                 if (isListView) {
@@ -412,6 +432,8 @@ fun RecordListScreen(
                                     ?: emptyList() else groupedSeries.values.flatten()
                             RecordSeriesContent(
                                 seriesList = list,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
                                 isLoading = isSeriesLoading,
                                 onSeriesClick = { executeSearch(it) },
                                 onOpenNavPane = {
@@ -424,16 +446,14 @@ fun RecordListScreen(
                                 backButtonFocusRequester = backButtonFocusRequester,
                                 isSearchBarVisible = isSearchBarVisible,
                                 onBackPress = handleBackPress,
-                                gridState = seriesGridState,
+                                listState = seriesListState,
                                 onFirstItemBound = { }
                             )
                         }
 
                         else -> {
                             RecordListContent(
-                                recentRecordings = recentRecordings,
-                                isLoadingInitial = isLoadingInitial,
-                                isLoadingMore = isLoadingMore,
+                                pagedRecordings = pagedRecordings,
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
                                 isSearchBarVisible = isSearchBarVisible,
@@ -443,44 +463,151 @@ fun RecordListScreen(
                                 backButtonFocusRequester = backButtonFocusRequester,
                                 onProgramClick = onProgramClick,
                                 onSeriesSearch = { executeSearch(it) },
-                                onLoadMore = { viewModel.loadNextPage() },
                                 isDetailVisible = isDetailActive,
                                 onDetailStateChange = { isDetailActive = it },
                                 onBackPress = handleBackPress,
                                 listState = listState,
+                                fetchedProgramDetail = programDetail,
+                                onFetchDetail = { viewModel.fetchProgramDetail(it) },
+                                onClearDetail = { viewModel.clearProgramDetail() },
                                 onFirstItemBound = { }
                             )
                         }
                     }
                 } else {
-                    RecordGridContent(
-                        recentRecordings = recentRecordings,
-                        isLoadingInitial = isLoadingInitial,
-                        isLoadingMore = isLoadingMore,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        gridState = gridState,
-                        isSearchBarVisible = isSearchBarVisible,
-                        isKeyboardActive = false,
-                        firstItemFocusRequester = firstItemFocusRequester,
-                        searchInputFocusRequester = searchInputFocusRequester,
-                        backButtonFocusRequester = backButtonFocusRequester,
-                        onProgramClick = onProgramClick,
-                        onLoadMore = { viewModel.loadNextPage() },
-                        onFirstItemBound = { }
-                    )
+                    when (selectedCategory) {
+                        RecordCategory.SERIES -> {
+                            val list =
+                                if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                                    ?: emptyList() else groupedSeries.values.flatten()
+                            RecordSeriesGridContent(
+                                seriesList = list,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                isLoading = isSeriesLoading,
+                                onSeriesClick = { executeSearch(it) },
+                                onOpenNavPane = {
+                                    isNavPaneOpen = true
+                                    navPaneFocusRequester.safeRequestFocus("OpenGridNav")
+                                },
+                                firstItemFocusRequester = firstItemFocusRequester,
+                                searchInputFocusRequester = searchInputFocusRequester,
+                                backButtonFocusRequester = backButtonFocusRequester,
+                                isSearchBarVisible = isSearchBarVisible,
+                                onBackPress = handleBackPress,
+                                gridState = gridState,
+                                onFirstItemBound = { }
+                            )
+                        }
+
+                        else -> {
+                            RecordGridContent(
+                                pagedRecordings = pagedRecordings,
+                                konomiIp = konomiIp,
+                                konomiPort = konomiPort,
+                                gridState = gridState,
+                                isSearchBarVisible = isSearchBarVisible,
+                                isKeyboardActive = false,
+                                firstItemFocusRequester = firstItemFocusRequester,
+                                searchInputFocusRequester = searchInputFocusRequester,
+                                backButtonFocusRequester = backButtonFocusRequester,
+                                onProgramClick = onProgramClick,
+                                onOpenNavPane = {
+                                    isNavPaneOpen = true
+                                    navPaneFocusRequester.safeRequestFocus("OpenGridNav")
+                                },
+                                onFirstItemBound = { }
+                            )
+                        }
+                    }
                 }
             }
 
-            if (isListView) {
+            Box(
+                modifier = Modifier
+                    .zIndex(5f)
+                    .fillMaxSize()
+            ) {
+
                 AnimatedVisibility(
-                    visibleState = paneTransitionState,
-                    enter = slideInHorizontally(animationSpec = tween(350)) { -it },
-                    exit = slideOutHorizontally(animationSpec = tween(350)) { it } + fadeOut(
-                        animationSpec = tween(200)
+                    visible = isNavOverlayVisible,
+                    enter = fadeIn(animationSpec = tween(350)),
+                    exit = fadeOut(animationSpec = tween(350))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                isNavPaneOpen = false
+                                firstItemFocusRequester.safeRequestFocus()
+                            }
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible = isNavOverlayVisible,
+                    enter = slideInHorizontally(animationSpec = tween(350)) { -it } + fadeIn(
+                        animationSpec = tween(350)
+                    ),
+                    exit = slideOutHorizontally(animationSpec = tween(350)) { -it } + fadeOut(
+                        animationSpec = tween(350)
                     ),
                     modifier = Modifier
-                        .zIndex(1f)
+                        .zIndex(6f)
+                        .fillMaxHeight()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(240.dp)
+                            .fillMaxHeight()
+                            .padding(start = 28.dp, bottom = 20.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(colors.surface.copy(alpha = 0.95f))
+                    ) {
+                        RecordNavigationPane(
+                            selectedCategory = selectedCategory,
+                            onCategorySelect = handleCategorySelect,
+                            isOverlay = true,
+                            navPaneFocusRequester = navPaneFocusRequester,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusProperties {
+                                    right = when {
+                                        isGenrePaneOpen -> genrePaneFocusRequester
+                                        isChannelPaneOpen -> channelPaneFocusRequester
+                                        isDayPaneOpen -> dayPaneFocusRequester
+                                        isSeriesGenrePaneOpen -> seriesGenrePaneFocusRequester
+                                        else -> FocusRequester.Cancel
+                                    }
+                                }
+                                .onKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown) {
+                                        if (event.key == Key.DirectionRight && !isPaneOpen) {
+                                            isNavPaneOpen = false
+                                            firstItemFocusRequester.safeRequestFocus()
+                                            return@onKeyEvent true
+                                        } else if (event.key == Key.Back || event.key == Key.Escape) {
+                                            isNavPaneOpen = false
+                                            firstItemFocusRequester.safeRequestFocus()
+                                            return@onKeyEvent true
+                                        }
+                                    }
+                                    false
+                                }
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visibleState = paneTransitionState,
+                    enter = slideInHorizontally(tween(350)) { -it },
+                    exit = slideOutHorizontally(tween(350)) { it } + fadeOut(tween(200)),
+                    modifier = Modifier
+                        .zIndex(7f)
                         .fillMaxHeight()
                 ) {
                     Box(
@@ -491,24 +618,23 @@ fun RecordListScreen(
                             .padding(bottom = 20.dp)
                             .background(colors.surface.copy(alpha = 0.98f))
                     ) {
-                        if (isGenrePaneOpen) {
-                            RecordGenrePane(
+                        when {
+                            isGenrePaneOpen -> RecordGenrePane(
                                 genres = availableGenres,
                                 selectedGenre = selectedGenre,
                                 onGenreSelect = { genre ->
                                     isSelectionMade = true
-                                    navPaneFocusRequester.safeRequestFocus("Handoff")
                                     viewModel.updateGenre(genre)
                                     isGenrePaneOpen = false
-                                    jumpTriggerId = System.currentTimeMillis()
-                                    scope.launch {
-                                        try {
-                                            listState.scrollToItem(0)
-                                        } catch (e: Exception) {
-                                        }
-                                    }
+                                    isNavPaneOpen = false
+                                    listResetKey++
+                                    listResetTrigger = System.currentTimeMillis()
+                                    autoFocusTarget = ListFocusTarget.LIST_TOP
                                 },
-                                onClosePane = { isGenrePaneOpen = false },
+                                onClosePane = {
+                                    isGenrePaneOpen =
+                                        false; navPaneFocusRequester.safeRequestFocus()
+                                },
                                 firstItemFocusRequester = paneFirstItemFocusRequester,
                                 onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
@@ -516,25 +642,23 @@ fun RecordListScreen(
                                     .focusRequester(genrePaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester; right = FocusRequester.Cancel
-                                    }
-                            )
-                        } else if (isChannelPaneOpen) {
-                            RecordChannelPane(
+                                    })
+
+                            isChannelPaneOpen -> RecordChannelPane(
                                 groupedChannels = groupedChannels,
                                 onChannelSelect = { channelId ->
                                     isSelectionMade = true
-                                    navPaneFocusRequester.safeRequestFocus("Handoff")
                                     viewModel.updateChannel(channelId)
                                     isChannelPaneOpen = false
-                                    jumpTriggerId = System.currentTimeMillis()
-                                    scope.launch {
-                                        try {
-                                            listState.scrollToItem(0)
-                                        } catch (e: Exception) {
-                                        }
-                                    }
+                                    isNavPaneOpen = false
+                                    listResetKey++
+                                    listResetTrigger = System.currentTimeMillis()
+                                    autoFocusTarget = ListFocusTarget.LIST_TOP
                                 },
-                                onClosePane = { isChannelPaneOpen = false },
+                                onClosePane = {
+                                    isChannelPaneOpen =
+                                        false; navPaneFocusRequester.safeRequestFocus()
+                                },
                                 firstItemFocusRequester = paneFirstItemFocusRequester,
                                 onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
@@ -542,25 +666,22 @@ fun RecordListScreen(
                                     .focusRequester(channelPaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester; right = FocusRequester.Cancel
-                                    }
-                            )
-                        } else if (isDayPaneOpen) {
-                            RecordDayPane(
+                                    })
+
+                            isDayPaneOpen -> RecordDayPane(
                                 selectedDay = selectedDay,
                                 onDaySelect = { day ->
                                     isSelectionMade = true
-                                    navPaneFocusRequester.safeRequestFocus("Handoff")
                                     viewModel.updateDay(day)
                                     isDayPaneOpen = false
-                                    jumpTriggerId = System.currentTimeMillis()
-                                    scope.launch {
-                                        try {
-                                            listState.scrollToItem(0)
-                                        } catch (e: Exception) {
-                                        }
-                                    }
+                                    isNavPaneOpen = false
+                                    listResetKey++
+                                    listResetTrigger = System.currentTimeMillis()
+                                    autoFocusTarget = ListFocusTarget.LIST_TOP
                                 },
-                                onClosePane = { isDayPaneOpen = false },
+                                onClosePane = {
+                                    isDayPaneOpen = false; navPaneFocusRequester.safeRequestFocus()
+                                },
                                 firstItemFocusRequester = paneFirstItemFocusRequester,
                                 onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
@@ -568,26 +689,24 @@ fun RecordListScreen(
                                     .focusRequester(dayPaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester; right = FocusRequester.Cancel
-                                    }
-                            )
-                        } else if (isSeriesGenrePaneOpen) {
-                            RecordGenrePane(
+                                    })
+
+                            isSeriesGenrePaneOpen -> RecordGenrePane(
                                 genres = groupedSeries.keys.toList(),
                                 selectedGenre = selectedSeriesGenre,
                                 onGenreSelect = { genre ->
                                     isSelectionMade = true
-                                    navPaneFocusRequester.safeRequestFocus("Handoff")
                                     viewModel.updateSeriesGenre(genre)
                                     isSeriesGenrePaneOpen = false
-                                    jumpTriggerId = System.currentTimeMillis()
-                                    scope.launch {
-                                        try {
-                                            seriesGridState.scrollToItem(0)
-                                        } catch (e: Exception) {
-                                        }
-                                    }
+                                    isNavPaneOpen = false
+                                    listResetKey++
+                                    listResetTrigger = System.currentTimeMillis()
+                                    autoFocusTarget = ListFocusTarget.LIST_TOP
                                 },
-                                onClosePane = { isSeriesGenrePaneOpen = false },
+                                onClosePane = {
+                                    isSeriesGenrePaneOpen =
+                                        false; navPaneFocusRequester.safeRequestFocus()
+                                },
                                 firstItemFocusRequester = paneFirstItemFocusRequester,
                                 onFirstItemBound = { isPaneListReady = it },
                                 modifier = Modifier
@@ -595,14 +714,10 @@ fun RecordListScreen(
                                     .focusRequester(seriesGenrePaneFocusRequester)
                                     .focusProperties {
                                         left = navPaneFocusRequester; right = FocusRequester.Cancel
-                                    }
-                            )
+                                    })
                         }
                     }
                 }
-            }
-
-            if (isNavVisible) {
                 Box(
                     modifier = Modifier
                         .zIndex(2f)
@@ -616,12 +731,8 @@ fun RecordListScreen(
                                 up = FocusRequester.Cancel; down = FocusRequester.Cancel
                                 left = FocusRequester.Cancel; right = FocusRequester.Cancel
                             }
-                            if (jumpTriggerId > 0L || isLoadingInitial) {
-                                right = FocusRequester.Cancel
-                            }
                         }
-                        .onFocusChanged { isNavFocused = it.hasFocus }
-                ) {
+                        .onFocusChanged { isNavFocused = it.hasFocus }) {
                     RecordNavigationPane(
                         selectedCategory = selectedCategory,
                         onCategorySelect = handleCategorySelect,
@@ -631,20 +742,17 @@ fun RecordListScreen(
                             .fillMaxWidth()
                             .focusProperties {
                                 right = when {
-                                    jumpTriggerId > 0L || isLoadingInitial -> FocusRequester.Cancel
                                     isGenrePaneOpen -> genrePaneFocusRequester
                                     isChannelPaneOpen -> channelPaneFocusRequester
                                     isDayPaneOpen -> dayPaneFocusRequester
                                     isSeriesGenrePaneOpen -> seriesGenrePaneFocusRequester
-                                    hasContent -> firstItemFocusRequester
+                                    hasContent && isListFirstItemReady -> firstItemFocusRequester
                                     else -> FocusRequester.Cancel
                                 }
-                            }
-                    )
+                            })
                 }
             }
         }
-
         RecordScreenTopBar(
             modifier = Modifier
                 .fillMaxWidth()
@@ -652,7 +760,7 @@ fun RecordListScreen(
                 .zIndex(100f)
                 .focusProperties {
                     up = FocusRequester.Cancel
-                    if (isPaneOpen || isDetailActive) {
+                    if (isPaneOpen || isDetailActive || isNavOverlayVisible) {
                         down = FocusRequester.Cancel; left = FocusRequester.Cancel; right =
                             FocusRequester.Cancel
                     }
@@ -679,12 +787,11 @@ fun RecordListScreen(
             onViewToggle = {
                 val nextListView = !isListView
                 viewModel.updateListView(nextListView)
-                if (!nextListView && activeSearchQuery.isEmpty()) handleCategorySelect(
-                    RecordCategory.ALL
-                )
+                listResetKey++
+                listResetTrigger = System.currentTimeMillis()
+                autoFocusTarget = ListFocusTarget.LIST_TOP
             },
             onKeyboardActiveClick = { },
-            onBackButtonFocusChanged = { isBackButtonFocused = it }
-        )
+            onBackButtonFocusChanged = { isBackButtonFocused = it })
     }
 }

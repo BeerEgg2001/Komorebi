@@ -1,35 +1,49 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
-import androidx.tv.foundation.lazy.grid.itemsIndexed
-import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun RecordSeriesContent(
-    seriesList: List<Pair<String, String>>,
+    seriesList: List<SeriesInfo>,
+    konomiIp: String,
+    konomiPort: String,
     isLoading: Boolean,
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
@@ -39,23 +53,14 @@ fun RecordSeriesContent(
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
     onBackPress: () -> Unit,
-    gridState: TvLazyGridState = rememberTvLazyGridState(),
+    listState: LazyListState = rememberLazyListState(),
     onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
 
-    // 描画されている最初のアイテムのインデックスを取得
-    val firstVisibleIndex by remember {
-        derivedStateOf {
-            gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
-        }
-    }
-
-    // リストが物理的に表示されているか判定
-    val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
     LaunchedEffect(isListReady, seriesList) {
-        // リストが存在し、かつ1件以上データがある場合に「準備完了」を親に通知
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
     }
 
@@ -65,33 +70,31 @@ fun RecordSeriesContent(
                 CircularProgressIndicator(color = colors.textPrimary)
             }
         } else {
-            TvLazyVerticalGrid(
-                state = gridState,
-                columns = TvGridCells.Fixed(3),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+            LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(
-                    start = 12.dp,
                     top = 16.dp,
-                    end = 12.dp,
                     bottom = 32.dp
                 ),
+                // 高さを抑えた分、アイテム間の隙間も少しコンパクトに
+                verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                itemsIndexed(seriesList) { index, pair ->
+                itemsIndexed(seriesList) { index, series ->
                     var isFocused by remember { mutableStateOf(false) }
+
                     Surface(
-                        onClick = { onSeriesClick(pair.second) },
+                        onClick = { onSeriesClick(series.searchKeyword) },
                         modifier = Modifier
+                            .fillMaxWidth()
+                            // ★修正: 76.dp -> 64.dp にさらに縮小。1画面に8〜9個表示できるようになります。
+                            .height(64.dp)
                             .onFocusChanged { isFocused = it.isFocused }
-                            // 最初の可視アイテムにリクエスターを付与
                             .then(
-                                if (index == firstVisibleIndex) Modifier.focusRequester(
-                                    firstItemFocusRequester
-                                ) else Modifier
+                                if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
                             )
                             .focusProperties {
-                                if (index < 3) {
+                                if (index == 0) {
                                     up =
                                         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
                                 }
@@ -101,7 +104,7 @@ fun RecordSeriesContent(
                                     if (event.key == Key.Back || event.key == Key.Escape) {
                                         onBackPress()
                                         true
-                                    } else if (event.key == Key.DirectionLeft && index % 3 == 0) {
+                                    } else if (event.key == Key.DirectionLeft) {
                                         onOpenNavPane()
                                         true
                                     } else false
@@ -114,19 +117,90 @@ fun RecordSeriesContent(
                             contentColor = colors.textPrimary,
                             focusedContentColor = if (colors.isDark) Color.Black else Color.White
                         ),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
                         border = ClickableSurfaceDefaults.border(
                             focusedBorder = Border(BorderStroke(2.dp, colors.accent))
                         )
                     ) {
-                        Text(
-                            text = pair.first,
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .then(if (isFocused) Modifier.basicMarquee() else Modifier),
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 左側：サムネイル画像
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .aspectRatio(16f / 9f)
+                                    .background(Color.DarkGray.copy(alpha = 0.5f))
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(LocalContext.current)
+                                        .data(
+                                            UrlBuilder.getThumbnailUrl(
+                                                konomiIp,
+                                                konomiPort,
+                                                series.representativeVideoId.toString()
+                                            )
+                                        )
+                                        .crossfade(true).build(),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            // 中央：テキスト情報
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    // 高さに合わせてパディングをギリギリまで切り詰め
+                                    .padding(vertical = 4.dp),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = series.displayTitle,
+                                    modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    // テキストサイズは維持して見やすさを確保
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.VideoLibrary,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(12.dp),
+                                        tint = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "${series.programCount} エピソード",
+                                        // サブテキストを少し小さく
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary
+                                    )
+                                }
+                            }
+
+                            // 右端：誘導アイコン
+                            if (isFocused) {
+                                Icon(
+                                    imageVector = Icons.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .padding(end = 8.dp)
+                                        .size(24.dp), // アイコンも高さに合わせて少し縮小
+                                    tint = if (colors.isDark) Color.Black.copy(alpha = 0.7f) else Color.White.copy(
+                                        alpha = 0.7f
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }

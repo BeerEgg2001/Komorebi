@@ -31,6 +31,10 @@ interface KonomiApi {
         @Query("order") order: String = "desc"
     ): RecordedApiResponse
 
+    // ★追加: 個別の録画番組詳細を取得 (詳細情報を含む完全なデータ)
+    @GET("api/videos/{video_id}")
+    suspend fun getRecordedProgram(@Path("video_id") videoId: Int): RecordedProgram
+
     // --- 視聴維持 ---
     @PUT("api/streams/video/{videoId}/{quality}/keep-alive")
     suspend fun keepAlive(

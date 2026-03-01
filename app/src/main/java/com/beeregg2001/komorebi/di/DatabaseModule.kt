@@ -6,6 +6,8 @@ import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
 import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
+import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
+import com.beeregg2001.komorebi.data.local.dao.SyncMetaDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -41,5 +43,16 @@ object DatabaseModule {
     @Provides
     fun provideEpgCacheDao(database: AppDatabase): EpgCacheDao {
         return database.epgCacheDao()
+    }
+
+    // ★追加: 同期エンジン用のDaoのProvide
+    @Provides
+    fun provideRecordedProgramDao(database: AppDatabase): RecordedProgramDao {
+        return database.recordedProgramDao()
+    }
+
+    @Provides
+    fun provideSyncMetaDao(database: AppDatabase): SyncMetaDao {
+        return database.syncMetaDao()
     }
 }

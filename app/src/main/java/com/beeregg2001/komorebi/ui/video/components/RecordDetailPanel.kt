@@ -7,8 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material3.CircularProgressIndicator // ★追加
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,7 +68,6 @@ fun RecordDetailPanel(
             .onKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
-                        // ★修正: 左キーだけでなく、戻るキーでも確実に閉じる
                         Key.DirectionLeft, Key.Back, Key.Escape -> {
                             onClose()
                             true
@@ -91,16 +89,6 @@ fun RecordDetailPanel(
             }
             .focusable()
     ) {
-        Icon(
-            imageVector = Icons.Filled.KeyboardArrowLeft,
-            contentDescription = null,
-            tint = colors.textPrimary.copy(alpha = 0.6f),
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 4.dp)
-                .size(32.dp)
-        )
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -156,13 +144,17 @@ fun RecordDetailPanel(
                 fontSize = 11.sp
             )
             Spacer(modifier = Modifier.height(4.dp))
+
+            // ★修正: descriptionが空の場合のフォールバック表示
+            val descText = program.description.takeIf { it.isNotEmpty() } ?: "番組概要がありません"
             Text(
-                text = program.description,
-                color = colors.textPrimary,
+                text = descText,
+                color = colors.textPrimary.copy(alpha = if (program.description.isEmpty()) 0.5f else 1f),
                 lineHeight = 18.sp,
                 fontSize = 13.sp
             )
 
+            // API通信等でdetailを取得できた場合のみ表示
             if (!program.detail.isNullOrEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 program.detail.forEach { (key, value) ->
@@ -179,6 +171,20 @@ fun RecordDetailPanel(
                         lineHeight = 18.sp,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+            } else if (program.description.isEmpty()) {
+                // descriptionもdetailも無い場合（APIからのデータ取得中など）
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = colors.textSecondary,
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
                     )
                 }
             }
