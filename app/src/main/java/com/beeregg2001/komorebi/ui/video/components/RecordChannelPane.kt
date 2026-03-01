@@ -35,27 +35,13 @@ fun RecordChannelPane(
 ) {
     val colors = KomorebiTheme.colors
     val listState = rememberLazyListState()
-
     var selectedType by remember { mutableStateOf<String?>(null) }
-
     val currentItems = remember(selectedType, groupedChannels) {
-        if (selectedType == null) {
-            groupedChannels.keys.toList()
-        } else {
-            groupedChannels[selectedType] ?: emptyList()
-        }
+        if (selectedType == null) groupedChannels.keys.toList()
+        else groupedChannels[selectedType] ?: emptyList()
     }
-
-    val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
-    LaunchedEffect(isListReady, currentItems) {
-        onFirstItemBound(isListReady)
-    }
-
-    LaunchedEffect(selectedType) {
-        delay(150)
-        firstItemFocusRequester.safeRequestFocus("ChannelPaneStateChange")
-    }
-
+    LaunchedEffect(currentItems) { onFirstItemBound(currentItems.isNotEmpty()) }
+    LaunchedEffect(selectedType) { delay(150); firstItemFocusRequester.safeRequestFocus("ChannelPaneChange") }
     Surface(
         modifier = modifier.fillMaxHeight(),
         colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.95f)),
@@ -71,7 +57,6 @@ fun RecordChannelPane(
                 color = colors.textSecondary,
                 modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)
             )
-
             LazyColumn(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -79,36 +64,32 @@ fun RecordChannelPane(
                 modifier = Modifier.fillMaxSize()
             ) {
                 itemsIndexed(currentItems) { index, item ->
+                    // label: 表示名, id: キーワード(チャンネル名) または 種別(地デジ等)
                     val label =
                         if (item is Pair<*, *>) (item as Pair<String, String>).first else item.toString()
                     val id =
                         if (item is Pair<*, *>) (item as Pair<String, String>).second else item.toString()
-
                     Surface(
                         onClick = {
-                            if (selectedType == null) selectedType = id
-                            else onChannelSelect(id)
+                            if (selectedType == null) selectedType = id else onChannelSelect(id)
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp)
                             .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
                             .focusProperties {
-                                // ★上下右のフォーカス逸脱をガード
-                                if (index == 0) up = FocusRequester.Cancel
-                                if (index == currentItems.lastIndex) down = FocusRequester.Cancel
-                                right = FocusRequester.Cancel
+                                if (index == 0) up =
+                                    FocusRequester.Cancel; if (index == currentItems.lastIndex) down =
+                                FocusRequester.Cancel; right = FocusRequester.Cancel
                             }
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     when (event.key) {
                                         Key.DirectionLeft, Key.Back, Key.Escape -> {
                                             if (selectedType != null) {
-                                                selectedType = null
-                                                true
+                                                selectedType = null; true
                                             } else {
-                                                onClosePane()
-                                                true
+                                                onClosePane(); true
                                             }
                                         }
 
