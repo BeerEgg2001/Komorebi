@@ -28,6 +28,14 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
+// ★ GC対策: Composableの中にあった関数を外に出し、毎回の関数オブジェクト生成を防ぐ
+private fun formatTime(seconds: Long): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -37,11 +45,15 @@ fun RecordedCard(
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    showResumeLabel: Boolean = false // ★追加：続きから見る表記を切り替えるフラグ
+    showResumeLabel: Boolean = false,
+    isScrolling: () -> Boolean = { false } // ★追加：親からスクロール状態を受け取るラムダ
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
     val isAnalyzed = program.recordedVideo.hasKeyFrames
+
+    // スクロール状態の読み取り（スクロールが開始・停止した時だけ再評価される）
+    val scrolling = isScrolling()
 
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
@@ -52,17 +64,9 @@ fun RecordedCard(
         else -> (program.channel?.type ?: "") to Color.Gray
     }
 
-    fun formatTime(seconds: Long): String {
-        val h = seconds / 3600;
-        val m = (seconds % 3600) / 60;
-        val s = seconds % 60
-        return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
-    }
-
     val totalDuration = program.recordedVideo.duration.toLong()
     val currentPosition = program.playbackPosition.toLong()
 
-    // ★修正：フラグと再生位置に基づいてテキストを切り替え
     val durationDisplay = if (showResumeLabel && currentPosition > 5) {
         "続きから見る ${formatTime(currentPosition)}"
     } else if (currentPosition > 5) {
@@ -103,17 +107,34 @@ fun RecordedCard(
         )
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(thumbnailUrl)
-                    .size(coil.size.Size(300, 168))
-                    .crossfade(true)
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
+
+            // ★ GC対策: スクロール中は画像を描画せず、Coilの無駄な起動を物理的に遮断する
+            if (!scrolling) {
+                val context = LocalContext.current
+                // ★ GC対策: ImageRequestをrememberでキャッシュし、毎フレームのオブジェクト生成を防ぐ
+                val imageRequest = remember(thumbnailUrl) {
+                    ImageRequest.Builder(context)
+                        .data(thumbnailUrl)
+                        .size(coil.size.Size(300, 168))
+                        .crossfade(true)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                }
+
+                AsyncImage(
+                    model = imageRequest,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // スクロール中用の軽量プレースホルダー
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colors.background.copy(alpha = 0.5f))
+                )
+            }
 
             Box(
                 modifier = Modifier
@@ -121,9 +142,11 @@ fun RecordedCard(
                     .background(colors.background.copy(alpha = if (isFocused) 0.1f else 0.4f))
             )
 
-            Box(modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(4.dp)) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+            ) {
                 if (program.isRecording) {
                     Row(
                         modifier = Modifier
@@ -134,9 +157,11 @@ fun RecordedCard(
                             .padding(horizontal = 4.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(modifier = Modifier
-                            .size(6.dp)
-                            .background(Color.Red, CircleShape))
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(Color.Red, CircleShape)
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "録画中",
@@ -179,7 +204,8 @@ fun RecordedCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.then(
-                        if (isFocused) Modifier.basicMarquee(
+                        // ★ GC対策: マーキーは「フォーカスされていて、かつスクロールが止まっている時」だけ起動
+                        if (isFocused && !scrolling) Modifier.basicMarquee(
                             iterations = Int.MAX_VALUE,
                             repeatDelayMillis = 1000
                         ) else Modifier

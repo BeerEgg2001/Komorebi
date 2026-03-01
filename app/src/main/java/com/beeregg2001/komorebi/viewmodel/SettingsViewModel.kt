@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -12,7 +13,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val syncEngine: RecordSyncEngine // ★追加: DBリセットのために注入
 ) : ViewModel() {
 
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
@@ -47,7 +49,6 @@ class SettingsViewModel @Inject constructor(
     val subtitleCommentLayer: StateFlow<String> = settingsRepository.subtitleCommentLayer
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "CommentOnTop")
 
-    // ★追加: 音声出力モード
     val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
 
@@ -70,15 +71,37 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.MIRAKURUN_IP, ip) }
     }
 
+    // ★追加: KonomiTVのIP変更検知
+    fun updateKonomiIp(ip: String) {
+        viewModelScope.launch {
+            val oldIp = konomiIp.value
+            settingsRepository.saveString(SettingsRepository.KONOMI_IP, ip)
+            if (oldIp != ip && oldIp.isNotBlank()) {
+                syncEngine.clearDatabase()
+                syncEngine.syncAllRecords(forceFullSync = true)
+            }
+        }
+    }
+
+    // ★追加: KonomiTVのPort変更検知
+    fun updateKonomiPort(port: String) {
+        viewModelScope.launch {
+            val oldPort = konomiPort.value
+            settingsRepository.saveString(SettingsRepository.KONOMI_PORT, port)
+            if (oldPort != port && oldPort.isNotBlank()) {
+                syncEngine.clearDatabase()
+                syncEngine.syncAllRecords(forceFullSync = true)
+            }
+        }
+    }
+
     fun updateAppTheme(themeName: String) {
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.APP_THEME, themeName) }
     }
 
-    // ★追加
     fun updateDefaultRecordListView(viewType: String) {
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.DEFAULT_RECORD_LIST_VIEW, viewType) }
     }
-
 
     suspend fun getStartupTabOnce(): String {
         return settingsRepository.getStartupTabOnce()

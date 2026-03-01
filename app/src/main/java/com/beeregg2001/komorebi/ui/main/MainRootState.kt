@@ -48,9 +48,19 @@ class MainRootState {
 
     // システム状態
     var isDataReady by mutableStateOf(false)
+    var isUiReady by mutableStateOf(false) // ★追加: UIコンポーネントの描画完了
     var isSplashFinished by mutableStateOf(false)
     var showConnectionErrorDialog by mutableStateOf(false)
     var hasAppliedStartupTab by mutableStateOf(false)
+
+    // ★追加: 戻るボタンの連打ガード
+    private var lastBackPressTime by mutableLongStateOf(0L)
+    fun canProcessBackPress(): Boolean {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastBackPressTime < 500) return false
+        lastBackPressTime = currentTime
+        return true
+    }
 }
 
 @Composable

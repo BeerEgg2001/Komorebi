@@ -7,16 +7,15 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -32,6 +31,9 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.itemContentType
+import androidx.paging.compose.itemKey
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -44,9 +46,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun RecordListContent(
-    recentRecordings: List<RecordedProgram>,
-    isLoadingInitial: Boolean,
-    isLoadingMore: Boolean,
+    pagedRecordings: LazyPagingItems<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
     isSearchBarVisible: Boolean,
@@ -56,11 +56,13 @@ fun RecordListContent(
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
     onSeriesSearch: (String) -> Unit,
-    onLoadMore: () -> Unit,
     isDetailVisible: Boolean,
     onDetailStateChange: (Boolean) -> Unit,
     onBackPress: () -> Unit,
     listState: LazyListState = rememberLazyListState(),
+    fetchedProgramDetail: RecordedProgram? = null,
+    onFetchDetail: (Int) -> Unit = {},
+    onClearDetail: () -> Unit = {},
     onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
@@ -70,24 +72,32 @@ fun RecordListContent(
     var detailProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var isSideMenuOpen by remember { mutableStateOf(false) }
 
-    val itemFocusRequesters = remember(recentRecordings) { mutableMapOf<Int, FocusRequester>() }
+    val itemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val menuFirstItemRequester = remember { FocusRequester() }
+    val detailButtonFocusRequester = remember { FocusRequester() }
     val detailPanelFocusRequester = remember { FocusRequester() }
+
+    // ★追加: サブメニュー専用のフォーカス一時退避アンカー
+    val menuAnchorRequester = remember { FocusRequester() }
 
     val isAnyMenuOpen = isSideMenuOpen || isDetailVisible
     val menuTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
 
-    val firstVisibleIndex by remember {
-        derivedStateOf { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
+    LaunchedEffect(pagedRecordings.itemCount) {
+        if (pagedRecordings.itemCount == 0) focusedProgram = null
     }
 
-    LaunchedEffect(recentRecordings) { focusedProgram = null }
+    LaunchedEffect(isSideMenuOpen, menuTransitionState.isIdle) {
+        if (isSideMenuOpen && !isDetailVisible && menuTransitionState.isIdle) {
+            menuFirstItemRequester.safeRequestFocus("SideMenuOpened")
+        }
+    }
 
-    LaunchedEffect(menuTransitionState.isIdle, menuTransitionState.targetState) {
-        if (menuTransitionState.isIdle && menuTransitionState.targetState) {
-            if (isDetailVisible) detailPanelFocusRequester.safeRequestFocus("DetailOpened")
-            else if (isSideMenuOpen) menuFirstItemRequester.safeRequestFocus("SideMenuOpened")
+    LaunchedEffect(isDetailVisible) {
+        if (isDetailVisible) {
+            delay(100)
+            detailPanelFocusRequester.safeRequestFocus("DetailPanelOpened")
         }
     }
 
@@ -101,43 +111,45 @@ fun RecordListContent(
                 .focusProperties { canFocus = !isAnyMenuOpen }
                 .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
         ) {
-            itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
-                val requester = if (index == firstVisibleIndex) {
-                    firstItemFocusRequester
-                } else {
-                    itemFocusRequesters.getOrPut(program.id) { FocusRequester() }
-                }
+            items(
+                count = pagedRecordings.itemCount,
+                key = pagedRecordings.itemKey { it.id },
+                contentType = pagedRecordings.itemContentType { "program_list" }
+            ) { index ->
+                val program = pagedRecordings[index]
 
-                LaunchedEffect(index) {
-                    if (!isLoadingMore && index >= recentRecordings.size - 4) onLoadMore()
-                }
+                if (program != null) {
+                    val specificRequester =
+                        itemFocusRequesters.getOrPut(program.id) { FocusRequester() }
 
-                RecordListItem(
-                    program = program, konomiIp = konomiIp, konomiPort = konomiPort,
-                    onClick = { onProgramClick(program, null) },
-                    isPersistentFocused = (isSideMenuOpen || isDetailVisible) &&
-                            (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),
-                    modifier = Modifier
-                        .focusRequester(requester)
-                        .onFocusChanged {
-                            if (it.isFocused) {
-                                if (!isSideMenuOpen && !isDetailVisible) {
-                                    focusedProgram = program
+                    RecordListItem(
+                        program = program, konomiIp = konomiIp, konomiPort = konomiPort,
+                        onClick = { onProgramClick(program, null) },
+                        isPersistentFocused = (isSideMenuOpen || isDetailVisible) &&
+                                (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),
+                        modifier = Modifier
+                            .focusRequester(specificRequester)
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    if (!isSideMenuOpen && !isDetailVisible) {
+                                        focusedProgram = program
+                                    }
                                 }
                             }
-                        }
-                        .onKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown) {
-                                if (event.key == Key.DirectionRight) {
-                                    isSideMenuOpen = true; return@onKeyEvent true
+                            .onKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    if (event.key == Key.DirectionRight) {
+                                        isSideMenuOpen = true; return@onKeyEvent true
+                                    }
+                                    if (event.key == Key.Back || event.key == Key.Escape) {
+                                        onBackPress(); return@onKeyEvent true
+                                    }
                                 }
-                                if (event.key == Key.Back || event.key == Key.Escape) {
-                                    onBackPress(); return@onKeyEvent true
-                                }
+                                false
                             }
-                            false
-                        }
-                )
+                    )
+                }
             }
         }
 
@@ -152,9 +164,7 @@ fun RecordListContent(
             visibleState = menuTransitionState,
             enter = slideInHorizontally(animationSpec = tween(250)) { it },
             exit = slideOutHorizontally(animationSpec = tween(250)) { it } + fadeOut(
-                animationSpec = tween(
-                    150
-                )
+                animationSpec = tween(150)
             ),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -164,23 +174,35 @@ fun RecordListContent(
                 modifier = Modifier
                     .width(overlayWidth)
                     .fillMaxHeight()
+                    .focusRequester(menuAnchorRequester) // ★追加: アンカーとして機能させる
+                    .focusable() // ★追加: 退避場所としてフォーカスを受け付ける
                     .focusGroup()
                     .onKeyEvent { event ->
                         if (!menuTransitionState.isIdle) return@onKeyEvent true
 
                         if (event.type == KeyEventType.KeyDown) {
                             val isLeftKey = event.key == Key.DirectionLeft
-                            val isBackAction =
-                                !isDetailVisible && (event.key == Key.Back || event.key == Key.Escape)
+                            val isBackAction = event.key == Key.Back || event.key == Key.Escape
 
                             if (isLeftKey || isBackAction) {
-                                isSideMenuOpen = false
-                                onDetailStateChange(false)
-                                scope.launch {
-                                    delay(10)
-                                    focusedProgram?.let { prog ->
-                                        itemFocusRequesters[prog.id]?.safeRequestFocus("ReturnFromSide")
-                                    } ?: firstItemFocusRequester.safeRequestFocus("ReturnToTop")
+                                if (isDetailVisible) {
+                                    // ★修正: 1.安全なアンカーに退避 -> 2.詳細を閉じる -> 3.ボタンへ復帰
+                                    menuAnchorRequester.safeRequestFocus()
+                                    onDetailStateChange(false)
+                                    onClearDetail()
+                                    scope.launch {
+                                        delay(50)
+                                        detailButtonFocusRequester.safeRequestFocus()
+                                    }
+                                } else {
+                                    // メニューを閉じてリストへ戻る時は、消す前にリストのアイテムへ移す
+                                    val id = focusedProgram?.id
+                                    if (id != null && itemFocusRequesters.containsKey(id)) {
+                                        itemFocusRequesters[id]?.safeRequestFocus()
+                                    } else {
+                                        firstItemFocusRequester.safeRequestFocus()
+                                    }
+                                    isSideMenuOpen = false
                                 }
                                 return@onKeyEvent true
                             }
@@ -202,16 +224,27 @@ fun RecordListContent(
                             .size(24.dp)
                     )
 
-                    Box(modifier = Modifier
-                        .fillMaxSize()
-                        .padding(start = 28.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 28.dp)
+                    ) {
                         if (isDetailVisible) {
                             RecordDetailPanel(
-                                program = detailProgram,
+                                program = fetchedProgramDetail ?: detailProgram,
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
                                 focusRequester = detailPanelFocusRequester,
-                                onClose = { onDetailStateChange(false) },
+                                onClose = {
+                                    // ★ここでも同じく: 1.退避 -> 2.閉じる -> 3.復帰
+                                    menuAnchorRequester.safeRequestFocus()
+                                    onDetailStateChange(false)
+                                    onClearDetail()
+                                    scope.launch {
+                                        delay(50)
+                                        detailButtonFocusRequester.safeRequestFocus()
+                                    }
+                                },
                                 modifier = Modifier.fillMaxSize()
                             )
                         } else {
@@ -248,13 +281,16 @@ fun RecordListContent(
                                     icon = Icons.Default.Info,
                                     label = "番組詳細",
                                     isExpanded = true,
-                                    modifier = Modifier.focusProperties {
-                                        right = FocusRequester.Cancel
-                                    },
+                                    modifier = Modifier
+                                        .focusRequester(detailButtonFocusRequester)
+                                        .focusProperties {
+                                            right = FocusRequester.Cancel
+                                        },
                                     onClick = {
-                                        detailProgram = focusedProgram; onDetailStateChange(
-                                        true
-                                    )
+                                        detailProgram = focusedProgram
+                                        focusedProgram?.id?.let { onFetchDetail(it) }
+                                        detailPanelFocusRequester.safeRequestFocus()
+                                        onDetailStateChange(true)
                                     }
                                 )
                                 Spacer(Modifier.height(12.dp))
@@ -266,6 +302,12 @@ fun RecordListContent(
                                         right = FocusRequester.Cancel
                                     },
                                     onClick = {
+                                        val id = focusedProgram?.id
+                                        if (id != null && itemFocusRequesters.containsKey(id)) {
+                                            itemFocusRequesters[id]?.safeRequestFocus()
+                                        } else {
+                                            firstItemFocusRequester.safeRequestFocus()
+                                        }
                                         focusedProgram?.let {
                                             isSideMenuOpen = false
                                             onSeriesSearch(TitleNormalizer.extractSearchKeyword(it.title))

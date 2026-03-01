@@ -7,37 +7,69 @@ import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
+import androidx.paging.map
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
+import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.data.sync.SyncProgress
 import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import javax.inject.Inject
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import java.time.ZonedDateTime
-import java.time.format.TextStyle
-import java.util.Locale
 
-@RequiresApi(Build.VERSION_CODES.O)
+private const val TAG = "Komorebi_RecordVM"
+private const val PREF_NAME = "search_history_pref"
+private const val KEY_HISTORY = "history_list"
+
+private data class FilterState(
+    val category: RecordCategory,
+    val channelId: String?,
+    val genre: String?,
+    val day: String?,
+    val query: String
+)
+
+data class SeriesInfo(
+    val displayTitle: String,
+    val searchKeyword: String,
+    val programCount: Int,
+    val representativeVideoId: Int
+)
+
 @HiltViewModel
 class RecordViewModel @Inject constructor(
     private val repository: KonomiRepository,
     private val historyRepository: WatchHistoryRepository,
     private val settingsRepository: SettingsRepository,
+    private val syncEngine: RecordSyncEngine,
+    private val programDao: RecordedProgramDao,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
-    private val _allRecordings = MutableStateFlow<List<RecordedProgram>>(emptyList())
+
+    // --- 1. 状態の定義 ---
+
+    // ★追加: UIローディング用の進捗状況
+    val syncProgress: StateFlow<SyncProgress> = syncEngine.syncProgress
+
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
     private val _selectedGenre = MutableStateFlow<String?>(null)
@@ -59,27 +91,20 @@ class RecordViewModel @Inject constructor(
     private val _selectedSeriesGenre = MutableStateFlow<String?>(null)
     val selectedSeriesGenre: StateFlow<String?> = _selectedSeriesGenre.asStateFlow()
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    val recentRecordings: StateFlow<List<RecordedProgram>> = combine(
-        _allRecordings,
-        _selectedCategory,
-        _selectedGenre,
-        _selectedDay
-    ) { recs, cat, genre, day ->
-        when (cat) {
-            RecordCategory.ALL, RecordCategory.CHANNEL -> recs // CHANNEL時はAPI検索済みのrecsをそのまま返す
-            RecordCategory.UNWATCHED -> recs.filter { it.playbackPosition < 5.0 }
-            RecordCategory.GENRE -> if (genre.isNullOrEmpty()) recs else recs.filter { p -> p.genres?.any { it.major == genre } == true }
-            RecordCategory.TIME -> if (day.isNullOrEmpty()) recs else recs.filter {
-                getDayOfWeekString(
-                    it.startTime
-                ) == day
-            }
+    // --- 2. 表示形式のリアクティブ管理 ---
 
-            else -> recs
-        }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-    private val _isRecordingLoading = MutableStateFlow(true)
+    private val _manualListViewOverride = MutableStateFlow<Boolean?>(null)
+
+    val isListView: StateFlow<Boolean> = combine(
+        settingsRepository.defaultRecordListView,
+        _manualListViewOverride
+    ) { defaultType, manualOverride ->
+        manualOverride ?: (defaultType == "LIST")
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    // --- その他非同期状態 ---
+
+    private val _isRecordingLoading = MutableStateFlow(false)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
@@ -87,134 +112,120 @@ class RecordViewModel @Inject constructor(
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
     private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
     val availableGenres: StateFlow<List<String>> = _availableGenres.asStateFlow()
+
     private val _groupedSeries =
-        MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
-    val groupedSeries: StateFlow<Map<String, List<Pair<String, String>>>> =
+        MutableStateFlow<Map<String, List<SeriesInfo>>>(emptyMap())
+    val groupedSeries: StateFlow<Map<String, List<SeriesInfo>>> =
         _groupedSeries.asStateFlow()
+
     private val _groupedChannels =
         MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
     val groupedChannels: StateFlow<Map<String, List<Pair<String, String>>>> =
         _groupedChannels.asStateFlow()
-    private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
-    val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
-    private var currentPage = 1
-    private var totalItems = 0
-    private var hasMorePages = true
-    private val pageSize = 30
+
     private var currentSearchQuery: String = ""
     private var maintenanceJob: Job? = null
 
+    private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
+    val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
+
+    fun fetchProgramDetail(videoId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.getRecordedProgram(videoId).onSuccess {
+                _programDetail.value = it
+            }.onFailure {
+                Log.e(TAG, "Failed to fetch program detail", it)
+            }
+        }
+    }
+
+    fun clearProgramDetail() {
+        _programDetail.value = null
+    }
+
+    val recentRecordings: StateFlow<List<RecordedProgram>> = programDao.getRecentRecordingsFlow()
+        .map { entities ->
+            entities.map { RecordDataMapper.toDomainModel(it) }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
     init {
         loadSearchHistory()
-        fetchMasterChannels() // 番組を走査せずマスターから取得
-        fetchRecentRecordings(forceRefresh = true)
-    }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun fetchMasterChannels() {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val response = repository.getChannels()
-                val allChannels = listOfNotNull(
-                    response.terrestrial,
-                    response.bs,
-                    response.cs,
-                    response.sky,
-                    response.bs4k
-                ).flatten()
-                val typePriority = listOf("GR", "BS", "BS4K", "CS", "SKY")
-                val mapped = allChannels.filter { it.isDisplay }.groupBy { it.type }.entries
-                    .sortedBy { (type, _) ->
-                        val idx =
-                            typePriority.indexOf(type); if (idx != -1) idx else typePriority.size
+            programDao.getAllProgramsFlow()
+                .debounce(1000L)
+                .collect { entities ->
+                    if (entities.isNotEmpty()) {
+                        buildSeriesAndChannelMapsFromEntities(entities)
                     }
-                    .associate { entry ->
-                        val label = when (entry.key) {
-                            "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> entry.key
-                        }
-                        // Pair の second にチャンネル名をセットして、検索キーワードとして使えるようにする
-                        label to entry.value.sortedBy { it.displayChannelId ?: it.id }
-                            .map { it.name to it.name }
+                }
+        }
+
+        viewModelScope.launch {
+            syncEngine.syncAllRecords()
+        }
+    }
+
+    // ★追加: 録画リストを開いた時などに呼ぶスマート同期
+    fun triggerSmartSync() {
+        viewModelScope.launch {
+            syncEngine.smartSync()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pagedRecordings: Flow<PagingData<RecordedProgram>> = combine(
+        _selectedCategory,
+        _selectedChannelId,
+        _selectedGenre,
+        _selectedDay,
+        _activeSearchQuery
+    ) { category, channelId, genre, day, query ->
+        FilterState(category, channelId, genre, day, query)
+    }.flatMapLatest { state ->
+        Pager(
+            config = PagingConfig(
+                pageSize = 30,
+                prefetchDistance = 10,
+                initialLoadSize = 20,
+                enablePlaceholders = false
+            )
+        ) {
+            when {
+                state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
+                state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() ->
+                    programDao.getPagingSourceByChannel(state.channelId)
+                state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() ->
+                    programDao.getPagingSourceByGenre(state.genre)
+                state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
+                    val dayOfWeekStr = when(state.day.replace("曜日", "")) {
+                        "日" -> "0"
+                        "月" -> "1"
+                        "火" -> "2"
+                        "水" -> "3"
+                        "木" -> "4"
+                        "金" -> "5"
+                        "土" -> "6"
+                        else -> "0"
                     }
-                _groupedChannels.value = mapped
-            } catch (e: Exception) {
-                Log.e("RecordVM", "Master fetch failed", e)
+                    programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
+                }
+                state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
+                else -> programDao.getAllPagingSource()
+            }
+        }.flow.map { pagingData ->
+            pagingData.map { entity ->
+                RecordDataMapper.toDomainModel(entity)
             }
         }
-    }
+    }.cachedIn(viewModelScope)
 
-    private fun fetchInitialRecordings(clearData: Boolean = true) {
-        viewModelScope.launch {
-            _isRecordingLoading.value = true
-            if (clearData) _allRecordings.value = emptyList()
-            try {
-                currentPage = 1
-                val response =
-                    if (currentSearchQuery.isNotBlank()) repository.searchRecordedPrograms(
-                        currentSearchQuery,
-                        1
-                    ) else repository.getRecordedPrograms(page = 1)
-                totalItems = response.total
-                val ids = response.recordedPrograms.map { it.id }
-                val historyMap = repository.getHistoryEntitiesByIds(ids)
-                    .associate { it.id to it.playbackPosition }
-                val initialList = response.recordedPrograms.map {
-                    it.copy(
-                        isRecording = it.recordedVideo.status == "Recording",
-                        playbackPosition = historyMap[it.id] ?: 0.0
-                    )
-                }
-                _allRecordings.value = initialList
-                hasMorePages = totalItems > pageSize
-            } catch (e: Exception) {
-                Log.e("RecordVM", "Initial fetch failed", e)
-            } finally {
-                _isRecordingLoading.value = false
-            }
-        }
-    }
-
-    fun loadNextPage() {
-        if (_isRecordingLoading.value || _isLoadingMore.value || !hasMorePages) return
-        viewModelScope.launch {
-            _isLoadingMore.value = true
-            try {
-                val nextPage = currentPage + 1
-                val response =
-                    if (currentSearchQuery.isNotBlank()) repository.searchRecordedPrograms(
-                        currentSearchQuery,
-                        nextPage
-                    ) else repository.getRecordedPrograms(page = nextPage)
-                val ids = response.recordedPrograms.map { it.id }
-                val historyMap = repository.getHistoryEntitiesByIds(ids)
-                    .associate { it.id to it.playbackPosition }
-                val newItems = response.recordedPrograms.map {
-                    it.copy(
-                        isRecording = it.recordedVideo.status == "Recording",
-                        playbackPosition = historyMap[it.id] ?: 0.0
-                    )
-                }
-                if (newItems.isNotEmpty()) {
-                    _allRecordings.value += newItems
-                    currentPage = nextPage
-                }
-                if (newItems.size < pageSize || _allRecordings.value.size >= totalItems) hasMorePages =
-                    false
-            } catch (e: Exception) {
-            } finally {
-                _isLoadingMore.value = false
-            }
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun getDayOfWeekString(startTime: String): String {
-        return try {
-            ZonedDateTime.parse(startTime).dayOfWeek.getDisplayName(TextStyle.FULL, Locale.JAPANESE)
-        } catch (e: Exception) {
-            ""
-        }
-    }
+    // --- 操作メソッド群 ---
 
     fun updateListView(isList: Boolean) {
         _manualListViewOverride.value = isList
@@ -246,9 +257,9 @@ class RecordViewModel @Inject constructor(
     fun updateChannel(channelName: String?) {
         _selectedChannelId.value = channelName // 便宜上名称を入れる
         _selectedCategory.value = RecordCategory.CHANNEL
-        _selectedGenre.value = null; _selectedDay.value = null
-        currentSearchQuery = channelName ?: "" // チャンネル名を検索キーワードに設定
-        fetchInitialRecordings(clearData = true)
+        _selectedGenre.value = null
+        _selectedDay.value = null
+        currentSearchQuery = ""
     }
 
     fun searchRecordings(query: String) {
@@ -257,7 +268,9 @@ class RecordViewModel @Inject constructor(
         _activeSearchQuery.value = query; _searchQuery.value = query; currentSearchQuery = query
         if (query.isNotBlank()) addSearchHistory(query)
         _selectedCategory.value = RecordCategory.ALL
-        fetchInitialRecordings(clearData = true)
+        _selectedGenre.value = null
+        _selectedChannelId.value = null
+        _selectedDay.value = null
     }
 
     fun clearSearch() {
@@ -265,20 +278,17 @@ class RecordViewModel @Inject constructor(
         _categoryBeforeSearch.value?.let {
             _selectedCategory.value = it; _categoryBeforeSearch.value = null
         }
-        fetchInitialRecordings(clearData = true)
-    }
-
-    fun clearWatchHistory() {
-        viewModelScope.launch {
-            try { historyRepository.clearWatchHistory() } catch (e: Exception) { }
-        }
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
-        if (!forceRefresh && currentSearchQuery.isNotEmpty()) return
-        currentSearchQuery = ""
-        fetchInitialRecordings(clearData = false)
+        viewModelScope.launch {
+            syncEngine.syncAllRecords(forceFullSync = forceRefresh)
+        }
     }
+
+    fun loadNextPage() {}
+
+    // --- 検索履歴・視聴履歴 ---
 
     private fun loadSearchHistory() {
         try {
@@ -286,7 +296,9 @@ class RecordViewModel @Inject constructor(
                 .getString("history_list", "[]")
             val array = JSONArray(json);
             val list = ArrayList<String>()
-            for (i in 0 until array.length()) list.add(array.getString(i))
+            for (i in 0 until jsonArray.length()) {
+                list.add(jsonArray.getString(i))
+            }
             _searchHistory.value = list
         } catch (e: Exception) {
             _searchHistory.value = emptyList()
@@ -299,28 +311,43 @@ class RecordViewModel @Inject constructor(
         _searchHistory.value = list
         viewModelScope.launch {
             try {
-                context.getSharedPreferences("search_history_pref", Context.MODE_PRIVATE).edit()
-                    .putString("history_list", JSONArray(list).toString()).apply()
+                val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                val jsonArray = JSONArray(list)
+                prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
             } catch (e: Exception) {
             }
         }
     }
 
-    fun updateWatchHistory(p: RecordedProgram, pos: Double) {
-        viewModelScope.launch { historyRepository.saveWatchHistory(p, pos) }
+    fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
+        viewModelScope.launch { historyRepository.saveWatchHistory(program, positionSeconds) }
     }
 
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            try {
+                historyRepository.clearWatchHistory()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    // --- ストリーミング用 ---
+
     @UnstableApi
-    fun startStreamMaintenance(p: RecordedProgram, q: String, sid: String, getPos: () -> Double) {
+    fun startStreamMaintenance(
+        program: RecordedProgram,
+        quality: String,
+        sessionId: String,
+        getPositionSeconds: () -> Double
+    ) {
         stopStreamMaintenance()
-        maintenanceJob = viewModelScope.launch {
+        maintenanceJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    repository.keepAlive(
-                        p.recordedVideo.id,
-                        q,
-                        sid
-                    ); historyRepository.saveWatchHistory(p, getPos())
+                    val currentPos = getPositionSeconds()
+                    repository.keepAlive(program.recordedVideo.id, quality, sessionId)
+                    historyRepository.saveWatchHistory(program, currentPos)
                 } catch (e: Exception) {
                 }
                 delay(20000)
@@ -337,36 +364,75 @@ class RecordViewModel @Inject constructor(
             repository.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
         }
 
-    fun buildSeriesIndex() {
-        if (_groupedSeries.value.isNotEmpty() || _isSeriesLoading.value) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _isSeriesLoading.value = true
-            val map = mutableMapOf<String, MutableMap<String, Pair<String, String>>>()
-            val genres = mutableSetOf<String>()
-            var page = 1
-            try {
-                while (true) {
-                    val response = repository.getRecordedPrograms(page = page)
-                    if (response.recordedPrograms.isEmpty()) break
-                    response.recordedPrograms.forEach { p ->
-                        val g = p.genres?.firstOrNull()?.major ?: "その他"; genres.add(g)
-                        val title = TitleNormalizer.extractDisplayTitle(p.title)
-                        if (title.isNotEmpty()) map.getOrPut(g) { mutableMapOf() }.getOrPut(title) {
-                            Pair(
-                                title,
-                                TitleNormalizer.extractSearchKeyword(p.title)
-                            )
-                        }
+    // --- メニュー構築 ---
+
+    fun buildSeriesIndex() {}
+
+    private fun buildSeriesAndChannelMapsFromEntities(entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>) {
+        _isSeriesLoading.value = true
+        val allSeriesMap = mutableMapOf<String, MutableMap<String, SeriesInfo>>()
+        val allChannelMap =
+            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+        val genresSet = mutableSetOf<String>()
+
+        try {
+            val programs = entities.map { RecordDataMapper.toDomainModel(it) }
+
+            programs.forEach { prog ->
+                val genre = prog.genres?.firstOrNull()?.major ?: "その他"
+                genresSet.add(genre)
+
+                val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
+                val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
+                if (displayTitle.isNotEmpty()) {
+                    val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
+                    val existing = genreMap[displayTitle]
+                    if (existing == null) {
+                        genreMap[displayTitle] = SeriesInfo(displayTitle, searchKeyword, 1, prog.id)
+                    } else {
+                        genreMap[displayTitle] = existing.copy(programCount = existing.programCount + 1)
                     }
-                    if (response.recordedPrograms.size < 30) break
-                    page++
                 }
-                _availableGenres.value = genres.sorted()
-                _groupedSeries.value = map.mapValues { it.value.values.sortedBy { p -> p.first } }
-            } catch (e: Exception) {
-            } finally {
-                _isSeriesLoading.value = false
+
+                prog.channel?.let { ch ->
+                    val type = when {
+                        ch.type == "GR" -> "地デジ"
+                        else -> ch.type
+                    }
+                    val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+                    if (!channelTypeMap.containsKey(ch.id)) {
+                        val safeDisplayId = ch.displayChannelId.takeIf { it.isNotBlank() } ?: ch.id
+                        channelTypeMap[ch.id] = Triple(ch.name, ch.id, safeDisplayId)
+                    }
+                }
             }
+
+            _availableGenres.value = genresSet.sorted()
+            _groupedSeries.value =
+                allSeriesMap.mapValues { entry -> entry.value.values.sortedBy { it.displayTitle } }
+
+            val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
+            val extractNumber = { idStr: String ->
+                Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+            }
+
+            _groupedChannels.value = allChannelMap.entries
+                .sortedBy { (type, _) ->
+                    val index =
+                        typePriority.indexOf(type); if (index != -1) index else typePriority.size
+                }
+                .associate { entry ->
+                    entry.key to entry.value.values.sortedWith(
+                        compareBy(
+                            { extractNumber(it.third) },
+                            { it.third }
+                        )).map { Pair(it.first, it.second) }
+                }
+
+        } catch (e: Exception) {
+            android.util.Log.e("RecordVM", "Map Build Error", e)
+        } finally {
+            _isSeriesLoading.value = false
         }
     }
 }

@@ -1,7 +1,6 @@
 package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -10,83 +9,116 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.itemContentType
+import androidx.paging.compose.itemKey
+import androidx.tv.foundation.lazy.grid.TvGridCells
+import androidx.tv.foundation.lazy.grid.TvGridItemSpan
+import androidx.tv.foundation.lazy.grid.TvLazyGridState
+import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun RecordGridContent(
-    recentRecordings: List<RecordedProgram>,
-    isLoadingInitial: Boolean,
-    isLoadingMore: Boolean,
+    pagedRecordings: LazyPagingItems<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
-    gridState: LazyGridState,
+    gridState: TvLazyGridState,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
-    onLoadMore: () -> Unit,
+    onOpenNavPane: () -> Unit,
     onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
 
-    val firstVisibleIndex by remember {
-        derivedStateOf { gridState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
-    }
-
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
-    LaunchedEffect(isListReady, recentRecordings) {
-        onFirstItemBound(isListReady && recentRecordings.isNotEmpty())
+    LaunchedEffect(isListReady, pagedRecordings.itemCount) {
+        onFirstItemBound(isListReady && pagedRecordings.itemCount > 0)
     }
 
-    if (isLoadingInitial && recentRecordings.isEmpty()) {
+    var isFastScrolling by remember { mutableStateOf(false) }
+    val isScrollInProgress = gridState.isScrollInProgress
+
+    LaunchedEffect(isScrollInProgress) {
+        if (isScrollInProgress) {
+            delay(300) // ★判定を少し早くする
+            isFastScrolling = true
+        } else {
+            isFastScrolling = false
+        }
+    }
+    val isScrollingLambda = remember { { isFastScrolling } }
+
+    val upFocusTarget =
+        if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
+
+    // ★修正: 毎回Modifierを再計算するのではなく、極力シンプルにする
+    val isInitialLoading = pagedRecordings.loadState.refresh is LoadState.Loading
+
+    if (isInitialLoading && pagedRecordings.itemCount == 0) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = colors.textPrimary)
         }
     } else {
-        LazyVerticalGrid(
+        TvLazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Fixed(4),
+            columns = TvGridCells.Fixed(4),
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            itemsIndexed(items = recentRecordings, key = { _, item -> item.id }) { index, program ->
+            items(
+                count = pagedRecordings.itemCount,
+                key = pagedRecordings.itemKey { it.id },
+                contentType = pagedRecordings.itemContentType { "program" }
+            ) { index ->
+                val program = pagedRecordings[index]
+                if (program != null) {
 
-                LaunchedEffect(index) {
-                    if (!isLoadingMore && index >= recentRecordings.size - 4) onLoadMore()
-                }
+                    // ★修正: Modifierのチェーンを最小限にし、不要なメモリ割り当てを防ぐ
+                    var modifier = Modifier.aspectRatio(16f / 9f)
 
-                RecordedCard(
-                    program = program, konomiIp = konomiIp, konomiPort = konomiPort,
-                    onClick = { onProgramClick(program, null) },
-                    modifier = Modifier
-                        .aspectRatio(16f / 9f)
-                        .then(
-                            if (index == firstVisibleIndex) Modifier.focusRequester(
-                                firstItemFocusRequester
-                            ) else Modifier
-                        )
-                        .focusProperties {
-                            if (index < 4) {
-                                up =
-                                    if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-                            }
+                    if (index == 0) {
+                        modifier = modifier.focusRequester(firstItemFocusRequester)
+                    }
+                    if (index < 4) {
+                        modifier = modifier.focusProperties { up = upFocusTarget }
+                    }
+                    if (index % 4 == 0) {
+                        modifier = modifier.onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+                                onOpenNavPane()
+                                true
+                            } else false
                         }
-                    // ★「引き算」：ここに存在した onKeyEvent(Key.Back) を削除しました。
-                    // これにより、画面全体の BackHandler との競合が解消されます。
-                )
+                    }
+
+                    RecordedCard(
+                        program = program,
+                        konomiIp = konomiIp,
+                        konomiPort = konomiPort,
+                        isScrolling = isScrollingLambda,
+                        onClick = { onProgramClick(program, null) },
+                        modifier = modifier
+                    )
+                }
             }
 
-            if (isLoadingMore) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
+            if (pagedRecordings.loadState.append is LoadState.Loading) {
+                item(span = { TvGridItemSpan(maxLineSpan) }) {
                     Box(
                         Modifier
                             .fillMaxWidth()

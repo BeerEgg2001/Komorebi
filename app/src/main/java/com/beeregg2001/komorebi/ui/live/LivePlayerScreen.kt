@@ -50,6 +50,7 @@ import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
+import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
@@ -173,8 +174,9 @@ fun LivePlayerScreen(
             arrayOf(
                 TsExtractor(
                     TsExtractor.MODE_SINGLE_PMT,
-                    TimestampAdjuster(0),
-                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState)
+                    TimestampAdjuster(0L), // 0L (Long) にすることを推奨
+                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState),
+                    TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES // ★ これを追加 (112800)
                 )
             )
         }
@@ -433,64 +435,65 @@ fun LivePlayerScreen(
             delay(150); subMenuFocusRequester.safeRequestFocus(TAG)
         }
     }
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(colors.background)
-        .onKeyEvent { keyEvent ->
-            if (keyEvent.type != KeyEventType.KeyDown || ps.playerError != null || isSubMenuOpen || isMiniListOpen) return@onKeyEvent false
-            val keyCode = keyEvent.nativeKeyEvent.keyCode
-            if (!isMiniListOpen) {
-                val currentGroupList =
-                    groupedChannels.values.find { list -> list.any { it.id == currentChannelItem.id } }
-                if (currentGroupList != null) {
-                    val currentIndex =
-                        currentGroupList.indexOfFirst { it.id == currentChannelItem.id }
-                    if (currentIndex != -1) {
-                        when (keyCode) {
-                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1]); return@onKeyEvent true
-                            }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown || ps.playerError != null || isSubMenuOpen || isMiniListOpen) return@onKeyEvent false
+                val keyCode = keyEvent.nativeKeyEvent.keyCode
+                if (!isMiniListOpen) {
+                    val currentGroupList =
+                        groupedChannels.values.find { list -> list.any { it.id == currentChannelItem.id } }
+                    if (currentGroupList != null) {
+                        val currentIndex =
+                            currentGroupList.indexOfFirst { it.id == currentChannelItem.id }
+                        if (currentIndex != -1) {
+                            when (keyCode) {
+                                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                    onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1]); return@onKeyEvent true
+                                }
 
-                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0]); return@onKeyEvent true
+                                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                    onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0]); return@onKeyEvent true
+                                }
                             }
                         }
                     }
                 }
-            }
-            when (keyCode) {
-                NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                    if (!isSubMenuOpen && !isMiniListOpen) {
-                        if (showOverlay) {
-                            onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(
-                                true
-                            )
-                        } else if (isPinnedOverlay) onPinnedOverlayChange(false) else {
-                            onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(
-                                false
-                            )
-                        }; return@onKeyEvent true
+                when (keyCode) {
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                        if (!isSubMenuOpen && !isMiniListOpen) {
+                            if (showOverlay) {
+                                onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(
+                                    true
+                                )
+                            } else if (isPinnedOverlay) onPinnedOverlayChange(false) else {
+                                onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(
+                                    false
+                                )
+                            }; return@onKeyEvent true
+                        }
                     }
-                }
 
-                NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                    if (showOverlay && isManualOverlay) {
-                        scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; return@onKeyEvent true
-                    }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
-                        onSubMenuToggle(true); return@onKeyEvent true
+                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                        if (showOverlay && isManualOverlay) {
+                            scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; return@onKeyEvent true
+                        }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
+                            onSubMenuToggle(true); return@onKeyEvent true
+                        }
                     }
-                }
 
-                NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (showOverlay && isManualOverlay) {
-                        scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; return@onKeyEvent true
-                    }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
-                        onMiniListToggle(true); return@onKeyEvent true
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (showOverlay && isManualOverlay) {
+                            scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; return@onKeyEvent true
+                        }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
+                            onMiniListToggle(true); return@onKeyEvent true
+                        }
                     }
                 }
-            }
-            false
-        }) {
+                false
+            }) {
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -655,11 +658,11 @@ fun LivePlayerScreen(
                         exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters =
                     exoPlayer.trackSelectionParameters.buildUpon()
                         .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                        TrackSelectionOverride(
-                            audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                            0
+                            TrackSelectionOverride(
+                                audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
+                            )
                         )
-                    )
                         .build(); onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 {

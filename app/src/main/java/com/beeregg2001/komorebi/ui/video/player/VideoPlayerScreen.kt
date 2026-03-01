@@ -76,6 +76,25 @@ fun VideoPlayerScreen(
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
 
+    // =========================================================================
+    // ★ 追加: 番組情報の最新化 (シーンサーチの Duration とタイル情報を正確にするため)
+    // =========================================================================
+    var currentProgram by remember { mutableStateOf(program) }
+    val fetchedDetail by recordViewModel.programDetail.collectAsState()
+
+    // 再生開始時に、DBの「薄いデータ」ではなくAPIの「厚いデータ」をリクエストする
+    LaunchedEffect(program.id) {
+        recordViewModel.fetchProgramDetail(program.id)
+    }
+
+    // APIから詳細データ（完全な Duration と ThumbnailInfo）が届いたら差し替える
+    LaunchedEffect(fetchedDetail) {
+        if (fetchedDetail != null && fetchedDetail?.id == program.id) {
+            currentProgram = fetchedDetail!!
+        }
+    }
+    // =========================================================================
+
     // ★State Holder
     val vs = rememberVideoPlayerState(initialQuality)
 
@@ -130,7 +149,7 @@ fun VideoPlayerScreen(
     val exoPlayer = remember(vs.currentQuality) {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             init {
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
+                setExtensionRendererMode(EXTENSION_RENDERER_MODE_OFF)
             }
 
             override fun buildAudioSink(
@@ -198,8 +217,7 @@ fun VideoPlayerScreen(
         } else if (vs.wasPlayingBeforeSceneSearch) exoPlayer.play()
     }
 
-    // ★追加: 中央オーバーレイ（インジケーター）の自動非表示ロジック
-    // vs.indicatorState が更新されるたびにタイマーが起動し、2秒後に null にリセットします
+    // 中央オーバーレイ（インジケーター）の自動非表示ロジック
     LaunchedEffect(vs.indicatorState) {
         if (vs.indicatorState != null) {
             delay(2000)
@@ -327,7 +345,7 @@ fun VideoPlayerScreen(
 
         PlayerControls(
             exoPlayer,
-            program.title,
+            currentProgram.title, // ★ 最新情報を反映
             showControls && !isSubMenuOpen && !isSceneSearchOpen
         )
 
@@ -337,7 +355,7 @@ fun VideoPlayerScreen(
             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
         ) {
             SceneSearchOverlay(
-                program,
+                currentProgram, // ★ ここを最新の currentProgram に変更 (完全な Duration と TileInfo が渡る)
                 exoPlayer.currentPosition,
                 konomiIp,
                 konomiPort,

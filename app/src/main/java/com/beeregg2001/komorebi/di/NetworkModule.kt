@@ -3,7 +3,8 @@ package com.beeregg2001.komorebi.di
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.repository.KonomiTvApiService
 import com.beeregg2001.komorebi.data.api.KonomiApi
-import com.google.gson.Gson // ★追加
+import com.beeregg2001.komorebi.data.api.interceptor.MockRecordInterceptor
+import com.google.gson.Gson
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -30,8 +31,18 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(settingsRepository: SettingsRepository): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkClientTrusted(
+                chain: Array<out X509Certificate>?,
+                authType: String?
+            ) {
+            }
+
+            override fun checkServerTrusted(
+                chain: Array<out X509Certificate>?,
+                authType: String?
+            ) {
+            }
+
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         })
 
@@ -49,6 +60,7 @@ object NetworkModule {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+//            .addInterceptor(MockRecordInterceptor())
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val baseUrlString = runBlocking {
@@ -68,7 +80,6 @@ object NetworkModule {
             .build()
     }
 
-    // ★追加: Gsonのインスタンスを提供
     @Provides
     @Singleton
     fun provideGson(): Gson {
@@ -81,7 +92,7 @@ object NetworkModule {
         return Retrofit.Builder()
             .baseUrl("https://192-168-11-10.local.konomi.tv:7000")
             .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create(gson)) // ★引数にgsonを渡す
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
     }
 
