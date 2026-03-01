@@ -38,6 +38,11 @@ class KonomiRepository @Inject constructor(
 
     suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
 
+    // ★追加: 番組詳細の取得（DBではなく直接KonomiTVに最新情報を聞きに行く）
+    suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> = runCatching {
+        apiService.getRecordedProgram(videoId)
+    }
+
     suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) = run {
         Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
         apiService.searchVideos(keyword = keyword, page = page)

@@ -5,10 +5,8 @@ package com.beeregg2001.komorebi.ui.main
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +29,6 @@ import com.beeregg2001.komorebi.ui.home.LoadingScreen
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
-import com.beeregg2001.komorebi.ui.video.SeriesListScreen
 import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
 import com.beeregg2001.komorebi.viewmodel.*
@@ -94,10 +91,8 @@ fun MainRootScreen(
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
-    val searchHistory by recordViewModel.searchHistory.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
-    val isRecLoading by recordViewModel.isRecordingLoading.collectAsState()
-    val isRecLoadingMore by recordViewModel.isLoadingMore.collectAsState()
+    val syncProgress by recordViewModel.syncProgress.collectAsState()
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
@@ -116,11 +111,24 @@ fun MainRootScreen(
         }
     }
 
+    LaunchedEffect(state.isRecordListOpen) {
+        if (state.isRecordListOpen) {
+            recordViewModel.triggerSmartSync()
+        }
+    }
+
+    // 設定画面から戻る時のリフレッシュ処理
     val closeSettingsAndRefresh = {
-        state.isSettingsOpen = false; state.isDataReady = false; state.showConnectionErrorDialog =
-        false
-        channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData()
-        recordViewModel.fetchRecentRecordings(); reserveViewModel.fetchReserves()
+        state.isSettingsOpen = false
+        state.isDataReady = false
+        state.isUiReady = false // UI準備フラグもリセット
+        state.showConnectionErrorDialog = false
+        state.currentTabIndex = 0
+        channelViewModel.fetchChannels()
+        epgViewModel.preloadAllEpgData()
+        homeViewModel.refreshHomeData()
+        recordViewModel.fetchRecentRecordings()
+        reserveViewModel.fetchReserves()
     }
 
     LaunchedEffect(state.toastMessage) {
@@ -129,7 +137,10 @@ fun MainRootScreen(
         }
     }
 
+    // 戻るボタンの処理（連打ガード付き）
     BackHandler(enabled = true) {
+        if (!state.canProcessBackPress()) return@BackHandler
+
         when {
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
@@ -156,9 +167,11 @@ fun MainRootScreen(
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
             state.isRecordListOpen -> {
-                state.isRecordListOpen = false; if (state.openedSeriesTitle != null) {
+                state.isRecordListOpen = false
+                if (state.openedSeriesTitle != null) {
                     state.isSeriesListOpen = true; state.openedSeriesTitle = null
-                }; recordViewModel.searchRecordings("")
+                }
+                recordViewModel.searchRecordings("")
             }
 
             state.isSeriesListOpen -> {
@@ -166,13 +179,15 @@ fun MainRootScreen(
             }
 
             state.showConnectionErrorDialog -> onExitApp()
+            // Loading中（準備中）はホームへ戻る挙動を抑制
+            !(state.isDataReady && state.isUiReady) -> {}
             else -> state.triggerHomeBack = true
         }
     }
 
     LaunchedEffect(isChannelLoading, isHomeLoading) {
-        delay(500)
         if (!isChannelLoading && !isHomeLoading) {
+            delay(300)
             if (isChannelError) {
                 state.showConnectionErrorDialog = true; state.isDataReady = false
             } else {
@@ -183,7 +198,8 @@ fun MainRootScreen(
 
     LaunchedEffect(Unit) { delay(500); state.isSplashFinished = true }
 
-    val isAppReady =
+    // データおよびOS設定が読み込めているか（UI準備はここには含めないことでデッドロック回避）
+    val isSystemReady =
         ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) && state.hasAppliedStartupTab
 
     KomorebiTheme(theme = currentTheme) {
@@ -204,22 +220,18 @@ fun MainRootScreen(
                 )
             }
 
+            // メインコンテンツを表示する（DB同期中はブロック）
             val showMainContent =
-                isAppReady && isSettingsInitialized && !state.showConnectionErrorDialog
-            AnimatedVisibility(
-                visible = showMainContent,
-                enter = fadeIn(animationSpec = tween(400)),
-                exit = fadeOut()
-            ) {
+                isSystemReady && isSettingsInitialized && !state.showConnectionErrorDialog && !(syncProgress.isSyncing && syncProgress.isInitialBuild)
+
+            if (showMainContent) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     when {
                         state.selectedChannel != null -> {
                             LivePlayerScreen(
                                 channel = state.selectedChannel!!,
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
+                                mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                                konomiIp = konomiIp, konomiPort = konomiPort,
                                 initialQuality = defaultLiveQuality,
                                 isMiniListOpen = state.isPlayerMiniListOpen,
                                 onMiniListToggle = { state.isPlayerMiniListOpen = it },
@@ -232,11 +244,11 @@ fun MainRootScreen(
                                 isSubMenuOpen = state.playerIsSubMenuOpen,
                                 onSubMenuToggle = { state.playerIsSubMenuOpen = it },
                                 onChannelSelect = { newChannel ->
-                                    state.selectedChannel =
-                                        newChannel; state.lastSelectedChannelId =
-                                    newChannel.id; state.lastSelectedProgramId =
-                                    null; homeViewModel.saveLastChannel(newChannel); state.isReturningFromPlayer =
-                                    false
+                                    state.selectedChannel = newChannel
+                                    state.lastSelectedChannelId = newChannel.id
+                                    state.lastSelectedProgramId = null
+                                    homeViewModel.saveLastChannel(newChannel)
+                                    state.isReturningFromPlayer = false
                                 },
                                 onBackPressed = {
                                     state.selectedChannel = null; state.isReturningFromPlayer = true
@@ -249,8 +261,7 @@ fun MainRootScreen(
                                 program = state.selectedProgram!!,
                                 initialPositionMs = state.initialPlaybackPositionMs,
                                 initialQuality = defaultVideoQuality,
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
+                                konomiIp = konomiIp, konomiPort = konomiPort,
                                 showControls = state.showPlayerControls,
                                 onShowControlsChange = { state.showPlayerControls = it },
                                 isSubMenuOpen = state.isPlayerSubMenuOpen,
@@ -263,40 +274,21 @@ fun MainRootScreen(
                                 onShowToast = { state.toastMessage = it })
                         }
 
-                        state.isSeriesListOpen -> {
-                            SeriesListScreen(
-                                onSeriesClick = { searchKeyword, displayTitle ->
-                                    recordViewModel.searchRecordings(
-                                        searchKeyword
-                                    ); state.openedSeriesTitle =
-                                    displayTitle; state.isSeriesListOpen =
-                                    false; state.isRecordListOpen = true
-                                },
-                                onBack = {
-                                    state.isSeriesListOpen =
-                                        false; recordViewModel.searchRecordings("")
-                                })
-                        }
-
                         state.isRecordListOpen -> {
                             RecordListScreen(
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
+                                konomiIp = konomiIp, konomiPort = konomiPort,
                                 customTitle = state.openedSeriesTitle,
                                 onProgramClick = { program, forcedPosition ->
                                     if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
-
                                     val duration = program.recordedVideo.duration
                                     val history =
                                         watchHistory.find { it.program.id.toString() == program.id.toString() }
-
                                     val resumePos = when {
                                         forcedPosition != null -> forcedPosition
                                         program.playbackPosition > 5.0 && (duration <= 0 || program.playbackPosition < (duration - 10)) -> program.playbackPosition
                                         history != null && history.playback_position > 5.0 && (duration <= 0 || history.playback_position < (duration - 10)) -> history.playback_position
                                         else -> 0.0
                                     }
-
                                     state.initialPlaybackPositionMs = (resumePos * 1000).toLong()
                                     state.selectedProgram = program
                                     state.lastSelectedProgramId = program.id.toString()
@@ -304,10 +296,12 @@ fun MainRootScreen(
                                     state.isReturningFromPlayer = false
                                 },
                                 onBack = {
-                                    state.isRecordListOpen =
-                                        false; if (state.openedSeriesTitle != null) {
-                                    state.isSeriesListOpen = true; state.openedSeriesTitle = null
-                                }; recordViewModel.searchRecordings("")
+                                    state.isRecordListOpen = false
+                                    if (state.openedSeriesTitle != null) {
+                                        state.isSeriesListOpen = true; state.openedSeriesTitle =
+                                            null
+                                    }
+                                    recordViewModel.searchRecordings("")
                                 })
                         }
 
@@ -327,28 +321,30 @@ fun MainRootScreen(
                                 onTabChange = { state.currentTabIndex = it },
                                 selectedChannel = state.selectedChannel,
                                 onChannelClick = { channel ->
-                                    state.selectedChannel = channel; if (channel != null) {
-                                    state.lastSelectedChannelId =
-                                        channel.id; state.lastSelectedProgramId =
-                                        null; homeViewModel.saveLastChannel(channel); state.isReturningFromPlayer =
-                                        false
-                                }
+                                    state.selectedChannel = channel
+                                    if (channel != null) {
+                                        state.lastSelectedChannelId = channel.id
+                                        state.lastSelectedProgramId = null
+                                        homeViewModel.saveLastChannel(channel)
+                                        state.isReturningFromPlayer = false
+                                    }
                                 },
                                 selectedProgram = state.selectedProgram,
                                 onProgramSelected = { program ->
                                     if (program != null) {
-                                        if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen;
+                                        if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
                                         val history =
-                                            watchHistory.find { it.program.id.toString() == program.id.toString() };
-                                        val duration =
-                                            program.recordedVideo.duration; state.initialPlaybackPositionMs =
+                                            watchHistory.find { it.program.id.toString() == program.id.toString() }
+                                        val duration = program.recordedVideo.duration
+                                        state.initialPlaybackPositionMs =
                                             if (history != null && history.playback_position > 5.0 && (duration <= 0.0 || history.playback_position < (duration - 10.0))) {
                                                 (history.playback_position * 1000).toLong()
-                                            } else 0L; state.selectedProgram =
-                                            program; state.lastSelectedProgramId =
-                                            program.id.toString(); state.lastSelectedChannelId =
-                                            null; state.showPlayerControls =
-                                            true; state.isReturningFromPlayer = false
+                                            } else 0L
+                                        state.selectedProgram = program
+                                        state.lastSelectedProgramId = program.id.toString()
+                                        state.lastSelectedChannelId = null
+                                        state.showPlayerControls = true
+                                        state.isReturningFromPlayer = false
                                     }
                                 },
                                 onReserveSelected = { reserveItem ->
@@ -362,16 +358,19 @@ fun MainRootScreen(
                                 triggerBack = state.triggerHomeBack,
                                 onBackTriggered = { state.triggerHomeBack = false },
                                 onFinalBack = onExitApp,
-                                onUiReady = { },
+                                onUiReady = { state.isUiReady = true }, // ここでUI準備完了を通知
                                 onNavigateToPlayer = { channelId, _, _ ->
-                                    val channel = groupedChannels.values.flatten()
-                                        .find { it.id == channelId }; if (channel != null) {
-                                    state.selectedChannel = channel; state.lastSelectedChannelId =
-                                        channelId; state.lastSelectedProgramId =
-                                        null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram =
-                                        null; state.isEpgJumpMenuOpen =
-                                        false; state.isReturningFromPlayer = false
-                                }
+                                    val channel =
+                                        groupedChannels.values.flatten().find { it.id == channelId }
+                                    if (channel != null) {
+                                        state.selectedChannel =
+                                            channel; state.lastSelectedChannelId = channelId
+                                        state.lastSelectedProgramId =
+                                            null; homeViewModel.saveLastChannel(channel)
+                                        state.epgSelectedProgram = null; state.isEpgJumpMenuOpen =
+                                            false
+                                        state.isReturningFromPlayer = false
+                                    }
                                 },
                                 lastPlayerChannelId = state.lastSelectedChannelId,
                                 lastPlayerProgramId = state.lastSelectedProgramId,
@@ -382,21 +381,36 @@ fun MainRootScreen(
                                 onCloseRecordList = { state.isRecordListOpen = false },
                                 onShowSeriesList = { state.isSeriesListOpen = true },
                                 isReturningFromPlayer = state.isReturningFromPlayer,
-                                onReturnFocusConsumed = { state.isReturningFromPlayer = false })
+                                onReturnFocusConsumed = { state.isReturningFromPlayer = false },
+                                isUiReadyFlag = state.isUiReady
+                            )
                         }
                     }
                 }
             }
-            if (!showMainContent && !state.showConnectionErrorDialog) {
-                LoadingScreen()
+
+            // ローディング画面の制御（UIが準備できるまでオーバーレイし続ける）
+            AnimatedVisibility(
+                visible = !state.isUiReady && !state.showConnectionErrorDialog && isSettingsInitialized,
+                enter = fadeIn(),
+                exit = fadeOut(tween(500))
+            ) {
+                if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
+                    LoadingScreen(
+                        message = syncProgress.progressText,
+                        progressRatio = syncProgress.progressRatio
+                    )
+                } else {
+                    LoadingScreen()
+                }
             }
 
+            // ダイアログ・トースト系 (変更なし)
             if (state.selectedReserve != null) {
                 val program =
-                    remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }; ProgramDetailScreen(
-                    program = program,
-                    mode = ProgramDetailMode.RESERVE,
-                    isReserved = true,
+                    remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }
+                ProgramDetailScreen(
+                    program = program, mode = ProgramDetailMode.RESERVE, isReserved = true,
                     onBackClick = { state.selectedReserve = null },
                     onDeleteReserveClick = { _ -> state.reserveToDelete = state.selectedReserve },
                     onEditReserveClick = { _ ->
@@ -409,53 +423,52 @@ fun MainRootScreen(
             }
             if (state.epgSelectedProgram != null) {
                 val relatedReserve =
-                    reserves.find { it.program.id == state.epgSelectedProgram!!.id };
-                val isReserved = relatedReserve != null; ProgramDetailScreen(
+                    reserves.find { it.program.id == state.epgSelectedProgram!!.id }
+                ProgramDetailScreen(
                     program = state.epgSelectedProgram!!,
                     mode = ProgramDetailMode.EPG,
-                    isReserved = isReserved,
+                    isReserved = relatedReserve != null,
                     onPlayClick = {
-                        val channel = groupedChannels.values.flatten()
-                            .find { ch -> ch.id == it.channel_id }; if (channel != null) {
-                        state.selectedChannel = channel; state.lastSelectedChannelId =
-                            channel.id; state.lastSelectedProgramId =
-                            null; homeViewModel.saveLastChannel(channel); state.epgSelectedProgram =
-                            null; state.isReturningFromPlayer = false
-                    }
+                        val channel =
+                            groupedChannels.values.flatten().find { ch -> ch.id == it.channel_id }
+                        if (channel != null) {
+                            state.selectedChannel = channel; state.lastSelectedChannelId =
+                                channel.id
+                            state.lastSelectedProgramId = null; homeViewModel.saveLastChannel(
+                                channel
+                            )
+                            state.epgSelectedProgram = null; state.isReturningFromPlayer = false
+                        }
                     },
                     onRecordClick = { program ->
                         reserveViewModel.addReserve(program.id) {
                             scope.launch {
-                                state.epgSelectedProgram = null; delay(300);
-                                val now = OffsetDateTime.now();
+                                state.epgSelectedProgram = null; delay(300)
+                                val now = OffsetDateTime.now()
                                 val start = try {
                                     OffsetDateTime.parse(program.start_time)
                                 } catch (e: Exception) {
                                     now
-                                };
+                                }
                                 val end = try {
                                     OffsetDateTime.parse(program.end_time)
                                 } catch (e: Exception) {
                                     now
-                                };
-                                val isBroadcasting =
-                                    now.isAfter(start) && now.isBefore(end); state.toastMessage =
-                                if (isBroadcasting) AppStrings.TOAST_RECORDING_STARTED else AppStrings.TOAST_RESERVED
+                                }
+                                val isBroadcasting = now.isAfter(start) && now.isBefore(end)
+                                state.toastMessage =
+                                    if (isBroadcasting) AppStrings.TOAST_RECORDING_STARTED else AppStrings.TOAST_RESERVED
                             }
                         }
                     },
                     onRecordDetailClick = { program -> state.editingNewProgram = program },
                     onEditReserveClick = { _ ->
-                        if (relatedReserve != null) {
-                            reserveViewModel.refreshReserveItem(relatedReserve.id) { latest ->
-                                state.editingReserveItem = latest ?: relatedReserve
-                            }
-                        }
+                        if (relatedReserve != null) reserveViewModel.refreshReserveItem(
+                            relatedReserve.id
+                        ) { state.editingReserveItem = it ?: relatedReserve }
                     },
                     onDeleteReserveClick = { _ ->
-                        if (relatedReserve != null) {
-                            state.reserveToDelete = relatedReserve
-                        }
+                        if (relatedReserve != null) state.reserveToDelete = relatedReserve
                     },
                     onBackClick = { state.epgSelectedProgram = null },
                     initialFocusRequester = detailFocusRequester
@@ -492,7 +505,8 @@ fun MainRootScreen(
                         recordingMode = "SpecifiedService",
                         isEventRelayFollowEnabled = true
                     )
-                }; ReserveSettingsDialog(
+                }
+                ReserveSettingsDialog(
                     programTitle = state.editingNewProgram!!.title,
                     initialSettings = defaultSettings,
                     isNewReservation = true,
@@ -512,7 +526,6 @@ fun MainRootScreen(
                             null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
                     })
             }
-
             if (state.reserveToDelete != null) {
                 DeleteConfirmationDialog(
                     title = AppStrings.DIALOG_DELETE_RESERVE_TITLE,
@@ -521,15 +534,16 @@ fun MainRootScreen(
                         state.reserveToDelete?.program?.title ?: ""
                     ),
                     onConfirm = {
-                        val id =
-                            state.reserveToDelete!!.id; reserveViewModel.deleteReservation(id) {
-                        scope.launch {
-                            state.reserveToDelete =
-                                null; if (state.selectedReserve != null) state.selectedReserve =
-                            null; if (state.epgSelectedProgram != null) state.epgSelectedProgram =
-                            null; delay(300); state.toastMessage = AppStrings.TOAST_RESERVE_DELETED
+                        val id = state.reserveToDelete!!.id
+                        reserveViewModel.deleteReservation(id) {
+                            scope.launch {
+                                state.reserveToDelete =
+                                    null; if (state.selectedReserve != null) state.selectedReserve =
+                                null; if (state.epgSelectedProgram != null) state.epgSelectedProgram =
+                                null; delay(300); state.toastMessage =
+                                AppStrings.TOAST_RESERVE_DELETED
+                            }
                         }
-                    }
                     },
                     onCancel = { state.reserveToDelete = null })
             }
@@ -541,7 +555,6 @@ fun MainRootScreen(
                     state.showConnectionErrorDialog = false; state.isSettingsOpen = true
                 }, onExit = onExitApp)
             }
-
             if (state.isSettingsOpen) {
                 SettingsScreen(
                     onBack = closeSettingsAndRefresh,
@@ -552,8 +565,7 @@ fun MainRootScreen(
                     onClearWatchHistory = {
                         recordViewModel.clearWatchHistory(); state.toastMessage =
                         AppStrings.TOAST_WATCH_HISTORY_DELETED
-                    }
-                )
+                    })
             }
             GlobalToast(message = state.toastMessage)
         }

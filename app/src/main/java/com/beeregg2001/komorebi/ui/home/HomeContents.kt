@@ -82,16 +82,46 @@ fun HomeContents(
     mirakurunIp: String, mirakurunPort: String,
     tabFocusRequester: FocusRequester,
     externalFocusRequester: FocusRequester,
+    onUiReady: () -> Unit = {}, // 親に描画完了を伝える
     modifier: Modifier = Modifier,
     lastFocusedChannelId: String? = null,
     lastFocusedProgramId: String? = null,
     isTopNavFocused: Boolean = false
 ) {
     val isKonomiTvMode =
-        mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "1270.0.1"
+        mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
     val lazyListState = rememberTvLazyListState()
-    val typeLabels =
-        mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+
+    val isFirstItemRendered = remember { derivedStateOf { lazyListState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+
+    LaunchedEffect(isFirstItemRendered.value) {
+        if (isFirstItemRendered.value) {
+            delay(100) // 描画直後のフォーカス計算の安定を待つ
+            onUiReady()
+        }
+    }
+
+    // セーフティガード（データが空の場合など）
+    LaunchedEffect(lastWatchedChannels, hotChannels) {
+        if (lastWatchedChannels.isNotEmpty() || hotChannels.isNotEmpty()) {
+            delay(400)
+            onUiReady()
+        }
+    }
+
+    // UI準備完了の判定
+    LaunchedEffect(lastWatchedChannels, hotChannels, genrePickup) {
+        if (lastWatchedChannels.isNotEmpty() || hotChannels.isNotEmpty() || genrePickup.isNotEmpty()) {
+            delay(300) // 描画が安定するのを待機
+            onUiReady()
+        }
+    }
+
+    // データが一切ない場合のセーフティタイマー
+    LaunchedEffect(Unit) {
+        delay(3000)
+        onUiReady()
+    }
 
     val welcomeHeroInfo = remember {
         HomeHeroInfo(
@@ -101,37 +131,29 @@ fun HomeContents(
             tag = "Welcome"
         )
     }
-
     var pendingHeroInfo by remember { mutableStateOf<HomeHeroInfo?>(welcomeHeroInfo) }
     var currentHeroInfo by remember { mutableStateOf<HomeHeroInfo>(welcomeHeroInfo) }
     var isFirstHeroLoad by remember { mutableStateOf(true) }
     val colors = KomorebiTheme.colors
 
-    LaunchedEffect(isTopNavFocused) {
-        if (isTopNavFocused) {
-            pendingHeroInfo = welcomeHeroInfo
-        }
-    }
+    LaunchedEffect(isTopNavFocused) { if (isTopNavFocused) pendingHeroInfo = welcomeHeroInfo }
 
     LaunchedEffect(pendingHeroInfo) {
         if (pendingHeroInfo != null) {
             if (isFirstHeroLoad) {
-                currentHeroInfo = pendingHeroInfo!!
-                isFirstHeroLoad = false
+                currentHeroInfo = pendingHeroInfo!!; isFirstHeroLoad = false
             } else {
-                delay(300)
-                currentHeroInfo = pendingHeroInfo!!
+                delay(300); currentHeroInfo = pendingHeroInfo!!
             }
         }
     }
 
     LaunchedEffect(lastWatchedChannels.isNotEmpty()) {
-        if (lastWatchedChannels.isNotEmpty()) {
-            lazyListState.scrollToItem(0)
-        }
+        if (lastWatchedChannels.isNotEmpty()) lazyListState.scrollToItem(
+            0
+        )
     }
 
-    // ★追加: 現在表示されているセクションのうち、どれが一番上かを判定する
     val topSection =
         remember(lastWatchedChannels, hotChannels, genrePickup, watchHistory, upcomingReserves) {
             when {
@@ -144,33 +166,23 @@ fun HomeContents(
             }
         }
 
-    // ★修正: focusPropertiesの代わりに、安全なキーイベントでタブへフォーカスを戻す処理
     val upToTabModifier = Modifier.onKeyEvent {
-        if (it.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
-            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
-        ) {
-            tabFocusRequester.safeRequestFocus(TAG)
-            true
-        } else {
-            false
-        }
+        if (it.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) {
+            tabFocusRequester.safeRequestFocus(TAG); true
+        } else false
     }
 
     val layoutInfo = lazyListState.layoutInfo
     val totalItemsCount = layoutInfo.totalItemsCount
     val visibleItems = layoutInfo.visibleItemsInfo
-
     val scrollProgress by remember(totalItemsCount, visibleItems) {
         derivedStateOf {
-            if (totalItemsCount == 0 || visibleItems.isEmpty()) {
-                0f
-            } else {
-                val firstVisibleIndex = visibleItems.first().index
-                (firstVisibleIndex.toFloat() / totalItemsCount.toFloat()).coerceIn(0f, 1f)
-            }
+            if (totalItemsCount == 0 || visibleItems.isEmpty()) 0f else (visibleItems.first().index.toFloat() / totalItemsCount.toFloat()).coerceIn(
+                0f,
+                1f
+            )
         }
     }
-
     val animatedScrollProgress by animateFloatAsState(
         targetValue = scrollProgress,
         animationSpec = tween(300),
@@ -178,30 +190,23 @@ fun HomeContents(
     )
 
     Column(modifier = modifier.fillMaxSize()) {
-        // --- ヒーローゾーン (上部) ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
-        ) {
-            HomeHeroDashboard(info = currentHeroInfo)
-        }
-
-        // --- カルーセルリストゾーン (下部) ---
+        ) { HomeHeroDashboard(info = currentHeroInfo) }
         Box(modifier = Modifier
             .weight(0.55f)
             .fillMaxWidth()) {
             TvLazyColumn(
                 state = lazyListState,
-                // ★修正: 下キー押下時に安全にフォーカスを受け取れるよう、TvLazyColumnに直接付与
                 modifier = Modifier
                     .fillMaxSize()
                     .focusRequester(externalFocusRequester),
                 contentPadding = PaddingValues(bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
             ) {
-                // 1. 前回視聴したチャンネル
                 if (lastWatchedChannels.isNotEmpty()) {
                     item(key = "section_last_watched") {
                         Column(modifier = Modifier.animateContentSize()) {
@@ -211,32 +216,28 @@ fun HomeContents(
                                 Modifier.padding(horizontal = 48.dp)
                             )
                             TvLazyRow(
-                                // ★ 一番上のリストにのみ上キートラップを付与
                                 modifier = if (topSection == "lastWatched") upToTabModifier else Modifier,
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
-                                items(
-                                    lastWatchedChannels,
-                                    key = { "ch_${it.id}" }) { channel ->
+                                items(lastWatchedChannels, key = { "ch_${it.id}" }) { channel ->
                                     val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(
-                                        konomiIp, konomiPort, channel.displayChannelId
+                                        konomiIp,
+                                        konomiPort,
+                                        channel.displayChannelId
                                     ) else UrlBuilder.getMirakurunLogoUrl(
                                         mirakurunIp,
                                         mirakurunPort,
                                         channel.networkId,
                                         channel.serviceId
                                     )
-
-                                    val liveChannel = remember(groupedChannels, channel.id) {
+                                    val liveChannel = remember(
+                                        groupedChannels,
+                                        channel.id
+                                    ) {
                                         groupedChannels.values.flatten()
                                             .find { it.id == channel.id }
                                     }
-                                    val programTitle =
-                                        liveChannel?.programPresent?.title ?: channel.name
-                                    val programDesc = liveChannel?.programPresent?.description
-                                        ?: "前回視聴していたチャンネルです。"
-
                                     LastWatchedChannelCard(
                                         channel = channel,
                                         liveChannel = liveChannel,
@@ -244,22 +245,21 @@ fun HomeContents(
                                         onClick = { onChannelClick(channel) },
                                         onFocus = {
                                             pendingHeroInfo = HomeHeroInfo(
-                                                title = programTitle,
+                                                title = liveChannel?.programPresent?.title
+                                                    ?: channel.name,
                                                 subtitle = channel.name,
-                                                description = programDesc,
+                                                description = liveChannel?.programPresent?.description
+                                                    ?: "前回視聴していたチャンネルです。",
                                                 imageUrl = logoUrl,
                                                 isThumbnail = false,
                                                 tag = "前回視聴"
                                             )
-                                        }
-                                    )
+                                        })
                                 }
                             }
                         }
                     }
                 }
-
-                // 2. 今、盛り上がっているチャンネル
                 if (hotChannels.isNotEmpty()) {
                     item(key = "section_hot") {
                         Column(modifier = Modifier.animateContentSize()) {
@@ -293,24 +293,21 @@ fun HomeContents(
                                                 isThumbnail = false,
                                                 tag = "盛り上がり"
                                             )
-                                        }
-                                    )
+                                        })
                                 }
                             }
                         }
                     }
                 }
-
-                // 3. ピックアップ
                 if (genrePickup.isNotEmpty()) {
                     item(key = "section_pickup") {
                         Column(modifier = Modifier.animateContentSize()) {
-                            val timePrefix = when (pickupTimeSlot) {
-                                "朝" -> "今朝の"; "昼" -> "今日の"; else -> "今夜の"
-                            }
-                            val seasonalIcon = getSeasonalIcon(KomorebiTheme.theme)
                             SectionHeader(
-                                "${timePrefix}${pickupGenreName}ピックアップ $seasonalIcon",
+                                "${
+                                    when (pickupTimeSlot) {
+                                        "朝" -> "今朝の"; "昼" -> "今日の"; else -> "今夜の"
+                                    }
+                                }${pickupGenreName}ピックアップ ${getSeasonalIcon(KomorebiTheme.theme)}",
                                 Icons.Default.Star,
                                 Modifier.padding(horizontal = 48.dp)
                             )
@@ -328,21 +325,19 @@ fun HomeContents(
                                         timeSlot = pickupTimeSlot,
                                         onClick = { onProgramClick(program) },
                                         onFocus = { startFormat ->
-                                            val logoUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                                konomiIp,
-                                                konomiPort,
-                                                program.channel_id
-                                            )
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = program.title,
                                                 subtitle = "$startFormat - $channelName",
                                                 description = program.description,
-                                                imageUrl = logoUrl,
+                                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
+                                                    konomiIp,
+                                                    konomiPort,
+                                                    program.channel_id
+                                                ),
                                                 isThumbnail = false,
                                                 tag = "ピックアップ"
                                             )
-                                        }
-                                    )
+                                        })
                                 }
                             }
                             NavigationLinkButton(
@@ -352,8 +347,6 @@ fun HomeContents(
                         }
                     }
                 }
-
-                // 4. 録画視聴履歴
                 if (watchHistory.isNotEmpty()) {
                     item(key = "section_history") {
                         Column(modifier = Modifier.animateContentSize()) {
@@ -383,15 +376,12 @@ fun HomeContents(
                                                 tag = "視聴履歴",
                                                 progress = progressVal
                                             )
-                                        }
-                                    )
+                                        })
                                 }
                             }
                         }
                     }
                 }
-
-                // 5. これからの録画予約
                 if (upcomingReserves.isNotEmpty()) {
                     item(key = "section_upcoming") {
                         Column(modifier = Modifier.animateContentSize()) {
@@ -406,25 +396,22 @@ fun HomeContents(
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(upcomingReserves, key = { "res_${it.id}" }) { reserve ->
-                                    val logoUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                        konomiIp,
-                                        konomiPort,
-                                        reserve.channel.displayChannelId ?: ""
-                                    )
                                     UpcomingReserveCard(
-                                        reserve = reserve,
-                                        onClick = { onReserveClick(reserve) },
+                                        reserve = reserve, onClick = { onReserveClick(reserve) },
                                         onFocus = { startFormat ->
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = reserve.program.title,
                                                 subtitle = "$startFormat - ${reserve.channel.name}",
                                                 description = reserve.program.description ?: "",
-                                                imageUrl = logoUrl,
+                                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
+                                                    konomiIp,
+                                                    konomiPort,
+                                                    reserve.channel.displayChannelId ?: ""
+                                                ),
                                                 isThumbnail = false,
                                                 tag = "録画予約"
                                             )
-                                        }
-                                    )
+                                        })
                                 }
                             }
                             NavigationLinkButton(
@@ -435,8 +422,6 @@ fun HomeContents(
                     }
                 }
             }
-
-            // 縦スクロールインジケーター
             if (totalItemsCount > 1) {
                 Box(
                     modifier = Modifier
@@ -464,8 +449,6 @@ fun HomeContents(
         }
     }
 }
-
-// ---------------- 以下のコンポーネントは前回と同じです ----------------
 
 @Composable
 fun HomeHeroDashboard(info: HomeHeroInfo) {
@@ -803,9 +786,11 @@ fun HotChannelCard(
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier
-                        .size(6.dp)
-                        .background(Color(0xFFE53935), CircleShape))
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .background(Color(0xFFE53935), CircleShape)
+                    )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         text = "${uiState.jikkyoForce ?: 0} コメ/分",

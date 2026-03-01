@@ -4,6 +4,6 @@
     </style>
 
     <style name="Theme_Komorebi_Starting" parent="Theme.Komorebi">
-        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowBackground">@color/background_dark</item>
     </style>
 </resources>

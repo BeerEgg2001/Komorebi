@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     alias(libs.plugins.kotlin.compose)
     id("com.google.dagger.hilt.android")
-    id("kotlin-kapt")
+//    id("kotlin-kapt")
     id("com.google.devtools.ksp")
     alias(libs.plugins.baselineprofile)
 }
@@ -16,8 +16,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2 // 数値を1つ上げる
+        versionName = "0.6.0-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -74,19 +74,19 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
-kapt {
-    correctErrorTypes = true
-}
+//kapt {
+//    correctErrorTypes = true
+//}
 
 // app/build.gradle.kts
-configurations.all {
-    resolutionStrategy {
-        // Kotlin 2.x のメタデータを正しく読み取れるバージョンに強制
-        force("org.jetbrains.kotlinx:kotlinx-metadata-jvm:0.9.0")
-        force("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
-        force("org.jetbrains.kotlin:kotlin-reflect:2.1.0")
-    }
-}
+//configurations.all {
+//    resolutionStrategy {
+//        // Kotlin 2.x のメタデータを正しく読み取れるバージョンに強制
+//        force("org.jetbrains.kotlinx:kotlinx-metadata-jvm:0.9.0")
+//        force("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
+//        force("org.jetbrains.kotlin:kotlin-reflect:2.1.0")
+//    }
+//}
 
 dependencies {
     // 1. Compose BOM を最新に近いバージョンに更新 (ここが最重要)
@@ -109,10 +109,11 @@ dependencies {
 
     // --- Hilt ---
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation("com.google.dagger:hilt-android:2.54")
+    implementation("com.google.dagger:hilt-android:2.59.2")
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.hilt.work)
     "baselineProfile"(project(":baselineprofile"))
-    kapt("com.google.dagger:hilt-compiler:2.54")
+    ksp("com.google.dagger:hilt-compiler:2.59.2")
 
     // --- Retrofit ---
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
@@ -131,12 +132,12 @@ dependencies {
     ksp("androidx.room:room-compiler:$room_version") // kaptからkspへ
 
     // --- Media3 ---
-    val media3_version = "1.5.0"
+    val media3_version = "1.6.1"
     implementation("androidx.media3:media3-exoplayer:$media3_version")
     implementation("androidx.media3:media3-ui:$media3_version")
     implementation("androidx.media3:media3-common:$media3_version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.6.1+1")
 
     // --- その他 ---
     implementation("io.coil-kt:coil-compose:2.5.0")
@@ -157,4 +158,11 @@ dependencies {
 
     // Baseline Profiles のインストールを管理するライブラリ
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
+
+    // Hilt Worker (これがないと HiltWorkerFactory が解決できず KAPT がエラーになります)
+    implementation("androidx.hilt:hilt-work:1.2.0")
+    ksp("androidx.hilt:hilt-compiler:1.2.0")
+
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }
