@@ -10,12 +10,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RecordSyncEngine"
-private const val PAGE_SIZE = 30
 
 data class SyncProgress(
     val isSyncing: Boolean = false,
@@ -25,7 +26,7 @@ data class SyncProgress(
     val total: Int = 0
 ) {
     val progressText: String
-        get() = if (total > 0) "$message ($current / $total)" else message
+        get() = if (total > 0) "$message ($current / $total)" else "$message ($current 件取得中)"
 
     val progressRatio: Float?
         get() = if (total > 0) current.toFloat() / total.toFloat() else null
@@ -39,125 +40,139 @@ class RecordSyncEngine @Inject constructor(
     private val _syncProgress = MutableStateFlow(SyncProgress())
     val syncProgress: StateFlow<SyncProgress> = _syncProgress.asStateFlow()
 
-    suspend fun syncAllRecords(forceFullSync: Boolean = false) = withContext(Dispatchers.IO) {
-        try {
-            Log.i(TAG, "Sync started. FullSync: $forceFullSync")
+    private val syncMutex = Mutex()
 
-            val metaDao = db.syncMetaDao()
-            val programDao = db.recordedProgramDao()
+    suspend fun syncAllRecords(forceFullSync: Boolean = false) {
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    Log.i(TAG, "Sync started. FullSync: $forceFullSync")
 
-            val currentMeta = metaDao.getSyncMeta() ?: SyncMetaEntity(
-                id = 1,
-                lastSyncedPage = 0,
-                lastSyncedAt = 0L,
-                isInitialBuildCompleted = false
-            )
+                    val metaDao = db.syncMetaDao()
+                    val programDao = db.recordedProgramDao()
 
-            val isInitial = !currentMeta.isInitialBuildCompleted || forceFullSync
-            // ★修正: 差分更新の時はメッセージを変える
-            val baseMessage = if (isInitial) "DB construction..." else "Updating records..."
-
-            _syncProgress.value = SyncProgress(
-                isSyncing = true,
-                isInitialBuild = isInitial,
-                message = "$baseMessage (Connecting)"
-            )
-
-            var currentPage = if (!currentMeta.isInitialBuildCompleted) currentMeta.lastSyncedPage + 1 else 1
-            var isCompleted = false
-            var processedCount = (currentPage - 1) * PAGE_SIZE
-
-            while (!isCompleted) {
-                Log.i(TAG, "Fetching page: $currentPage")
-                val response = apiService.getRecordedPrograms(page = currentPage)
-                val programs = response.recordedPrograms
-
-                if (programs.isEmpty()) {
-                    isCompleted = true
-                    break
-                }
-
-                _syncProgress.value = SyncProgress(
-                    isSyncing = true,
-                    isInitialBuild = isInitial,
-                    message = baseMessage, // ★修正
-                    current = processedCount,
-                    total = response.total
-                )
-
-                val entities = programs.map { RecordDataMapper.toEntity(it) }
-
-                if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
-                    val allPageItemsMatch = entities.all { entity ->
-                        val local = programDao.getById(entity.id)
-                        local != null && local == entity
-                    }
-                    if (allPageItemsMatch) {
-                        Log.i(TAG, "No changes detected on page $currentPage. Stopping sync.")
-                        isCompleted = true
-                        break
-                    }
-                }
-
-                db.withTransaction {
-                    programDao.upsertAll(entities)
-
-                    val newMeta = currentMeta.copy(
-                        lastSyncedPage = currentPage,
-                        lastSyncedAt = System.currentTimeMillis(),
-                        isInitialBuildCompleted = currentMeta.isInitialBuildCompleted || (currentPage * PAGE_SIZE >= response.total)
+                    var currentMeta = metaDao.getSyncMeta() ?: SyncMetaEntity(
+                        id = 1,
+                        lastSyncedPage = 0,
+                        lastSyncedAt = 0L,
+                        isInitialBuildCompleted = false
                     )
-                    metaDao.upsert(newMeta)
+
+                    if (forceFullSync) {
+                        programDao.clearAll()
+                        currentMeta = currentMeta.copy(
+                            lastSyncedPage = 0,
+                            isInitialBuildCompleted = false
+                        )
+                    }
+
+                    val isInitial = !currentMeta.isInitialBuildCompleted
+                    val baseMessage = if (isInitial) "DB construction..." else "Updating records..."
+
+                    _syncProgress.value = SyncProgress(
+                        isSyncing = true,
+                        isInitialBuild = isInitial,
+                        message = "$baseMessage (Connecting)"
+                    )
+
+                    var currentPage = if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
+                    var isCompleted = false
+                    var processedCount = 0
+
+                    // ★追加: サーバー上に存在する全てのIDを保持するリスト
+                    val allFetchedIds = mutableListOf<Int>()
+
+                    while (!isCompleted) {
+                        Log.i(TAG, "Fetching page: $currentPage")
+                        val response = apiService.getRecordedPrograms(page = currentPage)
+                        val programs = response.recordedPrograms
+
+                        if (programs.isEmpty()) {
+                            Log.i(TAG, "No more programs found. Reached end of records.")
+                            isCompleted = true
+                            break
+                        }
+
+                        val entities = programs.map { RecordDataMapper.toEntity(it) }
+
+                        // ★追加: 取得したIDを漏れなく記録していく
+                        allFetchedIds.addAll(entities.map { it.id })
+
+                        if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
+                            val allPageItemsMatch = entities.all { entity ->
+                                val local = programDao.getById(entity.id)
+                                local != null && local == entity
+                            }
+                            if (allPageItemsMatch) {
+                                Log.i(TAG, "No changes detected on page $currentPage. Stopping sync.")
+                                isCompleted = true
+                                break
+                            }
+                        }
+
+                        db.withTransaction {
+                            programDao.upsertAll(entities)
+                            val newMeta = currentMeta.copy(
+                                lastSyncedPage = currentPage,
+                                lastSyncedAt = System.currentTimeMillis()
+                            )
+                            metaDao.upsert(newMeta)
+                            currentMeta = newMeta
+                        }
+
+                        processedCount += programs.size
+                        val totalCount = response.total.takeIf { it > 0 } ?: 0
+
+                        _syncProgress.value = SyncProgress(
+                            isSyncing = true,
+                            isInitialBuild = isInitial,
+                            message = baseMessage,
+                            current = processedCount,
+                            total = totalCount
+                        )
+
+                        if (totalCount > 0 && processedCount >= totalCount) {
+                            isCompleted = true
+                        } else {
+                            currentPage++
+                        }
+                    }
+
+                    if (isCompleted) {
+                        metaDao.upsert(
+                            currentMeta.copy(
+                                lastSyncedAt = System.currentTimeMillis(),
+                                isInitialBuildCompleted = true
+                            )
+                        )
+
+                        // ★修正: 別途APIを叩かず、ループで集めた100%確実なIDリストを使ってクリーンアップ
+                        if (isInitial || forceFullSync) {
+                            if (allFetchedIds.isNotEmpty()) {
+                                Log.i(TAG, "Cleaning up orphaned records...")
+                                _syncProgress.value = _syncProgress.value.copy(
+                                    isInitialBuild = isInitial,
+                                    message = "Cleaning up old records..."
+                                )
+                                db.recordedProgramDao().deleteOrphans(allFetchedIds)
+                                Log.i(TAG, "Cleanup completed.")
+                            }
+                        }
+                    }
+
+                    Log.i(TAG, "Sync completed successfully. Total processed: $processedCount")
+
+                } catch (e: Exception) {
+                    Log.i(TAG, "Sync interrupted. Will resume next time. Error: ${e.message}")
+                } finally {
+                    _syncProgress.value = SyncProgress(isSyncing = false, isInitialBuild = false)
                 }
-
-                processedCount += programs.size
-                _syncProgress.value = SyncProgress(
-                    isSyncing = true,
-                    isInitialBuild = isInitial,
-                    message = baseMessage, // ★修正
-                    current = processedCount,
-                    total = response.total
-                )
-
-                if ((currentPage * PAGE_SIZE) >= response.total) {
-                    isCompleted = true
-                } else {
-                    currentPage++
-                }
             }
-
-            if (currentMeta.isInitialBuildCompleted || forceFullSync) {
-                cleanupOrphanedRecords(isInitial)
-            }
-
-            Log.i(TAG, "Sync completed successfully.")
-
-        } catch (e: Exception) {
-            Log.i(TAG, "Sync interrupted. Will resume next time. Error: ${e.message}")
-        } finally {
-            _syncProgress.value = SyncProgress(isSyncing = false, isInitialBuild = false)
-        }
-    }
-
-    private suspend fun cleanupOrphanedRecords(isInitial: Boolean) {
-        try {
-            Log.i(TAG, "Cleaning up deleted records...")
-            _syncProgress.value = _syncProgress.value.copy(isInitialBuild = isInitial, message = "Cleaning up old records...")
-            val response = apiService.getRecordedPrograms(limit = 10000)
-            val apiIds = response.recordedPrograms.map { it.id }
-
-            if (apiIds.isNotEmpty()) {
-                db.recordedProgramDao().deleteOrphans(apiIds)
-                Log.i(TAG, "Cleanup completed.")
-            }
-        } catch (e: Exception) {
-            Log.i(TAG, "Cleanup failed: ${e.message}")
         }
     }
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
         Log.i(TAG, "Clearing database...")
-        _syncProgress.value = SyncProgress(isSyncing = true, isInitialBuild = true, message = "Clearing database...")
         db.recordedProgramDao().clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
@@ -175,7 +190,7 @@ class RecordSyncEngine @Inject constructor(
 
             val currentMeta = metaDao.getSyncMeta()
             if (currentMeta == null || !currentMeta.isInitialBuildCompleted) {
-                syncAllRecords()
+                syncAllRecords(forceFullSync = false)
                 return@withContext
             }
 
