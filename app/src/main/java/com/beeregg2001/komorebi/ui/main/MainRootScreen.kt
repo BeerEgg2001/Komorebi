@@ -127,7 +127,7 @@ fun MainRootScreen(
         channelViewModel.fetchChannels()
         epgViewModel.preloadAllEpgData()
         homeViewModel.refreshHomeData()
-        recordViewModel.fetchRecentRecordings()
+        recordViewModel.fetchRecentRecordings(forceRefresh = true)
         reserveViewModel.fetchReserves()
     }
 
