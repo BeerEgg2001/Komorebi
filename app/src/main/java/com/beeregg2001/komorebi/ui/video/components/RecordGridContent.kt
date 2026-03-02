@@ -35,6 +35,7 @@ fun RecordGridContent(
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
+    visibleItemFocusRequester: FocusRequester, // ★追加
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
@@ -51,26 +52,19 @@ fun RecordGridContent(
     var isFastScrolling by remember { mutableStateOf(false) }
     val isScrollInProgress = gridState.isScrollInProgress
 
+    // ★重要: 現在見えている最初のアイテムのインデックスを監視
+    val firstVisibleIndex by remember { derivedStateOf { gridState.firstVisibleItemIndex } }
+
     LaunchedEffect(isScrollInProgress) {
-        if (isScrollInProgress) {
-            delay(300) // ★判定を少し早くする
-            isFastScrolling = true
-        } else {
-            isFastScrolling = false
-        }
+        if (isScrollInProgress) { delay(300); isFastScrolling = true } else { isFastScrolling = false }
     }
     val isScrollingLambda = remember { { isFastScrolling } }
 
-    val upFocusTarget =
-        if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
-
-    // ★修正: 毎回Modifierを再計算するのではなく、極力シンプルにする
+    val upFocusTarget = if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
     val isInitialLoading = pagedRecordings.loadState.refresh is LoadState.Loading
 
     if (isInitialLoading && pagedRecordings.itemCount == 0) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = colors.textPrimary)
-        }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = colors.textPrimary) }
     } else {
         TvLazyVerticalGrid(
             state = gridState,
@@ -87,46 +81,26 @@ fun RecordGridContent(
             ) { index ->
                 val program = pagedRecordings[index]
                 if (program != null) {
-
-                    // ★修正: Modifierのチェーンを最小限にし、不要なメモリ割り当てを防ぐ
                     var modifier = Modifier.aspectRatio(16f / 9f)
 
-                    if (index == 0) {
-                        modifier = modifier.focusRequester(firstItemFocusRequester)
-                    }
-                    if (index < 4) {
-                        modifier = modifier.focusProperties { up = upFocusTarget }
-                    }
+                    // ★修正: index == 0 なら先頭、現在見えている位置なら visibleItem を貼る
+                    if (index == 0) modifier = modifier.focusRequester(firstItemFocusRequester)
+                    if (index == firstVisibleIndex) modifier = modifier.focusRequester(visibleItemFocusRequester)
+
+                    if (index < 4) modifier = modifier.focusProperties { up = upFocusTarget }
                     if (index % 4 == 0) {
                         modifier = modifier.onKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
-                                onOpenNavPane()
-                                true
-                            } else false
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) { onOpenNavPane(); true } else false
                         }
                     }
 
-                    RecordedCard(
-                        program = program,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        isScrolling = isScrollingLambda,
-                        onClick = { onProgramClick(program, null) },
-                        modifier = modifier
-                    )
+                    RecordedCard(program = program, konomiIp = konomiIp, konomiPort = konomiPort, isScrolling = isScrollingLambda, onClick = { onProgramClick(program, null) }, modifier = modifier)
                 }
             }
 
             if (pagedRecordings.loadState.append is LoadState.Loading) {
                 item(span = { TvGridItemSpan(maxLineSpan) }) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(80.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = colors.textPrimary)
-                    }
+                    Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = colors.textPrimary) }
                 }
             }
         }

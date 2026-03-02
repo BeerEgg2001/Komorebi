@@ -52,6 +52,7 @@ fun RecordListContent(
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
+    visibleItemFocusRequester: FocusRequester, // ★追加
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
@@ -76,13 +77,14 @@ fun RecordListContent(
     val menuFirstItemRequester = remember { FocusRequester() }
     val detailButtonFocusRequester = remember { FocusRequester() }
     val detailPanelFocusRequester = remember { FocusRequester() }
-
-    // ★追加: サブメニュー専用のフォーカス一時退避アンカー
     val menuAnchorRequester = remember { FocusRequester() }
 
     val isAnyMenuOpen = isSideMenuOpen || isDetailVisible
     val menuTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
+
+    // ★重要: 現在画面に見えている最初のアイテムのインデックスを監視
+    val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
 
     LaunchedEffect(pagedRecordings.itemCount) {
         if (pagedRecordings.itemCount == 0) focusedProgram = null
@@ -96,8 +98,7 @@ fun RecordListContent(
 
     LaunchedEffect(isDetailVisible) {
         if (isDetailVisible) {
-            delay(100)
-            detailPanelFocusRequester.safeRequestFocus("DetailPanelOpened")
+            delay(100); detailPanelFocusRequester.safeRequestFocus("DetailPanelOpened")
         }
     }
 
@@ -129,7 +130,13 @@ fun RecordListContent(
                                 (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),
                         modifier = Modifier
                             .focusRequester(specificRequester)
+                            // ★修正: index == 0 の時は先頭へ、それ以外で見えている時は帰り道用の visibleItem を貼る
                             .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(
+                                if (index == firstVisibleIndex) Modifier.focusRequester(
+                                    visibleItemFocusRequester
+                                ) else Modifier
+                            )
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     if (!isSideMenuOpen && !isDetailVisible) {
@@ -164,7 +171,9 @@ fun RecordListContent(
             visibleState = menuTransitionState,
             enter = slideInHorizontally(animationSpec = tween(250)) { it },
             exit = slideOutHorizontally(animationSpec = tween(250)) { it } + fadeOut(
-                animationSpec = tween(150)
+                animationSpec = tween(
+                    150
+                )
             ),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -174,8 +183,8 @@ fun RecordListContent(
                 modifier = Modifier
                     .width(overlayWidth)
                     .fillMaxHeight()
-                    .focusRequester(menuAnchorRequester) // ★追加: アンカーとして機能させる
-                    .focusable() // ★追加: 退避場所としてフォーカスを受け付ける
+                    .focusRequester(menuAnchorRequester)
+                    .focusable()
                     .focusGroup()
                     .onKeyEvent { event ->
                         if (!menuTransitionState.isIdle) return@onKeyEvent true
@@ -186,21 +195,16 @@ fun RecordListContent(
 
                             if (isLeftKey || isBackAction) {
                                 if (isDetailVisible) {
-                                    // ★修正: 1.安全なアンカーに退避 -> 2.詳細を閉じる -> 3.ボタンへ復帰
                                     menuAnchorRequester.safeRequestFocus()
                                     onDetailStateChange(false)
                                     onClearDetail()
-                                    scope.launch {
-                                        delay(50)
-                                        detailButtonFocusRequester.safeRequestFocus()
-                                    }
+                                    scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
                                 } else {
-                                    // メニューを閉じてリストへ戻る時は、消す前にリストのアイテムへ移す
                                     val id = focusedProgram?.id
                                     if (id != null && itemFocusRequesters.containsKey(id)) {
                                         itemFocusRequesters[id]?.safeRequestFocus()
                                     } else {
-                                        firstItemFocusRequester.safeRequestFocus()
+                                        visibleItemFocusRequester.safeRequestFocus() // ★修正
                                     }
                                     isSideMenuOpen = false
                                 }
@@ -224,11 +228,9 @@ fun RecordListContent(
                             .size(24.dp)
                     )
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(start = 28.dp)
-                    ) {
+                    Box(modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 28.dp)) {
                         if (isDetailVisible) {
                             RecordDetailPanel(
                                 program = fetchedProgramDetail ?: detailProgram,
@@ -236,14 +238,10 @@ fun RecordListContent(
                                 konomiPort = konomiPort,
                                 focusRequester = detailPanelFocusRequester,
                                 onClose = {
-                                    // ★ここでも同じく: 1.退避 -> 2.閉じる -> 3.復帰
-                                    menuAnchorRequester.safeRequestFocus()
-                                    onDetailStateChange(false)
-                                    onClearDetail()
-                                    scope.launch {
-                                        delay(50)
-                                        detailButtonFocusRequester.safeRequestFocus()
-                                    }
+                                    menuAnchorRequester.safeRequestFocus(); onDetailStateChange(
+                                    false
+                                ); onClearDetail()
+                                    scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
                                 },
                                 modifier = Modifier.fillMaxSize()
                             )
@@ -264,8 +262,7 @@ fun RecordListContent(
                                             up = FocusRequester.Cancel; right =
                                             FocusRequester.Cancel
                                         },
-                                    onClick = { focusedProgram?.let { onProgramClick(it, null) } }
-                                )
+                                    onClick = { focusedProgram?.let { onProgramClick(it, null) } })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
                                     icon = Icons.Default.Replay,
@@ -274,8 +271,7 @@ fun RecordListContent(
                                     modifier = Modifier.focusProperties {
                                         right = FocusRequester.Cancel
                                     },
-                                    onClick = { focusedProgram?.let { onProgramClick(it, 0.0) } }
-                                )
+                                    onClick = { focusedProgram?.let { onProgramClick(it, 0.0) } })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
                                     icon = Icons.Default.Info,
@@ -283,16 +279,16 @@ fun RecordListContent(
                                     isExpanded = true,
                                     modifier = Modifier
                                         .focusRequester(detailButtonFocusRequester)
-                                        .focusProperties {
-                                            right = FocusRequester.Cancel
-                                        },
+                                        .focusProperties { right = FocusRequester.Cancel },
                                     onClick = {
-                                        detailProgram = focusedProgram
-                                        focusedProgram?.id?.let { onFetchDetail(it) }
-                                        detailPanelFocusRequester.safeRequestFocus()
-                                        onDetailStateChange(true)
-                                    }
-                                )
+                                        detailProgram = focusedProgram; focusedProgram?.id?.let {
+                                        onFetchDetail(
+                                            it
+                                        )
+                                    }; detailPanelFocusRequester.safeRequestFocus(); onDetailStateChange(
+                                        true
+                                    )
+                                    })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
                                     icon = Icons.Default.LibraryBooks,
@@ -302,18 +298,20 @@ fun RecordListContent(
                                         right = FocusRequester.Cancel
                                     },
                                     onClick = {
-                                        val id = focusedProgram?.id
-                                        if (id != null && itemFocusRequesters.containsKey(id)) {
-                                            itemFocusRequesters[id]?.safeRequestFocus()
-                                        } else {
-                                            firstItemFocusRequester.safeRequestFocus()
-                                        }
-                                        focusedProgram?.let {
-                                            isSideMenuOpen = false
-                                            onSeriesSearch(TitleNormalizer.extractSearchKeyword(it.title))
-                                        }
+                                        val id =
+                                            focusedProgram?.id; if (id != null && itemFocusRequesters.containsKey(
+                                            id
+                                        )
+                                    ) {
+                                        itemFocusRequesters[id]?.safeRequestFocus()
+                                    } else {
+                                        visibleItemFocusRequester.safeRequestFocus()
+                                    }; focusedProgram?.let {
+                                        isSideMenuOpen = false; onSeriesSearch(
+                                        TitleNormalizer.extractSearchKeyword(it.title)
+                                    )
                                     }
-                                )
+                                    })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
                                     icon = Icons.Default.Delete,
@@ -323,8 +321,7 @@ fun RecordListContent(
                                         down = FocusRequester.Cancel; right = FocusRequester.Cancel
                                     },
                                     enabled = false,
-                                    onClick = { }
-                                )
+                                    onClick = { })
                             }
                         }
                     }
@@ -337,8 +334,12 @@ fun RecordListContent(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun SideMenuItem(
-    icon: ImageVector, label: String, isExpanded: Boolean,
-    modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit
+    icon: ImageVector,
+    label: String,
+    isExpanded: Boolean,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     Surface(

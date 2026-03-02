@@ -47,6 +47,7 @@ fun RecordSeriesGridContent(
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
+    visibleItemFocusRequester: FocusRequester, // ★追加
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
@@ -55,25 +56,29 @@ fun RecordSeriesGridContent(
     onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
-
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
-    LaunchedEffect(isListReady, seriesList) {
-        onFirstItemBound(isListReady && seriesList.isNotEmpty())
-    }
+    // ★重要: 現在画面に見えている最初のアイテムを監視
+    val firstVisibleIndex by remember { derivedStateOf { gridState.firstVisibleItemIndex } }
+
+    LaunchedEffect(
+        isListReady,
+        seriesList
+    ) { onFirstItemBound(isListReady && seriesList.isNotEmpty()) }
 
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading && seriesList.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.textPrimary)
-            }
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator(color = colors.textPrimary) }
         } else {
             TvLazyVerticalGrid(
                 state = gridState,
-                columns = TvGridCells.Fixed(4), // 既存のグリッドに合わせて4列
+                columns = TvGridCells.Fixed(4),
                 contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -81,61 +86,62 @@ fun RecordSeriesGridContent(
             ) {
                 itemsIndexed(seriesList) { index, series ->
                     var isFocused by remember { mutableStateOf(false) }
-
-                    val itemModifier = Modifier
-                        .aspectRatio(16f / 9f) // サムネイル比率
-                        .onFocusChanged { isFocused = it.isFocused }
-                        .then(
-                            if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
-                        )
-                        .focusProperties {
-                            if (index < 4) {
-                                up = upFocusTarget
+                    val itemModifier =
+                        Modifier
+                            .aspectRatio(16f / 9f)
+                            .onFocusChanged { isFocused = it.isFocused }
+                            // ★修正: 的の付け替え
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .then(
+                                if (index == firstVisibleIndex) Modifier.focusRequester(
+                                    visibleItemFocusRequester
+                                ) else Modifier
+                            )
+                            .focusProperties {
+                                if (index < 4) {
+                                    up = upFocusTarget
+                                }
                             }
-                        }
-                        .onKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown) {
-                                if (event.key == Key.Back || event.key == Key.Escape) {
-                                    onBackPress()
-                                    true
-                                } else if (event.key == Key.DirectionLeft && index % 4 == 0) {
-                                    onOpenNavPane()
-                                    true
+                            .onKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    if (event.key == Key.Back || event.key == Key.Escape) {
+                                        onBackPress(); true
+                                    } else if (event.key == Key.DirectionLeft && index % 4 == 0) {
+                                        onOpenNavPane(); true
+                                    } else false
                                 } else false
-                            } else false
-                        }
+                            }
 
                     Surface(
-                        onClick = { onSeriesClick(series.searchKeyword) },
-                        modifier = itemModifier,
+                        onClick = { onSeriesClick(series.searchKeyword) }, modifier = itemModifier,
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = colors.surface,
-                            focusedContainerColor = colors.surface,
+                            focusedContainerColor = colors.surface
                         ),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
                         border = ClickableSurfaceDefaults.border(
-                            focusedBorder = Border(BorderStroke(2.dp, colors.accent))
+                            focusedBorder = Border(
+                                BorderStroke(
+                                    2.dp,
+                                    colors.accent
+                                )
+                            )
                         )
                     ) {
                         Box(modifier = Modifier.fillMaxSize()) {
-                            // 背景サムネイル
                             AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(
-                                        UrlBuilder.getThumbnailUrl(
-                                            konomiIp,
-                                            konomiPort,
-                                            series.representativeVideoId.toString()
-                                        )
+                                model = ImageRequest.Builder(LocalContext.current).data(
+                                    UrlBuilder.getThumbnailUrl(
+                                        konomiIp,
+                                        konomiPort,
+                                        series.representativeVideoId.toString()
                                     )
-                                    .crossfade(true).build(),
+                                ).crossfade(true).build(),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
-
-                            // 下部グラデーション（テキストを読みやすくする黒いグラデ）
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -149,8 +155,6 @@ fun RecordSeriesGridContent(
                                         )
                                     )
                             )
-
-                            // 右上のエピソード数バッジ
                             Row(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
@@ -176,8 +180,6 @@ fun RecordSeriesGridContent(
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-
-                            // 左下のシリーズタイトル
                             Text(
                                 text = series.displayTitle,
                                 modifier = Modifier

@@ -72,22 +72,25 @@ class RecordViewModel @Inject constructor(
 
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
+
     private val _selectedGenre = MutableStateFlow<String?>(null)
     val selectedGenre: StateFlow<String?> = _selectedGenre.asStateFlow()
+
     private val _selectedChannelId = MutableStateFlow<String?>(null)
     val selectedChannelId: StateFlow<String?> = _selectedChannelId.asStateFlow()
+
     private val _selectedDay = MutableStateFlow<String?>(null)
     val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
+
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
+
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
     private val _categoryBeforeSearch = MutableStateFlow<RecordCategory?>(null)
-    private val _manualListViewOverride = MutableStateFlow<Boolean?>(null)
-    val isListView: StateFlow<Boolean> =
-        combine(settingsRepository.defaultRecordListView, _manualListViewOverride) { d, m ->
-            m ?: (d == "LIST")
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    val categoryBeforeSearch: StateFlow<RecordCategory?> = _categoryBeforeSearch.asStateFlow()
+
     private val _selectedSeriesGenre = MutableStateFlow<String?>(null)
     val selectedSeriesGenre: StateFlow<String?> = _selectedSeriesGenre.asStateFlow()
 
@@ -106,10 +109,16 @@ class RecordViewModel @Inject constructor(
 
     private val _isRecordingLoading = MutableStateFlow(false)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
+
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
+
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
+
+    private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
+    val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
+
     private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
     val availableGenres: StateFlow<List<String>> = _availableGenres.asStateFlow()
 
@@ -242,20 +251,24 @@ class RecordViewModel @Inject constructor(
     fun updateCategory(category: RecordCategory) {
         if (_selectedCategory.value == category) return
         _selectedCategory.value = category
-        _selectedGenre.value = null; _selectedChannelId.value = null; _selectedDay.value = null
+        _selectedGenre.value = null
+        _selectedChannelId.value = null
+        _selectedDay.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
     fun updateGenre(genre: String?) {
-        _selectedGenre.value = genre; _selectedCategory.value = RecordCategory.GENRE
+        _selectedGenre.value = genre
+        _selectedCategory.value = RecordCategory.GENRE
     }
 
     fun updateDay(day: String?) {
-        _selectedDay.value = day; _selectedCategory.value = RecordCategory.TIME
+        _selectedDay.value = day
+        _selectedCategory.value = RecordCategory.TIME
     }
 
-    fun updateChannel(channelName: String?) {
-        _selectedChannelId.value = channelName // 便宜上名称を入れる
+    fun updateChannel(channelId: String?) {
+        _selectedChannelId.value = channelId
         _selectedCategory.value = RecordCategory.CHANNEL
         _selectedGenre.value = null
         _selectedDay.value = null
@@ -263,9 +276,12 @@ class RecordViewModel @Inject constructor(
     }
 
     fun searchRecordings(query: String) {
-        if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) _categoryBeforeSearch.value =
-            _selectedCategory.value
-        _activeSearchQuery.value = query; _searchQuery.value = query; currentSearchQuery = query
+        if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) {
+            _categoryBeforeSearch.value = _selectedCategory.value
+        }
+        _activeSearchQuery.value = query
+        _searchQuery.value = query
+        currentSearchQuery = query
         if (query.isNotBlank()) addSearchHistory(query)
         _selectedCategory.value = RecordCategory.ALL
         _selectedGenre.value = null
@@ -274,9 +290,16 @@ class RecordViewModel @Inject constructor(
     }
 
     fun clearSearch() {
-        _activeSearchQuery.value = ""; _searchQuery.value = ""; currentSearchQuery = ""
-        _categoryBeforeSearch.value?.let {
-            _selectedCategory.value = it; _categoryBeforeSearch.value = null
+        _activeSearchQuery.value = ""
+        _searchQuery.value = ""
+        currentSearchQuery = ""
+        if (!isListView.value) {
+            updateCategory(RecordCategory.ALL)
+        } else {
+            _categoryBeforeSearch.value?.let {
+                _selectedCategory.value = it
+                _categoryBeforeSearch.value = null
+            }
         }
     }
 
@@ -292,9 +315,9 @@ class RecordViewModel @Inject constructor(
 
     private fun loadSearchHistory() {
         try {
-            val json = context.getSharedPreferences("search_history_pref", Context.MODE_PRIVATE)
-                .getString("history_list", "[]")
-            val array = JSONArray(json);
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val jsonString = prefs.getString(KEY_HISTORY, "[]")
+            val jsonArray = JSONArray(jsonString)
             val list = ArrayList<String>()
             for (i in 0 until jsonArray.length()) {
                 list.add(jsonArray.getString(i))
@@ -306,9 +329,22 @@ class RecordViewModel @Inject constructor(
     }
 
     private fun addSearchHistory(query: String) {
-        val list = _searchHistory.value.toMutableList(); list.remove(query); list.add(0, query)
-        if (list.size > 5) list.removeAt(list.lastIndex)
-        _searchHistory.value = list
+        val currentList = _searchHistory.value.toMutableList()
+        currentList.remove(query); currentList.add(0, query)
+        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex)
+        _searchHistory.value = currentList
+        saveSearchHistory(currentList)
+    }
+
+    fun removeSearchHistory(query: String) {
+        val currentList = _searchHistory.value.toMutableList()
+        if (currentList.remove(query)) {
+            _searchHistory.value = currentList
+            saveSearchHistory(currentList)
+        }
+    }
+
+    private fun saveSearchHistory(list: List<String>) {
         viewModelScope.launch {
             try {
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -356,13 +392,20 @@ class RecordViewModel @Inject constructor(
     }
 
     fun stopStreamMaintenance() {
-        maintenanceJob?.cancel(); maintenanceJob = null
+        maintenanceJob?.cancel()
+        maintenanceJob = null
     }
 
-    suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> =
-        withContext(Dispatchers.IO) {
+    override fun onCleared() {
+        super.onCleared()
+        stopStreamMaintenance()
+    }
+
+    suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {
+        return withContext(Dispatchers.IO) {
             repository.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
         }
+    }
 
     // --- メニュー構築 ---
 
@@ -370,35 +413,39 @@ class RecordViewModel @Inject constructor(
 
     private fun buildSeriesAndChannelMapsFromEntities(entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>) {
         _isSeriesLoading.value = true
-        val allSeriesMap = mutableMapOf<String, MutableMap<String, SeriesInfo>>()
-        val allChannelMap =
-            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+        val genreToSeriesData = mutableMapOf<String, MutableMap<String, SeriesInfo>>()
+        val allChannelMap = mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
         val genresSet = mutableSetOf<String>()
 
         try {
             val programs = entities.map { RecordDataMapper.toDomainModel(it) }
 
+            // 1次パス: TitleNormalizer による抽出と基本グルーピング
             programs.forEach { prog ->
                 val genre = prog.genres?.firstOrNull()?.major ?: "その他"
                 genresSet.add(genre)
 
                 val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
                 val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
+                val groupingKey = TitleNormalizer.getGroupingKey(prog.title)
+
                 if (displayTitle.isNotEmpty()) {
-                    val genreMap = allSeriesMap.getOrPut(genre) { mutableMapOf() }
-                    val existing = genreMap[displayTitle]
+                    val genreMap = genreToSeriesData.getOrPut(genre) { mutableMapOf() }
+                    val existing = genreMap[groupingKey]
                     if (existing == null) {
-                        genreMap[displayTitle] = SeriesInfo(displayTitle, searchKeyword, 1, prog.id)
+                        genreMap[groupingKey] = SeriesInfo(displayTitle, searchKeyword, 1, prog.id)
                     } else {
-                        genreMap[displayTitle] = existing.copy(programCount = existing.programCount + 1)
+                        // 文字数が短い、または記号を含まない方をシリーズ表示名に選定
+                        val betterTitle = if (displayTitle.length < existing.displayTitle.length) displayTitle else existing.displayTitle
+                        genreMap[groupingKey] = existing.copy(
+                            displayTitle = betterTitle,
+                            programCount = existing.programCount + 1
+                        )
                     }
                 }
 
                 prog.channel?.let { ch ->
-                    val type = when {
-                        ch.type == "GR" -> "地デジ"
-                        else -> ch.type
-                    }
+                    val type = if (ch.type == "GR") "地デジ" else ch.type
                     val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
                     if (!channelTypeMap.containsKey(ch.id)) {
                         val safeDisplayId = ch.displayChannelId.takeIf { it.isNotBlank() } ?: ch.id
@@ -407,32 +454,58 @@ class RecordViewModel @Inject constructor(
                 }
             }
 
-            _availableGenres.value = genresSet.sorted()
-            _groupedSeries.value =
-                allSeriesMap.mapValues { entry -> entry.value.values.sortedBy { it.displayTitle } }
-
-            val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
-            val extractNumber = { idStr: String ->
-                Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+            // 2次パス: LCP（最長共通接頭辞）による類似タイトルのさらなるマージ
+            val finalGroupedSeries = genreToSeriesData.mapValues { (_, seriesMap) ->
+                mergeSeriesByLCP(seriesMap.values.toMutableList())
             }
 
+            _availableGenres.value = genresSet.sorted()
+            _groupedSeries.value = finalGroupedSeries.mapValues { entry -> entry.value.sortedBy { it.displayTitle } }
+
+            val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
+            val extractNumber = { idStr: String -> Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE }
             _groupedChannels.value = allChannelMap.entries
-                .sortedBy { (type, _) ->
-                    val index =
-                        typePriority.indexOf(type); if (index != -1) index else typePriority.size
-                }
+                .sortedBy { (type, _) -> typePriority.indexOf(type).let { if (it != -1) it else typePriority.size } }
                 .associate { entry ->
-                    entry.key to entry.value.values.sortedWith(
-                        compareBy(
-                            { extractNumber(it.third) },
-                            { it.third }
-                        )).map { Pair(it.first, it.second) }
+                    entry.key to entry.value.values.sortedWith(compareBy({ extractNumber(it.third) }, { it.third }))
+                        .map { Pair(it.first, it.second) }
                 }
 
-        } catch (e: Exception) {
-            android.util.Log.e("RecordVM", "Map Build Error", e)
-        } finally {
-            _isSeriesLoading.value = false
+        } catch (e: Exception) { Log.e(TAG, "Map Build Error", e) } finally { _isSeriesLoading.value = false }
+    }
+
+    private fun mergeSeriesByLCP(seriesList: MutableList<SeriesInfo>): List<SeriesInfo> {
+        if (seriesList.size < 2) return seriesList
+        seriesList.sortBy { TitleNormalizer.getGroupingKey(it.displayTitle) }
+        val mergedList = mutableListOf<SeriesInfo>()
+        if (seriesList.isEmpty()) return mergedList
+        var current = seriesList[0]
+
+        for (i in 1 until seriesList.size) {
+            val next = seriesList[i]
+            val commonPrefix = findLCP(current.displayTitle, next.displayTitle).trim()
+            val isMatch = commonPrefix.length >= 4 &&
+                    (commonPrefix.length >= current.displayTitle.length * 0.75 ||
+                            commonPrefix.length >= next.displayTitle.length * 0.75)
+
+            if (isMatch) {
+                val newTitle = commonPrefix.removeSuffix("・").removeSuffix("-").removeSuffix("！").trim()
+                current = current.copy(
+                    displayTitle = if (newTitle.length >= 2) newTitle else current.displayTitle,
+                    programCount = current.programCount + next.programCount
+                )
+            } else {
+                mergedList.add(current)
+                current = next
+            }
         }
+        mergedList.add(current)
+        return mergedList
+    }
+
+    private fun findLCP(s1: String, s2: String): String {
+        val minLen = minOf(s1.length, s2.length)
+        for (i in 0 until minLen) if (s1[i] != s2[i]) return s1.substring(0, i)
+        return s1.substring(0, minLen)
     }
 }

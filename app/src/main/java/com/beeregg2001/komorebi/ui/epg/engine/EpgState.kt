@@ -76,15 +76,25 @@ class EpgState(
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
                 val newUiChannels = newData.map { wrapper ->
-                    val filled = EpgDataConverter.getFilledPrograms(wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime)
+                    val filled = EpgDataConverter.getFilledPrograms(
+                        wrapper.channel.id,
+                        wrapper.programs,
+                        newBaseTime,
+                        newLimitTime
+                    )
                     val uiProgs = filled.map { p ->
                         val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
                         val topY = (sOff / 60f) * config.hhPx
                         val height = (dur / 60f) * config.hhPx
                         val isEmpty = p.title == "（番組情報なし）"
                         val endMs = try {
-                            EpgDataConverter.safeParseTime(p.end_time, newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())).toInstant().toEpochMilli()
-                        } catch (e: Exception) { 0L }
+                            EpgDataConverter.safeParseTime(
+                                p.end_time,
+                                newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())
+                            ).toInstant().toEpochMilli()
+                        } catch (e: Exception) {
+                            0L
+                        }
                         UiProgram(p, topY, height, isEmpty, endMs)
                     }
                     UiChannel(wrapper.copy(programs = filled), uiProgs)
@@ -135,7 +145,9 @@ class EpgState(
     fun jumpToTime(targetTime: OffsetDateTime) {
         val targetMin = try {
             Duration.between(baseTime, targetTime).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
-        } catch (e: Exception) { 0 }
+        } catch (e: Exception) {
+            0
+        }
 
         Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
 
@@ -160,7 +172,8 @@ class EpgState(
         val desiredScrollY = -targetY
         val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
         val visibleH = (effectiveScreenHeight - config.hhAreaPx).coerceAtLeast(100f)
-        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+        val maxScrollY =
+            -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
 
         targetScrollX = 0f
         targetScrollY = desiredScrollY.coerceIn(maxScrollY, 0f)
@@ -189,7 +202,8 @@ class EpgState(
         targetAnimX = safeCol * config.cwPx
         if (uiProg != null) {
             targetAnimY = uiProg.topY
-            targetAnimH = if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
+            targetAnimH =
+                if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
         } else {
             targetAnimY = focusY
             targetAnimH = 30f / 60f * config.hhPx
@@ -209,14 +223,17 @@ class EpgState(
 
         var nextTargetX = targetScrollX
         if (targetAnimX < -targetScrollX) nextTargetX = -targetAnimX
-        else if (targetAnimX + config.cwPx > -targetScrollX + visibleW) nextTargetX = -(targetAnimX + config.cwPx - visibleW)
+        else if (targetAnimX + config.cwPx > -targetScrollX + visibleW) nextTargetX =
+            -(targetAnimX + config.cwPx - visibleW)
 
         var nextTargetY = targetScrollY
-        if (targetAnimY + targetAnimH > -targetScrollY + visibleH) nextTargetY = -(targetAnimY + targetAnimH - visibleH + config.sPadPx)
+        if (targetAnimY + targetAnimH > -targetScrollY + visibleH) nextTargetY =
+            -(targetAnimY + targetAnimH - visibleH + config.sPadPx)
         if (targetAnimY < -targetScrollY) nextTargetY = -targetAnimY
 
         val maxScrollX = -(columns * config.cwPx - visibleW).coerceAtLeast(0f)
-        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+        val maxScrollY =
+            -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
 
         targetScrollX = nextTargetX.coerceIn(maxScrollX, 0f)
         targetScrollY = nextTargetY.coerceIn(maxScrollY, 0f)

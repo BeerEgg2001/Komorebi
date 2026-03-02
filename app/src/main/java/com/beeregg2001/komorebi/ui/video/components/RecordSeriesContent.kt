@@ -49,6 +49,7 @@ fun RecordSeriesContent(
     onOpenNavPane: () -> Unit,
     isListView: Boolean,
     firstItemFocusRequester: FocusRequester,
+    visibleItemFocusRequester: FocusRequester, // ★追加
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
@@ -57,41 +58,43 @@ fun RecordSeriesContent(
     onFirstItemBound: (Boolean) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
-
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
-    LaunchedEffect(isListReady, seriesList) {
-        onFirstItemBound(isListReady && seriesList.isNotEmpty())
-    }
+    // ★重要: 現在画面に見えている最初のアイテムを監視
+    val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+
+    LaunchedEffect(
+        isListReady,
+        seriesList
+    ) { onFirstItemBound(isListReady && seriesList.isNotEmpty()) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading && seriesList.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.textPrimary)
-            }
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator(color = colors.textPrimary) }
         } else {
             LazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(
-                    top = 16.dp,
-                    bottom = 32.dp
-                ),
-                // 高さを抑えた分、アイテム間の隙間も少しコンパクトに
+                contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 itemsIndexed(seriesList) { index, series ->
                     var isFocused by remember { mutableStateOf(false) }
-
                     Surface(
                         onClick = { onSeriesClick(series.searchKeyword) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            // ★修正: 76.dp -> 64.dp にさらに縮小。1画面に8〜9個表示できるようになります。
                             .height(64.dp)
                             .onFocusChanged { isFocused = it.isFocused }
+                            // ★修正: 的の付け替え
+                            .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
                             .then(
-                                if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier
+                                if (index == firstVisibleIndex) Modifier.focusRequester(
+                                    visibleItemFocusRequester
+                                ) else Modifier
                             )
                             .focusProperties {
                                 if (index == 0) {
@@ -102,31 +105,35 @@ fun RecordSeriesContent(
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     if (event.key == Key.Back || event.key == Key.Escape) {
-                                        onBackPress()
-                                        true
+                                        onBackPress(); true
                                     } else if (event.key == Key.DirectionLeft) {
-                                        onOpenNavPane()
-                                        true
+                                        onOpenNavPane(); true
                                     } else false
                                 } else false
                             },
                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
                         colors = ClickableSurfaceDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.05f),
+                            containerColor = colors.textPrimary.copy(
+                                alpha = 0.05f
+                            ),
                             focusedContainerColor = colors.textPrimary,
                             contentColor = colors.textPrimary,
                             focusedContentColor = if (colors.isDark) Color.Black else Color.White
                         ),
                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
                         border = ClickableSurfaceDefaults.border(
-                            focusedBorder = Border(BorderStroke(2.dp, colors.accent))
+                            focusedBorder = Border(
+                                BorderStroke(
+                                    2.dp,
+                                    colors.accent
+                                )
+                            )
                         )
                     ) {
                         Row(
                             modifier = Modifier.fillMaxSize(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 左側：サムネイル画像
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
@@ -134,29 +141,23 @@ fun RecordSeriesContent(
                                     .background(Color.DarkGray.copy(alpha = 0.5f))
                             ) {
                                 AsyncImage(
-                                    model = ImageRequest.Builder(LocalContext.current)
-                                        .data(
-                                            UrlBuilder.getThumbnailUrl(
-                                                konomiIp,
-                                                konomiPort,
-                                                series.representativeVideoId.toString()
-                                            )
+                                    model = ImageRequest.Builder(LocalContext.current).data(
+                                        UrlBuilder.getThumbnailUrl(
+                                            konomiIp,
+                                            konomiPort,
+                                            series.representativeVideoId.toString()
                                         )
-                                        .crossfade(true).build(),
+                                    ).crossfade(true).build(),
                                     contentDescription = null,
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop
                                 )
                             }
-
                             Spacer(modifier = Modifier.width(16.dp))
-
-                            // 中央：テキスト情報
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight()
-                                    // 高さに合わせてパディングをギリギリまで切り詰め
                                     .padding(vertical = 4.dp),
                                 verticalArrangement = Arrangement.Center
                             ) {
@@ -165,7 +166,6 @@ fun RecordSeriesContent(
                                     modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    // テキストサイズは維持して見やすさを確保
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -180,21 +180,18 @@ fun RecordSeriesContent(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "${series.programCount} エピソード",
-                                        // サブテキストを少し小さく
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary
                                     )
                                 }
                             }
-
-                            // 右端：誘導アイコン
                             if (isFocused) {
                                 Icon(
                                     imageVector = Icons.Filled.KeyboardArrowRight,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)
-                                        .size(24.dp), // アイコンも高さに合わせて少し縮小
+                                        .size(24.dp),
                                     tint = if (colors.isDark) Color.Black.copy(alpha = 0.7f) else Color.White.copy(
                                         alpha = 0.7f
                                     )
@@ -205,7 +202,6 @@ fun RecordSeriesContent(
                 }
             }
         }
-
         if (!isListView) {
             Box(
                 modifier = Modifier

@@ -220,9 +220,11 @@ fun SettingsScreen(
                 .fillMaxHeight()
                 .padding(vertical = 48.dp, horizontal = 64.dp)
         ) {
-            Column(modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(mainScrollState)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(mainScrollState)
+            ) {
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
                         onClearChannel = {
