@@ -257,22 +257,23 @@ fun ModernEpgCanvasEngine_Smooth(
                     .focusable()
             ) {
                 if (epgState.hasData) {
-                    Spacer(modifier = Modifier
-                        .fillMaxSize()
-                        .drawWithCache {
-                            onDrawBehind {
-                                drawer.draw(
-                                    drawScope = this,
-                                    state = epgState,
-                                    animValues = animValues,
-                                    logoPainters = logoPainters,
-                                    isGridFocused = isContentFocused || epgState.hasData,
-                                    reserveMap = reserveMap,
-                                    clockPainter = clockPainter
-                                )
-                                hasRenderedFirstFrame = true
-                            }
-                        })
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .drawWithCache {
+                                onDrawBehind {
+                                    drawer.draw(
+                                        drawScope = this,
+                                        state = epgState,
+                                        animValues = animValues,
+                                        logoPainters = logoPainters,
+                                        isGridFocused = isContentFocused || epgState.hasData,
+                                        reserveMap = reserveMap,
+                                        clockPainter = clockPainter
+                                    )
+                                    hasRenderedFirstFrame = true
+                                }
+                            })
                 }
                 if (uiState is EpgUiState.Loading || epgState.isCalculating || (!hasRenderedFirstFrame && !isJumping)) {
                     Box(

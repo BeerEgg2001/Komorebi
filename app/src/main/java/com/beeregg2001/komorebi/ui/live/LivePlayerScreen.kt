@@ -47,8 +47,9 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.extractor.ExtractorsFactory
-import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.TsExtractor
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*

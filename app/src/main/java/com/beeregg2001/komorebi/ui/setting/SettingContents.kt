@@ -55,24 +55,85 @@ fun GeneralSettingsContent(
 
 @Composable
 fun ConnectionSettingsContent(
-    kIp: String, kPort: String, mIp: String, mPort: String, prefSrc: String,
+    kIp: String,
+    kPort: String,
+    mIp: String,
+    mPort: String,
+    prefSrc: String,
     onEdit: (String, String) -> Unit,
     onSelectSrc: () -> Unit,
-    kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, prefSrcR: FocusRequester,
+    kIpR: FocusRequester,
+    kPortR: FocusRequester,
+    mIpR: FocusRequester,
+    mPortR: FocusRequester,
+    prefSrcR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text(AppStrings.SETTINGS_CATEGORY_CONNECTION, style = MaterialTheme.typography.headlineMedium, color = KomorebiTheme.colors.textPrimary, fontWeight = FontWeight.Bold)
+        Text(
+            AppStrings.SETTINGS_CATEGORY_CONNECTION,
+            style = MaterialTheme.typography.headlineMedium,
+            color = KomorebiTheme.colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
 
         SettingsSection(AppStrings.SETTINGS_SECTION_KONOMITV) {
-            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Dns, modifier = Modifier.focusRequester(kIpR).focusProperties { left = sidebarR }, onClick = { onClick(kIpR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS, kIp) })
-            SettingItem(AppStrings.SETTINGS_ITEM_PORT, kPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(kPortR).focusProperties { left = sidebarR }, onClick = { onClick(kPortR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_PORT, kPort) })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_ADDRESS,
+                kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                Icons.Default.Dns,
+                modifier = Modifier
+                    .focusRequester(kIpR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(kIpR); onEdit(
+                    AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS,
+                    kIp
+                )
+                })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_PORT,
+                kPort,
+                Icons.Default.Numbers,
+                modifier = Modifier
+                    .focusRequester(kPortR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(kPortR); onEdit(
+                    AppStrings.SETTINGS_INPUT_KONOMITV_PORT,
+                    kPort
+                )
+                })
         }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_MIRAKURUN) {
-            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Router, modifier = Modifier.focusRequester(mIpR).focusProperties { left = sidebarR }, onClick = { onClick(mIpR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS, mIp) })
-            SettingItem(AppStrings.SETTINGS_ITEM_PORT, mPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(mPortR).focusProperties { left = sidebarR }, onClick = { onClick(mPortR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT, mPort) })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_ADDRESS,
+                mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                Icons.Default.Router,
+                modifier = Modifier
+                    .focusRequester(mIpR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(mIpR); onEdit(
+                    AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS,
+                    mIp
+                )
+                })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_PORT,
+                mPort,
+                Icons.Default.Numbers,
+                modifier = Modifier
+                    .focusRequester(mPortR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(mPortR); onEdit(
+                    AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT,
+                    mPort
+                )
+                })
         }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_PRIORITY) {
@@ -87,7 +148,9 @@ fun ConnectionSettingsContent(
                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
                 label,
                 Icons.Default.PriorityHigh,
-                modifier = Modifier.focusRequester(prefSrcR).focusProperties { left = sidebarR },
+                modifier = Modifier
+                    .focusRequester(prefSrcR)
+                    .focusProperties { left = sidebarR },
                 onClick = { onClick(prefSrcR); onSelectSrc() })
         }
     }

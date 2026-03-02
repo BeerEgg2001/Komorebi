@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
 

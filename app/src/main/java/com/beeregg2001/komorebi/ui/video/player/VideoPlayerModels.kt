@@ -2,8 +2,6 @@ package com.beeregg2001.komorebi.ui.video.player
 
 import androidx.compose.ui.graphics.vector.ImageVector
 
-enum class AudioMode { MAIN, SUB }
-
 // ★修正: COMMENT を追加
 enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY, COMMENT }
 

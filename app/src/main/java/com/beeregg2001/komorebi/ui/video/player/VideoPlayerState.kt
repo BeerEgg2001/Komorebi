@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.model.AudioMode
 
 @Stable
 class VideoPlayerState(

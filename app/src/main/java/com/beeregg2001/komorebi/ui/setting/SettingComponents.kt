@@ -222,7 +222,13 @@ fun SelectionDialog(
             modifier = Modifier.width(400.dp)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
-                Text(title, style = MaterialTheme.typography.headlineSmall, color = colors.textPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
                 LazyColumn(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -240,11 +246,23 @@ fun SelectionDialog(
                             }
                         }
 
-                        SelectionDialogItem(label, isSelected, { onSelect(value) }, Modifier.focusRequester(fR))
+                        SelectionDialogItem(
+                            label,
+                            isSelected,
+                            { onSelect(value) },
+                            Modifier.focusRequester(fR)
+                        )
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onDismiss, colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(0.1f), contentColor = colors.textPrimary), modifier = Modifier.fillMaxWidth()) { Text(AppStrings.BUTTON_CANCEL) }
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = colors.textPrimary.copy(0.1f),
+                        contentColor = colors.textPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(AppStrings.BUTTON_CANCEL) }
             }
         }
     }
