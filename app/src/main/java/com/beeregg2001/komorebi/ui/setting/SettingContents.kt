@@ -137,7 +137,6 @@ fun ConnectionSettingsContent(
         }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_PRIORITY) {
-            // ★修正: 表示ラベルの動的切り替えロジックの修正（キーをKONOMITVに修正）
             val label = if (mIp.isBlank()) {
                 AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED
             } else {
@@ -442,9 +441,12 @@ fun CommentSettingsContent(
 @Composable
 fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
+    enableAi: String, apiKey: String, // ★追加
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
+    enableAiR: FocusRequester, apiKeyR: FocusRequester, // ★追加
     sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
+    onToggleAi: () -> Unit, onEditApiKey: () -> Unit, // ★追加
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -454,6 +456,30 @@ fun LabSettingsContent(
             color = KomorebiTheme.colors.textPrimary,
             fontWeight = FontWeight.Bold
         )
+
+        // ★追加: AI強化正規化 セクション
+        SettingsSection("AI強化正規化 (アルファ版)") {
+            SettingItem(
+                "AIによるシリーズ名正規化",
+                enableAi,
+                Icons.Default.AutoAwesome,
+                modifier = Modifier
+                    .focusRequester(enableAiR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(enableAiR); onToggleAi() }
+            )
+            SettingItem(
+                "Gemini API Key",
+                if (apiKey.isEmpty()) "未設定" else "設定済み",
+                Icons.Default.VpnKey,
+                enabled = enableAi == "ON", // 機能がONの時だけ入力可能に
+                modifier = Modifier
+                    .focusRequester(apiKeyR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(apiKeyR); onEditApiKey() }
+            )
+        }
+
         SettingsSection(AppStrings.SETTINGS_SECTION_EXTERNAL_INTEGRATION) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_ANNICT,
@@ -504,7 +530,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.5.0 beta",
+            "Version 0.7.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

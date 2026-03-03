@@ -17,7 +17,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 2 // 数値を1つ上げる
-        versionName = "0.6.0-beta"
+        versionName = "0.7.0-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -165,4 +165,6 @@ dependencies {
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 }

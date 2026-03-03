@@ -100,7 +100,14 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            listOf(FocusRequester(), FocusRequester(), FocusRequester()),
+            // ★変更: ラボタブのフォーカスリクエスターを3つから5つに増やす
+            listOf(
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ),
             listOf(FocusRequester())
         )
     }
@@ -267,7 +274,6 @@ fun SettingsScreen(
                             }
                         },
                         onSelectSrc = {
-                            // ★修正: Mirakurunの入力状況に応じた動的な選択肢生成（キーをKONOMITVに修正）
                             val options = if (prefs.mirakurunIp.isBlank()) {
                                 listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV")
                             } else {
@@ -621,9 +627,13 @@ fun SettingsScreen(
                         annict = prefs.labAnnict,
                         shobocal = prefs.labShobocal,
                         postCmd = prefs.defaultPostCommand,
+                        enableAi = prefs.enableAiNormalization, // ★追加
+                        apiKey = prefs.geminiApiKey, // ★追加
                         annictR = itemFocusRequesters[6][0],
                         shobocalR = itemFocusRequesters[6][1],
                         cmdR = itemFocusRequesters[6][2],
+                        enableAiR = itemFocusRequesters[6][3], // ★追加
+                        apiKeyR = itemFocusRequesters[6][4], // ★追加
                         sidebarR = categoryFocusRequesters[6],
                         onAnnict = {
                             scope.launch {
@@ -649,6 +659,27 @@ fun SettingsScreen(
                                 scope.launch {
                                     repository.saveString(
                                         SettingsRepository.DEFAULT_POST_COMMAND,
+                                        it
+                                    )
+                                }
+                            }
+                        },
+                        onToggleAi = {
+                            scope.launch {
+                                repository.saveString(
+                                    SettingsRepository.ENABLE_AI_NORMALIZATION,
+                                    if (prefs.enableAiNormalization == "ON") "OFF" else "ON"
+                                )
+                            }
+                        },
+                        onEditApiKey = {
+                            uiState.activeDialog = SettingDialogState.Input(
+                                "Gemini API Key",
+                                prefs.geminiApiKey
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.GEMINI_API_KEY,
                                         it
                                     )
                                 }

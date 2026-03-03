@@ -13,6 +13,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -27,8 +28,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
-import com.beeregg2001.komorebi.ui.video.ListFocusTarget
-import com.beeregg2001.komorebi.ui.video.ListResetState
+import com.beeregg2001.komorebi.ui.video.FocusTicket
+import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.ui.video.RecordListFocusRequesters
 import com.beeregg2001.komorebi.ui.video.RecordListMenuState
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
@@ -38,7 +39,7 @@ import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 fun RecordListOverlay(
     menuState: RecordListMenuState,
     focuses: RecordListFocusRequesters,
-    resetState: ListResetState,
+    ticketManager: FocusTicketManager,
     selectedCategory: RecordCategory,
     availableGenres: List<String>,
     selectedGenre: String?,
@@ -46,12 +47,11 @@ fun RecordListOverlay(
     selectedDay: String?,
     groupedSeries: Map<String, List<SeriesInfo>>,
     selectedSeriesGenre: String?,
-    isListView: Boolean, // ★追加: 常駐メニューの判定用
-    isSearchActive: Boolean, // ★追加: 検索中の判定用
+    isListView: Boolean,
+    isSearchActive: Boolean,
     isNavOverlayVisible: Boolean,
     paneTransitionState: MutableTransitionState<Boolean>,
     hasContent: Boolean,
-    isListFirstItemReady: Boolean,
     onCategorySelect: (RecordCategory) -> Unit,
     onGenreSelect: (String?) -> Unit,
     onChannelSelect: (String?) -> Unit,
@@ -60,11 +60,21 @@ fun RecordListOverlay(
 ) {
     val colors = KomorebiTheme.colors
 
-    // 黒背景（半透明）
+    // ★自律回収: 第2階層が開いて準備ができたらチケット回収
+    LaunchedEffect(
+        ticketManager.currentTicket,
+        ticketManager.issueTime,
+        menuState.isPaneListReady
+    ) {
+        if (ticketManager.currentTicket == FocusTicket.PANE && menuState.isPaneListReady) {
+            focuses.paneFirstItem.safeRequestFocus("Ticket_PANE")
+            ticketManager.consume(FocusTicket.PANE)
+        }
+    }
+
     AnimatedVisibility(
         visible = isNavOverlayVisible,
-        enter = fadeIn(animationSpec = tween(350)),
-        exit = fadeOut(animationSpec = tween(350))
+        enter = fadeIn(animationSpec = tween(350)), exit = fadeOut(animationSpec = tween(350))
     ) {
         Box(
             modifier = Modifier
@@ -75,13 +85,11 @@ fun RecordListOverlay(
                     indication = null
                 ) {
                     menuState.isNavPaneOpen = false
-                    // ★修正: index=0 ではなく現在見えている visibleItem に戻る
-                    focuses.visibleItem.safeRequestFocus()
+                    focuses.contentContainer.safeRequestFocus()
                 }
         )
     }
 
-    // 左側のナビゲーションペイン（オーバーレイ時）
     AnimatedVisibility(
         visible = isNavOverlayVisible,
         enter = slideInHorizontally(animationSpec = tween(350)) { -it } + fadeIn(
@@ -111,6 +119,7 @@ fun RecordListOverlay(
                 onCategorySelect = onCategorySelect,
                 isOverlay = true,
                 navPaneFocusRequester = focuses.navPane,
+                ticketManager = ticketManager,
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusProperties {
@@ -125,11 +134,11 @@ fun RecordListOverlay(
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown) {
                             if (event.key == Key.DirectionRight && !menuState.isPaneOpen) {
-                                menuState.isNavPaneOpen = false
-                                focuses.visibleItem.safeRequestFocus(); return@onKeyEvent true // ★修正
+                                menuState.isNavPaneOpen =
+                                    false; focuses.contentContainer.safeRequestFocus(); return@onKeyEvent true
                             } else if (event.key == Key.Back || event.key == Key.Escape) {
-                                menuState.isNavPaneOpen = false
-                                focuses.visibleItem.safeRequestFocus(); return@onKeyEvent true // ★修正
+                                menuState.isNavPaneOpen =
+                                    false; focuses.contentContainer.safeRequestFocus(); return@onKeyEvent true
                             }
                         }
                         false
@@ -138,7 +147,6 @@ fun RecordListOverlay(
         }
     }
 
-    // 右側の各種カテゴリ選択ペイン（アニメーションでスライドイン）
     AnimatedVisibility(
         visibleState = paneTransitionState,
         enter = slideInHorizontally(tween(350)) { -it },
@@ -160,12 +168,15 @@ fun RecordListOverlay(
                     genres = availableGenres,
                     selectedGenre = selectedGenre,
                     onGenreSelect = { genre ->
-                        menuState.isSelectionMade =
-                            true; onGenreSelect(genre); menuState.isGenrePaneOpen =
-                        false; menuState.isNavPaneOpen = false; resetState.reset()
+                        focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_Pane")
+                        menuState.isSelectionMade = true; onGenreSelect(genre)
+                        menuState.isGenrePaneOpen = false; menuState.isNavPaneOpen = false
+                        ticketManager.issue(FocusTicket.LIST_TOP)
                     },
                     onClosePane = {
-                        menuState.isGenrePaneOpen = false; focuses.navPane.safeRequestFocus()
+                        menuState.isGenrePaneOpen = false; ticketManager.issue(
+                        FocusTicket.NAV_PANE
+                    )
                     },
                     firstItemFocusRequester = focuses.paneFirstItem,
                     onFirstItemBound = { menuState.isPaneListReady = it },
@@ -178,12 +189,15 @@ fun RecordListOverlay(
                 menuState.isChannelPaneOpen -> RecordChannelPane(
                     groupedChannels = groupedChannels,
                     onChannelSelect = { channelId ->
-                        menuState.isSelectionMade =
-                            true; onChannelSelect(channelId); menuState.isChannelPaneOpen =
-                        false; menuState.isNavPaneOpen = false; resetState.reset()
+                        focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_Pane")
+                        menuState.isSelectionMade = true; onChannelSelect(channelId)
+                        menuState.isChannelPaneOpen = false; menuState.isNavPaneOpen = false
+                        ticketManager.issue(FocusTicket.LIST_TOP)
                     },
                     onClosePane = {
-                        menuState.isChannelPaneOpen = false; focuses.navPane.safeRequestFocus()
+                        menuState.isChannelPaneOpen = false; ticketManager.issue(
+                        FocusTicket.NAV_PANE
+                    )
                     },
                     firstItemFocusRequester = focuses.paneFirstItem,
                     onFirstItemBound = { menuState.isPaneListReady = it },
@@ -196,12 +210,13 @@ fun RecordListOverlay(
                 menuState.isDayPaneOpen -> RecordDayPane(
                     selectedDay = selectedDay,
                     onDaySelect = { day ->
-                        menuState.isSelectionMade =
-                            true; onDaySelect(day); menuState.isDayPaneOpen =
-                        false; menuState.isNavPaneOpen = false; resetState.reset()
+                        focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_Pane")
+                        menuState.isSelectionMade = true; onDaySelect(day)
+                        menuState.isDayPaneOpen = false; menuState.isNavPaneOpen = false
+                        ticketManager.issue(FocusTicket.LIST_TOP)
                     },
                     onClosePane = {
-                        menuState.isDayPaneOpen = false; focuses.navPane.safeRequestFocus()
+                        menuState.isDayPaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
                     },
                     firstItemFocusRequester = focuses.paneFirstItem,
                     onFirstItemBound = { menuState.isPaneListReady = it },
@@ -215,12 +230,15 @@ fun RecordListOverlay(
                     genres = groupedSeries.keys.toList(),
                     selectedGenre = selectedSeriesGenre,
                     onGenreSelect = { genre ->
-                        menuState.isSelectionMade =
-                            true; onSeriesGenreSelect(genre); menuState.isSeriesGenrePaneOpen =
-                        false; menuState.isNavPaneOpen = false; resetState.reset()
+                        focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_Pane")
+                        menuState.isSelectionMade = true; onSeriesGenreSelect(genre)
+                        menuState.isSeriesGenrePaneOpen = false; menuState.isNavPaneOpen = false
+                        ticketManager.issue(FocusTicket.LIST_TOP)
                     },
                     onClosePane = {
-                        menuState.isSeriesGenrePaneOpen = false; focuses.navPane.safeRequestFocus()
+                        menuState.isSeriesGenrePaneOpen = false; ticketManager.issue(
+                        FocusTicket.NAV_PANE
+                    )
                     },
                     firstItemFocusRequester = focuses.paneFirstItem,
                     onFirstItemBound = { menuState.isPaneListReady = it },
@@ -233,8 +251,6 @@ fun RecordListOverlay(
         }
     }
 
-    // 左側のナビゲーションペイン（通常時/固定表示）
-    // ★修正: リスト形式、かつ検索中でない時だけ常時表示し、それ以外は隠す（引き算）
     if (isListView && !isSearchActive) {
         Box(
             modifier = Modifier
@@ -257,6 +273,7 @@ fun RecordListOverlay(
                 onCategorySelect = onCategorySelect,
                 isOverlay = false,
                 navPaneFocusRequester = focuses.navPane,
+                ticketManager = ticketManager,
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusProperties {
@@ -265,7 +282,7 @@ fun RecordListOverlay(
                             menuState.isChannelPaneOpen -> focuses.channelPane
                             menuState.isDayPaneOpen -> focuses.dayPane
                             menuState.isSeriesGenrePaneOpen -> focuses.seriesGenrePane
-                            hasContent && isListFirstItemReady -> focuses.visibleItem // ★修正
+                            hasContent -> focuses.contentContainer
                             else -> FocusRequester.Cancel
                         }
                     }

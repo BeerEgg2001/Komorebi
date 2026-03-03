@@ -21,16 +21,18 @@ class SettingPreferences(
     val liveSubtitleDefault: String,
     val videoSubtitleDefault: String,
     val subtitleCommentLayer: String,
-    val audioOutputMode: String, // ★追加
+    val audioOutputMode: String,
     val labAnnict: String,
     val labShobocal: String,
     val defaultPostCommand: String,
+    val geminiApiKey: String, // ★追加
+    val enableAiNormalization: String, // ★追加
     val pickupGenre: String,
     val excludePaid: String,
     val pickupTime: String,
     val startupTab: String,
     val currentThemeName: String,
-    val defaultRecordListView: String // ★追加
+    val defaultRecordListView: String
 )
 
 @Composable
@@ -51,16 +53,18 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         liveSubtitleDefault = repository.liveSubtitleDefault.collectAsState(initial = "OFF").value,
         videoSubtitleDefault = repository.videoSubtitleDefault.collectAsState(initial = "OFF").value,
         subtitleCommentLayer = repository.subtitleCommentLayer.collectAsState(initial = "CommentOnTop").value,
-        audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value, // ★追加
+        audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value,
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
+        geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value, // ★追加
+        enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value, // ★追加
         pickupGenre = repository.homePickupGenre.collectAsState(initial = "アニメ").value,
         excludePaid = repository.excludePaidBroadcasts.collectAsState(initial = "ON").value,
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
-        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value // ★追加
+        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
     )
 }
 

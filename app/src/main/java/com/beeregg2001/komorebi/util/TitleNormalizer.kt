@@ -12,14 +12,18 @@ object TitleNormalizer {
                 "［(新|終|再|初|字|二|デ|解|無料|生|録)］"
     )
 
+    // 放送枠名のプレフィックスを強制除去
+    private val GENRE_PREFIX_PATTERN = Pattern.compile(
+        "^(?:【|\\[|［|\\(|（)(?:連続テレビ小説|土曜ドラマ|よるドラ|夜ドラ|ドラマ|アニメ|映画|特番|特別番組|新番組|最終回)(?:】|\\]|］|\\)|）)\\s*"
+    )
+
     private val LEADING_TAGS_PATTERN = Pattern.compile("^(?:\\[.*?\\]|【.*?】|［.*?］|\\(.*?\\)|（.*?）)+")
     private const val NUM = "[ 0-9０-９一二三四五六七八九十百千万零]+"
 
-    // バラエティ番組で「番組名」と「内容」を分ける可能性が高い境界線
+    // ★修正: 暴発の元だった「!」「?」「空白」で切るルールを全廃止。
+    // 「★」などの明らかな装飾記号の直前でだけ切る、安全なルールに変更。
     private val VARIETY_BOUNDARY_PATTERN = Pattern.compile(
-        "(?<=[^A-Z0-9])([★☆◆◇■□●○▽▼!！?？])|" + // 記号による境界
-                "(?<=[！!？?])|" +                           // 強い句読点の直後
-                "(?:[ 　]+)(?=.)"                             // 空白の直後
+        "(?<=[^A-Z0-9a-z])(?=[★☆◆◇■□●○▽▼])"
     )
 
     private val EPISODE_SUBTITLE_PATTERN = Pattern.compile(
@@ -31,19 +35,25 @@ object TitleNormalizer {
         Pattern.CASE_INSENSITIVE
     )
 
-    private val SEARCH_DELIMITER_PATTERN = Pattern.compile("(?:\\[|【|［|\\(|（|\\s|　|「|『|第|#|EP|▽|▼|~|〜|-|—)")
+    // ★修正: 検索キーワードの区切り文字から「\\s」や「　」（空白）を削除。「Sound Shower」が生き残るように。
+    private val SEARCH_DELIMITER_PATTERN = Pattern.compile("(?:\\[|【|［|\\(|（|「|『|第|#|EP|▽|▼|~|〜|-|—)")
+
     private val PREFIX_PATTERN_BRACKETS = Pattern.compile("^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)(?:「|『)(.*?)(?:」|』)$")
     private val PREFIX_PATTERN_SPACE = Pattern.compile("^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)[\\s　]+")
 
-    /**
-     * UI表示用のタイトルを抽出（単発録画でもバラエティを切り分ける強化版）
-     */
     fun extractDisplayTitle(fullTitle: String): String {
         if (fullTitle.isEmpty()) return ""
         var title = Normalizer.normalize(fullTitle, Normalizer.Form.NFKC)
         title = TAGS_PATTERN.matcher(title).replaceAll("")
 
-        // プリフィックス除去
+        // 映画枠などは作品名ではなく枠名そのものをシリーズ名とする
+        val movieBlockMatcher = Pattern.compile("^(金曜ロードショー|金曜ロードSHOW!|土曜プレミアム|日曜洋画劇場|月曜プレミア8|水曜エンタ|木曜洋画劇場)").matcher(title.trim())
+        if (movieBlockMatcher.find()) {
+            return movieBlockMatcher.group(1) ?: title
+        }
+
+        title = GENRE_PREFIX_PATTERN.matcher(title.trim()).replaceAll("")
+
         val prefixMatcher = PREFIX_PATTERN_BRACKETS.matcher(title.trim())
         if (prefixMatcher.matches()) {
             title = prefixMatcher.group(1) ?: title
@@ -51,29 +61,23 @@ object TitleNormalizer {
             title = PREFIX_PATTERN_SPACE.matcher(title.trim()).replaceAll("")
         }
 
-        // 1. まず標準的な話数パターンでカット
         val episodeMatcher = EPISODE_SUBTITLE_PATTERN.matcher(title)
         if (episodeMatcher.find()) {
             title = title.substring(0, episodeMatcher.start())
         }
 
-        // 2. バラエティ特有の記号境界でのカット（単発録画対策）
-        // 番組名としての長さを考慮し、極端に短くならない範囲でカット
         val boundaryMatcher = VARIETY_BOUNDARY_PATTERN.matcher(title)
         if (boundaryMatcher.find()) {
-            val cutIndex = if (boundaryMatcher.group(1) != null) boundaryMatcher.start() else boundaryMatcher.end()
-            // 4文字以上残るならカットを採用（短すぎると「Qさま」などが削れすぎるため）
+            val cutIndex = boundaryMatcher.start()
             if (cutIndex >= 4) {
                 title = title.substring(0, cutIndex)
             }
         }
 
-        return title.replace(Regex("^[\\s　・-]+|[\\s　・-]+$"), "").trim()
+        // ★修正: 末尾に残る「。」や「、」などの句読点を削除（放送局ごとの表記揺れを吸収）
+        return title.replace(Regex("^[\\s　・\\-]+|[\\s　・。、\\-]+$"), "").trim()
     }
 
-    /**
-     * 自動正規化キー
-     */
     fun getGroupingKey(fullTitle: String): String {
         val title = extractDisplayTitle(fullTitle)
         return title
@@ -82,12 +86,11 @@ object TitleNormalizer {
             .replace(Regex("[^A-Z0-9\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF]"), "")
     }
 
-    /**
-     * 検索キーワード抽出
-     */
     fun extractSearchKeyword(fullTitle: String): String {
         if (fullTitle.isEmpty()) return ""
         var title = LEADING_TAGS_PATTERN.matcher(fullTitle.trim()).replaceAll("")
+        title = GENRE_PREFIX_PATTERN.matcher(title).replaceAll("")
+
         val prefixMatcher = PREFIX_PATTERN_BRACKETS.matcher(title)
         if (prefixMatcher.matches()) {
             title = prefixMatcher.group(1) ?: title
@@ -99,6 +102,10 @@ object TitleNormalizer {
             val cut = title.substring(0, delimiterMatcher.start()).trim()
             if (cut.length > 1) title = cut
         }
+
+        // ★修正: 検索キーワードでも末尾の「。」を消す
+        title = title.replace(Regex("^[\\s　・\\-]+|[\\s　・。、\\-]+$"), "").trim()
+
         return if (title.length > 30) title.substring(0, 30).trim() else title.trim()
     }
 }

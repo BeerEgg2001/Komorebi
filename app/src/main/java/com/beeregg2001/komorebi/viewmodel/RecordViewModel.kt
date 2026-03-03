@@ -13,6 +13,7 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
@@ -62,6 +63,7 @@ class RecordViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
     private val programDao: RecordedProgramDao,
+    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao, // ★追加
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -411,7 +413,10 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
-    private fun buildSeriesAndChannelMapsFromEntities(entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>) {
+    /**
+     * ★修正: AI名寄せ辞書と3重の壁（大ジャンル_中ジャンル_チャンネル）を利用して精度の高いシリーズ構築を行う
+     */
+    private suspend fun buildSeriesAndChannelMapsFromEntities(entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>) {
         _isSeriesLoading.value = true
         val genreToSeriesData = mutableMapOf<String, MutableMap<String, SeriesInfo>>()
         val allChannelMap = mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
@@ -420,23 +425,40 @@ class RecordViewModel @Inject constructor(
         try {
             val programs = entities.map { RecordDataMapper.toDomainModel(it) }
 
-            // 1次パス: TitleNormalizer による抽出と基本グルーピング
-            programs.forEach { prog ->
-                val genre = prog.genres?.firstOrNull()?.major ?: "その他"
-                genresSet.add(genre)
+            // ★追加: AI名寄せ辞書のロードと有効化チェック
+            val aiDict = aiSeriesDictionaryDao.getAllDictionary().associate { it.originalTitle to it.normalizedSeriesName }
+            val isAiEnabled = settingsRepository.enableAiNormalization.first() == "ON"
 
-                val displayTitle = TitleNormalizer.extractDisplayTitle(prog.title)
-                val searchKeyword = TitleNormalizer.extractSearchKeyword(prog.title)
-                val groupingKey = TitleNormalizer.getGroupingKey(prog.title)
+            // 1次パス: AI辞書 または TitleNormalizer による抽出と、3重の壁による強固なグルーピング
+            programs.forEach { prog ->
+                val majorGenre = prog.genres?.firstOrNull()?.major ?: "その他"
+                val middleGenre = prog.genres?.firstOrNull()?.middle ?: "その他"
+                val channelId = prog.channel?.id ?: "unknown"
+
+                genresSet.add(majorGenre)
+
+                // AI辞書に存在すればそれを採用、なければローカル正規化
+                val aiSeriesName = if (isAiEnabled) aiDict[prog.title] else null
+                val displayTitle = aiSeriesName ?: TitleNormalizer.extractDisplayTitle(prog.title)
+                val searchKeyword = aiSeriesName ?: TitleNormalizer.extractSearchKeyword(prog.title)
+                val groupingKey = aiSeriesName ?: TitleNormalizer.getGroupingKey(prog.title)
 
                 if (displayTitle.isNotEmpty()) {
-                    val genreMap = genreToSeriesData.getOrPut(genre) { mutableMapOf() }
+                    // ★修正: 他局や別ジャンルの類似タイトルが混ざるのを完全に防ぐ「3重の壁」
+                    val groupingCategory = "${majorGenre}_${middleGenre}_${channelId}"
+
+                    val genreMap = genreToSeriesData.getOrPut(groupingCategory) { mutableMapOf() }
                     val existing = genreMap[groupingKey]
+
                     if (existing == null) {
                         genreMap[groupingKey] = SeriesInfo(displayTitle, searchKeyword, 1, prog.id)
                     } else {
-                        // 文字数が短い、または記号を含まない方をシリーズ表示名に選定
-                        val betterTitle = if (displayTitle.length < existing.displayTitle.length) displayTitle else existing.displayTitle
+                        // AI名がある場合は長さを問わずAI名を優先、それ以外は短いものを優先
+                        val betterTitle = if (aiSeriesName != null) {
+                            aiSeriesName
+                        } else {
+                            if (displayTitle.length < existing.displayTitle.length) displayTitle else existing.displayTitle
+                        }
                         genreMap[groupingKey] = existing.copy(
                             displayTitle = betterTitle,
                             programCount = existing.programCount + 1
@@ -454,9 +476,26 @@ class RecordViewModel @Inject constructor(
                 }
             }
 
-            // 2次パス: LCP（最長共通接頭辞）による類似タイトルのさらなるマージ
-            val finalGroupedSeries = genreToSeriesData.mapValues { (_, seriesMap) ->
+            // 2次パス: 「3重の壁」の中でのみ、LCP（最長共通接頭辞）による類似タイトルの結合を行う
+            val mergedByCategory = genreToSeriesData.mapValues { (_, seriesMap) ->
                 mergeSeriesByLCP(seriesMap.values.toMutableList())
+            }
+
+            // 3次パス: 壁を取り払い、大ジャンルごとに集約。かつ「タイトルが完全一致」するシリーズは合流（全録の再放送対策）
+            val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
+            mergedByCategory.forEach { (categoryKey, seriesList) ->
+                val majorGenre = categoryKey.substringBefore("_")
+                val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }
+
+                seriesList.forEach { seriesInfo ->
+                    val existing = list.find { it.displayTitle == seriesInfo.displayTitle }
+                    if (existing != null) {
+                        val index = list.indexOf(existing)
+                        list[index] = existing.copy(programCount = existing.programCount + seriesInfo.programCount)
+                    } else {
+                        list.add(seriesInfo)
+                    }
+                }
             }
 
             _availableGenres.value = genresSet.sorted()
@@ -471,7 +510,11 @@ class RecordViewModel @Inject constructor(
                         .map { Pair(it.first, it.second) }
                 }
 
-        } catch (e: Exception) { Log.e(TAG, "Map Build Error", e) } finally { _isSeriesLoading.value = false }
+        } catch (e: Exception) {
+            Log.e(TAG, "Map Build Error", e)
+        } finally {
+            _isSeriesLoading.value = false
+        }
     }
 
     private fun mergeSeriesByLCP(seriesList: MutableList<SeriesInfo>): List<SeriesInfo> {
@@ -484,14 +527,21 @@ class RecordViewModel @Inject constructor(
         for (i in 1 until seriesList.size) {
             val next = seriesList[i]
             val commonPrefix = findLCP(current.displayTitle, next.displayTitle).trim()
-            val isMatch = commonPrefix.length >= 4 &&
-                    (commonPrefix.length >= current.displayTitle.length * 0.75 ||
-                            commonPrefix.length >= next.displayTitle.length * 0.75)
+
+            // ★修正: 壁で守られているため、LCPの閾値を文字数2文字・60%一致にまで緩和し、短いタイトルも結合する
+            val isMatch = commonPrefix.length >= 2 &&
+                    (commonPrefix.length >= current.displayTitle.length * 0.6 ||
+                            commonPrefix.length >= next.displayTitle.length * 0.6)
 
             if (isMatch) {
-                val newTitle = commonPrefix.removeSuffix("・").removeSuffix("-").removeSuffix("！").trim()
+                // ★修正: 末尾に残ったゴミ記号（【 や & や 「 など）を根こそぎ消す
+                val newTitle = commonPrefix
+                    .replace(Regex("[【「『（(\\[＆&・\\-！!？?　 ]+$"), "")
+                    .trim()
+
                 current = current.copy(
                     displayTitle = if (newTitle.length >= 2) newTitle else current.displayTitle,
+                    searchKeyword = if (newTitle.length >= 2) newTitle else current.searchKeyword,
                     programCount = current.programCount + next.programCount
                 )
             } else {

@@ -1,12 +1,48 @@
 package com.beeregg2001.komorebi.ui.video
 
+import android.util.Log
 import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 
-enum class ListFocusTarget { NONE, LIST_TOP, NAV_PANE }
+// 🎫 チケット種類の拡張
+enum class FocusTicket { NONE, LIST_TOP, NAV_PANE, PANE, TARGET_ID }
 
-// ★修正: 不足していた拡張プロパティを定義
+@Stable
+class FocusTicketManager {
+    var currentTicket by mutableStateOf(FocusTicket.NONE)
+        private set
+    var issueTime by mutableLongStateOf(0L)
+        private set
+    var targetProgramId by mutableStateOf<Int?>(null) // ★特定の番組を狙い撃ちするためのID
+        private set
+    var forceResetTick by mutableIntStateOf(0) // ★強制リセット用のカウンター
+        private set
+
+    fun issue(ticket: FocusTicket, programId: Int? = null) {
+        targetProgramId = programId
+        currentTicket = ticket
+        issueTime = System.currentTimeMillis()
+        Log.i("KomorebiFocus", "🎟️ Ticket ISSUED: $ticket (TargetID: $programId)")
+    }
+
+    fun consume(ticket: FocusTicket) {
+        if (currentTicket == ticket) {
+            Log.i("KomorebiFocus", "🗑️ Ticket CONSUMED: $currentTicket")
+            currentTicket = FocusTicket.NONE
+            targetProgramId = null
+        }
+    }
+
+    fun triggerHardReset() {
+        forceResetTick++
+        Log.i("KomorebiFocus", "♻️ HARD RESET Triggered: tick=$forceResetTick")
+    }
+}
+
+@Composable
+fun rememberFocusTicketManager() = remember { FocusTicketManager() }
+
 val RecordCategory.isPaneCategory: Boolean
     get() = this == RecordCategory.GENRE ||
             this == RecordCategory.CHANNEL ||
@@ -32,8 +68,8 @@ class RecordListFocusRequesters {
     val firstItem = FocusRequester()
     val paneFirstItem = FocusRequester()
 
-    // ★追加: 画面に見えている適当なアイテムを指す「帰り道」用の的
-    val visibleItem = FocusRequester()
+    val contentContainer = FocusRequester()
+    val loadingSafeHouse = FocusRequester()
 }
 
 @Composable
@@ -60,19 +96,3 @@ class RecordListMenuState {
 
 @Composable
 fun rememberRecordListMenuState() = remember { RecordListMenuState() }
-
-@Stable
-class ListResetState {
-    var trigger by mutableLongStateOf(0L)
-    var key by mutableIntStateOf(0)
-    var autoFocusTarget by mutableStateOf(ListFocusTarget.NONE)
-
-    fun reset(target: ListFocusTarget = ListFocusTarget.LIST_TOP) {
-        key++
-        trigger = System.currentTimeMillis()
-        autoFocusTarget = target
-    }
-}
-
-@Composable
-fun rememberListResetState() = remember { ListResetState() }

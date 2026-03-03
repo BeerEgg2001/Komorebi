@@ -38,12 +38,15 @@ class SettingsRepository @Inject constructor(
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
 
-        // ★追加: 音声出力モード (DOWNMIX or PASSTHROUGH)
         val AUDIO_OUTPUT_MODE = stringPreferencesKey("audio_output_mode")
 
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
+
+        // ★追加: AI正規化関連
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
+        val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
@@ -51,7 +54,6 @@ class SettingsRepository @Inject constructor(
 
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
         val APP_THEME = stringPreferencesKey("app_theme")
-        // ★追加: 録画一覧の初期表示形式
         val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
     }
 
@@ -73,13 +75,15 @@ class SettingsRepository @Inject constructor(
     val liveSubtitleDefault: Flow<String> = context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
     val videoSubtitleDefault: Flow<String> = context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
     val subtitleCommentLayer: Flow<String> = context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
-
-    // ★追加: デフォルトは安定性の高い DOWNMIX
     val audioOutputMode: Flow<String> = context.dataStore.data.map { it[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
 
     val labAnnictIntegration: Flow<String> = context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
     val labShobocalIntegration: Flow<String> = context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
     val defaultPostCommand: Flow<String> = context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
+
+    // ★追加: AI正規化関連
+    val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
+    val enableAiNormalization: Flow<String> = context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
 
     val homePickupGenre: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
     val excludePaidBroadcasts: Flow<String> = context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
@@ -87,7 +91,6 @@ class SettingsRepository @Inject constructor(
 
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
-    // ★追加
     val defaultRecordListView: Flow<String> = context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)

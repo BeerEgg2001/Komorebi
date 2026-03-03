@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -38,6 +39,8 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.video.FocusTicket
+import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,7 +55,7 @@ fun RecordListContent(
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
-    visibleItemFocusRequester: FocusRequester, // ★追加
+    contentContainerFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
@@ -60,11 +63,13 @@ fun RecordListContent(
     isDetailVisible: Boolean,
     onDetailStateChange: (Boolean) -> Unit,
     onBackPress: () -> Unit,
+    ticketManager: FocusTicketManager,
     listState: LazyListState = rememberLazyListState(),
     fetchedProgramDetail: RecordedProgram? = null,
     onFetchDetail: (Int) -> Unit = {},
     onClearDetail: () -> Unit = {},
-    onFirstItemBound: (Boolean) -> Unit = {}
+    onFirstItemBound: (Boolean) -> Unit = {},
+    onFocusedItemChanged: (RecordedProgram?) -> Unit = {} // ★追加
 ) {
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
@@ -82,9 +87,7 @@ fun RecordListContent(
     val isAnyMenuOpen = isSideMenuOpen || isDetailVisible
     val menuTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
-
-    // ★重要: 現在画面に見えている最初のアイテムのインデックスを監視
-    val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+    val isScrollInProgress = listState.isScrollInProgress
 
     LaunchedEffect(pagedRecordings.itemCount) {
         if (pagedRecordings.itemCount == 0) focusedProgram = null
@@ -109,6 +112,9 @@ fun RecordListContent(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(contentContainerFocusRequester)
+                .focusGroup()
+                .focusRestorer()
                 .focusProperties { canFocus = !isAnyMenuOpen }
                 .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
         ) {
@@ -130,24 +136,22 @@ fun RecordListContent(
                                 (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),
                         modifier = Modifier
                             .focusRequester(specificRequester)
-                            // ★修正: index == 0 の時は先頭へ、それ以外で見えている時は帰り道用の visibleItem を貼る
                             .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
-                            .then(
-                                if (index == firstVisibleIndex) Modifier.focusRequester(
-                                    visibleItemFocusRequester
-                                ) else Modifier
-                            )
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     if (!isSideMenuOpen && !isDetailVisible) {
                                         focusedProgram = program
+                                        onFocusedItemChanged(program) // ★ここ
                                     }
                                 }
                             }
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     if (event.key == Key.DirectionRight) {
-                                        isSideMenuOpen = true; return@onKeyEvent true
+                                        if (!isScrollInProgress) {
+                                            isSideMenuOpen = true
+                                        }
+                                        return@onKeyEvent true
                                     }
                                     if (event.key == Key.Back || event.key == Key.Escape) {
                                         onBackPress(); return@onKeyEvent true
@@ -156,6 +160,22 @@ fun RecordListContent(
                                 false
                             }
                     )
+
+                    // ★自律回収システム（指名手配ID対応）
+                    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+                        val ticket = ticketManager.currentTicket
+                        if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
+                            // 1. 指名手配された番組IDが自分ならフォーカスを奪う
+                            delay(100)
+                            specificRequester.safeRequestFocus("Ticket_TARGET_ID")
+                            ticketManager.consume(FocusTicket.TARGET_ID)
+                        } else if (ticket == FocusTicket.LIST_TOP && index == 0) {
+                            // 2. 単なる先頭リクエストかつ自分が index 0 ならフォーカスを奪う
+                            delay(100)
+                            firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP")
+                            ticketManager.consume(FocusTicket.LIST_TOP)
+                        }
+                    }
                 }
             }
         }
@@ -204,7 +224,7 @@ fun RecordListContent(
                                     if (id != null && itemFocusRequesters.containsKey(id)) {
                                         itemFocusRequesters[id]?.safeRequestFocus()
                                     } else {
-                                        visibleItemFocusRequester.safeRequestFocus() // ★修正
+                                        contentContainerFocusRequester.safeRequestFocus()
                                     }
                                     isSideMenuOpen = false
                                 }
@@ -298,19 +318,13 @@ fun RecordListContent(
                                         right = FocusRequester.Cancel
                                     },
                                     onClick = {
-                                        val id =
-                                            focusedProgram?.id; if (id != null && itemFocusRequesters.containsKey(
-                                            id
-                                        )
-                                    ) {
-                                        itemFocusRequesters[id]?.safeRequestFocus()
-                                    } else {
-                                        visibleItemFocusRequester.safeRequestFocus()
-                                    }; focusedProgram?.let {
-                                        isSideMenuOpen = false; onSeriesSearch(
-                                        TitleNormalizer.extractSearchKeyword(it.title)
-                                    )
-                                    }
+                                        focusedProgram?.let {
+                                            val keyword =
+                                                TitleNormalizer.extractSearchKeyword(it.title)
+                                            // ★呼び出し側でチケット発行ロジックを呼ぶ
+                                            onSeriesSearch(keyword)
+                                            isSideMenuOpen = false
+                                        }
                                     })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(

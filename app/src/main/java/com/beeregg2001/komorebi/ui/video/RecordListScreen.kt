@@ -3,21 +3,27 @@
 package com.beeregg2001.komorebi.ui.video
 
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -28,6 +34,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.tv.foundation.lazy.grid.TvLazyGridState
 import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.MaterialTheme
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -37,8 +44,6 @@ import com.beeregg2001.komorebi.ui.video.components.*
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private const val TAG = "RecordListScreen"
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.O)
@@ -72,7 +77,10 @@ fun RecordListScreen(
 
     val menuState = rememberRecordListMenuState()
     val focuses = rememberRecordListFocusRequesters()
-    val resetState = rememberListResetState()
+    val ticketManager = rememberFocusTicketManager()
+
+    // ★追加: 現在フォーカスされている番組を親で管理する
+    var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
 
     val paneTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = menuState.isPaneOpen }
@@ -84,7 +92,7 @@ fun RecordListScreen(
                 if (selectedCategory == RecordCategory.UNWATCHED) {
                     focuses.navPane.safeRequestFocus("RetreatToNav")
                     pagedRecordings.refresh()
-                    resetState.reset(ListFocusTarget.LIST_TOP)
+                    ticketManager.issue(FocusTicket.LIST_TOP)
                 }
             }
         }
@@ -93,11 +101,7 @@ fun RecordListScreen(
     }
 
     val currentDisplayTitle by remember(
-        selectedCategory,
-        selectedGenre,
-        selectedDay,
-        selectedSeriesGenre,
-        customTitle
+        selectedCategory, selectedGenre, selectedDay, selectedSeriesGenre, customTitle
     ) {
         mutableStateOf(
             when (selectedCategory) {
@@ -112,15 +116,23 @@ fun RecordListScreen(
         )
     }
 
-    val listState = key(resetState.key) { rememberLazyListState() }
-    val gridState = key(resetState.key) { rememberTvLazyGridState() }
-    val seriesListState = key(resetState.key) { rememberLazyListState() }
+    val stateKey = remember(
+        selectedCategory,
+        selectedGenre,
+        selectedDay,
+        selectedSeriesGenre,
+        activeSearchQuery,
+        ticketManager.forceResetTick
+    ) {
+        "${selectedCategory.name}_${selectedGenre}_${selectedDay}_${selectedSeriesGenre}_${activeSearchQuery}_${ticketManager.forceResetTick}"
+    }
+
+    val listState = remember(stateKey) { LazyListState() }
+    val gridState = remember(stateKey) { TvLazyGridState() }
+    val seriesListState = remember(stateKey) { LazyListState() }
 
     val isListFirstItemReady by remember(
-        selectedCategory,
-        isListView,
-        pagedRecordings.itemCount,
-        groupedSeries
+        selectedCategory, isListView, pagedRecordings.itemCount, groupedSeries
     ) {
         derivedStateOf {
             if (isListView) {
@@ -131,196 +143,210 @@ fun RecordListScreen(
     }
 
     val isCategoryImplemented = remember(selectedCategory) {
-        selectedCategory == RecordCategory.ALL || selectedCategory == RecordCategory.UNWATCHED ||
-                selectedCategory == RecordCategory.GENRE || selectedCategory == RecordCategory.SERIES ||
-                selectedCategory == RecordCategory.CHANNEL || selectedCategory == RecordCategory.TIME
+        selectedCategory == RecordCategory.ALL || selectedCategory == RecordCategory.UNWATCHED || selectedCategory == RecordCategory.GENRE || selectedCategory == RecordCategory.SERIES || selectedCategory == RecordCategory.CHANNEL || selectedCategory == RecordCategory.TIME
     }
 
-    val hasContent = remember(
+    val hasContent by remember(
         selectedCategory,
         pagedRecordings.itemCount,
         groupedSeries,
         selectedSeriesGenre,
         isCategoryImplemented
     ) {
-        if (!isCategoryImplemented) false
-        else {
-            when (selectedCategory) {
-                RecordCategory.SERIES -> (if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                    ?: emptyList() else groupedSeries.values.flatten()).isNotEmpty()
+        derivedStateOf {
+            if (!isCategoryImplemented) false
+            else {
+                when (selectedCategory) {
+                    RecordCategory.SERIES -> (if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                        ?: emptyList() else groupedSeries.values.flatten()).isNotEmpty()
 
-                else -> pagedRecordings.itemCount > 0
+                    else -> pagedRecordings.itemCount > 0
+                }
             }
         }
     }
 
-    // ★修正: トップバーから下に移動した際も見えているアイテムを狙い撃ちする（クラッシュ防止）
-    val topBarDownRequester =
-        remember(hasContent, isCategoryImplemented, isListView, isListFirstItemReady) {
-            if (!isCategoryImplemented || !hasContent) {
-                if (isListView) focuses.navPane else FocusRequester.Cancel
-            } else if (isListFirstItemReady) {
-                focuses.visibleItem
-            } else {
-                if (isListView) focuses.navPane else FocusRequester.Cancel
-            }
+    val isLoadingAny by remember(isRecLoading, isSeriesLoading, pagedRecordings.loadState.refresh) {
+        derivedStateOf { isRecLoading || isSeriesLoading || pagedRecordings.loadState.refresh is LoadState.Loading }
+    }
+
+    val topBarDownRequester = remember(isCategoryImplemented, isListView, hasContent) {
+        if (!isCategoryImplemented || !hasContent) {
+            if (isListView) focuses.navPane else focuses.loadingSafeHouse
+        } else {
+            focuses.contentContainer
         }
+    }
 
     val isNavOverlayVisible = !isListView && menuState.isNavPaneOpen
 
-    LaunchedEffect(isNavOverlayVisible) {
-        if (isNavOverlayVisible) {
-            delay(50); focuses.navPane.safeRequestFocus("OverlayMenuOpened")
+    val currentTicket = ticketManager.currentTicket
+    val issueTime = ticketManager.issueTime
+
+    LaunchedEffect(currentTicket, issueTime, isListFirstItemReady, hasContent, isLoadingAny) {
+        when (currentTicket) {
+            FocusTicket.LIST_TOP -> {
+                if (hasContent && isListFirstItemReady && !isLoadingAny) {
+                    delay(50)
+                    focuses.firstItem.safeRequestFocus("Ticket_LIST_TOP")
+                    ticketManager.consume(FocusTicket.LIST_TOP)
+                } else if (!hasContent && !isLoadingAny) {
+                    delay(50)
+                    focuses.firstItem.safeRequestFocus("Ticket_EmptyBox")
+                    ticketManager.consume(FocusTicket.LIST_TOP)
+                }
+            }
+
+            FocusTicket.NAV_PANE -> {
+                delay(50)
+                focuses.navPane.safeRequestFocus("Ticket_NAV_PANE")
+                ticketManager.consume(FocusTicket.NAV_PANE)
+            }
+
+            FocusTicket.PANE -> {
+                if (menuState.isPaneListReady) {
+                    delay(50)
+                    focuses.paneFirstItem.safeRequestFocus("Ticket_PANE")
+                    ticketManager.consume(FocusTicket.PANE)
+                }
+            }
+
+            else -> {}
         }
     }
 
-    LaunchedEffect(resetState.trigger) {
-        if (resetState.trigger > 0L) {
-            delay(100)
-            if (resetState.autoFocusTarget == ListFocusTarget.LIST_TOP && selectedCategory != RecordCategory.SERIES) {
-                var waitLoadRetry = 0
-                while (waitLoadRetry < 30) {
-                    if (pagedRecordings.loadState.refresh is LoadState.NotLoading) break
-                    delay(50); waitLoadRetry++
-                }
-            }
-            try {
-                listState.scrollToItem(0); gridState.scrollToItem(0); seriesListState.scrollToItem(0)
-            } catch (e: Exception) {
-            }
-
-            if (resetState.autoFocusTarget == ListFocusTarget.LIST_TOP) {
-                if (hasContent) {
-                    var focusRetry = 0
-                    while (focusRetry < 10) {
-                        if (isListFirstItemReady) {
-                            delay(50); focuses.firstItem.safeRequestFocus("FocusToListTop"); break
-                        }
-                        delay(50); focusRetry++
-                    }
-                } else {
-                    if (isListView) focuses.navPane.safeRequestFocus("EmptyListFocusNav")
-                }
-            } else if (resetState.autoFocusTarget == ListFocusTarget.NAV_PANE) {
-                delay(50); focuses.navPane.safeRequestFocus("FocusToNavPane")
-            }
-            resetState.autoFocusTarget = ListFocusTarget.NONE
-        }
-    }
-
-    LaunchedEffect(pagedRecordings.itemCount) {
-        if (menuState.isInitialFocusRequested && pagedRecordings.itemCount > 0 && !menuState.isPaneOpen && !menuState.isDetailActive) {
-            delay(100)
-            if (isListView && activeSearchQuery.isEmpty()) focuses.navPane.safeRequestFocus("InitialMenuFocus")
-            else focuses.firstItem.safeRequestFocus("InitialContentFocus")
+    LaunchedEffect(Unit) {
+        if (menuState.isInitialFocusRequested) {
+            delay(200)
+            ticketManager.issue(FocusTicket.LIST_TOP)
             menuState.isInitialFocusRequested = false
-        }
-    }
-
-    LaunchedEffect(menuState.isPaneOpen, menuState.isPaneListReady) {
-        if (menuState.isPaneOpen && menuState.isPaneListReady) {
-            delay(50); focuses.paneFirstItem.safeRequestFocus("PaneOpenedHandover")
-        }
-    }
-
-    LaunchedEffect(menuState.isPaneOpen) {
-        if (!menuState.isPaneOpen && !menuState.isSelectionMade && !menuState.isSearchBarVisible && !menuState.isDetailActive && isListView) {
-            delay(50); focuses.navPane.safeRequestFocus("CancelReturnToMenu")
         }
     }
 
     val executeSearch: (String) -> Unit = { query ->
         viewModel.searchRecordings(query)
         menuState.isSearchBarVisible = false; menuState.isDetailActive = false
-        resetState.reset(ListFocusTarget.LIST_TOP)
+        ticketManager.issue(FocusTicket.LIST_TOP)
     }
 
     val handleCategorySelect: (RecordCategory) -> Unit = { category ->
         val isSameCategory = selectedCategory == category
         menuState.isSelectionMade = false
+
         if (isSameCategory) {
             when (category) {
-                RecordCategory.GENRE -> menuState.isGenrePaneOpen = true
-                RecordCategory.CHANNEL -> menuState.isChannelPaneOpen = true
-                RecordCategory.SERIES -> menuState.isSeriesGenrePaneOpen = true
-                RecordCategory.TIME -> menuState.isDayPaneOpen = true
+                RecordCategory.GENRE -> {
+                    menuState.isGenrePaneOpen = true; ticketManager.issue(FocusTicket.PANE)
+                }
+
+                RecordCategory.CHANNEL -> {
+                    menuState.isChannelPaneOpen = true; ticketManager.issue(FocusTicket.PANE)
+                }
+
+                RecordCategory.SERIES -> {
+                    menuState.isSeriesGenrePaneOpen = true; ticketManager.issue(FocusTicket.PANE)
+                }
+
+                RecordCategory.TIME -> {
+                    menuState.isDayPaneOpen = true; ticketManager.issue(FocusTicket.PANE)
+                }
+
                 else -> {
-                    pagedRecordings.refresh(); resetState.reset(ListFocusTarget.LIST_TOP); menuState.isNavPaneOpen =
-                        false
+                    ticketManager.triggerHardReset()
+                    pagedRecordings.refresh()
+                    ticketManager.issue(FocusTicket.LIST_TOP)
+                    menuState.isNavPaneOpen = false
                 }
             }
         } else {
+            focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_CategoryChange")
             viewModel.updateCategory(category)
+
             if (!category.isPaneCategory) {
                 menuState.isGenrePaneOpen = false; menuState.isChannelPaneOpen =
                     false; menuState.isSeriesGenrePaneOpen = false; menuState.isDayPaneOpen = false
-                resetState.reset(ListFocusTarget.LIST_TOP); menuState.isNavPaneOpen = false
+                ticketManager.issue(FocusTicket.LIST_TOP)
+                menuState.isNavPaneOpen = false
             } else {
                 menuState.isGenrePaneOpen = (category == RecordCategory.GENRE)
                 menuState.isChannelPaneOpen = (category == RecordCategory.CHANNEL)
                 menuState.isSeriesGenrePaneOpen = (category == RecordCategory.SERIES)
                 menuState.isDayPaneOpen = (category == RecordCategory.TIME)
+                ticketManager.issue(FocusTicket.PANE)
             }
         }
+    }
+
+    val handleOpenNavPane = {
+        menuState.isNavPaneOpen = true
+        ticketManager.issue(FocusTicket.NAV_PANE)
     }
 
     val handleBackPress: () -> Unit = {
         when {
             menuState.isDetailActive -> menuState.isDetailActive = false
             menuState.isGenrePaneOpen -> {
-                menuState.isGenrePaneOpen = false; focuses.navPane.safeRequestFocus()
+                menuState.isGenrePaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
             }
 
             menuState.isChannelPaneOpen -> {
-                menuState.isChannelPaneOpen = false; focuses.navPane.safeRequestFocus()
+                menuState.isChannelPaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
             }
 
             menuState.isDayPaneOpen -> {
-                menuState.isDayPaneOpen = false; focuses.navPane.safeRequestFocus()
+                menuState.isDayPaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
             }
 
             menuState.isSeriesGenrePaneOpen -> {
-                menuState.isSeriesGenrePaneOpen = false; focuses.navPane.safeRequestFocus()
+                menuState.isSeriesGenrePaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
             }
 
             menuState.isNavPaneOpen -> {
                 menuState.isNavPaneOpen = false
-                focuses.visibleItem.safeRequestFocus("CloseNavOverlay") // ★修正
+                focuses.contentContainer.safeRequestFocus("CloseNavOverlay")
             }
 
             menuState.isSearchBarVisible -> {
                 menuState.isSearchBarVisible = false
                 scope.launch {
                     delay(50)
-                    if (activeSearchQuery.isNotEmpty()) focuses.visibleItem.safeRequestFocus("SearchHide") // ★修正
-                    else if (isListView) focuses.navPane.safeRequestFocus("SearchHideMenu")
-                    else focuses.visibleItem.safeRequestFocus("SearchHideGrid") // ★修正
+                    if (activeSearchQuery.isNotEmpty()) focuses.contentContainer.safeRequestFocus("SearchHide")
+                    else if (isListView) ticketManager.issue(FocusTicket.NAV_PANE)
+                    else focuses.contentContainer.safeRequestFocus("SearchHideGrid")
                 }
             }
 
             activeSearchQuery.isNotEmpty() -> {
-                if (isListView) focuses.navPane.safeRequestFocus("BackToNavPane") else focuses.visibleItem.safeRequestFocus(
+                if (isListView) ticketManager.issue(FocusTicket.NAV_PANE) else focuses.contentContainer.safeRequestFocus(
                     "BackToGrid"
-                ) // ★修正
+                )
                 viewModel.clearSearch()
-                resetState.reset(if (isListView && selectedCategory != RecordCategory.SERIES) ListFocusTarget.NAV_PANE else ListFocusTarget.LIST_TOP)
+                ticketManager.issue(if (isListView && selectedCategory != RecordCategory.SERIES) FocusTicket.NAV_PANE else FocusTicket.LIST_TOP)
             }
 
             menuState.isBackButtonFocused -> onBack()
-            isListView && !menuState.isNavFocused -> focuses.navPane.safeRequestFocus("BackToNav")
+            isListView && !menuState.isNavFocused -> ticketManager.issue(FocusTicket.NAV_PANE)
             else -> onBack()
         }
     }
 
     BackHandler(enabled = !menuState.isDetailActive) { handleBackPress() }
 
-    // ★修正: 検索バーが表示されている時、または検索クエリが入っている時もパディングを詰め、メニューを隠す
     val contentStartPadding by animateDpAsState(
         targetValue = if (isListView && !menuState.isSearchBarVisible && activeSearchQuery.isEmpty()) 268.dp else 28.dp,
-        animationSpec = tween(350, easing = FastOutSlowInEasing), label = "ContentStartPadding"
+        animationSpec = tween(350, easing = FastOutSlowInEasing),
+        label = "ContentStartPadding"
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .alpha(0f)
+                .focusRequester(focuses.loadingSafeHouse)
+                .focusable()
+        )
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -335,128 +361,144 @@ fun RecordListScreen(
                             up = FocusRequester.Cancel; down = FocusRequester.Cancel; left =
                                 FocusRequester.Cancel; right = FocusRequester.Cancel
                         }
-                    }
-            ) {
-                if (!isRecLoading && !hasContent) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    }) {
+                if (!isLoadingAny && !hasContent) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(focuses.contentContainer)
+                            .focusRequester(focuses.firstItem)
+                            .focusable(),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            text = "録画番組がありません",
+                            "録画番組がありません",
                             style = MaterialTheme.typography.headlineSmall,
                             color = colors.textSecondary.copy(alpha = 0.6f)
                         )
                     }
+                } else if (isLoadingAny && !hasContent) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(focuses.contentContainer)
+                            .focusRequester(focuses.firstItem)
+                            .focusable(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = colors.textPrimary)
+                    }
                 } else {
-                    if (isListView) {
-                        when (selectedCategory) {
-                            RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
-                                RecordSeriesContent(
-                                    seriesList = list,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    isLoading = isSeriesLoading,
-                                    onSeriesClick = { executeSearch(it) },
-                                    onOpenNavPane = {
-                                        menuState.isNavPaneOpen =
-                                            true; focuses.navPane.safeRequestFocus(TAG)
-                                    },
-                                    isListView = true,
-                                    firstItemFocusRequester = focuses.firstItem,
-                                    visibleItemFocusRequester = focuses.visibleItem, // ★渡す
-                                    searchInputFocusRequester = focuses.searchInput,
-                                    backButtonFocusRequester = focuses.backButton,
-                                    isSearchBarVisible = menuState.isSearchBarVisible,
-                                    onBackPress = handleBackPress,
-                                    listState = seriesListState,
-                                    onFirstItemBound = { }
-                                )
-                            }
+                    key(stateKey, isListView) {
+                        if (isListView) {
+                            when (selectedCategory) {
+                                RecordCategory.SERIES -> {
+                                    val list =
+                                        if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                                            ?: emptyList() else groupedSeries.values.flatten()
+                                    RecordSeriesContent(
+                                        seriesList = list,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        onSeriesClick = { executeSearch(it) },
+                                        onOpenNavPane = handleOpenNavPane,
+                                        isListView = true,
+                                        firstItemFocusRequester = focuses.firstItem,
+                                        contentContainerFocusRequester = focuses.contentContainer,
+                                        searchInputFocusRequester = focuses.searchInput,
+                                        backButtonFocusRequester = focuses.backButton,
+                                        isSearchBarVisible = menuState.isSearchBarVisible,
+                                        onBackPress = handleBackPress,
+                                        listState = seriesListState,
+                                        ticketManager = ticketManager
+                                    )
+                                }
 
-                            else -> {
-                                RecordListContent(
-                                    pagedRecordings = pagedRecordings,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    isSearchBarVisible = menuState.isSearchBarVisible,
-                                    isKeyboardActive = false,
-                                    firstItemFocusRequester = focuses.firstItem,
-                                    visibleItemFocusRequester = focuses.visibleItem, // ★渡す
-                                    searchInputFocusRequester = focuses.searchInput,
-                                    backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
-                                    onSeriesSearch = { executeSearch(it) },
-                                    isDetailVisible = menuState.isDetailActive,
-                                    onDetailStateChange = { menuState.isDetailActive = it },
-                                    onBackPress = handleBackPress,
-                                    listState = listState,
-                                    fetchedProgramDetail = programDetail,
-                                    onFetchDetail = { viewModel.fetchProgramDetail(it) },
-                                    onClearDetail = { viewModel.clearProgramDetail() },
-                                    onFirstItemBound = { }
-                                )
+                                else -> {
+                                    RecordListContent(
+                                        pagedRecordings = pagedRecordings,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        isSearchBarVisible = menuState.isSearchBarVisible,
+                                        isKeyboardActive = false,
+                                        firstItemFocusRequester = focuses.firstItem,
+                                        contentContainerFocusRequester = focuses.contentContainer,
+                                        searchInputFocusRequester = focuses.searchInput,
+                                        backButtonFocusRequester = focuses.backButton,
+                                        onProgramClick = onProgramClick,
+                                        onSeriesSearch = { keyword ->
+                                            val currentId = focusedProgram?.id
+                                            executeSearch(keyword)
+                                            ticketManager.issue(FocusTicket.TARGET_ID, currentId)
+                                        },
+                                        isDetailVisible = menuState.isDetailActive,
+                                        onDetailStateChange = { menuState.isDetailActive = it },
+                                        onBackPress = handleBackPress,
+                                        listState = listState,
+                                        fetchedProgramDetail = programDetail,
+                                        onFetchDetail = { viewModel.fetchProgramDetail(it) },
+                                        onClearDetail = { viewModel.clearProgramDetail() },
+                                        ticketManager = ticketManager,
+                                        onFocusedItemChanged = { focusedProgram = it } // ★親で番組を受け取る
+                                    )
+                                }
                             }
-                        }
-                    } else {
-                        when (selectedCategory) {
-                            RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
-                                RecordSeriesGridContent(
-                                    seriesList = list,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    isLoading = isSeriesLoading,
-                                    onSeriesClick = { executeSearch(it) },
-                                    onOpenNavPane = {
-                                        menuState.isNavPaneOpen =
-                                            true; focuses.navPane.safeRequestFocus("OpenGridNav")
-                                    },
-                                    firstItemFocusRequester = focuses.firstItem,
-                                    visibleItemFocusRequester = focuses.visibleItem, // ★渡す
-                                    searchInputFocusRequester = focuses.searchInput,
-                                    backButtonFocusRequester = focuses.backButton,
-                                    isSearchBarVisible = menuState.isSearchBarVisible,
-                                    onBackPress = handleBackPress,
-                                    gridState = gridState,
-                                    onFirstItemBound = { }
-                                )
-                            }
+                        } else {
+                            when (selectedCategory) {
+                                RecordCategory.SERIES -> {
+                                    val list =
+                                        if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                                            ?: emptyList() else groupedSeries.values.flatten()
+                                    RecordSeriesGridContent(
+                                        seriesList = list,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        onSeriesClick = { executeSearch(it) },
+                                        onOpenNavPane = handleOpenNavPane,
+                                        firstItemFocusRequester = focuses.firstItem,
+                                        contentContainerFocusRequester = focuses.contentContainer,
+                                        searchInputFocusRequester = focuses.searchInput,
+                                        backButtonFocusRequester = focuses.backButton,
+                                        isSearchBarVisible = menuState.isSearchBarVisible,
+                                        onBackPress = handleBackPress,
+                                        gridState = gridState,
+                                        ticketManager = ticketManager
+                                    )
+                                }
 
-                            else -> {
-                                RecordGridContent(
-                                    pagedRecordings = pagedRecordings,
-                                    konomiIp = konomiIp,
-                                    konomiPort = konomiPort,
-                                    gridState = gridState,
-                                    isSearchBarVisible = menuState.isSearchBarVisible,
-                                    isKeyboardActive = false,
-                                    firstItemFocusRequester = focuses.firstItem,
-                                    visibleItemFocusRequester = focuses.visibleItem, // ★渡す
-                                    searchInputFocusRequester = focuses.searchInput,
-                                    backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
-                                    onOpenNavPane = {
-                                        menuState.isNavPaneOpen =
-                                            true; focuses.navPane.safeRequestFocus("OpenGridNav")
-                                    },
-                                    onFirstItemBound = { }
-                                )
+                                else -> {
+                                    RecordGridContent(
+                                        pagedRecordings = pagedRecordings,
+                                        konomiIp = konomiIp,
+                                        konomiPort = konomiPort,
+                                        gridState = gridState,
+                                        isSearchBarVisible = menuState.isSearchBarVisible,
+                                        isKeyboardActive = false,
+                                        firstItemFocusRequester = focuses.firstItem,
+                                        contentContainerFocusRequester = focuses.contentContainer,
+                                        searchInputFocusRequester = focuses.searchInput,
+                                        backButtonFocusRequester = focuses.backButton,
+                                        onProgramClick = onProgramClick,
+                                        onOpenNavPane = handleOpenNavPane,
+                                        ticketManager = ticketManager,
+                                        onFocusedItemChanged = { focusedProgram = it } // ★親で番組を受け取る
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            Box(modifier = Modifier
-                .zIndex(5f)
-                .fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .zIndex(5f)
+                    .fillMaxSize()
+            ) {
                 RecordListOverlay(
                     menuState = menuState,
                     focuses = focuses,
-                    resetState = resetState,
+                    ticketManager = ticketManager,
                     selectedCategory = selectedCategory,
                     availableGenres = availableGenres,
                     selectedGenre = selectedGenre,
@@ -464,18 +506,16 @@ fun RecordListScreen(
                     selectedDay = selectedDay,
                     groupedSeries = groupedSeries,
                     selectedSeriesGenre = selectedSeriesGenre,
-                    isListView = isListView, // ★修正: グリッド時はメニューを隠すために渡す
-                    isSearchActive = activeSearchQuery.isNotEmpty() || menuState.isSearchBarVisible, // ★追加: 検索中も隠すため
+                    isListView = isListView,
+                    isSearchActive = activeSearchQuery.isNotEmpty() || menuState.isSearchBarVisible,
                     isNavOverlayVisible = isNavOverlayVisible,
                     paneTransitionState = paneTransitionState,
                     hasContent = hasContent,
-                    isListFirstItemReady = isListFirstItemReady,
                     onCategorySelect = handleCategorySelect,
                     onGenreSelect = { viewModel.updateGenre(it) },
                     onChannelSelect = { viewModel.updateChannel(it) },
                     onDaySelect = { viewModel.updateDay(it) },
-                    onSeriesGenreSelect = { viewModel.updateSeriesGenre(it) }
-                )
+                    onSeriesGenreSelect = { viewModel.updateSeriesGenre(it) })
             }
         }
 
@@ -502,7 +542,7 @@ fun RecordListScreen(
             searchInputFocusRequester = focuses.searchInput,
             innerTextFieldFocusRequester = focuses.innerTextField,
             historyListFocusRequester = focuses.historyList,
-            firstItemFocusRequester = topBarDownRequester, // visibleItem を使うように上で設定済み
+            firstItemFocusRequester = topBarDownRequester,
             backButtonFocusRequester = focuses.backButton,
             searchOpenButtonFocusRequester = focuses.searchOpenButton,
             viewToggleButtonFocusRequester = focuses.viewToggleButton,
@@ -511,13 +551,10 @@ fun RecordListScreen(
             onBackPress = handleBackPress,
             onSearchOpen = { menuState.isSearchBarVisible = true },
             onViewToggle = {
-                val nextListView = !isListView
-                viewModel.updateListView(nextListView)
-                menuState.isNavPaneOpen = false // 切り替え時にメニューを確実に閉じる
-                resetState.reset(ListFocusTarget.LIST_TOP)
+                val nextListView = !isListView; viewModel.updateListView(nextListView)
+                menuState.isNavPaneOpen = false; ticketManager.issue(FocusTicket.LIST_TOP)
             },
             onKeyboardActiveClick = { },
-            onBackButtonFocusChanged = { menuState.isBackButtonFocused = it }
-        )
+            onBackButtonFocusChanged = { menuState.isBackButtonFocused = it })
     }
 }

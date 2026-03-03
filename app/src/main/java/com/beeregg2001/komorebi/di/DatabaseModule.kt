@@ -3,9 +3,10 @@ package com.beeregg2001.komorebi.di
 import android.content.Context
 import androidx.room.Room
 import com.beeregg2001.komorebi.data.local.AppDatabase
+import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
 import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
-import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
+import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao // ★復元
 import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
 import com.beeregg2001.komorebi.data.local.dao.SyncMetaDao
 import dagger.Module
@@ -39,13 +40,13 @@ object DatabaseModule {
         return database.lastChannelDao()
     }
 
-    // ★追加: キャッシュ用DaoのProvide
+    // ★復元: EPGキャッシュ用のDaoのProvide
     @Provides
     fun provideEpgCacheDao(database: AppDatabase): EpgCacheDao {
         return database.epgCacheDao()
     }
 
-    // ★追加: 同期エンジン用のDaoのProvide
+    // 同期エンジン用のDaoのProvide
     @Provides
     fun provideRecordedProgramDao(database: AppDatabase): RecordedProgramDao {
         return database.recordedProgramDao()
@@ -54,5 +55,11 @@ object DatabaseModule {
     @Provides
     fun provideSyncMetaDao(database: AppDatabase): SyncMetaDao {
         return database.syncMetaDao()
+    }
+
+    // AI辞書用のDaoのProvide
+    @Provides
+    fun provideAiSeriesDictionaryDao(database: AppDatabase): AiSeriesDictionaryDao {
+        return database.aiSeriesDictionaryDao()
     }
 }
