@@ -22,6 +22,7 @@ class HomeLauncherState(
     var internalLastPlayerChannelId by mutableStateOf<String?>(null)
     var isEpgJumping by mutableStateOf(false)
     var topNavHasFocus by mutableStateOf(false)
+    var isCurrentTabContentReady by mutableStateOf(false) // ★追加: ローカルのフォーカス安全装置
 
     // --- データ保持 (rememberHomeLauncherState から自動更新される) ---
     var watchHistory by mutableStateOf<List<KonomiHistoryProgram>>(emptyList())
@@ -45,8 +46,11 @@ class HomeLauncherState(
 
     // --- 算出プロパティ ---
     val watchHistoryPrograms: List<RecordedProgram>
-        @RequiresApi(Build.VERSION_CODES.O)
-        get() = watchHistory.map { KonomiDataMapper.toDomainModel(it) }
+        @RequiresApi(Build.VERSION_CODES.O) get() = watchHistory.map {
+            KonomiDataMapper.toDomainModel(
+                it
+            )
+        }
 
     fun isFullScreen(
         selectedChannel: Channel?,
@@ -56,8 +60,7 @@ class HomeLauncherState(
         isRecordListOpen: Boolean,
         isReserveOverlayOpen: Boolean
     ): Boolean {
-        return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null ||
-                isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
+        return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null || isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
     }
 
     /**
@@ -72,9 +75,10 @@ class HomeLauncherState(
         recordViewModel: RecordViewModel,
         reserveViewModel: ReserveViewModel
     ) {
-        // ★修正: すでに選択されているタブに再フォーカスした場合はリロードをスキップ
+        // すでに選択されているタブに再フォーカスした場合はリロードをスキップ
         if (selectedTabIndex == index) return
 
+        isCurrentTabContentReady = false // ★追加: タブが変わったらフォーカス安全装置をリセット
         selectedTabIndex = index
         onTabChange(index)
         when (index) {
@@ -90,14 +94,13 @@ class HomeLauncherState(
     }
 
     fun handleBackNavigation(
-        onTabChange: (Int) -> Unit,
-        onFinalBack: () -> Unit,
-        onBackTriggered: () -> Unit
+        onTabChange: (Int) -> Unit, onFinalBack: () -> Unit, onBackTriggered: () -> Unit
     ) {
         if (!topNavHasFocus) {
             tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus("Home_Back")
         } else {
             if (selectedTabIndex > 0) {
+                isCurrentTabContentReady = false // ★追加: ホームに戻る際もリセット
                 selectedTabIndex = 0
                 onTabChange(0)
             } else {

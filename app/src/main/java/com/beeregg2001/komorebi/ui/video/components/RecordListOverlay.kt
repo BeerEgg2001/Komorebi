@@ -274,6 +274,8 @@ fun RecordListOverlay(
                 isOverlay = false,
                 navPaneFocusRequester = focuses.navPane,
                 ticketManager = ticketManager,
+                contentContainerFocusRequester = focuses.contentContainer, // ★追加: コンテナの的
+                firstItemFocusRequester = focuses.firstItem,               // ★追加: 先頭アイテムの的
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusProperties {
@@ -282,7 +284,7 @@ fun RecordListOverlay(
                             menuState.isChannelPaneOpen -> focuses.channelPane
                             menuState.isDayPaneOpen -> focuses.dayPane
                             menuState.isSeriesGenrePaneOpen -> focuses.seriesGenrePane
-                            hasContent -> focuses.contentContainer
+                            hasContent -> focuses.firstItem
                             else -> FocusRequester.Cancel
                         }
                     }

@@ -24,6 +24,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.data.SettingsRepository
@@ -32,6 +33,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -42,7 +44,8 @@ import java.time.LocalTime
 fun SettingsScreen(
     onBack: () -> Unit,
     onClearLastChannel: () -> Unit = {},
-    onClearWatchHistory: () -> Unit = {}
+    onClearWatchHistory: () -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel() // ★ViewModelを追加
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -100,7 +103,6 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            // ★変更: ラボタブのフォーカスリクエスターを3つから5つに増やす
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -264,12 +266,20 @@ fun SettingsScreen(
                             uiState.activeDialog = SettingDialogState.Input(
                                 t,
                                 v
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) SettingsRepository.KONOMI_IP else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) SettingsRepository.KONOMI_PORT else if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
-                                        it
-                                    )
+                            ) { newValue ->
+                                // ★修正: KonomiTV関連はViewModelの判定を通すことで同期の誤爆を防ぐ
+                                if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) {
+                                    viewModel.updateKonomiIp(newValue)
+                                } else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) {
+                                    viewModel.updateKonomiPort(newValue)
+                                } else {
+                                    // Mirakurunの場合は直接保存
+                                    scope.launch {
+                                        repository.saveString(
+                                            if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
+                                            newValue
+                                        )
+                                    }
                                 }
                             }
                         },
@@ -627,13 +637,13 @@ fun SettingsScreen(
                         annict = prefs.labAnnict,
                         shobocal = prefs.labShobocal,
                         postCmd = prefs.defaultPostCommand,
-                        enableAi = prefs.enableAiNormalization, // ★追加
-                        apiKey = prefs.geminiApiKey, // ★追加
+                        enableAi = prefs.enableAiNormalization,
+                        apiKey = prefs.geminiApiKey,
                         annictR = itemFocusRequesters[6][0],
                         shobocalR = itemFocusRequesters[6][1],
                         cmdR = itemFocusRequesters[6][2],
-                        enableAiR = itemFocusRequesters[6][3], // ★追加
-                        apiKeyR = itemFocusRequesters[6][4], // ★追加
+                        enableAiR = itemFocusRequesters[6][3],
+                        apiKeyR = itemFocusRequesters[6][4],
                         sidebarR = categoryFocusRequesters[6],
                         onAnnict = {
                             scope.launch {

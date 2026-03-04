@@ -73,8 +73,8 @@ fun HomeLauncherScreen(
     triggerBack: Boolean,
     onBackTriggered: () -> Unit,
     onFinalBack: () -> Unit,
-    onUiReady: () -> Unit, // 親に描画完了を伝える
-    isUiReadyFlag: Boolean, // ★MainRootStateから渡される物理的準備完了フラグ
+    onUiReady: () -> Unit,
+    isUiReadyFlag: Boolean,
     onNavigateToPlayer: (String, String, String) -> Unit,
     lastPlayerChannelId: String? = null,
     lastPlayerProgramId: String? = null,
@@ -196,8 +196,13 @@ fun HomeLauncherScreen(
                                 modifier = Modifier
                                     .focusRequester(ui.tabFocusRequesters[index])
                                     .focusProperties {
-                                        down = if (isUiReadyFlag) ui.contentFirstItemRequesters[index] else FocusRequester.Default; canFocus =
-                                        !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
+                                        down =
+                                            if (ui.selectedTabIndex == index && ui.isCurrentTabContentReady) {
+                                                ui.contentFirstItemRequesters[index]
+                                            } else {
+                                                FocusRequester.Default
+                                            }
+                                        canFocus = !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
                                     }) {
                                 Text(
                                     text = title,
@@ -231,7 +236,6 @@ fun HomeLauncherScreen(
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                // タブ切り替え時に確実に描画完了を待つ
                 key(ui.selectedTabIndex) {
                     when (ui.selectedTabIndex) {
                         0 -> HomeContents(
@@ -274,7 +278,10 @@ fun HomeLauncherScreen(
                             lastFocusedChannelId = ui.internalLastPlayerChannelId,
                             lastFocusedProgramId = lastPlayerProgramId,
                             isTopNavFocused = ui.topNavHasFocus,
-                            onUiReady = onUiReady // コンテンツ内で描画完了を判定
+                            onUiReady = {
+                                onUiReady()
+                                ui.isCurrentTabContentReady = true
+                            }
                         )
 
                         1 -> {
@@ -297,7 +304,11 @@ fun HomeLauncherScreen(
                                 onReturnFocusConsumed = onReturnFocusConsumed,
                                 reserveViewModel = reserveViewModel
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500)
+                                onUiReady()
+                                ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         2 -> {
@@ -324,15 +335,29 @@ fun HomeLauncherScreen(
                                 onShowAllRecordings = onShowAllRecordings,
                                 onShowSeriesList = onShowSeriesList
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500)
+                                onUiReady()
+                                ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         3 -> {
+                            // ★修正: Stateを全て取得して渡す
+                            val epgSearchQuery by epgViewModel.searchQuery.collectAsState()
+                            val epgSearchHistory by epgViewModel.searchHistory.collectAsState()
+                            val epgActiveSearchQuery by epgViewModel.activeSearchQuery.collectAsState()
+                            val epgSearchResults by epgViewModel.searchResults.collectAsState()
+                            val epgIsSearching by epgViewModel.isSearching.collectAsState()
+
+                            // ★追加: 番組表タブが開かれたら、全放送波のデータをバックグラウンドでキャッシュしておく
+                            LaunchedEffect(groupedChannels.keys) {
+                                epgViewModel.preloadEpgDataForSearch(groupedChannels.keys.toList())
+                            }
+
                             EpgNavigationContainer(
                                 uiState = ui.epgUiState,
                                 logoUrls = ui.logoUrls,
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
                                 mainTabFocusRequester = ui.tabFocusRequesters[3],
                                 contentRequester = ui.contentFirstItemRequesters[3],
                                 selectedProgram = epgSelectedProgram,
@@ -345,9 +370,23 @@ fun HomeLauncherScreen(
                                 restoreChannelId = if (isReturningFromPlayer && ui.selectedTabIndex == 3) lastPlayerChannelId else null,
                                 availableTypes = groupedChannels.keys.toList(),
                                 onJumpStateChanged = { ui.isEpgJumping = it },
-                                reserves = ui.reserves
+                                reserves = ui.reserves,
+                                onUpdateTargetTime = { epgViewModel.updateTargetTime(it) },
+                                searchQuery = epgSearchQuery,
+                                searchHistory = epgSearchHistory,
+                                onSearchQueryChange = { epgViewModel.updateSearchQuery(it) },
+                                onExecuteSearch = { epgViewModel.executeSearch(it) },
+                                // ★追加: 結果表示用プロパティ
+                                activeSearchQuery = epgActiveSearchQuery,
+                                searchResults = epgSearchResults,
+                                isSearching = epgIsSearching,
+                                onClearSearch = { epgViewModel.clearSearch() }
                             )
-                            LaunchedEffect(Unit) { delay(800); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(800)
+                                onUiReady()
+                                ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         4 -> {
@@ -362,7 +401,11 @@ fun HomeLauncherScreen(
                                 konomiPort = konomiPort,
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[4]
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500)
+                                onUiReady()
+                                ui.isCurrentTabContentReady = true
+                            }
                         }
                     }
                 }

@@ -65,22 +65,22 @@ class EpgState(
     var screenWidthPx by mutableFloatStateOf(0f)
     var screenHeightPx by mutableFloatStateOf(0f)
 
-    private val maxScrollMinutes = 1440 * 14
+    // ★修正: ぴったり24時間（60分 × 24時間）
+    val maxScrollMinutes = 60 * 24
 
-    suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
+    suspend fun updateData(newData: List<EpgChannelWrapper>, targetTime: OffsetDateTime, resetFocus: Boolean = false) {
         isCalculating = true
         withContext(Dispatchers.Default) {
             try {
-                val now = OffsetDateTime.now()
-                val newBaseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
+                // ★修正: targetTimeからその日の「朝4時」を起算してベースにする
+                val newBaseTime = targetTime.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
+                    if (targetTime.hour < 4) it.minusDays(1) else it
+                }
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
                 val newUiChannels = newData.map { wrapper ->
                     val filled = EpgDataConverter.getFilledPrograms(
-                        wrapper.channel.id,
-                        wrapper.programs,
-                        newBaseTime,
-                        newLimitTime
+                        wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime
                     )
                     val uiProgs = filled.map { p ->
                         val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
@@ -88,13 +88,8 @@ class EpgState(
                         val height = (dur / 60f) * config.hhPx
                         val isEmpty = p.title == "（番組情報なし）"
                         val endMs = try {
-                            EpgDataConverter.safeParseTime(
-                                p.end_time,
-                                newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())
-                            ).toInstant().toEpochMilli()
-                        } catch (e: Exception) {
-                            0L
-                        }
+                            EpgDataConverter.safeParseTime(p.end_time, newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())).toInstant().toEpochMilli()
+                        } catch (e: Exception) { 0L }
                         UiProgram(p, topY, height, isEmpty, endMs)
                     }
                     UiChannel(wrapper.copy(programs = filled), uiProgs)
@@ -107,17 +102,9 @@ class EpgState(
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
                     textLayoutCache.clear()
 
-                    if (!isInitialized || resetFocus) {
-                        jumpToNow()
-                        isInitialized = true
-                    } else {
-                        if (uiChannels.isNotEmpty()) {
-                            if (focusedCol >= uiChannels.size) {
-                                focusedCol = uiChannels.size - 1
-                            }
-                            updatePositions(focusedCol, focusedMin)
-                        }
-                    }
+                    // ★修正: データが来たら、無限スクロールのことは忘れて常に目的の時刻へジャンプする！
+                    jumpToTime(targetTime)
+                    isInitialized = true
                     isCalculating = false
                 }
             } catch (e: Exception) {
@@ -148,8 +135,6 @@ class EpgState(
         } catch (e: Exception) {
             0
         }
-
-        Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
 
         var bestCol = 0
         if (uiChannels.isNotEmpty()) {

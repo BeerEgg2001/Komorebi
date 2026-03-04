@@ -422,8 +422,29 @@ fun LivePlayerScreen(
         }
         onDispose { jikkyoClient.stop() }
     }
+
+    // ★修正: 時計の「00秒」に同期した定期更新
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            // 現在の時刻から、次の「00秒ジャスト」までの残りミリ秒を計算
+            val delayToNextMinute = 60000L - (now % 60000L)
+
+            // 次の00秒ジャスト ＋ 1000ms（1秒）のバッファを持たせて待機
+            // 例: 20:00:01 にフェッチが走るようにする
+            delay(delayToNextMinute + 1000L)
+
+            channelViewModel.fetchChannels()
+        }
+    }
+
+    // ----------------------------------------------------
+    // ★修正: ミニリストの開閉を検知するエフェクト
+    // 開いた瞬間に一発 fetchChannels() を実行する
+    // ----------------------------------------------------
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
+            channelViewModel.fetchChannels()
             delay(200); listFocusRequester.safeRequestFocus(TAG)
         } else if (!isManualOverlay && !isSubMenuOpen) {
             delay(100); mainFocusRequester.safeRequestFocus(TAG)

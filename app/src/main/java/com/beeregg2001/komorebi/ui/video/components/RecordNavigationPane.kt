@@ -29,6 +29,8 @@ fun RecordNavigationPane(
     isOverlay: Boolean,
     navPaneFocusRequester: FocusRequester,
     ticketManager: FocusTicketManager,
+    contentContainerFocusRequester: FocusRequester? = null,
+    firstItemFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
@@ -67,7 +69,22 @@ fun RecordNavigationPane(
                     modifier = Modifier
                         .then(if (index == 0) Modifier.padding(top = 0.dp) else Modifier)
                         .focusRequester(categoryRequesters[category] ?: FocusRequester()),
-                    onClick = { onCategorySelect(category) }
+                    onClick = { onCategorySelect(category) },
+                    onRightKey = {
+                        // ★「透明コンテナの罠」回避ロジック（狙撃順序の逆転：例外キャッチ版）
+                        try {
+                            // 1. まず先頭アイテムを直接狙う（スクロールされていなければ確実に当たる）
+                            firstItemFocusRequester?.requestFocus()
+                        } catch (e: Exception) {
+                            // 2. 失敗した場合、それは「スクロールされて先頭が見えない」状態。
+                            // この時は履歴が残っているはずなので、コンテナへ任せる！
+                            try {
+                                contentContainerFocusRequester?.requestFocus()
+                            } catch (e2: Exception) {
+                                // どちらもダメなら無視
+                            }
+                        }
+                    }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -82,7 +99,8 @@ private fun NavigationItem(
     isSelected: Boolean,
     isOverlay: Boolean,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRightKey: () -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -95,8 +113,13 @@ private fun NavigationItem(
             .padding(horizontal = 12.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .onKeyEvent { event ->
-                if (isOverlay && event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
-                    onClick(); true
+                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+                    if (isOverlay) {
+                        onClick()
+                    } else {
+                        onRightKey()
+                    }
+                    true
                 } else false
             },
         colors = ClickableSurfaceDefaults.colors(
