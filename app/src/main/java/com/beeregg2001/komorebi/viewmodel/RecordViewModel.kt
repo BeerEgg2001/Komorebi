@@ -63,13 +63,12 @@ class RecordViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
     private val programDao: RecordedProgramDao,
-    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao, // ★追加
+    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     // --- 1. 状態の定義 ---
 
-    // ★追加: UIローディング用の進捗状況
     val syncProgress: StateFlow<SyncProgress> = syncEngine.syncProgress
 
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
@@ -168,11 +167,16 @@ class RecordViewModel @Inject constructor(
         loadSearchHistory()
 
         viewModelScope.launch(Dispatchers.IO) {
-            programDao.getAllProgramsFlow()
+            combine(
+                programDao.getAllProgramsFlow(),
+                aiSeriesDictionaryDao.getAllDictionaryFlow()
+            ) { programs, dictionary ->
+                Pair(programs, dictionary)
+            }
                 .debounce(1000L)
-                .collect { entities ->
-                    if (entities.isNotEmpty()) {
-                        buildSeriesAndChannelMapsFromEntities(entities)
+                .collect { (programs, dictionary) ->
+                    if (programs.isNotEmpty()) {
+                        buildSeriesAndChannelMapsFromEntities(programs, dictionary)
                     }
                 }
         }
@@ -182,7 +186,6 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // ★追加: 録画リストを開いた時などに呼ぶスマート同期
     fun triggerSmartSync() {
         viewModelScope.launch {
             syncEngine.smartSync()
@@ -211,10 +214,12 @@ class RecordViewModel @Inject constructor(
                 state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
                 state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() ->
                     programDao.getPagingSourceByChannel(state.channelId)
+
                 state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() ->
                     programDao.getPagingSourceByGenre(state.genre)
+
                 state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
-                    val dayOfWeekStr = when(state.day.replace("曜日", "")) {
+                    val dayOfWeekStr = when (state.day.replace("曜日", "")) {
                         "日" -> "0"
                         "月" -> "1"
                         "火" -> "2"
@@ -226,6 +231,7 @@ class RecordViewModel @Inject constructor(
                     }
                     programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
                 }
+
                 state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
                 else -> programDao.getAllPagingSource()
             }
@@ -413,23 +419,20 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
-    /**
-     * ★修正: AI名寄せ辞書と3重の壁（大ジャンル_中ジャンル_チャンネル）を利用して精度の高いシリーズ構築を行う
-     */
-    private suspend fun buildSeriesAndChannelMapsFromEntities(entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>) {
+    private suspend fun buildSeriesAndChannelMapsFromEntities(
+        entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>,
+        dictEntities: List<com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity>
+    ) {
         _isSeriesLoading.value = true
         val genreToSeriesData = mutableMapOf<String, MutableMap<String, SeriesInfo>>()
-        val allChannelMap = mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+        val allChannelMap =
+            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
         val genresSet = mutableSetOf<String>()
 
         try {
             val programs = entities.map { RecordDataMapper.toDomainModel(it) }
+            val aiDict = dictEntities.associate { it.originalTitle to it.normalizedSeriesName }
 
-            // ★追加: AI名寄せ辞書のロードと有効化チェック
-            val aiDict = aiSeriesDictionaryDao.getAllDictionary().associate { it.originalTitle to it.normalizedSeriesName }
-            val isAiEnabled = settingsRepository.enableAiNormalization.first() == "ON"
-
-            // 1次パス: AI辞書 または TitleNormalizer による抽出と、3重の壁による強固なグルーピング
             programs.forEach { prog ->
                 val majorGenre = prog.genres?.firstOrNull()?.major ?: "その他"
                 val middleGenre = prog.genres?.firstOrNull()?.middle ?: "その他"
@@ -437,14 +440,15 @@ class RecordViewModel @Inject constructor(
 
                 genresSet.add(majorGenre)
 
-                // AI辞書に存在すればそれを採用、なければローカル正規化
-                val aiSeriesName = if (isAiEnabled) aiDict[prog.title] else null
+                val aiSeriesName = aiDict[prog.title]
                 val displayTitle = aiSeriesName ?: TitleNormalizer.extractDisplayTitle(prog.title)
-                val searchKeyword = aiSeriesName ?: TitleNormalizer.extractSearchKeyword(prog.title)
-                val groupingKey = aiSeriesName ?: TitleNormalizer.getGroupingKey(prog.title)
+
+                // ★修正: 検索キーワードにはワイルドカード(%)を含ませた強靭な文字列を使用する
+                val searchKeyword = TitleNormalizer.toSqlSearchQuery(aiSeriesName ?: displayTitle)
+
+                val groupingKey = TitleNormalizer.getGroupingKey(aiSeriesName ?: prog.title)
 
                 if (displayTitle.isNotEmpty()) {
-                    // ★修正: 他局や別ジャンルの類似タイトルが混ざるのを完全に防ぐ「3重の壁」
                     val groupingCategory = "${majorGenre}_${middleGenre}_${channelId}"
 
                     val genreMap = genreToSeriesData.getOrPut(groupingCategory) { mutableMapOf() }
@@ -453,7 +457,6 @@ class RecordViewModel @Inject constructor(
                     if (existing == null) {
                         genreMap[groupingKey] = SeriesInfo(displayTitle, searchKeyword, 1, prog.id)
                     } else {
-                        // AI名がある場合は長さを問わずAI名を優先、それ以外は短いものを優先
                         val betterTitle = if (aiSeriesName != null) {
                             aiSeriesName
                         } else {
@@ -476,12 +479,10 @@ class RecordViewModel @Inject constructor(
                 }
             }
 
-            // 2次パス: 「3重の壁」の中でのみ、LCP（最長共通接頭辞）による類似タイトルの結合を行う
             val mergedByCategory = genreToSeriesData.mapValues { (_, seriesMap) ->
                 mergeSeriesByLCP(seriesMap.values.toMutableList())
             }
 
-            // 3次パス: 壁を取り払い、大ジャンルごとに集約。かつ「タイトルが完全一致」するシリーズは合流（全録の再放送対策）
             val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
             mergedByCategory.forEach { (categoryKey, seriesList) ->
                 val majorGenre = categoryKey.substringBefore("_")
@@ -491,7 +492,8 @@ class RecordViewModel @Inject constructor(
                     val existing = list.find { it.displayTitle == seriesInfo.displayTitle }
                     if (existing != null) {
                         val index = list.indexOf(existing)
-                        list[index] = existing.copy(programCount = existing.programCount + seriesInfo.programCount)
+                        list[index] =
+                            existing.copy(programCount = existing.programCount + seriesInfo.programCount)
                     } else {
                         list.add(seriesInfo)
                     }
@@ -499,14 +501,23 @@ class RecordViewModel @Inject constructor(
             }
 
             _availableGenres.value = genresSet.sorted()
-            _groupedSeries.value = finalGroupedSeries.mapValues { entry -> entry.value.sortedBy { it.displayTitle } }
+            _groupedSeries.value =
+                finalGroupedSeries.mapValues { entry -> entry.value.sortedBy { it.displayTitle } }
 
             val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
-            val extractNumber = { idStr: String -> Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE }
+            val extractNumber = { idStr: String ->
+                Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+            }
             _groupedChannels.value = allChannelMap.entries
-                .sortedBy { (type, _) -> typePriority.indexOf(type).let { if (it != -1) it else typePriority.size } }
+                .sortedBy { (type, _) ->
+                    typePriority.indexOf(type).let { if (it != -1) it else typePriority.size }
+                }
                 .associate { entry ->
-                    entry.key to entry.value.values.sortedWith(compareBy({ extractNumber(it.third) }, { it.third }))
+                    entry.key to entry.value.values.sortedWith(
+                        compareBy(
+                            { extractNumber(it.third) },
+                            { it.third })
+                    )
                         .map { Pair(it.first, it.second) }
                 }
 
@@ -528,20 +539,21 @@ class RecordViewModel @Inject constructor(
             val next = seriesList[i]
             val commonPrefix = findLCP(current.displayTitle, next.displayTitle).trim()
 
-            // ★修正: 壁で守られているため、LCPの閾値を文字数2文字・60%一致にまで緩和し、短いタイトルも結合する
             val isMatch = commonPrefix.length >= 2 &&
                     (commonPrefix.length >= current.displayTitle.length * 0.6 ||
                             commonPrefix.length >= next.displayTitle.length * 0.6)
 
             if (isMatch) {
-                // ★修正: 末尾に残ったゴミ記号（【 や & や 「 など）を根こそぎ消す
                 val newTitle = commonPrefix
                     .replace(Regex("[【「『（(\\[＆&・\\-！!？?　 ]+$"), "")
                     .trim()
 
                 current = current.copy(
                     displayTitle = if (newTitle.length >= 2) newTitle else current.displayTitle,
-                    searchKeyword = if (newTitle.length >= 2) newTitle else current.searchKeyword,
+                    // ★修正: LCPで統合された新しいタイトルにもワイルドカード処理を適応
+                    searchKeyword = if (newTitle.length >= 2) TitleNormalizer.toSqlSearchQuery(
+                        newTitle
+                    ) else current.searchKeyword,
                     programCount = current.programCount + next.programCount
                 )
             } else {

@@ -5,10 +5,11 @@ import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
 import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.generationConfig
+import com.google.ai.client.generativeai.type.generationConfig // ★復活
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -28,53 +29,106 @@ class AiNormalizationRepository @Inject constructor(
                     return@withContext Result.failure(Exception("API Key is not configured."))
                 }
 
-                val config = generationConfig {
-                    responseMimeType = "application/json"
-                }
-
-                val generativeModel = GenerativeModel(
-                    modelName = "gemini-1.5-flash",
-                    apiKey = apiKey,
-                    generationConfig = config
-                )
-
+                // ★修正: AIが「斜め読み」できないように、アルゴリズム的にガチガチに指示する
                 val prompt = """
-                あなたは優秀な日本のテレビ番組のメタデータ整理AIです。
-                以下の録画番組のタイトルリストを解析し、話数、サブタイトル、放送回、再放送や画質マーク、企画名、コーナー名などを取り除いた「公式のシリーズ名（親タイトル）」を抽出して、JSON形式で返してください。
+                あなたは文字列処理プログラムです。創造性は一切不要です。
+                以下の「元のタイトル」のリストから、絶対に以下のルール【ステップ1〜4】を順番に適用して文字列を削り、「シリーズ名」として出力してください。
                 
-                【重要ルール】
-                1. 「！」「？」などのタイトル固有の記号は絶対に削らないでください。
-                2. 「【連続テレビ小説】ばけばけ」のような放送枠名は外し、作品名だけにしてください。
-                3. 2つの番組が合体している場合（A & B）、メインの番組名（A）をシリーズ名にしてください。
-                4. 「金曜ロードショー」や「土曜プレミアム」などの映画枠・特別枠は、個別の映画作品名ではなく、枠名（「金曜ロードショー」など）をシリーズ名にしてください。
-                5. バラエティ番組の後半にある企画名（例：「カレンダープロジェクト」「～の巻」「〇〇SP」）は全て削除してください。
-                6. 極端に短いタイトル（例：マツコ、有吉など）に省略しすぎないでください。
-                7. 入力されたタイトルリストの全件について、1件も漏らさずに結果を返してください。必ず入力と同じ数の配列になります。
+                【ステップ1: 記号による分割と削除】
+                タイトルの中に 全角スペース、半角スペース、「！」、「？」、「～」、「#」、「第」 が含まれている場合、それ以降の文字列は「今日の企画名・ゲスト名・話数」であるため、**思い切って全て削除**してください。
+                （例: 「ヒルナンデス！冬の北海道SP」 → 「ヒルナンデス！」）
+                （例: 「アメトーーク！ 〇〇芸人」 → 「アメトーーク！」）
                 
-                【抽出の例】
-                "【連続テレビ小説】ばけばけ" -> "ばけばけ"
-                "ヒルナンデス!冬の北海道日帰りバスツアーSP!GLAY・ HISASHI登場!" -> "ヒルナンデス!"
-                "世界の果てまでイッテQ！ カレンダープロジェクト" -> "世界の果てまでイッテQ！"
-                "金曜ロードショー「ハリー・ポッターと賢者の石」" -> "金曜ロードショー"
-                "上田と女DEEP【セカンドキャリア】&「黒崎さんの一途な愛がとまらない」#7[字]" -> "上田と女DEEP"
+                【ステップ2: 放送枠名の優先】
+                タイトルに「金曜ロードショー」「土曜プレミアム」「月曜プレミア」が含まれている場合は、映画のタイトルを全て削除し、枠名だけを残してください。
+                （例: 「金曜ロードショー『ハリー・ポッター』」 → 「金曜ロードショー」）
                 
-                出力フォーマット: [{"original": "元のタイトル", "series": "シリーズ名"}, ... ]
+                【ステップ3: 合体番組の分離】
+                「 A & B 」や「 A / B 」のように番組が合体している場合は、最初の番組「A」だけを残してください。
+                
+                【ステップ4: ゴミ記号の掃除】
+                先頭や末尾に残ったカッコ（【】や「」や[]）や空白を綺麗に削除してください。
+                
+                必ず以下のJSON配列形式でのみ出力してください。
+                [{"original": "元のタイトル", "series": "削った後のシリーズ名"}, ...]
                 
                 タイトルリスト:
                 ${gson.toJson(titles)}
             """.trimIndent()
 
-                val response = generativeModel.generateContent(prompt)
-                val rawText = response.text
-                    ?: return@withContext Result.failure(Exception("Empty response from AI"))
+                val modelNamesToTry = listOf(
+                    "gemini-3-flash",
+                    "gemini-2.5-flash",
+                    "gemini-1.5-flash"
+                )
 
-                // ★修正: Markdownの ```json や ``` を取り除く安全処理（パースエラーによる破棄を防止）
-                val jsonText = rawText.replace(Regex("```json\\s*", RegexOption.IGNORE_CASE), "")
+                var rawText: String? = null
+                var lastException: Exception? = null
+                var successfulModel = ""
+
+                // ★修正: 創造性を完全に0にして、指示通りにしか動けないようにする
+                val strictConfig = generationConfig {
+                    temperature = 0.0f
+                }
+
+                for (modelName in modelNamesToTry) {
+                    var retryCount = 0
+                    var modelSuccess = false
+
+                    while (retryCount < 2 && !modelSuccess) {
+                        try {
+                            Log.i("AiNorm", "Trying AI model: $modelName (Strict Mode)...")
+
+                            val model = GenerativeModel(
+                                modelName = modelName,
+                                apiKey = apiKey,
+                                generationConfig = strictConfig // 適用
+                            )
+                            val response = model.generateContent(prompt)
+
+                            rawText = response.text
+                            if (rawText != null) {
+                                successfulModel = modelName
+                                modelSuccess = true
+                                Log.i("AiNorm", "🎉 Success with model: $modelName !!")
+                                break
+                            }
+                        } catch (e: Exception) {
+                            Log.w(
+                                "AiNorm",
+                                "Model $modelName attempt ${retryCount + 1} failed: ${e.message}"
+                            )
+                            lastException = e
+                            retryCount++
+                            if (retryCount < 2) {
+                                delay(20000L)
+                            }
+                        }
+                    }
+                    if (modelSuccess) break
+                }
+
+                if (rawText == null) {
+                    return@withContext Result.failure(
+                        lastException ?: Exception("All AI models failed")
+                    )
+                }
+
+                val cleanedText = rawText.replace(Regex("```json\\s*", RegexOption.IGNORE_CASE), "")
                     .replace(Regex("```\\s*"), "")
                     .trim()
 
+                val startIndex = cleanedText.indexOf("[")
+                val endIndex = cleanedText.lastIndexOf("]")
+
+                val safeJson = if (startIndex != -1 && endIndex != -1 && endIndex >= startIndex) {
+                    cleanedText.substring(startIndex, endIndex + 1)
+                } else {
+                    cleanedText
+                }
+
                 val listType = object : TypeToken<List<Map<String, String>>>() {}.type
-                val parsedList: List<Map<String, String>> = gson.fromJson(jsonText, listType)
+                val parsedList: List<Map<String, String>> = gson.fromJson(safeJson, listType)
 
                 val resultMap = mutableMapOf<String, String>()
                 val entities = mutableListOf<AiSeriesDictionaryEntity>()
@@ -94,7 +148,7 @@ class AiNormalizationRepository @Inject constructor(
 
                 Result.success(resultMap)
             } catch (e: Exception) {
-                Log.e("AiNorm", "Parse or API Error", e)
+                Log.e("AiNorm", "Parse Error after receiving data", e)
                 Result.failure(e)
             }
         }

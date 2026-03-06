@@ -11,20 +11,21 @@ data class RecordedProgram(
     val id: Int,
     val title: String,
     val description: String,
-    val detail: Map<String, String>? = null, // ★追加: 番組詳細
+    val detail: Map<String, String>? = null,
     @SerializedName("start_time") val startTime: String,
     @SerializedName("end_time") val endTime: String,
     val duration: Double,
     @SerializedName("is_partially_recorded") val isPartiallyRecorded: Boolean,
     val channel: RecordedChannel? = null,
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
-    val genres: List<EpgGenre>? = null, // ★追加: 番組表と同じジャンル情報
+    val genres: List<EpgGenre>? = null,
     val isRecording: Boolean = false,
     val playbackPosition: Double = 0.0
 )
 
 data class RecordedChannel(
     val id: String,
+    @SerializedName("network_id") val networkId: Int? = null, // NIDは保持（将来の拡張用）
     @SerializedName("display_channel_id") val displayChannelId: String,
     val type: String,
     val name: String,
