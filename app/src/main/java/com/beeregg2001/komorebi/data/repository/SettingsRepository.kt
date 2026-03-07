@@ -44,7 +44,9 @@ class SettingsRepository @Inject constructor(
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
 
-        // ★追加: AI正規化関連
+        // ★追加: 録画後実行バッチリスト (JSON形式で保存)
+        val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
+
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
 
@@ -81,7 +83,9 @@ class SettingsRepository @Inject constructor(
     val labShobocalIntegration: Flow<String> = context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
     val defaultPostCommand: Flow<String> = context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
 
-    // ★追加: AI正規化関連
+    // ★追加
+    val postRecordingBatchList: Flow<String> = context.dataStore.data.map { it[POST_RECORDING_BATCH_LIST] ?: "[]" }
+
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
     val enableAiNormalization: Flow<String> = context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
 

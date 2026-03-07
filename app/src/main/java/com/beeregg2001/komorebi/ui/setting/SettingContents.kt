@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -15,6 +16,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 
 @Composable
 fun GeneralSettingsContent(
@@ -49,6 +51,62 @@ fun GeneralSettingsContent(
                     .focusRequester(clearHistoryR)
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(clearHistoryR); onClearHistory() })
+        }
+    }
+}
+
+// ★追加: 録画設定コンテンツ
+@Composable
+fun RecordingSettingsContent(
+    batchList: List<PostRecordingBatch>,
+    onAdd: () -> Unit,
+    onDelete: (PostRecordingBatch) -> Unit,
+    addR: FocusRequester,
+    itemRs: List<FocusRequester>,
+    sidebarR: FocusRequester,
+    onClick: (FocusRequester) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(
+            "録画設定",
+            style = MaterialTheme.typography.headlineMedium,
+            color = colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
+
+        SettingsSection("録画後実行batの設定") {
+            SettingItem(
+                title = "新しいバッチを追加",
+                value = "",
+                icon = Icons.Default.Add,
+                modifier = Modifier
+                    .focusRequester(addR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(addR); onAdd() }
+            )
+
+            if (batchList.isEmpty()) {
+                Text(
+                    "登録されたバッチはありません",
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary.copy(0.6f)
+                )
+            } else {
+                batchList.forEachIndexed { index, batch ->
+                    val requester = itemRs.getOrNull(index) ?: remember { FocusRequester() }
+                    SettingItem(
+                        title = batch.name,
+                        value = "削除",
+                        icon = Icons.Default.Terminal,
+                        modifier = Modifier
+                            .focusRequester(requester)
+                            .focusProperties { left = sidebarR },
+                        onClick = { onClick(requester); onDelete(batch) }
+                    )
+                }
+            }
         }
     }
 }
@@ -441,12 +499,12 @@ fun CommentSettingsContent(
 @Composable
 fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
-    enableAi: String, apiKey: String, // ★追加
+    enableAi: String, apiKey: String,
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
-    enableAiR: FocusRequester, apiKeyR: FocusRequester, // ★追加
+    enableAiR: FocusRequester, apiKeyR: FocusRequester,
     sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
-    onToggleAi: () -> Unit, onEditApiKey: () -> Unit, // ★追加
+    onToggleAi: () -> Unit, onEditApiKey: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -457,7 +515,6 @@ fun LabSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        // ★追加: AI強化正規化 セクション
         SettingsSection("AI強化正規化 (アルファ版)") {
             SettingItem(
                 "AIによるシリーズ名正規化",
@@ -472,7 +529,7 @@ fun LabSettingsContent(
                 "Gemini API Key",
                 if (apiKey.isEmpty()) "未設定" else "設定済み",
                 Icons.Default.VpnKey,
-                enabled = enableAi == "ON", // 機能がONの時だけ入力可能に
+                enabled = enableAi == "ON",
                 modifier = Modifier
                     .focusRequester(apiKeyR)
                     .focusProperties { left = sidebarR },

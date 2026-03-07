@@ -3,6 +3,9 @@ package com.beeregg2001.komorebi.ui.setting
 import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 @Stable
 class SettingPreferences(
@@ -25,8 +28,9 @@ class SettingPreferences(
     val labAnnict: String,
     val labShobocal: String,
     val defaultPostCommand: String,
-    val geminiApiKey: String, // ★追加
-    val enableAiNormalization: String, // ★追加
+    val postRecordingBatchList: List<PostRecordingBatch>, // ★追加
+    val geminiApiKey: String,
+    val enableAiNormalization: String,
     val pickupGenre: String,
     val excludePaid: String,
     val pickupTime: String,
@@ -37,6 +41,17 @@ class SettingPreferences(
 
 @Composable
 fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferences {
+    val gson = remember { Gson() }
+    val batchListJson = repository.postRecordingBatchList.collectAsState(initial = "[]").value
+    val batchList = remember(batchListJson) {
+        try {
+            val type = object : TypeToken<List<PostRecordingBatch>>() {}.type
+            gson.fromJson<List<PostRecordingBatch>>(batchListJson, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     return SettingPreferences(
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "").value,
@@ -57,8 +72,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
-        geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value, // ★追加
-        enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value, // ★追加
+        postRecordingBatchList = batchList, // ★追加
+        geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value,
+        enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value,
         pickupGenre = repository.homePickupGenre.collectAsState(initial = "アニメ").value,
         excludePaid = repository.excludePaidBroadcasts.collectAsState(initial = "ON").value,
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,

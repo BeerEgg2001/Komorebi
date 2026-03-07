@@ -166,6 +166,12 @@ fun LivePlayerScreen(
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
+
+    // ★Amlogicバグ対策用：動画の解像度状態を保持
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+    var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
+
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
     val extractorsFactory = remember {
         ExtractorsFactory {
@@ -238,6 +244,13 @@ fun LivePlayerScreen(
                     setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
                     playWhenReady = true; addAnalyticsListener(EventLogger(null, "ExoPlayerLog"))
                     addListener(object : Player.Listener {
+                        // ★Amlogicバグ対策: 動画サイズ変更を検知
+                        override fun onVideoSizeChanged(videoSize: VideoSize) {
+                            videoWidth = videoSize.width
+                            videoHeight = videoSize.height
+                            pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
+                        }
+
                         override fun onIsPlayingChanged(playing: Boolean) {
                             ps.isPlayerPlaying = playing
                         }
@@ -552,11 +565,28 @@ fun LivePlayerScreen(
         AndroidView(
             factory = {
                 PlayerView(it).apply {
-                    player = exoPlayer; useController = false; resizeMode =
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true
+                    player = exoPlayer
+                    useController = false
+                    keepScreenOn = true
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
-            update = { it.player = exoPlayer },
+            update = { view ->
+                view.player = exoPlayer
+                // ★ Amlogic SoC 対策強化版（全解像度で4:3になる現象への対応）
+                if (videoWidth > 0 && videoHeight > 0) {
+                    val ratio = videoWidth.toFloat() / videoHeight.toFloat()
+                    val isAnamorphic =
+                        (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
+                    val is16by9 = ratio >= 1.7f
+
+                    if (isAnamorphic || is16by9) {
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    } else {
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(mainFocusRequester)

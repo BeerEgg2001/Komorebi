@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.view.KeyEvent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
@@ -10,6 +11,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.*
@@ -21,14 +25,20 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.NativeKeyEvent
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -39,6 +49,8 @@ sealed class SettingDialogState {
     object None : SettingDialogState()
     data class Input(val title: String, val initialValue: String, val onConfirm: (String) -> Unit) :
         SettingDialogState()
+
+    data class BatchInput(val onConfirm: (String, String) -> Unit) : SettingDialogState()
 
     data class Selection(
         val title: String,
@@ -190,6 +202,181 @@ fun SettingItem(
 }
 
 @Composable
+fun BatchInputDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    var name by remember { mutableStateOf("") }
+    var path by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(150)
+        focusRequester.safeRequestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                    onDismiss(); true
+                } else false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            // ★拡大を考慮して幅を広げる
+            modifier = Modifier.width(540.dp)
+        ) {
+            // ★内部パディングと間隔を広げる
+            Column(
+                modifier = Modifier.padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    "バッチの登録",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "バッチ名称",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.textSecondary
+                    )
+                    DialogTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = "例: エンコード実行",
+                        focusRequester = focusRequester
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "フルパス",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.textSecondary
+                    )
+                    // ★例を変更
+                    DialogTextField(
+                        value = path,
+                        onValueChange = { path = it },
+                        placeholder = "/var/local/edcb/transcode.sh"
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        )
+                    ) {
+                        Text("キャンセル")
+                    }
+                    Button(
+                        onClick = {
+                            if (name.isNotBlank() && path.isNotBlank()) onConfirm(
+                                name,
+                                path
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = name.isNotBlank() && path.isNotBlank()
+                    ) {
+                        Text("追加")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DialogTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    focusRequester: FocusRequester = remember { FocusRequester() }
+) {
+    val colors = KomorebiTheme.colors
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    Surface(
+        onClick = { focusRequester.requestFocus() },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp), // ★高さを少し増やして中央感を出す
+        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f)),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                BorderStroke(
+                    2.dp,
+                    colors.accent
+                )
+            )
+        ),
+        // ★拡大率を微調整
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+    ) {
+        // ★アライメントを Alignment.CenterStart に固定し、BasicTextFieldの内部構造を整理
+        Box(
+            contentAlignment = Alignment.CenterStart,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
+                cursorBrush = SolidColor(colors.textPrimary),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged {
+                        // ★フォーカス時にキーボードを表示
+                        if (it.isFocused) {
+                            keyboardController?.show()
+                        }
+                    },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
+                decorationBox = { innerTextField ->
+                    // ★decorationBox内でもBoxを使用して、Text(プレースホルダ)とinnerTextFieldを確実に中央揃えにする
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = colors.textSecondary.copy(0.5f),
+                                fontSize = 16.sp
+                            )
+                        }
+                        innerTextField()
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
 fun SelectionDialog(
     title: String,
     options: List<Pair<String, String>>,
@@ -203,16 +390,34 @@ fun SelectionDialog(
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
 
+    // ★追加：フォーカストラップを解除するためのフラグ
+    var isClosing by remember { mutableStateOf(false) }
+    val initialFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(50)
+        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
-            .focusProperties { exit = { FocusRequester.Cancel } }
+            // ★修正：isClosing が true になったらトラップを解除し、親画面への移動を許可する
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .focusGroup()
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
-                    onDismiss(); true
-                } else false
+                // ★修正：ハードウェア戻るボタンが裏画面に漏れるのを防ぐため、KeyUpで発火しつつ両方を消費する
+                if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    if (it.type == KeyEventType.KeyUp) {
+                        isClosing = true // 閉じる前にトラップ解除
+                        onDismiss()
+                    }
+                    return@onKeyEvent true
+                }
+                false
             },
         contentAlignment = Alignment.Center
     ) {
@@ -236,33 +441,33 @@ fun SelectionDialog(
                 ) {
                     itemsIndexed(options) { index, (label, value) ->
                         val isSelected = value == current
-                        val fR = remember { FocusRequester() }
-
-                        // ★修正: キーの不一致があっても、最初の項目には確実にフォーカスを当てる安全策
-                        LaunchedEffect(Unit) {
-                            if (isSelected || (index == 0)) {
-                                delay(150)
-                                fR.safeRequestFocus("SelectionDialog_Item")
-                            }
-                        }
+                        val focusModifier = if (isSelected || (current.isEmpty() && index == 0)) {
+                            Modifier.focusRequester(initialFocusRequester)
+                        } else Modifier
 
                         SelectionDialogItem(
-                            label,
-                            isSelected,
-                            { onSelect(value) },
-                            Modifier.focusRequester(fR)
+                            label = label,
+                            isSelected = isSelected,
+                            onClick = {
+                                isClosing = true // ★追加：選択されたのでトラップ解除
+                                onSelect(value)
+                            },
+                            modifier = focusModifier
                         )
                     }
                 }
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    onClick = onDismiss,
+                    onClick = {
+                        isClosing = true // ★追加：キャンセルされたのでトラップ解除
+                        onDismiss()
+                    },
                     colors = ButtonDefaults.colors(
                         containerColor = colors.textPrimary.copy(0.1f),
                         contentColor = colors.textPrimary
                     ),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(AppStrings.BUTTON_CANCEL) }
+                ) { Text("キャンセル") }
             }
         }
     }
@@ -331,7 +536,7 @@ fun ConfirmClearDialog(
             .focusProperties { exit = { FocusRequester.Cancel } }
             .focusGroup()
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                     onDismiss(); true
                 } else false
             },

@@ -80,7 +80,6 @@ fun RecordListScreen(
     val focuses = rememberRecordListFocusRequesters()
     val ticketManager = rememberFocusTicketManager()
 
-    // ★追加: 現在フォーカスされている番組を親で管理する
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
 
     val paneTransitionState =
@@ -171,11 +170,12 @@ fun RecordListScreen(
         derivedStateOf { isRecLoading || isSeriesLoading || pagedRecordings.loadState.refresh is LoadState.Loading }
     }
 
+    // ★修正: トップバーから下を押した時のターゲットを contentContainer (枠) ではなく firstItem (最初の項目) に変更
     val topBarDownRequester = remember(isCategoryImplemented, isListView, hasContent) {
         if (!isCategoryImplemented || !hasContent) {
             if (isListView) focuses.navPane else focuses.loadingSafeHouse
         } else {
-            focuses.contentContainer
+            focuses.firstItem
         }
     }
 
@@ -440,7 +440,7 @@ fun RecordListScreen(
                                         onFetchDetail = { viewModel.fetchProgramDetail(it) },
                                         onClearDetail = { viewModel.clearProgramDetail() },
                                         ticketManager = ticketManager,
-                                        onFocusedItemChanged = { focusedProgram = it } // ★親で番組を受け取る
+                                        onFocusedItemChanged = { focusedProgram = it }
                                     )
                                 }
                             }
@@ -482,7 +482,7 @@ fun RecordListScreen(
                                         onProgramClick = onProgramClick,
                                         onOpenNavPane = handleOpenNavPane,
                                         ticketManager = ticketManager,
-                                        onFocusedItemChanged = { focusedProgram = it } // ★親で番組を受け取る
+                                        onFocusedItemChanged = { focusedProgram = it }
                                     )
                                 }
                             }
