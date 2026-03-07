@@ -14,6 +14,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -23,9 +24,77 @@ import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
+
+/**
+ * REGZA風の信号情報オーバーレイ
+ */
+@Composable
+fun SignalInfoOverlay(info: SignalMetadata) {
+    val colors = KomorebiTheme.colors
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(start = 48.dp, bottom = 48.dp),
+        contentAlignment = Alignment.BottomStart
+    ) {
+        Column(
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                .padding(24.dp)
+                .width(320.dp)
+        ) {
+            Text(
+                text = "信号情報",
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.accent,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            SignalRow("解像度", info.videoRes)
+            SignalRow("垂直周波数", info.verticalFreq)
+            SignalRow("映像形式", info.videoCodec)
+            SignalRow("ビットレート", info.videoBitrate)
+            SignalRow("音声形式", info.audioCodec)
+            SignalRow("音声出力", info.audioChannels)
+            SignalRow("サンプリング", info.audioSampleRate)
+            SignalRow("バッファ量", info.bufferDuration)
+            SignalRow("ドロップ数", info.droppedFrames)
+        }
+    }
+}
+
+@Composable
+private fun SignalRow(label: String, value: String) {
+    val colors = KomorebiTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(100.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+            color = colors.textSecondary.copy(alpha = 0.8f)
+        )
+        Text(
+            text = ": $value",
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Medium
+            ),
+            color = colors.textPrimary
+        )
+    }
+}
 
 @Composable
 fun StatusOverlay(
@@ -38,7 +107,7 @@ fun StatusOverlay(
     var currentTime by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        while(true) {
+        while (true) {
             currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             delay(1000)
         }
@@ -46,13 +115,20 @@ fun StatusOverlay(
 
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp ?: "", mirakurunPort ?: "", channel.networkId, channel.serviceId)
+        UrlBuilder.getMirakurunLogoUrl(
+            mirakurunIp ?: "",
+            mirakurunPort ?: "",
+            channel.networkId,
+            channel.serviceId
+        )
     } else {
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
     Box(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
         contentAlignment = Alignment.TopEnd
     ) {
         Row(
@@ -65,7 +141,10 @@ fun StatusOverlay(
             AsyncImage(
                 model = logoUrl,
                 contentDescription = null,
-                modifier = Modifier.size(56.dp, 32.dp).clip(RoundedCornerShape(2.dp)).background(Color.White),
+                modifier = Modifier
+                    .size(56.dp, 32.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White),
                 contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
             )
             Spacer(Modifier.width(16.dp))
@@ -94,7 +173,7 @@ fun LiveOverlayUI(
     konomiIp: String,
     konomiPort: String,
     showDesc: Boolean,
-    isRecording: Boolean, // ★追加
+    isRecording: Boolean,
     scrollState: ScrollState
 ) {
     val program = channel.programPresent
@@ -103,7 +182,12 @@ fun LiveOverlayUI(
     var progress by remember { mutableFloatStateOf(-1f) }
     val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
     val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(mirakurunIp, mirakurunPort, channel.networkId, channel.serviceId)
+        UrlBuilder.getMirakurunLogoUrl(
+            mirakurunIp,
+            mirakurunPort,
+            channel.networkId,
+            channel.serviceId
+        )
     } else {
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
@@ -115,7 +199,8 @@ fun LiveOverlayUI(
             val total = endMs - startMs
             if (total > 0) {
                 while (System.currentTimeMillis() < endMs) {
-                    progress = ((System.currentTimeMillis() - startMs).toFloat() / total).coerceIn(0f, 1f)
+                    progress =
+                        ((System.currentTimeMillis() - startMs).toFloat() / total).coerceIn(0f, 1f)
                     delay(5000)
                 }
             }
@@ -129,7 +214,14 @@ fun LiveOverlayUI(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(0.95f))))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.Black.copy(0.95f)
+                        )
+                    )
+                )
                 .padding(horizontal = 64.dp, vertical = 48.dp)
         ) {
             Row(
@@ -139,7 +231,10 @@ fun LiveOverlayUI(
                 AsyncImage(
                     model = logoUrl,
                     contentDescription = null,
-                    modifier = Modifier.size(80.dp, 45.dp).clip(RoundedCornerShape(4.dp)).background(Color.White),
+                    modifier = Modifier
+                        .size(80.dp, 45.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.White),
                     contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
                 )
                 Spacer(Modifier.width(24.dp))
@@ -147,17 +242,19 @@ fun LiveOverlayUI(
                     text = "${formatChannelType(channel.type)}${channel.channelNumber}  ${channel.name}",
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.White.copy(0.8f),
-                    modifier = Modifier.weight(1f) // 放送局名を左に寄せる
+                    modifier = Modifier.weight(1f)
                 )
 
-                // ★追加: 🔴 録画中インジケーター
                 if (isRecording) {
                     RecordingIndicator()
                 }
             }
             Text(
                 text = programTitle,
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp
+                ),
                 color = Color.White,
                 modifier = Modifier.padding(vertical = 16.dp)
             )
@@ -182,7 +279,10 @@ fun LiveOverlayUI(
                             Column(Modifier.padding(bottom = 14.dp)) {
                                 Text(
                                     text = "◆ $k",
-                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold, color = Color.White.copy(0.5f))
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White.copy(0.5f)
+                                    )
                                 )
                                 Text(
                                     text = v,
@@ -197,11 +297,15 @@ fun LiveOverlayUI(
             }
 
             if (progress >= 0f) {
-                val start = program?.startTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
-                val end = program?.endTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
+                val start =
+                    program?.startTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
+                val end =
+                    program?.endTime?.let { sdf.parse(it) }?.let { timeFormat.format(it) } ?: ""
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
                 ) {
                     Text(
                         text = start,
@@ -233,7 +337,6 @@ fun LiveOverlayUI(
     }
 }
 
-// ★追加: 録画中インジケーター用コンポーネント
 @Composable
 fun RecordingIndicator() {
     Box(
@@ -259,7 +362,6 @@ fun RecordingIndicator() {
     }
 }
 
-// ... 以下のコンポーネントは変更なし
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Unit) {
@@ -267,7 +369,9 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
     LaunchedEffect(Unit) { retryButtonFocusRequester.requestFocus() }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
         contentAlignment = Alignment.Center
     ) {
         Surface(
@@ -283,7 +387,9 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
                     imageVector = Icons.Default.Warning,
                     contentDescription = null,
                     tint = Color(0xFFFF5252),
-                    modifier = Modifier.size(48.dp).padding(bottom = 16.dp)
+                    modifier = Modifier
+                        .size(48.dp)
+                        .padding(bottom = 16.dp)
                 )
                 Text(
                     text = AppStrings.LIVE_PLAYER_ERROR_TITLE,
@@ -305,15 +411,23 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
                 ) {
                     Button(
                         onClick = onBack,
-                        colors = ButtonDefaults.colors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White),
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.White.copy(alpha = 0.1f),
+                            contentColor = Color.White
+                        ),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(AppStrings.BUTTON_BACK)
                     }
                     Button(
                         onClick = onRetry,
-                        colors = ButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-                        modifier = Modifier.weight(1f).focusRequester(retryButtonFocusRequester)
+                        colors = ButtonDefaults.colors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(retryButtonFocusRequester)
                     ) {
                         Text(AppStrings.BUTTON_RETRY)
                     }

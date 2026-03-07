@@ -3,6 +3,9 @@ package com.beeregg2001.komorebi.ui.setting
 import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 @Stable
 class SettingPreferences(
@@ -21,20 +24,34 @@ class SettingPreferences(
     val liveSubtitleDefault: String,
     val videoSubtitleDefault: String,
     val subtitleCommentLayer: String,
-    val audioOutputMode: String, // ★追加
+    val audioOutputMode: String,
     val labAnnict: String,
     val labShobocal: String,
     val defaultPostCommand: String,
+    val postRecordingBatchList: List<PostRecordingBatch>, // ★追加
+    val geminiApiKey: String,
+    val enableAiNormalization: String,
     val pickupGenre: String,
     val excludePaid: String,
     val pickupTime: String,
     val startupTab: String,
     val currentThemeName: String,
-    val defaultRecordListView: String // ★追加
+    val defaultRecordListView: String
 )
 
 @Composable
 fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferences {
+    val gson = remember { Gson() }
+    val batchListJson = repository.postRecordingBatchList.collectAsState(initial = "[]").value
+    val batchList = remember(batchListJson) {
+        try {
+            val type = object : TypeToken<List<PostRecordingBatch>>() {}.type
+            gson.fromJson<List<PostRecordingBatch>>(batchListJson, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     return SettingPreferences(
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "").value,
@@ -51,16 +68,19 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         liveSubtitleDefault = repository.liveSubtitleDefault.collectAsState(initial = "OFF").value,
         videoSubtitleDefault = repository.videoSubtitleDefault.collectAsState(initial = "OFF").value,
         subtitleCommentLayer = repository.subtitleCommentLayer.collectAsState(initial = "CommentOnTop").value,
-        audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value, // ★追加
+        audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value,
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
+        postRecordingBatchList = batchList, // ★追加
+        geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value,
+        enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value,
         pickupGenre = repository.homePickupGenre.collectAsState(initial = "アニメ").value,
         excludePaid = repository.excludePaidBroadcasts.collectAsState(initial = "ON").value,
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
-        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value // ★追加
+        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
     )
 }
 

@@ -65,18 +65,23 @@ class EpgState(
     var screenWidthPx by mutableFloatStateOf(0f)
     var screenHeightPx by mutableFloatStateOf(0f)
 
-    private val maxScrollMinutes = 1440 * 14
+    // ★修正: ぴったり24時間（60分 × 24時間）
+    val maxScrollMinutes = 60 * 24
 
-    suspend fun updateData(newData: List<EpgChannelWrapper>, resetFocus: Boolean = false) {
+    suspend fun updateData(newData: List<EpgChannelWrapper>, targetTime: OffsetDateTime, resetFocus: Boolean = false) {
         isCalculating = true
         withContext(Dispatchers.Default) {
             try {
-                val now = OffsetDateTime.now()
-                val newBaseTime = now.minusHours(2).truncatedTo(ChronoUnit.HOURS)
+                // ★修正: targetTimeからその日の「朝4時」を起算してベースにする
+                val newBaseTime = targetTime.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
+                    if (targetTime.hour < 4) it.minusDays(1) else it
+                }
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
                 val newUiChannels = newData.map { wrapper ->
-                    val filled = EpgDataConverter.getFilledPrograms(wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime)
+                    val filled = EpgDataConverter.getFilledPrograms(
+                        wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime
+                    )
                     val uiProgs = filled.map { p ->
                         val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
                         val topY = (sOff / 60f) * config.hhPx
@@ -97,17 +102,9 @@ class EpgState(
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
                     textLayoutCache.clear()
 
-                    if (!isInitialized || resetFocus) {
-                        jumpToNow()
-                        isInitialized = true
-                    } else {
-                        if (uiChannels.isNotEmpty()) {
-                            if (focusedCol >= uiChannels.size) {
-                                focusedCol = uiChannels.size - 1
-                            }
-                            updatePositions(focusedCol, focusedMin)
-                        }
-                    }
+                    // ★修正: データが来たら、無限スクロールのことは忘れて常に目的の時刻へジャンプする！
+                    jumpToTime(targetTime)
+                    isInitialized = true
                     isCalculating = false
                 }
             } catch (e: Exception) {
@@ -135,9 +132,9 @@ class EpgState(
     fun jumpToTime(targetTime: OffsetDateTime) {
         val targetMin = try {
             Duration.between(baseTime, targetTime).toMinutes().toInt().coerceIn(0, maxScrollMinutes)
-        } catch (e: Exception) { 0 }
-
-        Log.d(TAG, "jumpToTime: target=$targetTime, min=$targetMin")
+        } catch (e: Exception) {
+            0
+        }
 
         var bestCol = 0
         if (uiChannels.isNotEmpty()) {
@@ -160,7 +157,8 @@ class EpgState(
         val desiredScrollY = -targetY
         val effectiveScreenHeight = if (screenHeightPx > 0) screenHeightPx else 1080f
         val visibleH = (effectiveScreenHeight - config.hhAreaPx).coerceAtLeast(100f)
-        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+        val maxScrollY =
+            -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
 
         targetScrollX = 0f
         targetScrollY = desiredScrollY.coerceIn(maxScrollY, 0f)
@@ -189,7 +187,8 @@ class EpgState(
         targetAnimX = safeCol * config.cwPx
         if (uiProg != null) {
             targetAnimY = uiProg.topY
-            targetAnimH = if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
+            targetAnimH =
+                if (uiProg.isEmpty) uiProg.height else uiProg.height.coerceAtLeast(config.minExpHPx)
         } else {
             targetAnimY = focusY
             targetAnimH = 30f / 60f * config.hhPx
@@ -209,14 +208,17 @@ class EpgState(
 
         var nextTargetX = targetScrollX
         if (targetAnimX < -targetScrollX) nextTargetX = -targetAnimX
-        else if (targetAnimX + config.cwPx > -targetScrollX + visibleW) nextTargetX = -(targetAnimX + config.cwPx - visibleW)
+        else if (targetAnimX + config.cwPx > -targetScrollX + visibleW) nextTargetX =
+            -(targetAnimX + config.cwPx - visibleW)
 
         var nextTargetY = targetScrollY
-        if (targetAnimY + targetAnimH > -targetScrollY + visibleH) nextTargetY = -(targetAnimY + targetAnimH - visibleH + config.sPadPx)
+        if (targetAnimY + targetAnimH > -targetScrollY + visibleH) nextTargetY =
+            -(targetAnimY + targetAnimH - visibleH + config.sPadPx)
         if (targetAnimY < -targetScrollY) nextTargetY = -targetAnimY
 
         val maxScrollX = -(columns * config.cwPx - visibleW).coerceAtLeast(0f)
-        val maxScrollY = -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
+        val maxScrollY =
+            -((maxScrollMinutes / 60f) * config.hhPx + config.bPadPx - visibleH).coerceAtLeast(0f)
 
         targetScrollX = nextTargetX.coerceIn(maxScrollX, 0f)
         targetScrollY = nextTargetY.coerceIn(maxScrollY, 0f)

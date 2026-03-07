@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -15,7 +16,10 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.video.FocusTicket
+import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -23,23 +27,33 @@ fun RecordNavigationPane(
     selectedCategory: RecordCategory,
     onCategorySelect: (RecordCategory) -> Unit,
     isOverlay: Boolean,
-    navPaneFocusRequester: FocusRequester, // ★追加: 親からフォーカスリクエスターを受け取る
+    navPaneFocusRequester: FocusRequester,
+    ticketManager: FocusTicketManager,
+    contentContainerFocusRequester: FocusRequester? = null,
+    firstItemFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
-    val backgroundColor = colors.surface.copy(alpha = 0.95f)
-    val borderColor = colors.textPrimary.copy(alpha = 0.1f)
+    val categoryRequesters = remember { RecordCategory.values().associateWith { FocusRequester() } }
+
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.NAV_PANE) {
+            categoryRequesters[selectedCategory]?.safeRequestFocus("Ticket_NAV_PANE")
+            ticketManager.consume(FocusTicket.NAV_PANE)
+        }
+    }
 
     Surface(
         modifier = modifier
             .fillMaxHeight()
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .focusRequester(navPaneFocusRequester),
         colors = SurfaceDefaults.colors(
-            containerColor = backgroundColor,
+            containerColor = colors.surface.copy(alpha = 0.95f),
             contentColor = colors.textPrimary
         ),
         shape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
-        border = Border(BorderStroke(1.dp, borderColor))
+        border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
     ) {
         Column(
             modifier = Modifier
@@ -51,14 +65,26 @@ fun RecordNavigationPane(
             RecordCategory.values().forEachIndexed { index, category ->
                 val isSelected = selectedCategory == category
                 NavigationItem(
-                    category = category,
-                    isSelected = isSelected,
-                    isOverlay = isOverlay,
+                    category = category, isSelected = isSelected, isOverlay = isOverlay,
                     modifier = Modifier
                         .then(if (index == 0) Modifier.padding(top = 0.dp) else Modifier)
-                        // ★修正: 選択されているアイテム自身にフォーカスリクエスターを付与し、退避を確実に成功させる
-                        .then(if (isSelected) Modifier.focusRequester(navPaneFocusRequester) else Modifier),
-                    onClick = { onCategorySelect(category) }
+                        .focusRequester(categoryRequesters[category] ?: FocusRequester()),
+                    onClick = { onCategorySelect(category) },
+                    onRightKey = {
+                        // ★「透明コンテナの罠」回避ロジック（狙撃順序の逆転：例外キャッチ版）
+                        try {
+                            // 1. まず先頭アイテムを直接狙う（スクロールされていなければ確実に当たる）
+                            firstItemFocusRequester?.requestFocus()
+                        } catch (e: Exception) {
+                            // 2. 失敗した場合、それは「スクロールされて先頭が見えない」状態。
+                            // この時は履歴が残っているはずなので、コンテナへ任せる！
+                            try {
+                                contentContainerFocusRequester?.requestFocus()
+                            } catch (e2: Exception) {
+                                // どちらもダメなら無視
+                            }
+                        }
+                    }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -73,7 +99,8 @@ private fun NavigationItem(
     isSelected: Boolean,
     isOverlay: Boolean,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRightKey: () -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -86,8 +113,12 @@ private fun NavigationItem(
             .padding(horizontal = 12.dp)
             .onFocusChanged { isFocused = it.isFocused }
             .onKeyEvent { event ->
-                if (isOverlay && event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
-                    onClick()
+                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+                    if (isOverlay) {
+                        onClick()
+                    } else {
+                        onRightKey()
+                    }
                     true
                 } else false
             },

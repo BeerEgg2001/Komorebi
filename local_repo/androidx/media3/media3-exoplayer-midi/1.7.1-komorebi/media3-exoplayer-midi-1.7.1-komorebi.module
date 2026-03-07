@@ -1,0 +1,152 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-exoplayer-midi",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-decoder",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-extractor",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-exoplayer-midi-1.7.1-komorebi.aar",
+          "url": "media3-exoplayer-midi-1.7.1-komorebi.aar",
+          "size": 270726,
+          "sha512": "204a179f8557653a2b4e75e6e5db0c78b333fdb9db86a53d5ebefb8ee9d9edb422c6c32d111dfe7ee145af6300e642e85e444d34fee675cd187093b1ff4790de",
+          "sha256": "9d41bf593df4d898ea83527d7ae5403ff52180c9dbe047ea354c0d389d1031d7",
+          "sha1": "c3abe76bfc273f3e467e9f008a84070826afd297",
+          "md5": "9bedc4116d964b6f9df635d96b80770e"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.6.0"
+          }
+        },
+        {
+          "group": "com.github.philburk",
+          "module": "jsyn",
+          "version": {
+            "requires": "40a41092cbab558d7d410ec43d93bb1e4121e86a"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-decoder",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-extractor",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-exoplayer-midi-1.7.1-komorebi.aar",
+          "url": "media3-exoplayer-midi-1.7.1-komorebi.aar",
+          "size": 270726,
+          "sha512": "204a179f8557653a2b4e75e6e5db0c78b333fdb9db86a53d5ebefb8ee9d9edb422c6c32d111dfe7ee145af6300e642e85e444d34fee675cd187093b1ff4790de",
+          "sha256": "9d41bf593df4d898ea83527d7ae5403ff52180c9dbe047ea354c0d389d1031d7",
+          "sha1": "c3abe76bfc273f3e467e9f008a84070826afd297",
+          "md5": "9bedc4116d964b6f9df635d96b80770e"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-exoplayer-midi-1.7.1-komorebi-sources.jar",
+          "url": "media3-exoplayer-midi-1.7.1-komorebi-sources.jar",
+          "size": 35024,
+          "sha512": "12789bd7ff89fc70c5813ee2cef32980dfa10b8e0aeda16eef261495ec2e565605e864524cb01c57d7338394dac39f65779cf13c84a05c942ff16071b37bcaf6",
+          "sha256": "fa2e613ebb9c95197727eb5bc3c29f3e465a6ea977863d9e54b3493ef878afe2",
+          "sha1": "553fc0f4718b676e0a515f3d0f40408f36fa7b16",
+          "md5": "b4958a9e24aa3a4f1347d1eefd26de4c"
+        }
+      ]
+    }
+  ]
+}

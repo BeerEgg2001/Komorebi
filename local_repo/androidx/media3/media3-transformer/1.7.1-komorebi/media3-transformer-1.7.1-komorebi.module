@@ -1,0 +1,152 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-transformer",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-effect",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-muxer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-transformer-1.7.1-komorebi.aar",
+          "url": "media3-transformer-1.7.1-komorebi.aar",
+          "size": 379979,
+          "sha512": "f1f6757600b20e6fef70443b053afb35064134fc5dd569de5eca737565e08c66e0f560795d2d86772851ed20f77ada550a5ad43a4f22b49b5a063fc1ecd65d1d",
+          "sha256": "0491099c589290cfa83bb0db7be22fafece623e223e062063a20c9dfc557b20b",
+          "sha1": "b28663fa51b12efb051a3ea2dc6aeb4c70de581b",
+          "md5": "31282a47e8a3dfec261adcf94659b704"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.6.0"
+          }
+        },
+        {
+          "group": "androidx.concurrent",
+          "module": "concurrent-futures",
+          "version": {
+            "requires": "1.2.0"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-datasource",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-container",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-effect",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-muxer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-transformer-1.7.1-komorebi.aar",
+          "url": "media3-transformer-1.7.1-komorebi.aar",
+          "size": 379979,
+          "sha512": "f1f6757600b20e6fef70443b053afb35064134fc5dd569de5eca737565e08c66e0f560795d2d86772851ed20f77ada550a5ad43a4f22b49b5a063fc1ecd65d1d",
+          "sha256": "0491099c589290cfa83bb0db7be22fafece623e223e062063a20c9dfc557b20b",
+          "sha1": "b28663fa51b12efb051a3ea2dc6aeb4c70de581b",
+          "md5": "31282a47e8a3dfec261adcf94659b704"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-transformer-1.7.1-komorebi-sources.jar",
+          "url": "media3-transformer-1.7.1-komorebi-sources.jar",
+          "size": 256917,
+          "sha512": "86ed4d91bc2fc7719b2b215997307dff7dbb417689b60451e4ba8f318a6308cb9a8c8d4af2f4dd33781e1a81ae3c5477e68a7d727c86c666a54b569fd537498b",
+          "sha256": "bde3002a2cb78f331c41bd7d133288436c7d8c011e1dc911f3e629de9fc2822f",
+          "sha1": "4775de20848144f6954ad18fa04fc8388f402bc0",
+          "md5": "e43a09e1573a8b07851c1d49c8acb80d"
+        }
+      ]
+    }
+  ]
+}

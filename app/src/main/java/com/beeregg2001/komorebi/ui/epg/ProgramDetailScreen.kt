@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
+import androidx.activity.compose.BackHandler // ★追加
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -58,8 +59,16 @@ fun ProgramDetailScreen(
     initialFocusRequester: FocusRequester
 ) {
     val now = OffsetDateTime.now()
-    val startTime = try { OffsetDateTime.parse(program.start_time) } catch (e: Exception) { now }
-    val endTime = try { OffsetDateTime.parse(program.end_time) } catch (e: Exception) { now }
+    val startTime = try {
+        OffsetDateTime.parse(program.start_time)
+    } catch (e: Exception) {
+        now
+    }
+    val endTime = try {
+        OffsetDateTime.parse(program.end_time)
+    } catch (e: Exception) {
+        now
+    }
     val colors = KomorebiTheme.colors
 
     val isPast = endTime.isBefore(now)
@@ -82,6 +91,11 @@ fun ProgramDetailScreen(
         isClickEnabled = true
     }
 
+    // ★追加: 詳細画面表示中の「戻るキー」を確実にキャッチし、背後の画面への誤爆を防ぐ
+    BackHandler(enabled = isClickEnabled) {
+        onBackClick()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -91,26 +105,48 @@ fun ProgramDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Brush.linearGradient(colors = listOf(colors.surface, colors.background)))
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            colors.surface,
+                            colors.background
+                        )
+                    )
+                )
         )
 
-        Row(modifier = Modifier.fillMaxSize().padding(48.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(48.dp)
+        ) {
             Column(
-                modifier = Modifier.weight(0.3f).fillMaxHeight(),
+                modifier = Modifier
+                    .weight(0.3f)
+                    .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.Start
             ) {
                 if (mode == ProgramDetailMode.RESERVE) {
                     Button(
                         onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                        colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
-                        modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(
+                                alpha = 0.1f
+                            ), contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(initialFocusRequester)
                     ) {
                         Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                     }
                     Button(
                         onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                        colors = ButtonDefaults.colors(containerColor = recordRed, contentColor = Color.White),
+                        colors = ButtonDefaults.colors(
+                            containerColor = recordRed,
+                            contentColor = Color.White
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
@@ -119,8 +155,13 @@ fun ProgramDetailScreen(
                     if (isBroadcasting) {
                         Button(
                             onClick = { if (isClickEnabled) onPlayClick(program) },
-                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester),
-                            colors = ButtonDefaults.colors(containerColor = colors.textPrimary, contentColor = if(colors.isDark) Color.Black else Color.White)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(initialFocusRequester),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary,
+                                contentColor = if (colors.isDark) Color.Black else Color.White
+                            )
                         ) {
                             Text("視聴する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
                         }
@@ -128,29 +169,54 @@ fun ProgramDetailScreen(
                         if (isReserved) {
                             Button(
                                 onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(
+                                        alpha = 0.1f
+                                    ), contentColor = colors.textPrimary
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "予約設定変更",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Button(
                                 onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = recordRed, contentColor = Color.White),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordRed,
+                                    contentColor = Color.White
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "予約を削除",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         } else {
                             Button(
                                 onClick = { if (isClickEnabled) onRecordClick(program) },
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.colors(containerColor = recordRed, contentColor = Color.White)
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordRed,
+                                    contentColor = Color.White
+                                )
                             ) {
-                                Text("録画する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "録画する",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = recordDarkRed, contentColor = Color.White),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordDarkRed,
+                                    contentColor = Color.White
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("録画する（詳細設定）", fontFamily = NotoSansJP)
@@ -161,29 +227,58 @@ fun ProgramDetailScreen(
                         if (isReserved) {
                             Button(
                                 onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = colors.textPrimary.copy(alpha = 0.1f), contentColor = colors.textPrimary),
-                                modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(
+                                        alpha = 0.1f
+                                    ), contentColor = colors.textPrimary
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(initialFocusRequester)
                             ) {
-                                Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "予約設定変更",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Button(
                                 onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = recordRed, contentColor = Color.White),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordRed,
+                                    contentColor = Color.White
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "予約を削除",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         } else {
                             Button(
                                 onClick = { if (isClickEnabled) onRecordClick(program) },
-                                modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester),
-                                colors = ButtonDefaults.colors(containerColor = recordRed, contentColor = Color.White)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(initialFocusRequester),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordRed,
+                                    contentColor = Color.White
+                                )
                             ) {
-                                Text("録画予約する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "録画予約する",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
-                                colors = ButtonDefaults.colors(containerColor = recordDarkRed, contentColor = Color.White),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = recordDarkRed,
+                                    contentColor = Color.White
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text("録画予約（詳細設定）", fontFamily = NotoSansJP)
@@ -193,23 +288,38 @@ fun ProgramDetailScreen(
                         Button(
                             onClick = {},
                             enabled = false,
-                            colors = ButtonDefaults.colors(containerColor = colors.textSecondary.copy(0.3f), contentColor = colors.textSecondary),
-                            modifier = Modifier.fillMaxWidth().focusRequester(initialFocusRequester)
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textSecondary.copy(
+                                    0.3f
+                                ), contentColor = colors.textSecondary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(initialFocusRequester)
                         ) {
-                            Text("終了した番組", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                            Text(
+                                "終了した番組",
+                                fontFamily = NotoSansJP,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
 
-                // ★修正箇所: Border() オブジェクトでラップ
                 OutlinedButton(
                     onClick = { if (isClickEnabled) onBackClick() },
-                    modifier = Modifier.fillMaxWidth().then(if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(initialFocusRequester) else Modifier),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(
+                                initialFocusRequester
+                            ) else Modifier
+                        ),
                     colors = ButtonDefaults.colors(
                         containerColor = Color.Transparent,
                         contentColor = colors.textPrimary,
                         focusedContainerColor = colors.textPrimary,
-                        focusedContentColor = if(colors.isDark) Color.Black else Color.White
+                        focusedContentColor = if (colors.isDark) Color.Black else Color.White
                     ),
                     border = ButtonDefaults.border(
                         border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.5f))),
@@ -227,12 +337,19 @@ fun ProgramDetailScreen(
 
             Column(
                 modifier = Modifier
-                    .weight(0.7f).fillMaxHeight()
+                    .weight(0.7f)
+                    .fillMaxHeight()
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown) {
                             when (event.key) {
-                                Key.DirectionDown -> { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 300) }; true }
-                                Key.DirectionUp -> { coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 300) }; true }
+                                Key.DirectionDown -> {
+                                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value + 300) }; true
+                                }
+
+                                Key.DirectionUp -> {
+                                    coroutineScope.launch { scrollState.animateScrollTo(scrollState.value - 300) }; true
+                                }
+
                                 else -> false
                             }
                         } else false
@@ -242,24 +359,46 @@ fun ProgramDetailScreen(
             ) {
                 val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd(E) HH:mm")
                 Text(
-                    text = "${startTime.format(formatter)} ～ ${endTime.format(DateTimeFormatter.ofPattern("HH:mm"))}",
-                    style = MaterialTheme.typography.labelLarge, color = colors.textSecondary, fontFamily = NotoSansJP
+                    text = "${startTime.format(formatter)} ～ ${
+                        endTime.format(
+                            DateTimeFormatter.ofPattern(
+                                "HH:mm"
+                            )
+                        )
+                    }",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.textSecondary,
+                    fontFamily = NotoSansJP
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = program.title,
-                    style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold, lineHeight = 46.sp),
+                    style = MaterialTheme.typography.displaySmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 46.sp
+                    ),
                     color = colors.textPrimary, fontFamily = NotoSansJP
                 )
                 Spacer(modifier = Modifier.height(32.dp))
-                Text("番組概要", style = MaterialTheme.typography.titleMedium, color = colors.textPrimary, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                Text(
+                    "番組概要",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.textPrimary,
+                    fontFamily = NotoSansJP,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = program.description ?: "説明はありません。",
-                    style = MaterialTheme.typography.bodyLarge, color = colors.textSecondary, fontFamily = NotoSansJP, lineHeight = 28.sp
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.textSecondary,
+                    fontFamily = NotoSansJP,
+                    lineHeight = 28.sp
                 )
 
-                if (isReady) { ProgramDetailedInfo(program) }
+                if (isReady) {
+                    ProgramDetailedInfo(program)
+                }
                 Spacer(modifier = Modifier.height(60.dp))
             }
         }
@@ -273,9 +412,21 @@ fun ProgramDetailedInfo(program: EpgProgram) {
         program.detail?.forEach { (label, content) ->
             if (content.isNotBlank()) {
                 Spacer(modifier = Modifier.height(24.dp))
-                Text(text = label, style = MaterialTheme.typography.titleMedium, color = colors.textPrimary, fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.textPrimary,
+                    fontFamily = NotoSansJP,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(text = content, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, fontFamily = NotoSansJP, lineHeight = 24.sp)
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary,
+                    fontFamily = NotoSansJP,
+                    lineHeight = 24.sp
+                )
             }
         }
     }

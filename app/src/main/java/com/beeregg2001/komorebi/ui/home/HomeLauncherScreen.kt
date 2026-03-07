@@ -73,8 +73,8 @@ fun HomeLauncherScreen(
     triggerBack: Boolean,
     onBackTriggered: () -> Unit,
     onFinalBack: () -> Unit,
-    onUiReady: () -> Unit, // 親に描画完了を伝える
-    isUiReadyFlag: Boolean, // ★MainRootStateから渡される物理的準備完了フラグ
+    onUiReady: () -> Unit,
+    isUiReadyFlag: Boolean,
     onNavigateToPlayer: (String, String, String) -> Unit,
     lastPlayerChannelId: String? = null,
     lastPlayerProgramId: String? = null,
@@ -196,8 +196,9 @@ fun HomeLauncherScreen(
                                 modifier = Modifier
                                     .focusRequester(ui.tabFocusRequesters[index])
                                     .focusProperties {
-                                        down = if (isUiReadyFlag) ui.contentFirstItemRequesters[index] else FocusRequester.Default; canFocus =
-                                        !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
+                                        down =
+                                            if (ui.selectedTabIndex == index && ui.isCurrentTabContentReady) ui.contentFirstItemRequesters[index] else FocusRequester.Default
+                                        canFocus = !(ui.selectedTabIndex == 3 && ui.isEpgJumping)
                                     }) {
                                 Text(
                                     text = title,
@@ -231,7 +232,6 @@ fun HomeLauncherScreen(
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                // タブ切り替え時に確実に描画完了を待つ
                 key(ui.selectedTabIndex) {
                     when (ui.selectedTabIndex) {
                         0 -> HomeContents(
@@ -265,16 +265,14 @@ fun HomeLauncherScreen(
                                     reserveViewModel
                                 )
                             },
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
-                            mirakurunIp = mirakurunIp,
-                            mirakurunPort = mirakurunPort,
+                            konomiIp = konomiIp, konomiPort = konomiPort,
+                            mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
                             tabFocusRequester = ui.tabFocusRequesters[0],
                             externalFocusRequester = ui.contentFirstItemRequesters[0],
                             lastFocusedChannelId = ui.internalLastPlayerChannelId,
                             lastFocusedProgramId = lastPlayerProgramId,
                             isTopNavFocused = ui.topNavHasFocus,
-                            onUiReady = onUiReady // コンテンツ内で描画完了を判定
+                            onUiReady = { onUiReady(); ui.isCurrentTabContentReady = true }
                         )
 
                         1 -> {
@@ -285,10 +283,8 @@ fun HomeLauncherScreen(
                                 selectedChannel = selectedChannel,
                                 onChannelClick = onChannelClick,
                                 onFocusChannelChange = { ui.internalLastPlayerChannelId = it },
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
+                                mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
+                                konomiIp = konomiIp, konomiPort = konomiPort,
                                 topNavFocusRequester = ui.tabFocusRequesters[1],
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[1],
                                 onPlayerStateChanged = { },
@@ -297,42 +293,55 @@ fun HomeLauncherScreen(
                                 onReturnFocusConsumed = onReturnFocusConsumed,
                                 reserveViewModel = reserveViewModel
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500); onUiReady(); ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         2 -> {
+                            // ★修正: 引数をVideoTabContentの新しいシグネチャに完全に合わせる
                             VideoTabContent(
-                                recentRecordings = ui.recentRecordings,
-                                watchHistory = ui.watchHistoryPrograms,
-                                selectedProgram = selectedProgram,
-                                restoreProgramId = if (isReturningFromPlayer && ui.selectedTabIndex == 2) lastPlayerProgramId?.toIntOrNull() else null,
-                                isLoading = ui.isLoadingInitial,
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
-                                topNavFocusRequester = ui.tabFocusRequesters[2],
+                                tabFocusRequester = ui.tabFocusRequesters[2],
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[2],
                                 onProgramClick = { program ->
                                     val betterProgram =
-                                        ui.recentRecordings.find { it.id == program.id }; onProgramSelected(
-                                    betterProgram?.copy(playbackPosition = program.playbackPosition)
-                                        ?: program
-                                )
+                                        ui.recentRecordings.find { it.id == program.id }
+                                    onProgramSelected(
+                                        betterProgram?.copy(playbackPosition = program.playbackPosition)
+                                            ?: program
+                                    )
                                 },
-                                onViewAllClick = onShowAllRecordings,
-                                onLoadMore = { recordViewModel.loadNextPage() },
-                                isLoadingMore = ui.isLoadingMore,
                                 onShowAllRecordings = onShowAllRecordings,
-                                onShowSeriesList = onShowSeriesList
+                                onShowSeriesList = onShowSeriesList,
+                                openedSeriesTitle = ui.openedSeriesTitle,
+                                onOpenedSeriesTitleChange = { ui.openedSeriesTitle = it },
+                                recordViewModel = recordViewModel,
+                                watchHistory = ui.watchHistory,
+                                isTopNavFocused = ui.topNavHasFocus
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500); onUiReady(); ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         3 -> {
+                            val epgSearchQuery by epgViewModel.searchQuery.collectAsState()
+                            val epgSearchHistory by epgViewModel.searchHistory.collectAsState()
+                            val epgActiveSearchQuery by epgViewModel.activeSearchQuery.collectAsState()
+                            val epgSearchResults by epgViewModel.searchResults.collectAsState()
+                            val epgIsSearching by epgViewModel.isSearching.collectAsState()
+
+                            LaunchedEffect(groupedChannels.keys) {
+                                epgViewModel.preloadEpgDataForSearch(
+                                    groupedChannels.keys.toList()
+                                )
+                            }
+
                             EpgNavigationContainer(
                                 uiState = ui.epgUiState,
                                 logoUrls = ui.logoUrls,
-                                mirakurunIp = mirakurunIp,
-                                mirakurunPort = mirakurunPort,
                                 mainTabFocusRequester = ui.tabFocusRequesters[3],
                                 contentRequester = ui.contentFirstItemRequesters[3],
                                 selectedProgram = epgSelectedProgram,
@@ -345,24 +354,32 @@ fun HomeLauncherScreen(
                                 restoreChannelId = if (isReturningFromPlayer && ui.selectedTabIndex == 3) lastPlayerChannelId else null,
                                 availableTypes = groupedChannels.keys.toList(),
                                 onJumpStateChanged = { ui.isEpgJumping = it },
-                                reserves = ui.reserves
+                                reserves = ui.reserves,
+                                onUpdateTargetTime = { epgViewModel.updateTargetTime(it) },
+                                searchQuery = epgSearchQuery,
+                                searchHistory = epgSearchHistory,
+                                onSearchQueryChange = { epgViewModel.updateSearchQuery(it) },
+                                onExecuteSearch = { epgViewModel.executeSearch(it) },
+                                activeSearchQuery = epgActiveSearchQuery,
+                                searchResults = epgSearchResults,
+                                isSearching = epgIsSearching,
+                                onClearSearch = { epgViewModel.clearSearch() }
                             )
-                            LaunchedEffect(Unit) { delay(800); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(800); onUiReady(); ui.isCurrentTabContentReady = true
+                            }
                         }
 
                         4 -> {
                             ReserveListScreen(
-                                onBack = {
-                                    ui.tabFocusRequesters[4].safeRequestFocus(
-                                        TAG
-                                    )
-                                },
+                                onBack = { ui.tabFocusRequesters[4].safeRequestFocus(TAG) },
                                 onProgramClick = onReserveSelected,
-                                konomiIp = konomiIp,
-                                konomiPort = konomiPort,
+                                konomiIp = konomiIp, konomiPort = konomiPort,
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[4]
                             )
-                            LaunchedEffect(Unit) { delay(500); onUiReady() }
+                            LaunchedEffect(Unit) {
+                                delay(500); onUiReady(); ui.isCurrentTabContentReady = true
+                            }
                         }
                     }
                 }

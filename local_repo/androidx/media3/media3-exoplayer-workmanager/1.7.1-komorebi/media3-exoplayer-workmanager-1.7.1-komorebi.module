@@ -1,0 +1,103 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-exoplayer-workmanager",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-exoplayer-workmanager-1.7.1-komorebi.aar",
+          "url": "media3-exoplayer-workmanager-1.7.1-komorebi.aar",
+          "size": 7036,
+          "sha512": "c04ce2137de493ad34e5e1512a81eebbf609e5efde8fed1d9aa2ec760eb31a319b48b9cb0400067b47f20da800de8d81671d8ff5ebaa97d97bb6c6acb4ede130",
+          "sha256": "c12bf70fda73e306a50427393dc2b9c1046b8408f6ad3fb79664adb7b0d7b4ae",
+          "sha1": "1a9df39315583fc523388102d94003e4fe2ad88b",
+          "md5": "58c258245b69688c7d4bf29c0c219845"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.work",
+          "module": "work-runtime",
+          "version": {
+            "requires": "2.8.1"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-exoplayer-workmanager-1.7.1-komorebi.aar",
+          "url": "media3-exoplayer-workmanager-1.7.1-komorebi.aar",
+          "size": 7036,
+          "sha512": "c04ce2137de493ad34e5e1512a81eebbf609e5efde8fed1d9aa2ec760eb31a319b48b9cb0400067b47f20da800de8d81671d8ff5ebaa97d97bb6c6acb4ede130",
+          "sha256": "c12bf70fda73e306a50427393dc2b9c1046b8408f6ad3fb79664adb7b0d7b4ae",
+          "sha1": "1a9df39315583fc523388102d94003e4fe2ad88b",
+          "md5": "58c258245b69688c7d4bf29c0c219845"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-exoplayer-workmanager-1.7.1-komorebi-sources.jar",
+          "url": "media3-exoplayer-workmanager-1.7.1-komorebi-sources.jar",
+          "size": 3582,
+          "sha512": "deffa4ac557c757b6783c3058712a53e8b0e32f01c083aff80b610812e1687ae372fc160b77c926de622fc17c9d29c944239d32d1b6d711c593c670208f57716",
+          "sha256": "d56a934a669195befb19d4f1af40c8d24bef165ff4ef83b00edb784244700291",
+          "sha1": "01c6a68530ae9590a2ded0a5b7e53b7b3e977dce",
+          "md5": "0df83e26b3bec75e0e37060f1677eb09"
+        }
+      ]
+    }
+  ]
+}

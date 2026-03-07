@@ -42,6 +42,14 @@ fun LiveCommentOverlay(
             setTypeface(customTypeface)
             setDanmakuBold(true)
             setDuplicateMergingEnabled(false)
+
+            // ★追加: 重なり防止設定 (これがないと maxLines も効きません)
+            val overlappingEnablePair = mapOf(
+                BaseDanmaku.TYPE_SCROLL_RL to true,
+                BaseDanmaku.TYPE_FIX_TOP to true
+            )
+            // 修正: setPreventOverlapping ではなく preventOverlapping です！
+            preventOverlapping(overlappingEnablePair)
         }
     }
 
@@ -74,8 +82,10 @@ fun LiveCommentOverlay(
                 })
 
                 post {
-                    // 初期設定の適用
-                    danmakuContext.setScrollSpeedFactor(speed)
+                    // ★修正: speedを「スクロール時間係数」に変換 (1.5倍速なら 1.0/1.5 = 0.66の時間をかける)
+                    val speedFactor = if (speed > 0f) 1.0f / speed else 1.0f
+                    danmakuContext.setScrollSpeedFactor(speedFactor)
+
                     danmakuContext.setDanmakuTransparency(opacity)
 
                     // 行数制限の適用 (Map形式で指定)
@@ -83,7 +93,8 @@ fun LiveCommentOverlay(
                         val maxLinesMap = mapOf(BaseDanmaku.TYPE_SCROLL_RL to maxLines)
                         danmakuContext.setMaximumLines(maxLinesMap)
                     } else {
-                        danmakuContext.setMaximumLines(null)
+                        // nullよりもemptyMap()の方が内部的に安全
+                        danmakuContext.setMaximumLines(emptyMap())
                     }
 
                     prepare(parser, danmakuContext)
@@ -94,7 +105,9 @@ fun LiveCommentOverlay(
         },
         update = { view ->
             // 設定変更をリアルタイムに反映
-            danmakuContext.setScrollSpeedFactor(speed)
+            val speedFactor = if (speed > 0f) 1.0f / speed else 1.0f
+            danmakuContext.setScrollSpeedFactor(speedFactor)
+
             danmakuContext.setDanmakuTransparency(opacity)
 
             // 行数制限の動的更新
@@ -102,7 +115,7 @@ fun LiveCommentOverlay(
                 val maxLinesMap = mapOf(BaseDanmaku.TYPE_SCROLL_RL to maxLines)
                 danmakuContext.setMaximumLines(maxLinesMap)
             } else {
-                danmakuContext.setMaximumLines(null)
+                danmakuContext.setMaximumLines(emptyMap())
             }
 
             val targetType = if (useSoftwareRendering) View.LAYER_TYPE_SOFTWARE else View.LAYER_TYPE_HARDWARE
