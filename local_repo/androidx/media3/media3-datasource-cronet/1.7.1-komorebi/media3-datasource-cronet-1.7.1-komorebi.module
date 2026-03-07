@@ -1,0 +1,131 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-datasource-cronet",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "com.google.android.gms",
+          "module": "play-services-cronet",
+          "version": {
+            "requires": "18.0.1"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-datasource",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-datasource-cronet-1.7.1-komorebi.aar",
+          "url": "media3-datasource-cronet-1.7.1-komorebi.aar",
+          "size": 23918,
+          "sha512": "7c14dcf9bd41d42354690e3ce089f3e17f77281fe0513ad954a179952ab69ce67b9b0cc0a2e7ae7ba02c535d1dd61358d5223083ca5cbad75fab96d924042d78",
+          "sha256": "4baccb25122153a5b42221faceca301b29136152e4a957d8564fcfd0cbac6753",
+          "sha1": "55efab17904c046aa24e49dbfb6c2ca73f5085ab",
+          "md5": "943ffffd9b1f9f6e7ababa48b3ca30f0"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.6.0"
+          }
+        },
+        {
+          "group": "com.google.android.gms",
+          "module": "play-services-cronet",
+          "version": {
+            "requires": "18.0.1"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-datasource",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-datasource-cronet-1.7.1-komorebi.aar",
+          "url": "media3-datasource-cronet-1.7.1-komorebi.aar",
+          "size": 23918,
+          "sha512": "7c14dcf9bd41d42354690e3ce089f3e17f77281fe0513ad954a179952ab69ce67b9b0cc0a2e7ae7ba02c535d1dd61358d5223083ca5cbad75fab96d924042d78",
+          "sha256": "4baccb25122153a5b42221faceca301b29136152e4a957d8564fcfd0cbac6753",
+          "sha1": "55efab17904c046aa24e49dbfb6c2ca73f5085ab",
+          "md5": "943ffffd9b1f9f6e7ababa48b3ca30f0"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-datasource-cronet-1.7.1-komorebi-sources.jar",
+          "url": "media3-datasource-cronet-1.7.1-komorebi-sources.jar",
+          "size": 16612,
+          "sha512": "eea10b00737e7fe0ace4bdbce0c39445fc7bfdb2252e356bc706b6d8ce4d76325c8924222321ecdf25502970a857e8c00dad11cf321f095f2722f5b685fb735a",
+          "sha256": "a6840cb35d68b6cb42667d9c3f922a051067eed11cc3ff78645c21f2c7f67947",
+          "sha1": "f93dacc8ed498cff79c2caba591b52ad4d8101d8",
+          "md5": "acd559e54ef76ec035a2343e52bb6a77"
+        }
+      ]
+    }
+  ]
+}

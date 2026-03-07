@@ -70,6 +70,21 @@ android {
         }
     }
 }
+configurations.all {
+    resolutionStrategy {
+        // 全ての Media3 モジュールをローカルの独自ビルドに強制上書きする
+        val customVersion = "1.7.1-komorebi"
+        force("androidx.media3:media3-exoplayer:$customVersion")
+        force("androidx.media3:media3-extractor:$customVersion") // パッチ本体！
+        force("androidx.media3:media3-ui:$customVersion")
+        force("androidx.media3:media3-common:$customVersion")
+        force("androidx.media3:media3-decoder:$customVersion")
+        force("androidx.media3:media3-datasource:$customVersion")
+        force("androidx.media3:media3-database:$customVersion")
+        force("androidx.media3:media3-container:$customVersion")
+        force("androidx.media3:media3-exoplayer-hls:$customVersion")
+    }
+}
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -132,7 +147,7 @@ dependencies {
     ksp("androidx.room:room-compiler:$room_version") // kaptからkspへ
 
     // --- Media3 ---
-    val media3_version = "1.6.1"
+    val media3_version = "1.7.1-komorebi"
     implementation("androidx.media3:media3-exoplayer:$media3_version")
     implementation("androidx.media3:media3-ui:$media3_version")
     implementation("androidx.media3:media3-common:$media3_version")

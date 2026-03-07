@@ -9,7 +9,7 @@ import java.net.URLEncoder
 
 object WikipediaNormalizer {
 
-    private const val USER_AGENT = "KomorebiApp/0.7.0-beta (your_email@example.com) Android"
+    private const val USER_AGENT = "KomorebiApp/0.7.0-beta (tamago8168@gmail.com) Android"
 
     suspend fun getCanonicalTitle(keyword: String): String? = withContext(Dispatchers.IO) {
         if (keyword.contains("オリンピック") || keyword.contains("五輪")) return@withContext "オリンピック"
@@ -22,8 +22,8 @@ object WikipediaNormalizer {
         var result = fetchOpenSearch(keyword)
 
         // 第2波：見つからなかった場合、かつ文字数が長い場合は、サブタイトルが邪魔しているとみなして先頭6文字で再検索（豊臣兄弟などの救済）
-        if (result == null && keyword.length > 4) {
-            val truncatedKeyword = keyword.substring(0, 4)
+        if (result == null && keyword.length > 6) {
+            val truncatedKeyword = keyword.substring(0, 6)
             result = fetchOpenSearch(truncatedKeyword)
         }
 

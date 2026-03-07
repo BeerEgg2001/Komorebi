@@ -1,0 +1,110 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-effect",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-effect-1.7.1-komorebi.aar",
+          "url": "media3-effect-1.7.1-komorebi.aar",
+          "size": 260665,
+          "sha512": "ff8e197fbb0c725cb5f44583d64f2613ef92c88487039109c855f5df8513de94c02951d614bb64be1688b954dec29361cec5da8c503199492a24d3db643f9b3d",
+          "sha256": "4f7b15a0ab08ad05c734dbb5861c97f88a59bb50f816d9401b16faa8a0033fce",
+          "sha1": "9010fa7ed80427d2cb757cd84daef6429a511a64",
+          "md5": "e7787c032e42ce24169fe5f2f6e524b7"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.6.0"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-datasource",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-common",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-effect-1.7.1-komorebi.aar",
+          "url": "media3-effect-1.7.1-komorebi.aar",
+          "size": 260665,
+          "sha512": "ff8e197fbb0c725cb5f44583d64f2613ef92c88487039109c855f5df8513de94c02951d614bb64be1688b954dec29361cec5da8c503199492a24d3db643f9b3d",
+          "sha256": "4f7b15a0ab08ad05c734dbb5861c97f88a59bb50f816d9401b16faa8a0033fce",
+          "sha1": "9010fa7ed80427d2cb757cd84daef6429a511a64",
+          "md5": "e7787c032e42ce24169fe5f2f6e524b7"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-effect-1.7.1-komorebi-sources.jar",
+          "url": "media3-effect-1.7.1-komorebi-sources.jar",
+          "size": 183604,
+          "sha512": "00b72723046e4a150024f91fde941b5da20f5598ecfeb66a7e0611742fb74f89855a5eef5f25ccaf0f5f639068ed4e736fad1896013680968abf4e41d678879b",
+          "sha256": "e5b31247783524a1bb5f8234af2c955739bcabd07ba9eed684d719a4b8c5e563",
+          "sha1": "557e0ec9a4871d0e76fe3f63d59b0374cb0345e3",
+          "md5": "36b94acd126bb7ded8afc8aa5fd38315"
+        }
+      ]
+    }
+  ]
+}

@@ -1,9 +1,7 @@
 package com.beeregg2001.komorebi.viewmodel
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
-import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
@@ -67,8 +65,6 @@ class RecordViewModel @Inject constructor(
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-    // --- 1. 状態の定義 ---
-
     val syncProgress: StateFlow<SyncProgress> = syncEngine.syncProgress
 
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
@@ -95,8 +91,6 @@ class RecordViewModel @Inject constructor(
     private val _selectedSeriesGenre = MutableStateFlow<String?>(null)
     val selectedSeriesGenre: StateFlow<String?> = _selectedSeriesGenre.asStateFlow()
 
-    // --- 2. 表示形式のリアクティブ管理 ---
-
     private val _manualListViewOverride = MutableStateFlow<Boolean?>(null)
 
     val isListView: StateFlow<Boolean> = combine(
@@ -105,8 +99,6 @@ class RecordViewModel @Inject constructor(
     ) { defaultType, manualOverride ->
         manualOverride ?: (defaultType == "LIST")
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
-
-    // --- その他非同期状態 ---
 
     private val _isRecordingLoading = MutableStateFlow(false)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
@@ -186,6 +178,17 @@ class RecordViewModel @Inject constructor(
         }
     }
 
+    /**
+     * ★追加: 戻る操作の制御。検索結果 -> カテゴリ表示 -> 全体表示 という順序で戻る
+     */
+    fun handleBackNavigation(onExit: () -> Unit) {
+        when {
+            _activeSearchQuery.value.isNotEmpty() -> clearSearch()
+            _selectedCategory.value != RecordCategory.ALL -> updateCategory(RecordCategory.ALL)
+            else -> onExit()
+        }
+    }
+
     fun triggerSmartSync() {
         viewModelScope.launch {
             syncEngine.smartSync()
@@ -241,8 +244,6 @@ class RecordViewModel @Inject constructor(
             }
         }
     }.cachedIn(viewModelScope)
-
-    // --- 操作メソッド群 ---
 
     fun updateListView(isList: Boolean) {
         _manualListViewOverride.value = isList
@@ -301,13 +302,11 @@ class RecordViewModel @Inject constructor(
         _activeSearchQuery.value = ""
         _searchQuery.value = ""
         currentSearchQuery = ""
-        if (!isListView.value) {
-            updateCategory(RecordCategory.ALL)
-        } else {
-            _categoryBeforeSearch.value?.let {
-                _selectedCategory.value = it
-                _categoryBeforeSearch.value = null
-            }
+        _categoryBeforeSearch.value?.let {
+            _selectedCategory.value = it
+            _categoryBeforeSearch.value = null
+        } ?: run {
+            _selectedCategory.value = RecordCategory.ALL
         }
     }
 
@@ -318,8 +317,6 @@ class RecordViewModel @Inject constructor(
     }
 
     fun loadNextPage() {}
-
-    // --- 検索履歴・視聴履歴 ---
 
     private fun loadSearchHistory() {
         try {
@@ -376,8 +373,6 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // --- ストリーミング用 ---
-
     @UnstableApi
     fun startStreamMaintenance(
         program: RecordedProgram,
@@ -415,8 +410,6 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // --- メニュー構築 ---
-
     fun buildSeriesIndex() {}
 
     private suspend fun buildSeriesAndChannelMapsFromEntities(
@@ -442,10 +435,7 @@ class RecordViewModel @Inject constructor(
 
                 val aiSeriesName = aiDict[prog.title]
                 val displayTitle = aiSeriesName ?: TitleNormalizer.extractDisplayTitle(prog.title)
-
-                // ★修正: 検索キーワードにはワイルドカード(%)を含ませた強靭な文字列を使用する
                 val searchKeyword = TitleNormalizer.toSqlSearchQuery(aiSeriesName ?: displayTitle)
-
                 val groupingKey = TitleNormalizer.getGroupingKey(aiSeriesName ?: prog.title)
 
                 if (displayTitle.isNotEmpty()) {
@@ -550,7 +540,6 @@ class RecordViewModel @Inject constructor(
 
                 current = current.copy(
                     displayTitle = if (newTitle.length >= 2) newTitle else current.displayTitle,
-                    // ★修正: LCPで統合された新しいタイトルにもワイルドカード処理を適応
                     searchKeyword = if (newTitle.length >= 2) TitleNormalizer.toSqlSearchQuery(
                         newTitle
                     ) else current.searchKeyword,

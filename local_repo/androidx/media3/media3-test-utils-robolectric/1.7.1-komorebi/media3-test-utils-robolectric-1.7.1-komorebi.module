@@ -1,0 +1,124 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "androidx.media3",
+    "module": "media3-test-utils-robolectric",
+    "version": "1.7.1-komorebi",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.4"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-test-utils",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-test-utils-robolectric-1.7.1-komorebi.aar",
+          "url": "media3-test-utils-robolectric-1.7.1-komorebi.aar",
+          "size": 36818,
+          "sha512": "4ee075e1ba661e868e76d35a62d7b57738b1f8542f318aeb212c09ba29fce3c5c4df7378cf67e736d497481a71b56413ac1adca854518ed2913a47698db2d49e",
+          "sha256": "6337c6a4b1f185c1f0d54b8714bcbb22f64fa0904dc4260fe91ec18dea1f9bf1",
+          "sha1": "58c3474ee7330375f52d687aae4352c9aa306c1c",
+          "md5": "6c8b2a4f834fc345a449ba5288f441cb"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.6.0"
+          }
+        },
+        {
+          "group": "org.robolectric",
+          "module": "robolectric",
+          "version": {
+            "requires": "4.14.1"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-exoplayer",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        },
+        {
+          "group": "androidx.media3",
+          "module": "media3-test-utils",
+          "version": {
+            "requires": "1.7.1-komorebi"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "media3-test-utils-robolectric-1.7.1-komorebi.aar",
+          "url": "media3-test-utils-robolectric-1.7.1-komorebi.aar",
+          "size": 36818,
+          "sha512": "4ee075e1ba661e868e76d35a62d7b57738b1f8542f318aeb212c09ba29fce3c5c4df7378cf67e736d497481a71b56413ac1adca854518ed2913a47698db2d49e",
+          "sha256": "6337c6a4b1f185c1f0d54b8714bcbb22f64fa0904dc4260fe91ec18dea1f9bf1",
+          "sha1": "58c3474ee7330375f52d687aae4352c9aa306c1c",
+          "md5": "6c8b2a4f834fc345a449ba5288f441cb"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "media3-test-utils-robolectric-1.7.1-komorebi-sources.jar",
+          "url": "media3-test-utils-robolectric-1.7.1-komorebi-sources.jar",
+          "size": 21429,
+          "sha512": "ace7bbacdf21c9410f07185d44c18cdfe278fa4e136e51061a365f180286635ae430674dd15cc627e5ab749db582e3f6b69e8a90d23e44f91bf3d209542349ac",
+          "sha256": "b6d83d77bcee15ef1a2d07b600e0c7c17fb50edcac0ceb8b16fca5a472476dfb",
+          "sha1": "322bbdce955a28149c930c8adb7cb1cfecd30298",
+          "md5": "eb84a4b31caa18fd65cf110aca3163af"
+        }
+      ]
+    }
+  ]
+}
