@@ -38,7 +38,8 @@
 機種ごとの確認報告などは作者X([@tamago0602](https://x.com/tamago0602)))へご連絡いただければ、とても嬉しいです
 
 * REGZA 55X8900K (Android TV 10)
-* Fire Tv Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
+* Fire TV Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
+* Fire TV Stick 4K Max 第二世代 (Fire OS 8 Android 11ベース)
 
 ---
 
