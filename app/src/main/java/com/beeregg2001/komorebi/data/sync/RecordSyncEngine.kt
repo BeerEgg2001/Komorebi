@@ -7,6 +7,7 @@ import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
+import com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity
 import com.beeregg2001.komorebi.data.local.entity.SyncMetaEntity
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.util.TitleNormalizer
@@ -16,7 +17,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -34,9 +34,6 @@ data class SyncProgress(
 ) {
     val progressText: String
         get() = if (total > 0) "$message ($current / $total)" else "$message ($current 件取得中)"
-
-    val progressRatio: Float?
-        get() = if (total > 0) current.toFloat() / total.toFloat() else null
 }
 
 @Singleton
@@ -88,7 +85,6 @@ class RecordSyncEngine @Inject constructor(
                     var processedCount = 0
 
                     val allFetchedIds = mutableListOf<Int>()
-                    val allFetchedTitles = mutableSetOf<String>()
 
                     while (!isCompleted) {
                         Log.i(TAG, "Fetching page: $currentPage")
@@ -102,12 +98,11 @@ class RecordSyncEngine @Inject constructor(
 
                         val entities = programs.map { RecordDataMapper.toEntity(it) }
                         allFetchedIds.addAll(entities.map { it.id })
-                        allFetchedTitles.addAll(programs.map { it.title })
 
                         if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
                             val allPageItemsMatch = entities.all { entity ->
                                 val local = programDao.getById(entity.id)
-                                local != null && local == entity
+                                local != null && local.id == entity.id && local.title == entity.title // 簡易チェック
                             }
                             if (allPageItemsMatch) {
                                 isCompleted = true
@@ -115,8 +110,11 @@ class RecordSyncEngine @Inject constructor(
                             }
                         }
 
+                        // ★DB保存前にシリーズ名を確定させる！
+                        val enrichedEntities = enrichEntitiesWithSeriesName(entities)
+
                         db.withTransaction {
-                            programDao.upsertAll(entities)
+                            programDao.upsertAll(enrichedEntities)
                             val newMeta = currentMeta.copy(
                                 lastSyncedPage = currentPage,
                                 lastSyncedAt = System.currentTimeMillis()
@@ -135,7 +133,6 @@ class RecordSyncEngine @Inject constructor(
                             current = processedCount,
                             total = totalCount
                         )
-
                         if (totalCount > 0 && processedCount >= totalCount) isCompleted =
                             true else currentPage++
                     }
@@ -147,17 +144,11 @@ class RecordSyncEngine @Inject constructor(
                                 isInitialBuildCompleted = true
                             )
                         )
-
                         if (isInitial || forceFullSync) {
-                            if (allFetchedIds.isNotEmpty()) {
-                                db.recordedProgramDao().deleteOrphans(allFetchedIds)
-                            }
+                            if (allFetchedIds.isNotEmpty()) db.recordedProgramDao()
+                                .deleteOrphans(allFetchedIds)
                         }
-
-                        // 新機能：Wikipedia APIによる名寄せ処理の実行
-                        runWikipediaNormalizationIfNeeded(allFetchedTitles.toList())
                     }
-
                 } catch (e: Exception) {
                     Log.i(TAG, "Sync interrupted. Error: ${e.message}")
                 } finally {
@@ -195,18 +186,15 @@ class RecordSyncEngine @Inject constructor(
             if (apiPrograms.isEmpty()) return@withContext
 
             val entities = apiPrograms.map { RecordDataMapper.toEntity(it) }
-
             val allPageItemsMatch = entities.all { entity ->
                 val local = programDao.getById(entity.id)
-                local != null && local == entity
+                local != null && local.id == entity.id && local.title == entity.title
             }
 
             if (!allPageItemsMatch) {
-                db.withTransaction { programDao.upsertAll(entities) }
-
-                // 差分で取得したタイトルを渡す
-                val newTitles = apiPrograms.map { it.title }
-                runWikipediaNormalizationIfNeeded(newTitles)
+                // ★差分更新時もシリーズ名を確定させる！
+                val enrichedEntities = enrichEntitiesWithSeriesName(entities)
+                db.withTransaction { programDao.upsertAll(enrichedEntities) }
             }
         } catch (e: Exception) {
             Log.i(TAG, "Smart sync error: ${e.message}")
@@ -214,70 +202,63 @@ class RecordSyncEngine @Inject constructor(
     }
 
     /**
-     * Wikipedia APIを用いて、未知の番組タイトルを正式なシリーズ名に名寄せし、ローカルDBに保存します。
-     * @param targetTitles 処理対象の生タイトルリスト
+     * DB保存前に、ローカル辞書とWikipedia APIを活用して SeriesName を付与する
      */
-    private suspend fun runWikipediaNormalizationIfNeeded(targetTitles: List<String>) {
-        try {
-            val existingDict =
-                aiSeriesDictionaryDao.getAllDictionary().map { it.originalTitle }.toSet()
-            val unknownPrograms = targetTitles.filter { it !in existingDict }.distinct()
+    private suspend fun enrichEntitiesWithSeriesName(entities: List<RecordedProgramEntity>): List<RecordedProgramEntity> {
+        if (entities.isEmpty()) return emptyList()
 
-            if (unknownPrograms.isEmpty()) return
+        val dictionary = aiSeriesDictionaryDao.getAllDictionary()
+            .associate { it.originalTitle to it.normalizedSeriesName }
+        val unknownBaseTitles = mutableSetOf<String>()
 
-            // 💡 超高速化ハック1: APIを叩く前に「クレンジング後のキーワード」でグループ化する
-            // 戻り値の型: Map<String, List<String>> = Map<cleanKeyword, List<originalTitle>>
-            val groupedByCleanKeyword = unknownPrograms.groupBy { originalTitle ->
-                TitleNormalizer.extractDisplayTitle(originalTitle)
+        entities.forEach { entity ->
+            if (!dictionary.containsKey(entity.title)) {
+                unknownBaseTitles.add(TitleNormalizer.extractDisplayTitle(entity.title))
             }
+        }
 
-            // Wikipediaに問い合わせる「ユニークなシリーズ名」のリスト（件数が劇的に減る）
-            val uniqueCleanKeywords = groupedByCleanKeyword.keys.toList()
-
-            Log.i(
-                TAG,
-                "Starting Wikipedia Normalization for ${uniqueCleanKeywords.size} unique series (from ${unknownPrograms.size} unknown episodes)."
-            )
-
+        if (unknownBaseTitles.isNotEmpty()) {
             var processed = 0
-            val total = uniqueCleanKeywords.size
             _syncProgress.value = _syncProgress.value.copy(
                 isSyncing = true,
                 message = "シリーズ辞書を自動生成中...",
                 current = 0,
-                total = total
+                total = unknownBaseTitles.size
             )
 
-            for (cleanKeyword in uniqueCleanKeywords) {
-                // 1. Wikipedia API に正式名称を聞きに行く（各シリーズ1回だけ！）
-                val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(cleanKeyword)
-                val finalSeriesName = canonicalTitle ?: cleanKeyword
+            val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
+            for (baseTitle in unknownBaseTitles) {
+                val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                val finalSeriesName = canonicalTitle ?: baseTitle
 
-                // 2. この cleanKeyword に属する「すべてのエピソードのタイトル」に対して辞書エンティティを一気に作成
-                val originalTitlesInGroup = groupedByCleanKeyword[cleanKeyword] ?: emptyList()
-                val entriesToInsert = originalTitlesInGroup.map { originalTitle ->
-                    Log.d(TAG, "Normalized: [$originalTitle] -> [$finalSeriesName]")
-                    AiSeriesDictionaryEntity(
-                        originalTitle = originalTitle,
-                        normalizedSeriesName = finalSeriesName,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-
-                // 3. グループ単位でDBに一括保存
-                aiSeriesDictionaryDao.insertAll(entriesToInsert)
+                // このbaseTitleに属するすべてのoriginalTitleに対して辞書エントリを作成
+                entities.filter { TitleNormalizer.extractDisplayTitle(it.title) == baseTitle }
+                    .map { it.title }.distinct()
+                    .forEach { originalTitle ->
+                        newDictEntries.add(
+                            AiSeriesDictionaryEntity(
+                                originalTitle = originalTitle,
+                                normalizedSeriesName = finalSeriesName,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
 
                 processed++
                 _syncProgress.value = _syncProgress.value.copy(current = processed)
-
-                // 💡 超高速化ハック2: お行儀（レートリミット）の最適化
-                // 1000msだと遅すぎるため、Wikipediaの規約（数リクエスト/秒）の範囲内で最速の 300ms に短縮
-                delay(300)
+                delay(300) // APIレートリミット対策
             }
+            if (newDictEntries.isNotEmpty()) aiSeriesDictionaryDao.insertAll(newDictEntries)
+        }
 
-            Log.i(TAG, "Wikipedia Normalization completed.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Wikipedia Normalization error", e)
+        // 最新の辞書を再取得して適用
+        val updatedDictionary = aiSeriesDictionaryDao.getAllDictionary()
+            .associate { it.originalTitle to it.normalizedSeriesName }
+
+        return entities.map { entity ->
+            val finalSeriesName =
+                updatedDictionary[entity.title] ?: TitleNormalizer.extractDisplayTitle(entity.title)
+            entity.copy(seriesName = finalSeriesName)
         }
     }
 }

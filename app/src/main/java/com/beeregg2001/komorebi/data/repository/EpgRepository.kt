@@ -93,14 +93,14 @@ class EpgRepository @Inject constructor(
 
         val results = mutableListOf<EpgSearchResultItem>()
         val now = System.currentTimeMillis()
-        val twelveHoursAgo = now - (12 * 60 * 60 * 1000)
+        val nowMs = System.currentTimeMillis()
 
         memoryCache.values.flatten().forEach { wrapper ->
             wrapper.programs.forEach { prog ->
                 try {
                     val startTimeMs =
                         OffsetDateTime.parse(prog.start_time).toInstant().toEpochMilli()
-                    if (startTimeMs > twelveHoursAgo) {
+                    if (startTimeMs > nowMs) {
                         val detailText =
                             prog.detail?.entries?.joinToString(" ") { "${it.key} ${it.value}" }
                                 ?: ""

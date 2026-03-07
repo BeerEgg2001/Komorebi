@@ -19,33 +19,22 @@ interface RecordedProgramDao {
     @Query("DELETE FROM recorded_programs WHERE id NOT IN (:apiIds)")
     suspend fun deleteOrphans(apiIds: List<Int>)
 
-    // 全件取得
     @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
     fun getAllPagingSource(): PagingSource<Int, RecordedProgramEntity>
 
-    // チャンネル絞り込み用
     @Query("SELECT * FROM recorded_programs WHERE channel_id = :channelId ORDER BY start_time DESC")
     fun getPagingSourceByChannel(channelId: String): PagingSource<Int, RecordedProgramEntity>
 
-    // タイトル検索用
-    @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' ORDER BY start_time DESC")
+    // ★修正: 元のタイトル OR 成形後のシリーズ名のどちらかに引っかかればヒットさせる
+    @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY start_time DESC")
     fun searchPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
 
-    // ====================================================================================
-    // ★ 追加: ジャンル絞り込み用
-    // ====================================================================================
     @Query("SELECT * FROM recorded_programs WHERE genres LIKE '%' || :genre || '%' ORDER BY start_time DESC")
     fun getPagingSourceByGenre(genre: String): PagingSource<Int, RecordedProgramEntity>
 
-    // ====================================================================================
-    // ★ 追加: 曜日絞り込み用
-    // ====================================================================================
     @Query("SELECT * FROM recorded_programs WHERE strftime('%w', substr(start_time, 1, 10)) = :dayOfWeek ORDER BY start_time DESC")
     fun getPagingSourceByDayOfWeek(dayOfWeek: String): PagingSource<Int, RecordedProgramEntity>
 
-    // ====================================================================================
-    // ★ 追加: 未視聴絞り込み用
-    // ====================================================================================
     @Query("""
         SELECT * FROM recorded_programs 
         WHERE playback_position <= 5.0 

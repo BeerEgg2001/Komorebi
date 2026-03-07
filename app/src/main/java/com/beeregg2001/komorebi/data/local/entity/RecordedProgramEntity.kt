@@ -18,21 +18,18 @@ data class RecordedProgramEntity(
     @PrimaryKey
     val id: Int,
     val title: String,
+    @ColumnInfo(name = "series_name") val seriesName: String = "", // ★追加
+    @ColumnInfo(name = "is_episodic") val isEpisodic: Boolean = false, // ★追加
     @ColumnInfo(name = "start_time") val startTime: String,
     @ColumnInfo(name = "end_time") val endTime: String,
-
     @ColumnInfo(name = "video_duration") val videoDuration: Double,
     @ColumnInfo(name = "has_key_frames") val hasKeyFrames: Boolean,
     @ColumnInfo(name = "is_recording") val isRecording: Boolean,
     @ColumnInfo(name = "playback_position") val playbackPosition: Double,
-
     @ColumnInfo(name = "channel_id") val channelId: String?,
     @ColumnInfo(name = "channel_type") val channelType: String?,
     @ColumnInfo(name = "channel_name") val channelName: String?,
-
     val genres: List<EpgGenre>?,
-
-    // ★追加: シーンサーチに必要なタイルメタデータ
     @ColumnInfo(name = "tile_columns") val tileColumns: Int? = null,
     @ColumnInfo(name = "tile_rows") val tileRows: Int? = null,
     @ColumnInfo(name = "tile_interval") val tileInterval: Double? = null,

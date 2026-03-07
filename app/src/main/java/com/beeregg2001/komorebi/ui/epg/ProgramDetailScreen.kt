@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
+import androidx.activity.compose.BackHandler // ★追加
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -90,6 +91,11 @@ fun ProgramDetailScreen(
         isClickEnabled = true
     }
 
+    // ★追加: 詳細画面表示中の「戻るキー」を確実にキャッチし、背後の画面への誤爆を防ぐ
+    BackHandler(enabled = isClickEnabled) {
+        onBackClick()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -109,9 +115,11 @@ fun ProgramDetailScreen(
                 )
         )
 
-        Row(modifier = Modifier
-            .fillMaxSize()
-            .padding(48.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(48.dp)
+        ) {
             Column(
                 modifier = Modifier
                     .weight(0.3f)
@@ -298,7 +306,6 @@ fun ProgramDetailScreen(
                     }
                 }
 
-                // ★修正箇所: Border() オブジェクトでラップ
                 OutlinedButton(
                     onClick = { if (isClickEnabled) onBackClick() },
                     modifier = Modifier

@@ -115,7 +115,27 @@ fun EpgNavigationContainer(
 
     LaunchedEffect(isInternalJumping) { onJumpStateChanged(isInternalJumping) }
 
-    // ★修正: 検索実行時、安全地帯に逃してから少しディレイを挟んで検索バーを閉じる
+    // ★追加: 詳細画面から戻ってきたときのフォーカス復帰（フォーカスロスト＆クラッシュ対策）
+    var wasProgramSelected by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedProgram) {
+        if (selectedProgram != null) {
+            wasProgramSelected = true
+        } else if (wasProgramSelected) {
+            // selectedProgram が null に戻った ＝ 詳細画面が閉じた！
+            wasProgramSelected = false
+            delay(150) // 画面の遷移アニメーションを少し待つ
+            if (activeSearchQuery.isNotEmpty()) {
+                if (searchResults.isNotEmpty()) {
+                    searchResultsFirstItemRequester.safeRequestFocus("DetailToSearchResult")
+                } else {
+                    searchResultsBackButtonRequester.safeRequestFocus("DetailToSearchEmpty")
+                }
+            } else {
+                gridFocusRequester.safeRequestFocus("DetailToGrid")
+            }
+        }
+    }
+
     val performSearch = { query: String ->
         safeHouseRequester.safeRequestFocus("EscapeToSafeHouse_Search")
         keyboardController?.hide()
@@ -148,15 +168,12 @@ fun EpgNavigationContainer(
         }
     }
 
-    // ★修正: 検索中と完了時で「絶対に消えない要素」へフォーカスを誘導する
     LaunchedEffect(isSearching, activeSearchQuery) {
         if (activeSearchQuery.isNotEmpty()) {
             if (isSearching) {
-                // 検索中は、画面に常駐する「戻るボタン」にフォーカスを置いて保護する！
                 delay(50)
                 searchResultsBackButtonRequester.safeRequestFocus("Searching_BackBtn")
             } else {
-                // 検索完了後は、リストがレンダリングされるのを待ってから先頭アイテムへ
                 delay(150)
                 if (searchResults.isNotEmpty()) {
                     searchResultsFirstItemRequester.safeRequestFocus("SearchResults_List")
@@ -167,11 +184,12 @@ fun EpgNavigationContainer(
         }
     }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(Color.Transparent)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Transparent)
+    ) {
 
-        // ★修正: 避難所から絶対にフォーカスが漏れないように要塞化する
         Box(
             modifier = Modifier
                 .size(1.dp)

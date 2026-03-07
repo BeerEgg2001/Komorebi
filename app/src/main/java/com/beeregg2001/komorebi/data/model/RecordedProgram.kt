@@ -10,6 +10,8 @@ data class RecordedApiResponse(
 data class RecordedProgram(
     val id: Int,
     val title: String,
+    val seriesName: String? = null, // ★Nullableに変更
+    val isEpisodic: Boolean? = false, // ★Nullableに変更
     val description: String,
     val detail: Map<String, String>? = null,
     @SerializedName("start_time") val startTime: String,
@@ -25,7 +27,7 @@ data class RecordedProgram(
 
 data class RecordedChannel(
     val id: String,
-    @SerializedName("network_id") val networkId: Int? = null, // NIDは保持（将来の拡張用）
+    @SerializedName("network_id") val networkId: Int? = null,
     @SerializedName("display_channel_id") val displayChannelId: String,
     val type: String,
     val name: String,

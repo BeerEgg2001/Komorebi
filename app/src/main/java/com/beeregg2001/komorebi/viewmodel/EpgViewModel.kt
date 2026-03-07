@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.viewmodel
 
+import android.content.Context
 import android.os.Build
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
@@ -16,23 +17,29 @@ import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.repository.EpgRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext // ★追加
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import org.json.JSONArray // ★追加
 import java.time.OffsetDateTime
 import javax.inject.Inject
 
-// ★追加: UIに渡すための「完全な番組＋チャンネル＋ロゴURL」のデータクラス
+// UIに渡すための「完全な番組＋チャンネル＋ロゴURL」のデータクラス
 data class UiSearchResultItem(
     val program: EpgProgram,
     val channel: EpgChannel,
     val logoUrl: String
 )
 
+private const val PREF_NAME_EPG_SEARCH = "epg_search_history_pref"
+private const val KEY_EPG_HISTORY = "history_list"
+
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class EpgViewModel @Inject constructor(
     private val repository: EpgRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    @ApplicationContext private val context: Context // ★追加: SharedPreferencesにアクセスするため
 ) : ViewModel() {
 
     var uiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
@@ -71,12 +78,62 @@ class EpgViewModel @Inject constructor(
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
 
-    // ★修正: リストの型を UiSearchResultItem に変更
     private val _searchResults = MutableStateFlow<List<UiSearchResultItem>>(emptyList())
     val searchResults: StateFlow<List<UiSearchResultItem>> = _searchResults.asStateFlow()
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    init {
+        loadSearchHistory() // ★追加: アプリ起動時に履歴を読み込む
+        loadInitialData()
+    }
+
+    // ==========================================
+    // 検索履歴のローカル保存機能 (SharedPreferences)
+    // ==========================================
+    private fun loadSearchHistory() {
+        try {
+            val prefs = context.getSharedPreferences(PREF_NAME_EPG_SEARCH, Context.MODE_PRIVATE)
+            val jsonString = prefs.getString(KEY_EPG_HISTORY, "[]")
+            val jsonArray = JSONArray(jsonString)
+            val list = ArrayList<String>()
+            for (i in 0 until jsonArray.length()) list.add(jsonArray.getString(i))
+            _searchHistory.value = list
+        } catch (e: Exception) {
+            _searchHistory.value = emptyList()
+        }
+    }
+
+    private fun addSearchHistory(query: String) {
+        val currentList = _searchHistory.value.toMutableList()
+        currentList.remove(query)
+        currentList.add(0, query)
+        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex) // 5件まで
+        _searchHistory.value = currentList
+        saveSearchHistory(currentList)
+    }
+
+    fun removeSearchHistory(query: String) {
+        val currentList = _searchHistory.value.toMutableList()
+        if (currentList.remove(query)) {
+            _searchHistory.value = currentList
+            saveSearchHistory(currentList)
+        }
+    }
+
+    private fun saveSearchHistory(list: List<String>) {
+        viewModelScope.launch {
+            try {
+                val prefs = context.getSharedPreferences(PREF_NAME_EPG_SEARCH, Context.MODE_PRIVATE)
+                val jsonArray = JSONArray(list)
+                prefs.edit().putString(KEY_EPG_HISTORY, jsonArray.toString()).apply()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+    // ==========================================
 
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
@@ -87,17 +144,11 @@ class EpgViewModel @Inject constructor(
         if (trimmed.isNotEmpty()) {
             _activeSearchQuery.value = trimmed
 
-            val currentList = _searchHistory.value.toMutableList()
-            currentList.remove(trimmed)
-            currentList.add(0, trimmed)
-            if (currentList.size > 5) {
-                currentList.removeAt(currentList.lastIndex)
-            }
-            _searchHistory.value = currentList
+            // ★修正: ローカル保存機能を持つ関数を使用する
+            addSearchHistory(trimmed)
 
             viewModelScope.launch(Dispatchers.Default) {
                 _isSearching.value = true
-                // Repositoryからデータを取り出し、ここでロゴURLを付与してしまう！
                 val results = repository.searchFuturePrograms(trimmed)
                 val uiResults = results.map { item ->
                     UiSearchResultItem(
@@ -118,16 +169,12 @@ class EpgViewModel @Inject constructor(
         _searchResults.value = emptyList()
     }
 
-    // ==========================================
-    // ★追加: 検索に備えて全放送波のデータを裏で取得しておく
-    // ==========================================
     fun preloadEpgDataForSearch(availableTypes: List<String>) {
         val now = OffsetDateTime.now()
         val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
         val end = now.plusDays(7)
 
         viewModelScope.launch(Dispatchers.IO) {
-            // ★修正: forEach の順番待ちをやめ、async {}.awaitAll() で全放送波を同時にフェッチして爆速化！
             availableTypes.map { type ->
                 async {
                     if (!repository.hasCacheForType(type)) {
@@ -136,11 +183,6 @@ class EpgViewModel @Inject constructor(
                 }
             }.awaitAll()
         }
-    }
-    // ==========================================
-
-    init {
-        loadInitialData()
     }
 
     private fun loadInitialData() {

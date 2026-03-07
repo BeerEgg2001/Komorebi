@@ -69,7 +69,7 @@ fun RecordListContent(
     onFetchDetail: (Int) -> Unit = {},
     onClearDetail: () -> Unit = {},
     onFirstItemBound: (Boolean) -> Unit = {},
-    onFocusedItemChanged: (RecordedProgram?) -> Unit = {} // ★追加
+    onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
@@ -141,7 +141,7 @@ fun RecordListContent(
                                 if (it.isFocused) {
                                     if (!isSideMenuOpen && !isDetailVisible) {
                                         focusedProgram = program
-                                        onFocusedItemChanged(program) // ★ここ
+                                        onFocusedItemChanged(program)
                                     }
                                 }
                             }
@@ -161,16 +161,13 @@ fun RecordListContent(
                             }
                     )
 
-                    // ★自律回収システム（指名手配ID対応）
                     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                         val ticket = ticketManager.currentTicket
                         if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
-                            // 1. 指名手配された番組IDが自分ならフォーカスを奪う
                             delay(100)
                             specificRequester.safeRequestFocus("Ticket_TARGET_ID")
                             ticketManager.consume(FocusTicket.TARGET_ID)
                         } else if (ticket == FocusTicket.LIST_TOP && index == 0) {
-                            // 2. 単なる先頭リクエストかつ自分が index 0 ならフォーカスを奪う
                             delay(100)
                             firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP")
                             ticketManager.consume(FocusTicket.LIST_TOP)
@@ -248,9 +245,11 @@ fun RecordListContent(
                             .size(24.dp)
                     )
 
-                    Box(modifier = Modifier
-                        .fillMaxSize()
-                        .padding(start = 28.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 28.dp)
+                    ) {
                         if (isDetailVisible) {
                             RecordDetailPanel(
                                 program = fetchedProgramDetail ?: detailProgram,
@@ -319,9 +318,11 @@ fun RecordListContent(
                                     },
                                     onClick = {
                                         focusedProgram?.let {
+                                            // ★修正: extractSearchKeyword の代わりに直接抽出する
+                                            val displayTitle =
+                                                TitleNormalizer.extractDisplayTitle(it.title)
                                             val keyword =
-                                                TitleNormalizer.extractSearchKeyword(it.title)
-                                            // ★呼び出し側でチケット発行ロジックを呼ぶ
+                                                TitleNormalizer.toSqlSearchQuery(displayTitle)
                                             onSeriesSearch(keyword)
                                             isSideMenuOpen = false
                                         }

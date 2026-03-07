@@ -94,7 +94,6 @@ fun MainRootScreen(
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
 
-    // ★追加: EPGデータの準備完了状態
     val isEpgReady by epgViewModel.isInitialLoadComplete.collectAsState()
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
@@ -200,13 +199,10 @@ fun MainRootScreen(
         if (!isSettingsInitialized) {
             delay(500); state.isSplashFinished = true
         } else if (state.currentTabIndex == 3) {
-            // 番組表スタートなら、EPGが完了するまで意地でも待つ
             if (isEpgReady && state.isDataReady) {
                 delay(300); state.isSplashFinished = true
             }
         } else {
-            // ホームやライブスタートなら、チャンネル情報(isDataReady)さえ揃えば
-            // EPGのパース完了を待たずにサクッと画面を開いてしまう！
             if (state.isDataReady) {
                 delay(300); state.isSplashFinished = true
             }
@@ -408,9 +404,12 @@ fun MainRootScreen(
                 exit = fadeOut(tween(500))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
+                    // ★修正: progressRatio の計算をここで行う
+                    val pRatio =
+                        if (syncProgress.total > 0) syncProgress.current.toFloat() / syncProgress.total.toFloat() else 0f
                     LoadingScreen(
                         message = syncProgress.progressText,
-                        progressRatio = syncProgress.progressRatio
+                        progressRatio = pRatio
                     )
                 } else {
                     LoadingScreen()

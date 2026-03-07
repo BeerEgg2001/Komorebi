@@ -18,26 +18,37 @@ object WikipediaNormalizer {
 
         if (keyword.length <= 2) return@withContext null
 
-        // 第1波：まずはそのままのキーワードで検索
         var result = fetchOpenSearch(keyword)
 
-        // 第2波：見つからなかった場合、かつ文字数が長い場合は、サブタイトルが邪魔しているとみなして先頭6文字で再検索（豊臣兄弟などの救済）
         if (result == null && keyword.length > 6) {
             val truncatedKeyword = keyword.substring(0, 6)
             result = fetchOpenSearch(truncatedKeyword)
         }
 
+        if (result != null && !isMatchValid(keyword, result)) {
+            return@withContext null
+        }
         return@withContext result
     }
 
-    /**
-     * 実際にWikipedia opensearch APIを叩くプライベート関数
-     */
+    private fun isMatchValid(originalKeyword: String, wikiResult: String): Boolean {
+        if (originalKeyword.contains(wikiResult, ignoreCase = true) ||
+            wikiResult.contains(originalKeyword, ignoreCase = true)
+        ) {
+            return true
+        }
+
+        val prefixLen = minOf(3, minOf(originalKeyword.length, wikiResult.length))
+        if (prefixLen >= 2 && originalKeyword.take(prefixLen) == wikiResult.take(prefixLen)) {
+            return true
+        }
+        return false
+    }
+
     private fun fetchOpenSearch(query: String): String? {
         try {
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val urlString =
-                "https://ja.wikipedia.org/w/api.php?action=opensearch&search=$encodedQuery&limit=1&format=json"
+            val urlString = "https://ja.wikipedia.org/w/api.php?action=opensearch&search=$encodedQuery&limit=1&format=json"
             val url = URL(urlString)
 
             val connection = url.openConnection() as HttpURLConnection
