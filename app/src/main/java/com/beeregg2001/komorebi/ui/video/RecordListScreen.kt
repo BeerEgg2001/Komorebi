@@ -54,7 +54,8 @@ fun RecordListScreen(
     konomiPort: String,
     customTitle: String? = null,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    isFromVideoTabSearch: Boolean = false
 ) {
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
