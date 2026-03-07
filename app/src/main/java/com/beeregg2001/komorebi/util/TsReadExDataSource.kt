@@ -25,9 +25,10 @@ class TsReadExDataSource(
     private var uri: Uri? = null
     private var opened = false
 
-    private val inputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 5000)
-    private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 10000)
-    private val tempArray = ByteArray(188 * 5000)
+    private val inputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 20000)
+    private val tempArray = ByteArray(188 * 20000)
+    // outputBuffer も同様に拡大（10000 -> 30000など）
+    private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 30000)
 
     override fun getUri(): Uri? = uri
 
@@ -69,28 +70,38 @@ class TsReadExDataSource(
         if (length == 0) return 0
         val input = inputStream ?: return C.RESULT_END_OF_INPUT
 
-        var processedSize = nativeLib.popDataBuffer(handle, outputBuffer, length)
+        var totalProcessedSize = 0
 
-        if (processedSize <= 0) {
-            val readCount = input.read(tempArray)
-            if (readCount == -1) return C.RESULT_END_OF_INPUT
+        // 要求された length を満たすまで、あるいは入力が切れるまでループする
+        while (totalProcessedSize < length) {
+            val remainingToFill = length - totalProcessedSize
+            var processedSize = nativeLib.popDataBuffer(handle, outputBuffer, remainingToFill)
 
-            if (readCount > 0) {
-                inputBuffer.clear()
-                inputBuffer.put(tempArray, 0, readCount)
-                nativeLib.pushDataBuffer(handle, inputBuffer, readCount)
-                processedSize = nativeLib.popDataBuffer(handle, outputBuffer, length)
+            if (processedSize <= 0) {
+                // JNIにデータがないなら、元の入力（Stream）から取ってきて流し込む
+                val readCount = input.read(tempArray)
+                if (readCount == -1) {
+                    return if (totalProcessedSize > 0) totalProcessedSize else C.RESULT_END_OF_INPUT
+                }
+
+                if (readCount > 0) {
+                    inputBuffer.clear()
+                    inputBuffer.put(tempArray, 0, readCount)
+                    nativeLib.pushDataBuffer(handle, inputBuffer, readCount)
+                    // 流し込んだ直後に再度 pop を試みる
+                    continue
+                } else {
+                    break // 入力が一時的に空なら抜ける
+                }
             }
+
+            // 取れたデータを buffer に詰め替える
+            outputBuffer.position(0)
+            outputBuffer.get(buffer, offset + totalProcessedSize, processedSize)
+            totalProcessedSize += processedSize
         }
 
-        return if (processedSize > 0) {
-            outputBuffer.position(0)
-            val finalReadSize = Math.min(processedSize, length)
-            outputBuffer.get(buffer, offset, finalReadSize)
-            finalReadSize
-        } else {
-            0
-        }
+        return totalProcessedSize
     }
 
     override fun close() {

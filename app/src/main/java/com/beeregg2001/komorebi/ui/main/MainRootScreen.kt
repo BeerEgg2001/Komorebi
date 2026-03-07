@@ -94,6 +94,8 @@ fun MainRootScreen(
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
 
+    val isEpgReady by epgViewModel.isInitialLoadComplete.collectAsState()
+
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "")
@@ -117,17 +119,16 @@ fun MainRootScreen(
         }
     }
 
-    // 設定画面から戻る時のリフレッシュ処理
     val closeSettingsAndRefresh = {
         state.isSettingsOpen = false
         state.isDataReady = false
-        state.isUiReady = false // UI準備フラグもリセット
+        state.isUiReady = false
         state.showConnectionErrorDialog = false
         state.currentTabIndex = 0
         channelViewModel.fetchChannels()
         epgViewModel.preloadAllEpgData()
         homeViewModel.refreshHomeData()
-        recordViewModel.fetchRecentRecordings(forceRefresh = true)
+        recordViewModel.fetchRecentRecordings(forceRefresh = false)
         reserveViewModel.fetchReserves()
     }
 
@@ -137,7 +138,6 @@ fun MainRootScreen(
         }
     }
 
-    // 戻るボタンの処理（連打ガード付き）
     BackHandler(enabled = true) {
         if (!state.canProcessBackPress()) return@BackHandler
 
@@ -179,7 +179,6 @@ fun MainRootScreen(
             }
 
             state.showConnectionErrorDialog -> onExitApp()
-            // Loading中（準備中）はホームへ戻る挙動を抑制
             !(state.isDataReady && state.isUiReady) -> {}
             else -> state.triggerHomeBack = true
         }
@@ -196,9 +195,20 @@ fun MainRootScreen(
         }
     }
 
-    LaunchedEffect(Unit) { delay(500); state.isSplashFinished = true }
+    LaunchedEffect(isEpgReady, state.isDataReady, isSettingsInitialized, state.currentTabIndex) {
+        if (!isSettingsInitialized) {
+            delay(500); state.isSplashFinished = true
+        } else if (state.currentTabIndex == 3) {
+            if (isEpgReady && state.isDataReady) {
+                delay(300); state.isSplashFinished = true
+            }
+        } else {
+            if (state.isDataReady) {
+                delay(300); state.isSplashFinished = true
+            }
+        }
+    }
 
-    // データおよびOS設定が読み込めているか（UI準備はここには含めないことでデッドロック回避）
     val isSystemReady =
         ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) && state.hasAppliedStartupTab
 
@@ -220,7 +230,6 @@ fun MainRootScreen(
                 )
             }
 
-            // メインコンテンツを表示する（DB同期中はブロック）
             val showMainContent =
                 isSystemReady && isSettingsInitialized && !state.showConnectionErrorDialog && !(syncProgress.isSyncing && syncProgress.isInitialBuild)
 
@@ -358,7 +367,7 @@ fun MainRootScreen(
                                 triggerBack = state.triggerHomeBack,
                                 onBackTriggered = { state.triggerHomeBack = false },
                                 onFinalBack = onExitApp,
-                                onUiReady = { state.isUiReady = true }, // ここでUI準備完了を通知
+                                onUiReady = { state.isUiReady = true },
                                 onNavigateToPlayer = { channelId, _, _ ->
                                     val channel =
                                         groupedChannels.values.flatten().find { it.id == channelId }
@@ -389,23 +398,24 @@ fun MainRootScreen(
                 }
             }
 
-            // ローディング画面の制御（UIが準備できるまでオーバーレイし続ける）
             AnimatedVisibility(
                 visible = !state.isUiReady && !state.showConnectionErrorDialog && isSettingsInitialized,
                 enter = fadeIn(),
                 exit = fadeOut(tween(500))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
+                    // ★修正: progressRatio の計算をここで行う
+                    val pRatio =
+                        if (syncProgress.total > 0) syncProgress.current.toFloat() / syncProgress.total.toFloat() else 0f
                     LoadingScreen(
                         message = syncProgress.progressText,
-                        progressRatio = syncProgress.progressRatio
+                        progressRatio = pRatio
                     )
                 } else {
                     LoadingScreen()
                 }
             }
 
-            // ダイアログ・トースト系 (変更なし)
             if (state.selectedReserve != null) {
                 val program =
                     remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }

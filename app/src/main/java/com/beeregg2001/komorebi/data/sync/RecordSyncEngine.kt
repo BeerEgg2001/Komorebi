@@ -2,11 +2,18 @@ package com.beeregg2001.komorebi.data.sync
 
 import android.util.Log
 import androidx.room.withTransaction
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.local.AppDatabase
+import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
+import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
+import com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity
 import com.beeregg2001.komorebi.data.local.entity.SyncMetaEntity
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
+import com.beeregg2001.komorebi.util.TitleNormalizer
+import com.beeregg2001.komorebi.util.WikipediaNormalizer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,15 +34,14 @@ data class SyncProgress(
 ) {
     val progressText: String
         get() = if (total > 0) "$message ($current / $total)" else "$message ($current 件取得中)"
-
-    val progressRatio: Float?
-        get() = if (total > 0) current.toFloat() / total.toFloat() else null
 }
 
 @Singleton
 class RecordSyncEngine @Inject constructor(
     private val apiService: KonomiApi,
-    private val db: AppDatabase
+    private val db: AppDatabase,
+    private val settingsRepository: SettingsRepository,
+    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao
 ) {
     private val _syncProgress = MutableStateFlow(SyncProgress())
     val syncProgress: StateFlow<SyncProgress> = _syncProgress.asStateFlow()
@@ -60,10 +66,8 @@ class RecordSyncEngine @Inject constructor(
 
                     if (forceFullSync) {
                         programDao.clearAll()
-                        currentMeta = currentMeta.copy(
-                            lastSyncedPage = 0,
-                            isInitialBuildCompleted = false
-                        )
+                        currentMeta =
+                            currentMeta.copy(lastSyncedPage = 0, isInitialBuildCompleted = false)
                     }
 
                     val isInitial = !currentMeta.isInitialBuildCompleted
@@ -75,11 +79,11 @@ class RecordSyncEngine @Inject constructor(
                         message = "$baseMessage (Connecting)"
                     )
 
-                    var currentPage = if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
+                    var currentPage =
+                        if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
                     var isCompleted = false
                     var processedCount = 0
 
-                    // ★追加: サーバー上に存在する全てのIDを保持するリスト
                     val allFetchedIds = mutableListOf<Int>()
 
                     while (!isCompleted) {
@@ -88,30 +92,29 @@ class RecordSyncEngine @Inject constructor(
                         val programs = response.recordedPrograms
 
                         if (programs.isEmpty()) {
-                            Log.i(TAG, "No more programs found. Reached end of records.")
                             isCompleted = true
                             break
                         }
 
                         val entities = programs.map { RecordDataMapper.toEntity(it) }
-
-                        // ★追加: 取得したIDを漏れなく記録していく
                         allFetchedIds.addAll(entities.map { it.id })
 
                         if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
                             val allPageItemsMatch = entities.all { entity ->
                                 val local = programDao.getById(entity.id)
-                                local != null && local == entity
+                                local != null && local.id == entity.id && local.title == entity.title // 簡易チェック
                             }
                             if (allPageItemsMatch) {
-                                Log.i(TAG, "No changes detected on page $currentPage. Stopping sync.")
                                 isCompleted = true
                                 break
                             }
                         }
 
+                        // ★DB保存前にシリーズ名を確定させる！
+                        val enrichedEntities = enrichEntitiesWithSeriesName(entities)
+
                         db.withTransaction {
-                            programDao.upsertAll(entities)
+                            programDao.upsertAll(enrichedEntities)
                             val newMeta = currentMeta.copy(
                                 lastSyncedPage = currentPage,
                                 lastSyncedAt = System.currentTimeMillis()
@@ -130,12 +133,8 @@ class RecordSyncEngine @Inject constructor(
                             current = processedCount,
                             total = totalCount
                         )
-
-                        if (totalCount > 0 && processedCount >= totalCount) {
-                            isCompleted = true
-                        } else {
-                            currentPage++
-                        }
+                        if (totalCount > 0 && processedCount >= totalCount) isCompleted =
+                            true else currentPage++
                     }
 
                     if (isCompleted) {
@@ -145,25 +144,13 @@ class RecordSyncEngine @Inject constructor(
                                 isInitialBuildCompleted = true
                             )
                         )
-
-                        // ★修正: 別途APIを叩かず、ループで集めた100%確実なIDリストを使ってクリーンアップ
                         if (isInitial || forceFullSync) {
-                            if (allFetchedIds.isNotEmpty()) {
-                                Log.i(TAG, "Cleaning up orphaned records...")
-                                _syncProgress.value = _syncProgress.value.copy(
-                                    isInitialBuild = isInitial,
-                                    message = "Cleaning up old records..."
-                                )
-                                db.recordedProgramDao().deleteOrphans(allFetchedIds)
-                                Log.i(TAG, "Cleanup completed.")
-                            }
+                            if (allFetchedIds.isNotEmpty()) db.recordedProgramDao()
+                                .deleteOrphans(allFetchedIds)
                         }
                     }
-
-                    Log.i(TAG, "Sync completed successfully. Total processed: $processedCount")
-
                 } catch (e: Exception) {
-                    Log.i(TAG, "Sync interrupted. Will resume next time. Error: ${e.message}")
+                    Log.i(TAG, "Sync interrupted. Error: ${e.message}")
                 } finally {
                     _syncProgress.value = SyncProgress(isSyncing = false, isInitialBuild = false)
                 }
@@ -172,19 +159,19 @@ class RecordSyncEngine @Inject constructor(
     }
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Clearing database...")
         db.recordedProgramDao().clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
-                id = 1, lastSyncedPage = 0, lastSyncedAt = 0L, isInitialBuildCompleted = false
+                id = 1,
+                lastSyncedPage = 0,
+                lastSyncedAt = 0L,
+                isInitialBuildCompleted = false
             )
         )
-        Log.i(TAG, "Database cleared.")
     }
 
     suspend fun smartSync() = withContext(Dispatchers.IO) {
         try {
-            Log.i(TAG, "Smart sync started.")
             val metaDao = db.syncMetaDao()
             val programDao = db.recordedProgramDao()
 
@@ -199,22 +186,79 @@ class RecordSyncEngine @Inject constructor(
             if (apiPrograms.isEmpty()) return@withContext
 
             val entities = apiPrograms.map { RecordDataMapper.toEntity(it) }
-
             val allPageItemsMatch = entities.all { entity ->
                 val local = programDao.getById(entity.id)
-                local != null && local == entity
+                local != null && local.id == entity.id && local.title == entity.title
             }
 
             if (!allPageItemsMatch) {
-                Log.i(TAG, "Smart sync found changes. Updating local DB.")
-                db.withTransaction {
-                    programDao.upsertAll(entities)
-                }
-            } else {
-                Log.i(TAG, "Smart sync found no changes.")
+                // ★差分更新時もシリーズ名を確定させる！
+                val enrichedEntities = enrichEntitiesWithSeriesName(entities)
+                db.withTransaction { programDao.upsertAll(enrichedEntities) }
             }
         } catch (e: Exception) {
             Log.i(TAG, "Smart sync error: ${e.message}")
+        }
+    }
+
+    /**
+     * DB保存前に、ローカル辞書とWikipedia APIを活用して SeriesName を付与する
+     */
+    private suspend fun enrichEntitiesWithSeriesName(entities: List<RecordedProgramEntity>): List<RecordedProgramEntity> {
+        if (entities.isEmpty()) return emptyList()
+
+        val dictionary = aiSeriesDictionaryDao.getAllDictionary()
+            .associate { it.originalTitle to it.normalizedSeriesName }
+        val unknownBaseTitles = mutableSetOf<String>()
+
+        entities.forEach { entity ->
+            if (!dictionary.containsKey(entity.title)) {
+                unknownBaseTitles.add(TitleNormalizer.extractDisplayTitle(entity.title))
+            }
+        }
+
+        if (unknownBaseTitles.isNotEmpty()) {
+            var processed = 0
+            _syncProgress.value = _syncProgress.value.copy(
+                isSyncing = true,
+                message = "シリーズ辞書を自動生成中...",
+                current = 0,
+                total = unknownBaseTitles.size
+            )
+
+            val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
+            for (baseTitle in unknownBaseTitles) {
+                val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                val finalSeriesName = canonicalTitle ?: baseTitle
+
+                // このbaseTitleに属するすべてのoriginalTitleに対して辞書エントリを作成
+                entities.filter { TitleNormalizer.extractDisplayTitle(it.title) == baseTitle }
+                    .map { it.title }.distinct()
+                    .forEach { originalTitle ->
+                        newDictEntries.add(
+                            AiSeriesDictionaryEntity(
+                                originalTitle = originalTitle,
+                                normalizedSeriesName = finalSeriesName,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+
+                processed++
+                _syncProgress.value = _syncProgress.value.copy(current = processed)
+                delay(300) // APIレートリミット対策
+            }
+            if (newDictEntries.isNotEmpty()) aiSeriesDictionaryDao.insertAll(newDictEntries)
+        }
+
+        // 最新の辞書を再取得して適用
+        val updatedDictionary = aiSeriesDictionaryDao.getAllDictionary()
+            .associate { it.originalTitle to it.normalizedSeriesName }
+
+        return entities.map { entity ->
+            val finalSeriesName =
+                updatedDictionary[entity.title] ?: TitleNormalizer.extractDisplayTitle(entity.title)
+            entity.copy(seriesName = finalSeriesName)
         }
     }
 }

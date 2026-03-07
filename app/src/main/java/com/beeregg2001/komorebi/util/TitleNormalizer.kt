@@ -1,96 +1,115 @@
 package com.beeregg2001.komorebi.util
 
 import java.text.Normalizer
-import java.util.regex.Pattern
 
 object TitleNormalizer {
-    // 1. 放送記号の徹底的な除去（表示用）
-    private val TAGS_PATTERN = Pattern.compile(
-        "\\[(字|二|デ|解|多|S|新|終|再|無|SS|HV|P|W|手|初|生|N|H|複|双|別|カ|英|韓|中|天|擬|吹|撮|録|問|画|前|後|編|回|全|話)\\]|" +
-                "\\((字|二|デ|解|多|S|新|終|再|無|SS|HV|P|W|手|初|生|N|H|複|双|別|カ|英|韓|中|天|擬|吹|撮|録|問|画|前|後|編|回|全|話)\\)|" +
-                "（(字|二|デ|解|多|S|新|終|再|無|SS|HV|P|W|手|初|生|N|H|複|双|別|カ|英|韓|中|天|擬|吹|撮|録|問|画|前|後|編|回|全|話)）|" +
-                "【(新|終|再|初|字|二|デ|解|無料|生|録)】|" +
-                "［(新|終|再|初|字|二|デ|解|無料|生|録)］"
+
+    private val RP1_PREFIXES = listOf(
+        "ＢＳ深夜アニメ館", "無料≫", "日５『", "日5『", "日５「", "日5「",
+        "アニメＡ・", "アニメA・", "TV放送版『", "放送直前特番「", "アニメイズム「",
+        "＜アニメ＞『", "＜アニメ＞", "アニメ　ＴＶアニメ『", "ＴＶアニメ「", "TVアニメ「",
+        "ＴＶアニメ『", "TVアニメ『", "アニメ「", "アニメ", "ノイタミナ「", "木曜劇場「",
+        "オシドラサタデー「", "ドラマプレミア23「", "よるドラ「", "アサバラ"
     )
 
-    // 2. 先頭のタグのみを除去するパターン（検索用）
-    private val LEADING_TAGS_PATTERN = Pattern.compile("^(?:\\[.*?\\]|【.*?】|［.*?］|\\(.*?\\)|（.*?）)+")
-
-    // ★追加: 半角・全角数字に加えて、漢数字もマッチさせるパターン定数
-    private const val NUM = "[ 0-9０-９一二三四五六七八九十百千万零]+"
-
-    // 3. 話数・サブタイトルの分離パターン（表示用）
-    // $NUM を使うことで、アラビア数字だけでなく「第一話」「第百回」「第一期」なども検知可能に
-    private val EPISODE_SUBTITLE_PATTERN = Pattern.compile(
-        "(?:[ 　]+)(?:第$NUM[話回幕]?|$NUM[話回幕]|#+$NUM|\\($NUM\\)|（$NUM）|EP\\.?$NUM).*$|\\($NUM\\)|" +
-                "(?:[ 　]+)(?:「|『|【|＜|〈|~|〜|—|-|▽|▼).*$|" +
-                "(?:第$NUM[話回幕]?|$NUM[話回幕]|#+$NUM|\\($NUM\\)|（$NUM）|EP\\.?$NUM)$|第$NUM[部]|#$NUM|" +
-                "(?:[ 　]+)$NUM$|" +
-                "(?:[ 　]+)(?:第$NUM[期]|Season$NUM|Part$NUM).*$",
-        Pattern.CASE_INSENSITIVE
+    private val FRAME_PREFIXES = listOf(
+        "金曜ロードショー", "土曜プレミアム", "月曜プレミア", "日曜洋画劇場",
+        "午後のロードショー", "連続テレビ小説", "大河ドラマ", "ドラマプレミア",
+        "木曜劇場", "ドラマ24", "夜ドラ", "プレミアムシネマ"
     )
 
-    // 4. 検索キーワードを分断するデリミタのパターン（検索用）
-    private val SEARCH_DELIMITER_PATTERN = Pattern.compile("(?:\\[|【|［|\\(|（|\\s|　|「|『|第|#|EP|▽|▼|~|〜|-|—)")
+    fun extractDisplayTitle(fullTitle: String?): String {
+        // ★修正: エルビス演算子を使って確実に String 型 (非null) として取り出す
+        val safeTitle = fullTitle ?: return "不明な番組"
+        if (safeTitle.isBlank()) return "不明な番組"
 
-    // 5. アニメやドラマなどのジャンル文字列の除去
-    private val PREFIX_PATTERN_BRACKETS = Pattern.compile("^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)(?:「|『)(.*?)(?:」|』)$")
-    private val PREFIX_PATTERN_SPACE = Pattern.compile("^(?:映画|アニメ|連続テレビ小説|土曜ドラマ|ドラマ|特別番組|特番|新番組|最終回)[\\s　]+")
+        var title = safeTitle
 
-    /**
-     * UI表示用のタイトルを抽出
-     */
-    fun extractDisplayTitle(fullTitle: String): String {
-        if (fullTitle.isEmpty()) return ""
-        var title = Normalizer.normalize(fullTitle, Normalizer.Form.NFKC)
-
-        title = TAGS_PATTERN.matcher(title).replaceAll("")
-
-        val prefixMatcher = PREFIX_PATTERN_BRACKETS.matcher(title.trim())
-        if (prefixMatcher.matches()) {
-            title = prefixMatcher.group(1) ?: title
-        } else {
-            title = PREFIX_PATTERN_SPACE.matcher(title.trim()).replaceAll("")
+        for (prefix in RP1_PREFIXES) {
+            title = title.replace(prefix, "")
         }
 
-        val episodeMatcher = EPISODE_SUBTITLE_PATTERN.matcher(title)
-        if (episodeMatcher.find()) {
-            title = title.substring(0, episodeMatcher.start())
-        }
+        title = title.replace(Regex("\\[.*?\\]|\\(.*?\\)|（.*?）|<.*?>|［.*?］"), "")
+        title = title.replace(Regex("^【.*?】"), "")
+        title = Normalizer.normalize(title, Normalizer.Form.NFKC)
 
-        title = title.replace(Regex("^[\\s　・-]+|[\\s　・-]+$"), "")
-        return title.trim()
-    }
-
-    /**
-     * 検索用のキーワードを抽出
-     * （途中のタグが抜けることによる連続性の喪失＝検索漏れを防ぐ）
-     */
-    fun extractSearchKeyword(fullTitle: String): String {
-        if (fullTitle.isEmpty()) return ""
-
-        // 1. 先頭の邪魔なタグを除去 (例: "[字]アニメ" -> "アニメ")
-        var title = LEADING_TAGS_PATTERN.matcher(fullTitle.trim()).replaceAll("")
-
-        // 2. プレフィックスを除去 (例: "映画「〇〇」" -> "〇〇")
-        val prefixMatcher = PREFIX_PATTERN_BRACKETS.matcher(title)
-        if (prefixMatcher.matches()) {
-            title = prefixMatcher.group(1) ?: title
-        } else {
-            title = PREFIX_PATTERN_SPACE.matcher(title).replaceAll("")
-        }
-
-        // 3. 最初のデリミタ（タグの開始や空白など）が見つかったら、そこまででカット
-        // これにより「番組名[字]サブタイ」が「番組名」となり、確実にヒットする
-        val delimiterMatcher = SEARCH_DELIMITER_PATTERN.matcher(title)
-        if (delimiterMatcher.find()) {
-            val cut = title.substring(0, delimiterMatcher.start()).trim()
-            if (cut.length > 1) { // カットした結果が極端に短すぎなければ採用
-                title = cut
+        for (frame in FRAME_PREFIXES) {
+            if (title.contains(frame, ignoreCase = true)) {
+                return frame
             }
         }
 
-        // 4. 後方の揺れを回避するため、最大30文字程度に丸める
-        return if (title.length > 30) title.substring(0, 30).trim() else title.trim()
+        title = title.replace(
+            Regex("(第|第\\s*)([\\d一二三四五六七八九十百千万]+)\\s*(話|回|夜|弾|週|巻|部|期|章|幕|局|戦|シリーズ|シーズン).*"),
+            ""
+        )
+        title = title.replace(Regex("(#|＃)\\s*\\d+.*"), "")
+        title = title.replace(Regex("(?i)(season|episode|ep|sec)\\.?\\s*\\d+.*"), "")
+
+        fun safeCut(currentTitle: String, cutIndex: Int): String {
+            if (cutIndex <= 3) return currentTitle
+            return currentTitle.substring(0, cutIndex)
+        }
+
+        val splitRegex = Regex("(\\s+▽|\\s+▼|\\s+-[\\s\\-]*|\\s+〜|\\s+～|\\s+／|\\s*\\*\\s*)")
+        val splitMatch = splitRegex.find(title)
+        if (splitMatch != null) {
+            title = safeCut(title, splitMatch.range.first)
+        }
+
+        val exclRegex = Regex("([！？!?])\\s+.*")
+        val exclMatch = exclRegex.find(title)
+        if (exclMatch != null) {
+            title = safeCut(title, exclMatch.range.first + 1)
+        }
+
+        val spRegex =
+            Regex("([！？!?])(SP|スペシャル|特番|ダイジェスト|傑作選|総集編|新春|年末|年始|秋の|冬の|春の|夏の).*")
+        val spMatch = spRegex.find(title)
+        if (spMatch != null) {
+            title = safeCut(title, spMatch.range.first + 1)
+        }
+
+        val bracketMatch = Regex("([「『＜<【]).*").find(title)
+        if (bracketMatch != null) {
+            title = safeCut(title, bracketMatch.range.first)
+        }
+
+        val spaceIdx = title.indexOfFirst { it == ' ' || it == '　' }
+        if (spaceIdx > 0) {
+            title = safeCut(title, spaceIdx)
+        }
+
+        title = title.replace(
+            Regex("(拡大版?|直前|直後|豪華|大|超|秋の|冬の|春の|夏の|年末|年始|新春|最終回|完全版)?(SP|スペシャル|特番|ダイジェスト|傑作選|総集編).*$"),
+            ""
+        )
+
+        return title.replace(Regex("^[\\s　・\\-！!？?。、]+|[\\s　・\\-！!？?。、]+$"), "").trim()
+    }
+
+    fun getGroupingKey(fullTitle: String?): String {
+        return extractDisplayTitle(fullTitle)
+            .uppercase()
+            .replace(Regex("[^A-Z0-9\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF]"), "")
+    }
+
+    fun toSqlSearchQuery(baseTitle: String?): String {
+        // ★修正: こちらも安全に String 型として取り扱う
+        val safeTitle = baseTitle ?: return ""
+        if (safeTitle.isBlank()) return ""
+        return safeTitle.replace(Regex("[%_]"), "").trim()
+    }
+
+    fun extractSearchKeyword(fullTitle: String?): String {
+        return toSqlSearchQuery(extractDisplayTitle(fullTitle))
+    }
+
+    fun hasEpisodeNumber(fullTitle: String?): Boolean {
+        // ★修正: 同様に安全に取り扱う
+        val safeTitle = fullTitle ?: return false
+        val regex =
+            Regex("(第\\s*[\\d一二三四五六七八九十百千万]+\\s*(話|回|夜|弾|週|巻|部|期|章|幕|局|戦|シリーズ|シーズン))|([#＃]\\s*\\d+)|((?i)(season|episode|ep|sec)\\.?\\s*\\d+)")
+        return regex.containsMatchIn(safeTitle)
     }
 }

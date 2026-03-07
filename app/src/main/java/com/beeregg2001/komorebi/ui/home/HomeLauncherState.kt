@@ -22,6 +22,7 @@ class HomeLauncherState(
     var internalLastPlayerChannelId by mutableStateOf<String?>(null)
     var isEpgJumping by mutableStateOf(false)
     var topNavHasFocus by mutableStateOf(false)
+    var isCurrentTabContentReady by mutableStateOf(false)
 
     // --- データ保持 (rememberHomeLauncherState から自動更新される) ---
     var watchHistory by mutableStateOf<List<KonomiHistoryProgram>>(emptyList())
@@ -38,6 +39,10 @@ class HomeLauncherState(
     var logoUrls by mutableStateOf<List<String>>(emptyList())
     var isLoadingInitial by mutableStateOf(true)
 
+    // --- ★修正: 録画・シリーズ関連の状態保持を追加 ---
+    var openedSeriesTitle by mutableStateOf<String?>(null)
+    var isSeriesListOpen by mutableStateOf(false)
+
     // --- フォーカスリクエスタ ---
     val tabFocusRequesters = List(5) { FocusRequester() }
     val settingsFocusRequester = FocusRequester()
@@ -45,8 +50,9 @@ class HomeLauncherState(
 
     // --- 算出プロパティ ---
     val watchHistoryPrograms: List<RecordedProgram>
-        @RequiresApi(Build.VERSION_CODES.O)
-        get() = watchHistory.map { KonomiDataMapper.toDomainModel(it) }
+        @RequiresApi(Build.VERSION_CODES.O) get() = watchHistory.map {
+            KonomiDataMapper.toDomainModel(it)
+        }
 
     fun isFullScreen(
         selectedChannel: Channel?,
@@ -56,8 +62,9 @@ class HomeLauncherState(
         isRecordListOpen: Boolean,
         isReserveOverlayOpen: Boolean
     ): Boolean {
+        // ★修正: シリーズリストが開いている際もフルスクリーン判定に含める
         return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null ||
-                isSettingsOpen || isRecordListOpen || isReserveOverlayOpen
+                isSettingsOpen || isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
     }
 
     /**
@@ -72,9 +79,9 @@ class HomeLauncherState(
         recordViewModel: RecordViewModel,
         reserveViewModel: ReserveViewModel
     ) {
-        // ★修正: すでに選択されているタブに再フォーカスした場合はリロードをスキップ
         if (selectedTabIndex == index) return
 
+        isCurrentTabContentReady = false
         selectedTabIndex = index
         onTabChange(index)
         when (index) {
@@ -90,14 +97,13 @@ class HomeLauncherState(
     }
 
     fun handleBackNavigation(
-        onTabChange: (Int) -> Unit,
-        onFinalBack: () -> Unit,
-        onBackTriggered: () -> Unit
+        onTabChange: (Int) -> Unit, onFinalBack: () -> Unit, onBackTriggered: () -> Unit
     ) {
         if (!topNavHasFocus) {
             tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus("Home_Back")
         } else {
             if (selectedTabIndex > 0) {
+                isCurrentTabContentReady = false
                 selectedTabIndex = 0
                 onTabChange(0)
             } else {
@@ -108,9 +114,6 @@ class HomeLauncherState(
     }
 }
 
-/**
- * Screenから呼ばれ、ViewModelの状態を監視してStateHolderを構築・維持する
- */
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun rememberHomeLauncherState(
@@ -128,7 +131,6 @@ fun rememberHomeLauncherState(
         savedTabIndex.intValue = state.selectedTabIndex
     }
 
-    // --- ViewModel の状態を監視し、StateHolder へ値を流し込む (リアクティブな同期) ---
     state.watchHistory = homeViewModel.watchHistory.collectAsState().value
     state.lastChannels = homeViewModel.lastWatchedChannelFlow.collectAsState().value
     state.recentRecordings = recordViewModel.recentRecordings.collectAsState().value
@@ -138,14 +140,11 @@ fun rememberHomeLauncherState(
 
     val liveRows by channelViewModel.liveRows.collectAsState()
     state.hotChannels = remember(liveRows) { homeViewModel.getHotChannels(liveRows) }
-
     state.upcomingReserves =
         remember(state.reserves) { homeViewModel.getUpcomingReserves(state.reserves) }
-
     state.genrePickup = homeViewModel.genrePickupPrograms.collectAsState().value
     state.pickupGenreLabel = homeViewModel.pickupGenreLabel.collectAsState().value
     state.genrePickupTimeSlot = homeViewModel.genrePickupTimeSlot.collectAsState().value
-
     state.epgUiState = epgViewModel.uiState
     state.logoUrls = remember(state.epgUiState) {
         val eData = state.epgUiState

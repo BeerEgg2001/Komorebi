@@ -10,6 +10,21 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 
 /**
+ * 信号情報の詳細を保持するデータクラス
+ */
+data class SignalMetadata(
+    val videoRes: String = "-",
+    val videoCodec: String = "-",
+    val videoBitrate: String = "-",
+    val verticalFreq: String = "-",
+    val audioCodec: String = "-",
+    val audioChannels: String = "-",
+    val audioSampleRate: String = "-",
+    val bufferDuration: String = "-",
+    val droppedFrames: String = "0"
+)
+
+/**
  * LivePlayerScreenの複雑な状態と再生ロジックを管理するクラス
  */
 @Stable
@@ -26,6 +41,10 @@ class LivePlayerState(
     var playerError by mutableStateOf<String?>(null)
     var retryKey by mutableIntStateOf(0)
     var isPlayerPlaying by mutableStateOf(false)
+
+    // 信号情報オーバーレイの状態
+    var isSignalInfoVisible by mutableStateOf(false)
+    var signalInfo by mutableStateOf(SignalMetadata())
 
     // SSE / ステータス管理
     var sseStatus by mutableStateOf("Standby")

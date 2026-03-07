@@ -11,21 +11,28 @@ import com.beeregg2001.komorebi.data.local.entity.*
     entities = [
         WatchHistoryEntity::class,
         LastChannelEntity::class,
-        EpgCacheEntity::class,
-        // ★同期エンジン用のEntityを追加
+        EpgCacheEntity::class, // ★復元: これがないとEpgRepositoryが壊れます
         RecordedProgramEntity::class,
-        SyncMetaEntity::class
+        SyncMetaEntity::class,
+        AiSeriesDictionaryEntity::class,
+        EpgChannelEntity::class,
+        EpgProgramEntity::class
     ],
-    version = 10, // ★バージョンをアップ
+    version = 12,
     exportSchema = false
 )
-@TypeConverters(Converters::class) // ★TypeConverterを有効化
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun lastChannelDao(): LastChannelDao
-    abstract fun epgCacheDao(): EpgCacheDao
+    abstract fun epgCacheDao(): EpgCacheDao // ★復元
 
-    // ★同期エンジン用のDaoを追加
+    // 同期エンジン用のDao
     abstract fun recordedProgramDao(): RecordedProgramDao
     abstract fun syncMetaDao(): SyncMetaDao
+
+    abstract fun epgDao(): EpgDao
+
+    // AI辞書用のDao
+    abstract fun aiSeriesDictionaryDao(): AiSeriesDictionaryDao
 }

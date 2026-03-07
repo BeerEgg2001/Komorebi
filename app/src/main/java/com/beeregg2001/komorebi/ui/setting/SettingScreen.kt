@@ -1,7 +1,6 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
-import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
@@ -24,14 +23,16 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
-import com.beeregg2001.komorebi.ui.components.InputDialog
-import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -42,7 +43,8 @@ import java.time.LocalTime
 fun SettingsScreen(
     onBack: () -> Unit,
     onClearLastChannel: () -> Unit = {},
-    onClearWatchHistory: () -> Unit = {}
+    onClearWatchHistory: () -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -58,6 +60,7 @@ fun SettingsScreen(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
         Category(AppStrings.SETTINGS_CATEGORY_PLAYBACK, Icons.Default.PlayCircle),
+        Category("録画設定", Icons.Default.VideoSettings), // ★追加
         Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
@@ -66,24 +69,20 @@ fun SettingsScreen(
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
 
+    // ★修正: バッチリストの数に応じてRequestersを調整
+    val batchItemRs =
+        remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
+
     val itemFocusRequesters = remember {
         listOf(
-            listOf(FocusRequester(), FocusRequester()),
+            listOf(FocusRequester(), FocusRequester()), // 0: General
             listOf(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester()
-            ),
-            listOf(
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester()
-            ),
+            ), // 1: Connection
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -91,17 +90,32 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester()
-            ),
-            listOf(FocusRequester(), FocusRequester()),
+            ), // 2: Playback
+            listOf(FocusRequester()), // 3: Recording (Addボタン分) - 動的リストはbatchItemRsで管理
+            listOf(
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ), // 4: Home
+            listOf(FocusRequester(), FocusRequester()), // 5: Display
             listOf(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester()
-            ),
-            listOf(FocusRequester(), FocusRequester(), FocusRequester()),
-            listOf(FocusRequester())
+            ), // 6: Comment
+            listOf(
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ), // 7: Lab
+            listOf(FocusRequester()) // 8: AppInfo
         )
     }
 
@@ -256,27 +270,25 @@ fun SettingsScreen(
                                 t,
                                 v
                             ) {
-                                scope.launch {
+                                if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) viewModel.updateKonomiIp(
+                                    it
+                                ) else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) viewModel.updateKonomiPort(
+                                    it
+                                ) else scope.launch {
                                     repository.saveString(
-                                        if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) SettingsRepository.KONOMI_IP else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) SettingsRepository.KONOMI_PORT else if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
+                                        if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
                                         it
                                     )
                                 }
                             }
                         },
                         onSelectSrc = {
-                            // ★修正: Mirakurunの入力状況に応じた動的な選択肢生成（キーをKONOMITVに修正）
-                            val options = if (prefs.mirakurunIp.isBlank()) {
-                                listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV")
-                            } else {
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED to "KONOMITV",
-                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
-                                )
-                            }
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                                options,
+                                if (prefs.mirakurunIp.isBlank()) listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV") else listOf(
+                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED to "KONOMITV",
+                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
+                                ),
                                 prefs.preferredSource
                             ) {
                                 scope.launch {
@@ -394,8 +406,32 @@ fun SettingsScreen(
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2
                         }
                     )
-
-                    3 -> HomeDisplaySettingsContent(
+                    // ★追加: 録画設定 (カテゴリー3)
+                    3 -> RecordingSettingsContent(
+                        batchList = prefs.postRecordingBatchList,
+                        onAdd = {
+                            uiState.activeDialog = SettingDialogState.BatchInput { n, p ->
+                                viewModel.addPostRecordingBatch(
+                                    n,
+                                    p
+                                )
+                            }
+                        },
+                        onDelete = { batch ->
+                            uiState.activeDialog = SettingDialogState.ConfirmClear(
+                                "バッチの削除",
+                                "「${batch.name}」を削除しますか？"
+                            ) { viewModel.deletePostRecordingBatch(batch) }
+                        },
+                        addR = itemFocusRequesters[3][0],
+                        itemRs = batchItemRs,
+                        sidebarR = categoryFocusRequesters[3],
+                        onClick = {
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3
+                        }
+                    )
+                    // 以降のインデックスを+1
+                    4 -> HomeDisplaySettingsContent(
                         isDarkMode = !prefs.currentThemeName.contains("LIGHT"),
                         themeSeason = when (prefs.currentThemeName) {
                             "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
@@ -404,13 +440,13 @@ fun SettingsScreen(
                         excludePaid = prefs.excludePaid,
                         pickupTime = prefs.pickupTime,
                         startupTab = prefs.startupTab,
-                        modeR = itemFocusRequesters[3][0],
-                        colorR = itemFocusRequesters[3][1],
-                        startR = itemFocusRequesters[3][2],
-                        genreR = itemFocusRequesters[3][3],
-                        timeR = itemFocusRequesters[3][4],
-                        exPaidR = itemFocusRequesters[3][5],
-                        sidebarR = categoryFocusRequesters[3],
+                        modeR = itemFocusRequesters[4][0],
+                        colorR = itemFocusRequesters[4][1],
+                        startR = itemFocusRequesters[4][2],
+                        genreR = itemFocusRequesters[4][3],
+                        timeR = itemFocusRequesters[4][4],
+                        exPaidR = itemFocusRequesters[4][5],
+                        sidebarR = categoryFocusRequesters[4],
                         onMode = {
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_BASE_THEME,
@@ -527,13 +563,13 @@ fun SettingsScreen(
                             }
                         },
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
                         }
                     )
 
-                    4 -> DisplaySettingsContent(
+                    5 -> DisplaySettingsContent(
                         preferences = prefs,
-                        sidebarR = categoryFocusRequesters[4],
+                        sidebarR = categoryFocusRequesters[5],
                         onEditTab = {
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_STARTUP_TAB,
@@ -571,13 +607,13 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        itemRs = itemFocusRequesters[4],
+                        itemRs = itemFocusRequesters[5],
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
                         }
                     )
 
-                    5 -> CommentSettingsContent(
+                    6 -> CommentSettingsContent(
                         def = prefs.commentDefaultDisplay,
                         speed = prefs.commentSpeed,
                         size = prefs.commentFontSize,
@@ -604,25 +640,29 @@ fun SettingsScreen(
                                 )
                             }
                         },
-                        defR = itemFocusRequesters[5][0],
-                        spR = itemFocusRequesters[5][1],
-                        szR = itemFocusRequesters[5][2],
-                        opR = itemFocusRequesters[5][3],
-                        mxR = itemFocusRequesters[5][4],
-                        sidebarR = categoryFocusRequesters[5],
+                        defR = itemFocusRequesters[6][0],
+                        spR = itemFocusRequesters[6][1],
+                        szR = itemFocusRequesters[6][2],
+                        opR = itemFocusRequesters[6][3],
+                        mxR = itemFocusRequesters[6][4],
+                        sidebarR = categoryFocusRequesters[6],
                         onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
                         }
                     )
 
-                    6 -> LabSettingsContent(
+                    7 -> LabSettingsContent(
                         annict = prefs.labAnnict,
                         shobocal = prefs.labShobocal,
                         postCmd = prefs.defaultPostCommand,
-                        annictR = itemFocusRequesters[6][0],
-                        shobocalR = itemFocusRequesters[6][1],
-                        cmdR = itemFocusRequesters[6][2],
-                        sidebarR = categoryFocusRequesters[6],
+                        enableAi = prefs.enableAiNormalization,
+                        apiKey = prefs.geminiApiKey,
+                        annictR = itemFocusRequesters[7][0],
+                        shobocalR = itemFocusRequesters[7][1],
+                        cmdR = itemFocusRequesters[7][2],
+                        enableAiR = itemFocusRequesters[7][3],
+                        apiKeyR = itemFocusRequesters[7][4],
+                        sidebarR = categoryFocusRequesters[7],
                         onAnnict = {
                             scope.launch {
                                 repository.saveString(
@@ -652,19 +692,41 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
-                        }
-                    )
-
-                    7 -> AppInfoContent(
-                        onShow = { uiState.activeDialog = SettingDialogState.Licenses },
-                        licR = itemFocusRequesters[7][0],
-                        sidebarR = categoryFocusRequesters[7],
+                        onToggleAi = {
+                            scope.launch {
+                                repository.saveString(
+                                    SettingsRepository.ENABLE_AI_NORMALIZATION,
+                                    if (prefs.enableAiNormalization == "ON") "OFF" else "ON"
+                                )
+                            }
+                        },
+                        onEditApiKey = {
+                            uiState.activeDialog = SettingDialogState.Input(
+                                "Gemini API Key",
+                                prefs.geminiApiKey
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.GEMINI_API_KEY,
+                                        it
+                                    )
+                                }
+                            }
+                        },
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7
                         }
                     )
+
+                    8 -> AppInfoContent(
+                        onShow = {
+                            uiState.activeDialog = SettingDialogState.Licenses
+                        },
+                        licR = itemFocusRequesters[8][0],
+                        sidebarR = categoryFocusRequesters[8],
+                        onClick = {
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8
+                        })
                 }
                 Spacer(Modifier.height(32.dp))
             }
@@ -677,6 +739,10 @@ fun SettingsScreen(
             initialValue = state.initialValue,
             onDismiss = { closeDialog() },
             onConfirm = { state.onConfirm(it); closeDialog() })
+        // ★追加: バッチ入力
+        is SettingDialogState.BatchInput -> BatchInputDialog(
+            onDismiss = { closeDialog() },
+            onConfirm = { n, p -> state.onConfirm(n, p); closeDialog() })
 
         is SettingDialogState.Selection -> SelectionDialog(
             title = state.title,

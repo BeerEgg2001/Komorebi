@@ -133,6 +133,11 @@ fun VideoPlayerScreen(
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
 
+    // ★Amlogicバグ対策用：動画の解像度状態を保持
+    var videoWidth by remember { mutableIntStateOf(0) }
+    var videoHeight by remember { mutableIntStateOf(0) }
+    var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
+
     // コメント取得
     LaunchedEffect(program.recordedVideo.id) {
         allComments.clear()
@@ -179,6 +184,13 @@ fun VideoPlayerScreen(
                         .setUsage(C.USAGE_MEDIA).build(), true
                 )
                 addListener(object : Player.Listener {
+                    // ★Amlogicバグ対策: 動画サイズ変更を検知
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        videoWidth = videoSize.width
+                        videoHeight = videoSize.height
+                        pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
+                    }
+
                     override fun onIsPlayingChanged(playing: Boolean) {
                         vs.isPlayerPlaying = playing
                     }
@@ -289,10 +301,32 @@ fun VideoPlayerScreen(
         AndroidView(
             factory = {
                 PlayerView(it).apply {
-                    player = exoPlayer; useController = false; resizeMode =
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT; keepScreenOn = true
+                    player = exoPlayer
+                    useController = false
+                    keepScreenOn = true
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
-            }, modifier = Modifier
+            },
+            update = { view ->
+                view.player = exoPlayer
+                // ★ Amlogic SoC 対策強化版（全解像度で4:3になる現象への対応）
+                if (videoWidth > 0 && videoHeight > 0) {
+                    val ratio = videoWidth.toFloat() / videoHeight.toFloat()
+                    // 1. 1440x1080 (4:3) で SARが無視されている場合
+                    val isAnamorphic =
+                        (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
+                    // 2. 1920x1080 等、本来16:9なのにデコーダが4:3に潰す場合への対策
+                    val is16by9 = ratio >= 1.7f
+
+                    if (isAnamorphic || is16by9) {
+                        // ハードウェア側の潰れを上書きするため、強制的に画面いっぱい(16:9)に引き伸ばす
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    } else {
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                }
+            },
+            modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(mainFocusRequester)
                 .focusable()

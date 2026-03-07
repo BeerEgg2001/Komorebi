@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>androidx.media3</groupId>
+  <artifactId>media3-container</artifactId>
+  <versioning>
+    <latest>1.7.1-komorebi</latest>
+    <release>1.7.1-komorebi</release>
+    <versions>
+      <version>1.7.1-komorebi</version>
+    </versions>
+    <lastUpdated>20260306134716</lastUpdated>
+  </versioning>
+</metadata>

@@ -37,7 +37,7 @@ class RecordSyncWorker @AssistedInject constructor(
                 .build()
 
             val request = PeriodicWorkRequestBuilder<RecordSyncWorker>(
-                4, TimeUnit.HOURS // 4時間おきに実行
+                15, TimeUnit.MINUTES // 15分おきに実行
             )
                 .setConstraints(constraints)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)

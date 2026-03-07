@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -15,6 +16,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 
 @Composable
 fun GeneralSettingsContent(
@@ -53,30 +55,146 @@ fun GeneralSettingsContent(
     }
 }
 
+// ★追加: 録画設定コンテンツ
+@Composable
+fun RecordingSettingsContent(
+    batchList: List<PostRecordingBatch>,
+    onAdd: () -> Unit,
+    onDelete: (PostRecordingBatch) -> Unit,
+    addR: FocusRequester,
+    itemRs: List<FocusRequester>,
+    sidebarR: FocusRequester,
+    onClick: (FocusRequester) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(
+            "録画設定",
+            style = MaterialTheme.typography.headlineMedium,
+            color = colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
+
+        SettingsSection("録画後実行batの設定") {
+            SettingItem(
+                title = "新しいバッチを追加",
+                value = "",
+                icon = Icons.Default.Add,
+                modifier = Modifier
+                    .focusRequester(addR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(addR); onAdd() }
+            )
+
+            if (batchList.isEmpty()) {
+                Text(
+                    "登録されたバッチはありません",
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary.copy(0.6f)
+                )
+            } else {
+                batchList.forEachIndexed { index, batch ->
+                    val requester = itemRs.getOrNull(index) ?: remember { FocusRequester() }
+                    SettingItem(
+                        title = batch.name,
+                        value = "削除",
+                        icon = Icons.Default.Terminal,
+                        modifier = Modifier
+                            .focusRequester(requester)
+                            .focusProperties { left = sidebarR },
+                        onClick = { onClick(requester); onDelete(batch) }
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun ConnectionSettingsContent(
-    kIp: String, kPort: String, mIp: String, mPort: String, prefSrc: String,
+    kIp: String,
+    kPort: String,
+    mIp: String,
+    mPort: String,
+    prefSrc: String,
     onEdit: (String, String) -> Unit,
     onSelectSrc: () -> Unit,
-    kIpR: FocusRequester, kPortR: FocusRequester, mIpR: FocusRequester, mPortR: FocusRequester, prefSrcR: FocusRequester,
+    kIpR: FocusRequester,
+    kPortR: FocusRequester,
+    mIpR: FocusRequester,
+    mPortR: FocusRequester,
+    prefSrcR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text(AppStrings.SETTINGS_CATEGORY_CONNECTION, style = MaterialTheme.typography.headlineMedium, color = KomorebiTheme.colors.textPrimary, fontWeight = FontWeight.Bold)
+        Text(
+            AppStrings.SETTINGS_CATEGORY_CONNECTION,
+            style = MaterialTheme.typography.headlineMedium,
+            color = KomorebiTheme.colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
 
         SettingsSection(AppStrings.SETTINGS_SECTION_KONOMITV) {
-            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Dns, modifier = Modifier.focusRequester(kIpR).focusProperties { left = sidebarR }, onClick = { onClick(kIpR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS, kIp) })
-            SettingItem(AppStrings.SETTINGS_ITEM_PORT, kPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(kPortR).focusProperties { left = sidebarR }, onClick = { onClick(kPortR); onEdit(AppStrings.SETTINGS_INPUT_KONOMITV_PORT, kPort) })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_ADDRESS,
+                kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                Icons.Default.Dns,
+                modifier = Modifier
+                    .focusRequester(kIpR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(kIpR); onEdit(
+                    AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS,
+                    kIp
+                )
+                })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_PORT,
+                kPort,
+                Icons.Default.Numbers,
+                modifier = Modifier
+                    .focusRequester(kPortR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(kPortR); onEdit(
+                    AppStrings.SETTINGS_INPUT_KONOMITV_PORT,
+                    kPort
+                )
+                })
         }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_MIRAKURUN) {
-            SettingItem(AppStrings.SETTINGS_ITEM_ADDRESS, mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET }, Icons.Default.Router, modifier = Modifier.focusRequester(mIpR).focusProperties { left = sidebarR }, onClick = { onClick(mIpR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS, mIp) })
-            SettingItem(AppStrings.SETTINGS_ITEM_PORT, mPort, Icons.Default.Numbers, modifier = Modifier.focusRequester(mPortR).focusProperties { left = sidebarR }, onClick = { onClick(mPortR); onEdit(AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT, mPort) })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_ADDRESS,
+                mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                Icons.Default.Router,
+                modifier = Modifier
+                    .focusRequester(mIpR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(mIpR); onEdit(
+                    AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS,
+                    mIp
+                )
+                })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_PORT,
+                mPort,
+                Icons.Default.Numbers,
+                modifier = Modifier
+                    .focusRequester(mPortR)
+                    .focusProperties { left = sidebarR },
+                onClick = {
+                    onClick(mPortR); onEdit(
+                    AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT,
+                    mPort
+                )
+                })
         }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_PRIORITY) {
-            // ★修正: 表示ラベルの動的切り替えロジックの修正（キーをKONOMITVに修正）
             val label = if (mIp.isBlank()) {
                 AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED
             } else {
@@ -87,7 +205,9 @@ fun ConnectionSettingsContent(
                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
                 label,
                 Icons.Default.PriorityHigh,
-                modifier = Modifier.focusRequester(prefSrcR).focusProperties { left = sidebarR },
+                modifier = Modifier
+                    .focusRequester(prefSrcR)
+                    .focusProperties { left = sidebarR },
                 onClick = { onClick(prefSrcR); onSelectSrc() })
         }
     }
@@ -379,9 +499,12 @@ fun CommentSettingsContent(
 @Composable
 fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
+    enableAi: String, apiKey: String,
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
+    enableAiR: FocusRequester, apiKeyR: FocusRequester,
     sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
+    onToggleAi: () -> Unit, onEditApiKey: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -391,6 +514,29 @@ fun LabSettingsContent(
             color = KomorebiTheme.colors.textPrimary,
             fontWeight = FontWeight.Bold
         )
+
+        SettingsSection("AI強化正規化 (アルファ版)") {
+            SettingItem(
+                "AIによるシリーズ名正規化",
+                enableAi,
+                Icons.Default.AutoAwesome,
+                modifier = Modifier
+                    .focusRequester(enableAiR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(enableAiR); onToggleAi() }
+            )
+            SettingItem(
+                "Gemini API Key",
+                if (apiKey.isEmpty()) "未設定" else "設定済み",
+                Icons.Default.VpnKey,
+                enabled = enableAi == "ON",
+                modifier = Modifier
+                    .focusRequester(apiKeyR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(apiKeyR); onEditApiKey() }
+            )
+        }
+
         SettingsSection(AppStrings.SETTINGS_SECTION_EXTERNAL_INTEGRATION) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_ANNICT,
@@ -441,7 +587,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.5.0 beta",
+            "Version 0.7.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )
