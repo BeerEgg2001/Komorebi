@@ -6,14 +6,17 @@ import android.os.Build
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
@@ -25,7 +28,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -37,6 +43,8 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.tv.foundation.lazy.grid.TvLazyGridState
 import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -59,6 +67,79 @@ fun RecordListScreen(
 ) {
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
+    val syncProgress by viewModel.syncProgress.collectAsState()
+
+    // =====================================================================
+    // ★追加: 初回構築中のみ表示される専用のブロック画面
+    // Paging3が裏側で何十回もDBを更新してリストが破壊・再構築を繰り返すため、
+    // クラッシュを防ぐためにリストUIへのアクセスを物理的に遮断します。
+    // =====================================================================
+    if (syncProgress.isInitialSyncPhase) {
+        val blockFocusRequester = remember { FocusRequester() }
+        LaunchedEffect(Unit) { delay(100); blockFocusRequester.safeRequestFocus("InitialSyncBlock") }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colors.background)
+                .focusRequester(blockFocusRequester)
+                .focusable(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                CircularProgressIndicator(
+                    color = colors.accent,
+                    modifier = Modifier.size(64.dp),
+                    strokeWidth = 6.dp
+                )
+                Text(
+                    text = "データベースを構築しています...",
+                    color = colors.textPrimary,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Surface(
+                    colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        if (syncProgress.total > 0) {
+                            Text(
+                                text = "進捗: ${syncProgress.current} / ${syncProgress.total} 件",
+                                color = colors.textSecondary,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        } else {
+                            Text(
+                                text = "進捗: ${syncProgress.current} 件取得済み",
+                                color = colors.textSecondary,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "※この処理は初回のみ発生します。\n完了するまでビデオタブは操作できませんが、\n「ライブ視聴」など他の機能をご利用いただけます。",
+                            color = colors.textSecondary,
+                            style = MaterialTheme.typography.bodyLarge,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 24.sp
+                        )
+                    }
+                }
+            }
+        }
+        // ここでreturnすることで、下の不安定なリストUIを一切描画・評価させません
+        return
+    }
+
+    // --- ここから下は通常のリスト描画処理（初期同期完了後に到達します） ---
 
     val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
     val searchHistory by viewModel.searchHistory.collectAsState()
@@ -170,10 +251,9 @@ fun RecordListScreen(
         derivedStateOf { isRecLoading || isSeriesLoading || pagedRecordings.loadState.refresh is LoadState.Loading }
     }
 
-    // ★修正: トップバーから下を押した時のターゲットを contentContainer (枠) ではなく firstItem (最初の項目) に変更
     val topBarDownRequester = remember(isCategoryImplemented, isListView, hasContent) {
         if (!isCategoryImplemented || !hasContent) {
-            if (isListView) focuses.navPane else focuses.loadingSafeHouse
+            if (isListView) focuses.navPane else focuses.searchOpenButton
         } else {
             focuses.firstItem
         }
@@ -193,7 +273,8 @@ fun RecordListScreen(
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 } else if (!hasContent && !isLoadingAny) {
                     delay(50)
-                    focuses.firstItem.safeRequestFocus("Ticket_EmptyBox")
+                    if (isListView) focuses.navPane.safeRequestFocus("Ticket_EmptyNav")
+                    else focuses.searchOpenButton.safeRequestFocus("Ticket_EmptySearch")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 }
             }
@@ -353,6 +434,7 @@ fun RecordListScreen(
                 .fillMaxSize()
                 .padding(top = 88.dp)
                 .onKeyEvent { if (!paneTransitionState.isIdle) true else false }) {
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -363,129 +445,125 @@ fun RecordListScreen(
                                 FocusRequester.Cancel; right = FocusRequester.Cancel
                         }
                     }) {
-                if (!isLoadingAny && !hasContent) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .focusRequester(focuses.contentContainer)
-                            .focusRequester(focuses.firstItem)
-                            .focusable(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "録画番組がありません",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = colors.textSecondary.copy(alpha = 0.6f)
-                        )
-                    }
-                } else if (isLoadingAny && !hasContent) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .focusRequester(focuses.contentContainer)
-                            .focusRequester(focuses.firstItem)
-                            .focusable(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = colors.textPrimary)
-                    }
-                } else {
-                    key(stateKey, isListView) {
-                        if (isListView) {
-                            when (selectedCategory) {
-                                RecordCategory.SERIES -> {
-                                    val list =
-                                        if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                            ?: emptyList() else groupedSeries.values.flatten()
-                                    RecordSeriesContent(
-                                        seriesList = list,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
-                                        onSeriesClick = { executeSearch(it) },
-                                        onOpenNavPane = handleOpenNavPane,
-                                        isListView = true,
-                                        firstItemFocusRequester = focuses.firstItem,
-                                        contentContainerFocusRequester = focuses.contentContainer,
-                                        searchInputFocusRequester = focuses.searchInput,
-                                        backButtonFocusRequester = focuses.backButton,
-                                        isSearchBarVisible = menuState.isSearchBarVisible,
-                                        onBackPress = handleBackPress,
-                                        listState = seriesListState,
-                                        ticketManager = ticketManager
-                                    )
-                                }
 
-                                else -> {
-                                    RecordListContent(
-                                        pagedRecordings = pagedRecordings,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
-                                        isSearchBarVisible = menuState.isSearchBarVisible,
-                                        isKeyboardActive = false,
-                                        firstItemFocusRequester = focuses.firstItem,
-                                        contentContainerFocusRequester = focuses.contentContainer,
-                                        searchInputFocusRequester = focuses.searchInput,
-                                        backButtonFocusRequester = focuses.backButton,
-                                        onProgramClick = onProgramClick,
-                                        onSeriesSearch = { keyword ->
-                                            val currentId = focusedProgram?.id
-                                            executeSearch(keyword)
-                                            ticketManager.issue(FocusTicket.TARGET_ID, currentId)
-                                        },
-                                        isDetailVisible = menuState.isDetailActive,
-                                        onDetailStateChange = { menuState.isDetailActive = it },
-                                        onBackPress = handleBackPress,
-                                        listState = listState,
-                                        fetchedProgramDetail = programDetail,
-                                        onFetchDetail = { viewModel.fetchProgramDetail(it) },
-                                        onClearDetail = { viewModel.clearProgramDetail() },
-                                        ticketManager = ticketManager,
-                                        onFocusedItemChanged = { focusedProgram = it }
-                                    )
-                                }
+                key(stateKey, isListView) {
+                    if (isListView) {
+                        when (selectedCategory) {
+                            RecordCategory.SERIES -> {
+                                val list =
+                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                                        ?: emptyList() else groupedSeries.values.flatten()
+                                RecordSeriesContent(
+                                    seriesList = list,
+                                    konomiIp = konomiIp,
+                                    konomiPort = konomiPort,
+                                    onSeriesClick = { executeSearch(it) },
+                                    onOpenNavPane = handleOpenNavPane,
+                                    isListView = true,
+                                    firstItemFocusRequester = focuses.firstItem,
+                                    contentContainerFocusRequester = focuses.contentContainer,
+                                    searchInputFocusRequester = focuses.searchInput,
+                                    backButtonFocusRequester = focuses.backButton,
+                                    isSearchBarVisible = menuState.isSearchBarVisible,
+                                    onBackPress = handleBackPress,
+                                    listState = seriesListState,
+                                    ticketManager = ticketManager
+                                )
                             }
+
+                            else -> {
+                                RecordListContent(
+                                    pagedRecordings = pagedRecordings,
+                                    konomiIp = konomiIp,
+                                    konomiPort = konomiPort,
+                                    isSearchBarVisible = menuState.isSearchBarVisible,
+                                    isKeyboardActive = false,
+                                    firstItemFocusRequester = focuses.firstItem,
+                                    contentContainerFocusRequester = focuses.contentContainer,
+                                    searchInputFocusRequester = focuses.searchInput,
+                                    backButtonFocusRequester = focuses.backButton,
+                                    onProgramClick = onProgramClick,
+                                    onSeriesSearch = { keyword ->
+                                        val currentId = focusedProgram?.id
+                                        executeSearch(keyword)
+                                        ticketManager.issue(FocusTicket.TARGET_ID, currentId)
+                                    },
+                                    isDetailVisible = menuState.isDetailActive,
+                                    onDetailStateChange = { menuState.isDetailActive = it },
+                                    onBackPress = handleBackPress,
+                                    listState = listState,
+                                    fetchedProgramDetail = programDetail,
+                                    onFetchDetail = { viewModel.fetchProgramDetail(it) },
+                                    onClearDetail = { viewModel.clearProgramDetail() },
+                                    ticketManager = ticketManager,
+                                    onFocusedItemChanged = { focusedProgram = it }
+                                )
+                            }
+                        }
+                    } else {
+                        when (selectedCategory) {
+                            RecordCategory.SERIES -> {
+                                val list =
+                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
+                                        ?: emptyList() else groupedSeries.values.flatten()
+                                RecordSeriesGridContent(
+                                    seriesList = list,
+                                    konomiIp = konomiIp,
+                                    konomiPort = konomiPort,
+                                    onSeriesClick = { executeSearch(it) },
+                                    onOpenNavPane = handleOpenNavPane,
+                                    firstItemFocusRequester = focuses.firstItem,
+                                    contentContainerFocusRequester = focuses.contentContainer,
+                                    searchInputFocusRequester = focuses.searchInput,
+                                    backButtonFocusRequester = focuses.backButton,
+                                    isSearchBarVisible = menuState.isSearchBarVisible,
+                                    onBackPress = handleBackPress,
+                                    gridState = gridState,
+                                    ticketManager = ticketManager
+                                )
+                            }
+
+                            else -> {
+                                RecordGridContent(
+                                    pagedRecordings = pagedRecordings,
+                                    konomiIp = konomiIp,
+                                    konomiPort = konomiPort,
+                                    gridState = gridState,
+                                    isSearchBarVisible = menuState.isSearchBarVisible,
+                                    isKeyboardActive = false,
+                                    firstItemFocusRequester = focuses.firstItem,
+                                    contentContainerFocusRequester = focuses.contentContainer,
+                                    searchInputFocusRequester = focuses.searchInput,
+                                    backButtonFocusRequester = focuses.backButton,
+                                    onProgramClick = onProgramClick,
+                                    onOpenNavPane = handleOpenNavPane,
+                                    ticketManager = ticketManager,
+                                    onFocusedItemChanged = { focusedProgram = it }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = !hasContent,
+                    enter = fadeIn(tween(300)),
+                    exit = fadeOut(tween(300))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(colors.background), // 裏側の空のリストを隠す
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isLoadingAny) {
+                            CircularProgressIndicator(color = colors.textPrimary)
                         } else {
-                            when (selectedCategory) {
-                                RecordCategory.SERIES -> {
-                                    val list =
-                                        if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                            ?: emptyList() else groupedSeries.values.flatten()
-                                    RecordSeriesGridContent(
-                                        seriesList = list,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
-                                        onSeriesClick = { executeSearch(it) },
-                                        onOpenNavPane = handleOpenNavPane,
-                                        firstItemFocusRequester = focuses.firstItem,
-                                        contentContainerFocusRequester = focuses.contentContainer,
-                                        searchInputFocusRequester = focuses.searchInput,
-                                        backButtonFocusRequester = focuses.backButton,
-                                        isSearchBarVisible = menuState.isSearchBarVisible,
-                                        onBackPress = handleBackPress,
-                                        gridState = gridState,
-                                        ticketManager = ticketManager
-                                    )
-                                }
-
-                                else -> {
-                                    RecordGridContent(
-                                        pagedRecordings = pagedRecordings,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
-                                        gridState = gridState,
-                                        isSearchBarVisible = menuState.isSearchBarVisible,
-                                        isKeyboardActive = false,
-                                        firstItemFocusRequester = focuses.firstItem,
-                                        contentContainerFocusRequester = focuses.contentContainer,
-                                        searchInputFocusRequester = focuses.searchInput,
-                                        backButtonFocusRequester = focuses.backButton,
-                                        onProgramClick = onProgramClick,
-                                        onOpenNavPane = handleOpenNavPane,
-                                        ticketManager = ticketManager,
-                                        onFocusedItemChanged = { focusedProgram = it }
-                                    )
-                                }
-                            }
+                            Text(
+                                "録画番組がありません",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = colors.textSecondary.copy(alpha = 0.6f)
+                            )
                         }
                     }
                 }

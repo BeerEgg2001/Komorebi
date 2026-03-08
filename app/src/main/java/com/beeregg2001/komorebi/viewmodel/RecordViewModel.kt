@@ -11,7 +11,9 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.dao.ChannelProjection
 import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
+import com.beeregg2001.komorebi.data.local.dao.SeriesProjection
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -130,6 +132,10 @@ class RecordViewModel @Inject constructor(
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
 
+    fun clearSyncError() {
+        syncEngine.clearError()
+    }
+
     fun fetchProgramDetail(videoId: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.getRecordedProgram(videoId).onSuccess {
@@ -153,12 +159,22 @@ class RecordViewModel @Inject constructor(
     init {
         loadSearchHistory()
 
+        var initialLoaded = false
         viewModelScope.launch(Dispatchers.IO) {
-            programDao.getAllProgramsFlow()
+            combine(
+                programDao.getGroupedSeriesFlow(),
+                programDao.getDistinctChannelsFlow(),
+                syncEngine.syncProgress.map { it.isSyncing }.distinctUntilChanged()
+            ) { seriesList, channelsList, isSyncing ->
+                Triple(seriesList, channelsList, isSyncing)
+            }
                 .debounce(500L)
-                .collect { programs ->
-                    if (programs.isNotEmpty()) {
-                        buildSeriesAndChannelMapsFromEntities(programs)
+                .collect { (seriesList, channelsList, isSyncing) ->
+                    if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
+                        if (!isSyncing || !initialLoaded) {
+                            buildSeriesAndChannelMaps(seriesList, channelsList)
+                            initialLoaded = true
+                        }
                     }
                 }
         }
@@ -384,67 +400,24 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
-    private suspend fun buildSeriesAndChannelMapsFromEntities(
-        entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>
+    // ★修正: Kotlinでループを回すのをやめ、SQLiteから「集計済みの超軽量データ」を直接受け取る
+    private suspend fun buildSeriesAndChannelMaps(
+        seriesList: List<SeriesProjection>,
+        channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
-        val allChannelMap =
-            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
-        val genresSet = mutableSetOf<String>()
-
         try {
-            val programs = entities.map { RecordDataMapper.toDomainModel(it) }
-
-            programs.forEach { prog ->
-                val majorGenre = prog.genres?.firstOrNull()?.major ?: "その他"
-                genresSet.add(majorGenre)
-
-                prog.channel?.let { ch ->
-                    val type = if (ch.type == "GR") "地デジ" else ch.type
-                    val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
-                    if (!channelTypeMap.containsKey(ch.id)) {
-                        val safeDisplayId = ch.displayChannelId.takeIf { it.isNotBlank() } ?: ch.id
-                        channelTypeMap[ch.id] = Triple(ch.name, ch.id, safeDisplayId)
-                    }
+            // チャンネル構築 (全件走査不要)
+            val allChannelMap =
+                mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+            channelsList.forEach { ch ->
+                val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
+                val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+                if (!channelTypeMap.containsKey(ch.channelId)) {
+                    channelTypeMap[ch.channelId] =
+                        Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
                 }
             }
-
-            // DBから取り出したseriesNameをグループ化の軸にする (Nullable対応)
-            val groupedSeriesList =
-                programs.groupBy { it.seriesName ?: "" }.mapNotNull { (seriesName, progList) ->
-                    if (seriesName.isBlank()) return@mapNotNull null
-
-                    val representative = progList.first()
-                    val majorGenre = representative.genres?.firstOrNull()?.major ?: "その他"
-                    val isEpisodic = progList.any { it.isEpisodic == true }
-
-                    val searchKeyword = TitleNormalizer.toSqlSearchQuery(seriesName)
-
-                    Pair(
-                        majorGenre, SeriesInfo(
-                            displayTitle = seriesName,
-                            searchKeyword = searchKeyword,
-                            programCount = progList.size,
-                            representativeVideoId = representative.id,
-                            isEpisodic = isEpisodic
-                        )
-                    )
-                }
-
-            val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
-            groupedSeriesList.forEach { (genre, seriesInfo) ->
-                if (seriesInfo.programCount >= 2 || seriesInfo.isEpisodic) {
-                    val list = finalGroupedSeries.getOrPut(genre) { mutableListOf() }
-                    list.add(seriesInfo)
-                }
-            }
-
-            val filteredGroupedSeries = finalGroupedSeries.mapValues { entry ->
-                entry.value.sortedBy { it.displayTitle }
-            }.filterValues { it.isNotEmpty() }
-
-            _availableGenres.value = genresSet.sorted()
-            _groupedSeries.value = filteredGroupedSeries
 
             val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
             val extractNumber = { idStr: String ->
@@ -456,11 +429,38 @@ class RecordViewModel @Inject constructor(
                 }
                 .associate { entry ->
                     entry.key to entry.value.values.sortedWith(
-                        compareBy(
-                            { extractNumber(it.third) },
-                            { it.third })
+                        compareBy({ extractNumber(it.third) }, { it.third })
                     ).map { Pair(it.first, it.second) }
                 }
+
+            // シリーズ構築 (全件走査不要・SQLiteがカウント済み)
+            val genresSet = mutableSetOf<String>()
+            val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
+
+            seriesList.forEach { proj ->
+                if (proj.programCount >= 2 || proj.isEpisodic) {
+                    val majorGenre = proj.genres?.firstOrNull()?.major ?: "その他"
+                    genresSet.add(majorGenre)
+
+                    val searchKeyword = TitleNormalizer.toSqlSearchQuery(proj.seriesName)
+
+                    val seriesInfo = SeriesInfo(
+                        displayTitle = proj.seriesName,
+                        searchKeyword = searchKeyword,
+                        programCount = proj.programCount,
+                        representativeVideoId = proj.representativeVideoId,
+                        isEpisodic = proj.isEpisodic
+                    )
+
+                    val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }
+                    list.add(seriesInfo)
+                }
+            }
+
+            _availableGenres.value = genresSet.sorted()
+            _groupedSeries.value = finalGroupedSeries.mapValues { entry ->
+                entry.value.sortedBy { it.displayTitle }
+            }.filterValues { it.isNotEmpty() }
 
         } catch (e: Exception) {
             Log.e(TAG, "Map Build Error", e)

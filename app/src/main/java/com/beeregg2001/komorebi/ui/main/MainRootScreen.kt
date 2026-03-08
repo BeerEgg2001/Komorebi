@@ -8,19 +8,27 @@ import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.mapper.ReserveMapper
 import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
+import com.beeregg2001.komorebi.data.sync.SyncProgress
 import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailMode
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailScreen
@@ -395,6 +403,27 @@ fun MainRootScreen(
                             )
                         }
                     }
+
+                    if (state.selectedChannel == null && state.selectedProgram == null && !syncProgress.isInitialBuild) {
+                        SyncProgressIndicator(
+                            syncProgress = syncProgress,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 40.dp, bottom = 40.dp)
+                        )
+                    }
+
+                    // ★ 修正: 再実行（リトライ）可能なエラーダイアログ
+                    if (syncProgress.error != null) {
+                        SyncErrorDialog(
+                            errorMessage = syncProgress.error!!,
+                            onRetry = {
+                                recordViewModel.clearSyncError()
+                                recordViewModel.triggerSmartSync()
+                            },
+                            onDismiss = { recordViewModel.clearSyncError() }
+                        )
+                    }
                 }
             }
 
@@ -404,7 +433,6 @@ fun MainRootScreen(
                 exit = fadeOut(tween(500))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
-                    // ★修正: progressRatio の計算をここで行う
                     val pRatio =
                         if (syncProgress.total > 0) syncProgress.current.toFloat() / syncProgress.total.toFloat() else 0f
                     LoadingScreen(
@@ -578,6 +606,133 @@ fun MainRootScreen(
                     })
             }
             GlobalToast(message = state.toastMessage)
+        }
+    }
+}
+
+/**
+ * 右下に表示される汎用の進捗インジケーターコンポーネント
+ */
+@Composable
+fun SyncProgressIndicator(
+    syncProgress: SyncProgress,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    val progress = if (syncProgress.total > 0) {
+        syncProgress.current.toFloat() / syncProgress.total.toFloat()
+    } else {
+        0f
+    }
+
+    AnimatedVisibility(
+        visible = syncProgress.isSyncing,
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = modifier
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = colors.surface.copy(alpha = 0.9f),
+                contentColor = colors.textPrimary
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .widthIn(min = 200.dp, max = 300.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = syncProgress.progressText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (syncProgress.total > 0) {
+                    LinearProgressIndicator(
+                        progress = progress,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent,
+                        trackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent,
+                        trackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 同期エラー時に表示されるダイアログ（再実行ボタン付き）
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("SyncError") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "同期エラー",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color(0xFFFF5252),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("閉じる") }
+
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text("再実行") }
+                }
+            }
         }
     }
 }
