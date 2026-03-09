@@ -26,7 +26,7 @@ object RecordDataMapper {
             isEpisodic = isEpisodic,
             startTime = program.startTime,
             endTime = program.endTime,
-            videoDuration = if (program.duration > 0) program.duration else program.recordedVideo.duration,
+            videoDuration = if (program.recordedVideo.duration > 0) program.recordedVideo.duration else program.duration,
             // ★descriptionの保存を削除
             hasKeyFrames = program.recordedVideo.hasKeyFrames,
             isRecording = program.isRecording,
