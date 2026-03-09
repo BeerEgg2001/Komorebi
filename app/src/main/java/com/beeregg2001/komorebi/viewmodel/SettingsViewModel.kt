@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -14,7 +15,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-// ★追加: バッチ設定用のデータモデル
+// バッチ設定用のデータモデル
 data class PostRecordingBatch(
     val name: String,
     val path: String
@@ -23,10 +24,20 @@ data class PostRecordingBatch(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val syncEngine: RecordSyncEngine
+    private val syncEngine: RecordSyncEngine,
+    private val db: AppDatabase // ★追加: 件数取得のためにAppDatabaseを注入
 ) : ViewModel() {
 
     private val gson = Gson()
+
+    // ★追加: データベースの総保存件数
+    val totalRecordCount: StateFlow<Int> = db.recordedProgramDao().getTotalCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    // ★追加: 最終同期日時
+    val lastSyncedAt: StateFlow<Long> = db.syncMetaDao().getSyncMetaFlow()
+        .map { it?.lastSyncedAt ?: 0L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -74,7 +85,7 @@ class SettingsViewModel @Inject constructor(
     val defaultPostCommand: StateFlow<String> = settingsRepository.defaultPostCommand
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
-    // ★追加: バッチリストの取得
+    // バッチリストの取得
     val postRecordingBatchList: StateFlow<List<PostRecordingBatch>> =
         settingsRepository.postRecordingBatchList
             .map { json ->
@@ -121,7 +132,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★追加: バッチの追加
+    // ★追加: 手動フル同期の実行
+    fun triggerFullSync() {
+        viewModelScope.launch {
+            syncEngine.syncAllRecords(forceFullSync = true)
+        }
+    }
+
+    // バッチの追加
     fun addPostRecordingBatch(name: String, path: String) {
         viewModelScope.launch {
             val newList = postRecordingBatchList.value.toMutableList().apply {
@@ -134,7 +152,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★追加: バッチの削除
+    // バッチの削除
     fun deletePostRecordingBatch(batch: PostRecordingBatch) {
         viewModelScope.launch {
             val newList = postRecordingBatchList.value.toMutableList().apply {

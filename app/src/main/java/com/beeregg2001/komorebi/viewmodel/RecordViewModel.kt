@@ -132,12 +132,17 @@ class RecordViewModel @Inject constructor(
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
 
+    // 詳細データ取得APIの連打防止用Job
+    private var detailFetchJob: Job? = null
+
     fun clearSyncError() {
         syncEngine.clearError()
     }
 
     fun fetchProgramDetail(videoId: Int) {
-        viewModelScope.launch(Dispatchers.IO) {
+        detailFetchJob?.cancel()
+        detailFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(300) // 0.3秒フォーカスが留まったらAPIを叩く
             repository.getRecordedProgram(videoId).onSuccess {
                 _programDetail.value = it
             }.onFailure { Log.e(TAG, "Failed to fetch program detail", it) }
@@ -159,21 +164,14 @@ class RecordViewModel @Inject constructor(
     init {
         loadSearchHistory()
 
-        var initialLoaded = false
         viewModelScope.launch(Dispatchers.IO) {
-            combine(
-                programDao.getGroupedSeriesFlow(),
-                programDao.getDistinctChannelsFlow(),
-                syncEngine.syncProgress.map { it.isSyncing }.distinctUntilChanged()
-            ) { seriesList, channelsList, isSyncing ->
-                Triple(seriesList, channelsList, isSyncing)
-            }
-                .debounce(500L)
-                .collect { (seriesList, channelsList, isSyncing) ->
-                    if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
-                        if (!isSyncing || !initialLoaded) {
+            syncEngine.syncProgress.map { it.isSyncing }.distinctUntilChanged()
+                .collect { isSyncing ->
+                    if (!isSyncing) {
+                        val seriesList = programDao.getGroupedSeries()
+                        val channelsList = programDao.getDistinctChannels()
+                        if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
                             buildSeriesAndChannelMaps(seriesList, channelsList)
-                            initialLoaded = true
                         }
                     }
                 }
@@ -201,42 +199,53 @@ class RecordViewModel @Inject constructor(
     ) { category, channelId, genre, day, query ->
         FilterState(category, channelId, genre, day, query)
     }.flatMapLatest { state ->
-        Pager(
-            config = PagingConfig(
-                pageSize = 30,
-                prefetchDistance = 10,
-                initialLoadSize = 20,
-                enablePlaceholders = false
-            )
-        ) {
-            when {
-                state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
-                state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
-                    state.channelId
-                )
+        flow {
+            // ★修正: 検索条件が変わった瞬間に空のPagingDataを流し、UI上の古いリスト（残像）を強制的に消去する
+            // これにより、遷移時に一瞬全件リストが見えてフォーカスが飛ぶバグを完全に防ぎます。
+            emit(PagingData.empty())
+            delay(50) // UIが空リストを描画してフォーカスをリセットする隙を作る
 
-                state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() -> programDao.getPagingSourceByGenre(
-                    state.genre
+            val pager = Pager(
+                config = PagingConfig(
+                    pageSize = 30,
+                    prefetchDistance = 10,
+                    initialLoadSize = 20,
+                    enablePlaceholders = false
                 )
+            ) {
+                when {
+                    state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
+                    state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
+                        state.channelId
+                    )
 
-                state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
-                    val dayOfWeekStr = when (state.day.replace("曜日", "")) {
-                        "日" -> "0"
-                        "月" -> "1"
-                        "火" -> "2"
-                        "水" -> "3"
-                        "木" -> "4"
-                        "金" -> "5"
-                        "土" -> "6"
-                        else -> "0"
+                    state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() -> programDao.getPagingSourceByGenre(
+                        state.genre
+                    )
+
+                    state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
+                        val dayOfWeekStr = when (state.day.replace("曜日", "")) {
+                            "日" -> "0"
+                            "月" -> "1"
+                            "火" -> "2"
+                            "水" -> "3"
+                            "木" -> "4"
+                            "金" -> "5"
+                            "土" -> "6"
+                            else -> "0"
+                        }
+                        programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
                     }
-                    programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
-                }
 
-                state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
-                else -> programDao.getAllPagingSource()
+                    state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
+                    else -> programDao.getAllPagingSource()
+                }
             }
-        }.flow.map { pagingData -> pagingData.map { entity -> RecordDataMapper.toDomainModel(entity) } }
+
+            emitAll(pager.flow.map { pagingData ->
+                pagingData.map { entity -> RecordDataMapper.toDomainModel(entity) }
+            })
+        }
     }.cachedIn(viewModelScope)
 
     fun updateListView(isList: Boolean) {
@@ -400,14 +409,12 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
-    // ★修正: Kotlinでループを回すのをやめ、SQLiteから「集計済みの超軽量データ」を直接受け取る
     private suspend fun buildSeriesAndChannelMaps(
         seriesList: List<SeriesProjection>,
         channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
         try {
-            // チャンネル構築 (全件走査不要)
             val allChannelMap =
                 mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
             channelsList.forEach { ch ->
@@ -433,7 +440,6 @@ class RecordViewModel @Inject constructor(
                     ).map { Pair(it.first, it.second) }
                 }
 
-            // シリーズ構築 (全件走査不要・SQLiteがカウント済み)
             val genresSet = mutableSetOf<String>()
             val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
 

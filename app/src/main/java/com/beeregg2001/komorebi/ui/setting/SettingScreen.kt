@@ -56,6 +56,10 @@ fun SettingsScreen(
     val prefs = rememberSettingPreferences(repository)
     val uiState = rememberSettingUiState()
 
+    // ★追加: データベース情報の監視
+    val totalRecordCount by viewModel.totalRecordCount.collectAsState()
+    val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
+
     val categories = listOf(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
@@ -74,7 +78,13 @@ fun SettingsScreen(
 
     val itemFocusRequesters = remember {
         listOf(
-            listOf(FocusRequester(), FocusRequester()), // 0: General
+            // ★修正: Generalカテゴリの項目を2つから4つに増加（件数、強制同期、Ch履歴、視聴履歴）
+            listOf(
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ), // 0: General
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -240,6 +250,14 @@ fun SettingsScreen(
             ) {
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
+                        totalRecordCount = totalRecordCount, // ★追加
+                        lastSyncedAt = lastSyncedAt, // ★追加
+                        onForceSync = {
+                            uiState.activeDialog = SettingDialogState.ConfirmClear(
+                                "データベースの再構築",
+                                "すべての録画データをサーバーから再取得します。よろしいですか？"
+                            ) { viewModel.triggerFullSync() }
+                        }, // ★追加
                         onClearChannel = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 AppStrings.DIALOG_CLEAR_HISTORY_TITLE,
@@ -252,8 +270,10 @@ fun SettingsScreen(
                                 AppStrings.DIALOG_CLEAR_WATCH_HISTORY_MSG
                             ) { onClearWatchHistory() }
                         },
-                        clearChannelR = itemFocusRequesters[0][0],
-                        clearHistoryR = itemFocusRequesters[0][1],
+                        dbInfoR = itemFocusRequesters[0][0], // ★追加
+                        forceSyncR = itemFocusRequesters[0][1], // ★追加
+                        clearChannelR = itemFocusRequesters[0][2],
+                        clearHistoryR = itemFocusRequesters[0][3],
                         sidebarR = categoryFocusRequesters[0],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 0
@@ -433,7 +453,7 @@ fun SettingsScreen(
                     )
 
                     4 -> {
-                        // ★修正: デフォルトのライトテーマ(HIGHTONE)も正しくライトモードとして判定させる
+                        // デフォルトのライトテーマ(HIGHTONE)も正しくライトモードとして判定させる
                         val isLightMode =
                             prefs.currentThemeName.contains("LIGHT") || prefs.currentThemeName == "HIGHTONE"
                         val isDarkMode = !isLightMode

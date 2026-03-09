@@ -84,6 +84,10 @@ fun VideoTabContent(
     val availableGenres by recordViewModel.availableGenres.collectAsState()
     val selectedGenre by recordViewModel.selectedSeriesGenre.collectAsState()
 
+    // ★追加: ViewModelからAPIで取得した番組詳細データを監視する
+    val programDetail by recordViewModel.programDetail.collectAsState()
+    var focusedProgramId by remember { mutableStateOf<Int?>(null) }
+
     // 初期表示のヒーロー情報
     val initialHeroInfo = remember {
         HomeHeroInfo(
@@ -102,6 +106,7 @@ fun VideoTabContent(
     LaunchedEffect(isTopNavFocused) {
         if (isTopNavFocused) {
             pendingHeroInfo = initialHeroInfo
+            focusedProgramId = null
         }
     }
 
@@ -109,6 +114,22 @@ fun VideoTabContent(
         pendingHeroInfo?.let {
             delay(300)
             currentHeroInfo = it
+        }
+    }
+
+    // ★追加: 詳細データ（description等）がAPIから降ってきたら、バナーの情報を更新する
+    LaunchedEffect(programDetail, focusedProgramId) {
+        val detail = programDetail
+        if (detail != null && detail.id == focusedProgramId) {
+            val newDesc =
+                if (detail.description.isNotBlank()) detail.description else "番組概要がありません"
+
+            if (pendingHeroInfo?.title == detail.title) {
+                pendingHeroInfo = pendingHeroInfo?.copy(description = newDesc)
+            }
+            if (currentHeroInfo?.title == detail.title) {
+                currentHeroInfo = currentHeroInfo?.copy(description = newDesc)
+            }
         }
     }
 
@@ -167,6 +188,7 @@ fun VideoTabContent(
                             onShowAllRecordings()
                         },
                         onFocus = {
+                            focusedProgramId = null
                             pendingHeroInfo = HomeHeroInfo(
                                 title = "録画リスト",
                                 subtitle = "すべての番組や未視聴の番組を視聴できます。",
@@ -203,6 +225,10 @@ fun VideoTabContent(
                                         konomiPort = konomiPort,
                                         onClick = { onProgramClick(program) },
                                         onFocus = {
+                                            // ★修正: フォーカス時にAPIへ詳細データをリクエストする
+                                            focusedProgramId = program.id
+                                            recordViewModel.fetchProgramDetail(program.id)
+
                                             val startFormat = try {
                                                 OffsetDateTime.parse(program.startTime)
                                                     .format(DateTimeFormatter.ofPattern("yyyy/M/d(E) HH:mm"))
@@ -221,7 +247,7 @@ fun VideoTabContent(
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = program.title,
                                                 subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
-                                                description = program.description,
+                                                description = "番組情報を取得中...", // ★一時的なテキスト
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
                                                     konomiIp,
                                                     konomiPort,
@@ -274,6 +300,15 @@ fun VideoTabContent(
                                             } catch (e: Exception) {
                                                 0
                                             }
+
+                                            // ★修正: フォーカス時にAPIへ詳細データをリクエストする
+                                            if (videoId != 0) {
+                                                focusedProgramId = videoId
+                                                recordViewModel.fetchProgramDetail(videoId)
+                                            } else {
+                                                focusedProgramId = null
+                                            }
+
                                             val duration = matchedProgram?.duration ?: 0.0
                                             val progress =
                                                 if (duration > 0) (historyItem.playback_position / duration).toFloat()
@@ -282,7 +317,8 @@ fun VideoTabContent(
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = historyItem.program.title.toString(),
                                                 subtitle = "続きから再生を再開",
-                                                description = historyItem.program.description ?: "",
+                                                description = if (videoId != 0) "番組情報を取得中..." else (historyItem.program.description
+                                                    ?: "番組概要がありません"), // ★一時的なテキスト
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
                                                     konomiIp,
                                                     konomiPort,
@@ -384,11 +420,11 @@ fun VideoTabContent(
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
                                         onClick = {
-                                            // ★修正: シリーズ名で録画検索を実行してから遷移
                                             recordViewModel.searchRecordings(series.displayTitle)
                                             onShowAllRecordings()
                                         },
                                         onFocus = {
+                                            focusedProgramId = null
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = series.displayTitle,
                                                 subtitle = "録画エピソード: ${series.programCount}件",
@@ -477,9 +513,11 @@ private fun VideoRecentRecordCard(
                         )
                     )
             )
-            Column(modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+            ) {
                 val startFormat = try {
                     OffsetDateTime.parse(program.startTime)
                         .format(DateTimeFormatter.ofPattern("M/d(E) HH:mm"))
@@ -588,9 +626,11 @@ private fun VideoWatchHistoryCard(
                         )
                     )
             )
-            Column(modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -692,9 +732,11 @@ private fun VideoSeriesCard(
                         )
                     )
             )
-            Column(modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+            ) {
                 Text(
                     text = "${series.programCount}エピソード",
                     style = MaterialTheme.typography.labelSmall,

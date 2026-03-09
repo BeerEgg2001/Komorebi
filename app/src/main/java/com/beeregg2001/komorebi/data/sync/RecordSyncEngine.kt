@@ -61,9 +61,9 @@ class RecordSyncEngine @Inject constructor(
 
     private val syncMutex = Mutex()
     private val jobMutex = Mutex()
-    private var activeSyncJob: Job? = null // ★追加: 現在実行中のジョブを保持する
+    private var activeSyncJob: Job? = null // 現在実行中のジョブを保持する
 
-    private val BATCH_SIZE = 300
+    private val BATCH_SIZE = 100
 
     fun clearError() {
         _syncProgress.value = _syncProgress.value.copy(error = null)
@@ -72,7 +72,7 @@ class RecordSyncEngine @Inject constructor(
     suspend fun syncAllRecords(forceFullSync: Boolean = false) {
         val currentJob = currentCoroutineContext().job
 
-        // ★追加: FullSyncが要求された場合、現在実行中の同期処理（古いURLでの処理など）を即座に強制キャンセルする
+        // FullSyncが要求された場合、現在実行中の同期処理（古いURLでの処理など）を即座に強制キャンセルする
         if (forceFullSync) {
             jobMutex.withLock {
                 activeSyncJob?.cancel()
@@ -99,15 +99,14 @@ class RecordSyncEngine @Inject constructor(
 
                     if (forceFullSync) {
                         programDao.clearAll()
+                        // ★追加: フル同期時はシリーズ名辞書も綺麗に初期化する
+                        aiSeriesDictionaryDao.clearAll()
                         currentMeta =
                             currentMeta.copy(lastSyncedPage = 0, isInitialBuildCompleted = false)
                     }
 
-                    val hasExistingData = programDao.getAllIds().isNotEmpty()
-
-                    // ★修正: forceFullSync=true の時は問答無用でブロック画面（isInitial = true）にする
-                    val isInitial =
-                        forceFullSync || (!currentMeta.isInitialBuildCompleted && !hasExistingData)
+                    // forceFullSync=true の時は問答無用でブロック画面（isInitial = true）にする
+                    val isInitial = forceFullSync || !currentMeta.isInitialBuildCompleted
                     val baseMessage =
                         if (isInitial) "データベース構築中..." else "録画リストを更新中..."
 
@@ -120,8 +119,14 @@ class RecordSyncEngine @Inject constructor(
 
                     var currentPage =
                         if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
+
+                    // 途中からの再開かどうかを判定（orphan削除のスキップ判定に使用）
+                    val isResumed = currentPage > 1
+
                     var isCompleted = false
-                    var processedCount = 0
+
+                    // 途中再開時はすでに保存済みの件数をカウントの初期値として取得する
+                    var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
                     val allFetchedIds = mutableListOf<Int>()
                     val dictionary = aiSeriesDictionaryDao.getAllDictionary()
@@ -130,7 +135,7 @@ class RecordSyncEngine @Inject constructor(
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
 
                     while (!isCompleted) {
-                        // ★追加: ジョブがキャンセルされていたら例外を投げてループを即脱出する
+                        // ジョブがキャンセルされていたら例外を投げてループを即脱出する
                         currentCoroutineContext().ensureActive()
 
                         Log.i(TAG, "Fetching page: $currentPage")
@@ -217,9 +222,9 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     if (isCompleted) {
-                        val shouldDeleteOrphans =
-                            !currentMeta.isInitialBuildCompleted || forceFullSync
-                        if (shouldDeleteOrphans && allFetchedIds.isNotEmpty()) {
+                        // 途中からの再開（isResumed == true）の場合は、
+                        // 1ページ目からの完全なIDリストを持っていないため削除処理を行わない
+                        if (!isResumed && allFetchedIds.isNotEmpty()) {
                             val localIds = programDao.getAllIds()
                             val idsToDelete = localIds.toSet() - allFetchedIds.toSet()
                             if (idsToDelete.isNotEmpty()) {
@@ -228,6 +233,11 @@ class RecordSyncEngine @Inject constructor(
                                     programDao.deleteByIds(chunk)
                                 }
                             }
+                        } else if (isResumed) {
+                            Log.i(
+                                TAG,
+                                "Skipped deleting orphans because sync was resumed from a later page."
+                            )
                         }
 
                         metaDao.upsert(
@@ -249,8 +259,8 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                 } catch (e: CancellationException) {
-                    // ★追加: キャンセルされた場合は正常な中断として処理を終わらせる
-                    Log.i(TAG, "Sync cancelled by forceFullSync.")
+                    // キャンセルされた場合は正常な中断として処理を終わらせる
+                    Log.i(TAG, "Sync cancelled by forceFullSync or WorkManager timeout.")
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
@@ -273,6 +283,8 @@ class RecordSyncEngine @Inject constructor(
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
         db.recordedProgramDao().clearAll()
+        // ★追加: データベース完全リセット時にも辞書をクリアする
+        aiSeriesDictionaryDao.clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
                 id = 1,
@@ -283,7 +295,7 @@ class RecordSyncEngine @Inject constructor(
         )
     }
 
-    // ★修正: smartSyncも実行中にキャンセルできるように activeSyncJob の管理下に入れます
+    // smartSyncも実行中にキャンセルできるように activeSyncJob の管理下に入れます
     suspend fun smartSync() {
         val currentJob = currentCoroutineContext().job
 
@@ -354,7 +366,7 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun resumeDictionaryResolutionIfNeeded() {
-        val allPrograms = db.recordedProgramDao().getAllPrograms()
+        val allPrograms = db.recordedProgramDao().getAllTitlesAndSeries()
         val dictionary = aiSeriesDictionaryDao.getAllDictionary()
             .map { it.originalTitle }.toSet()
 
@@ -393,47 +405,59 @@ class RecordSyncEngine @Inject constructor(
 
                 val semaphore = Semaphore(3)
                 val processedCount = AtomicInteger(0)
+                val programDao = db.recordedProgramDao()
 
-                val deferreds = unknownMap.map { (baseTitle, originalTitles) ->
-                    async {
-                        semaphore.withPermit {
-                            currentCoroutineContext().ensureActive() // キャンセル検知
-                            val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
-                            delay(100)
+                // 一括ではなく、50件ずつチャンク（バッチ）に分けてDBに保存する
+                // これにより、途中で処理が強制終了されても進捗が失われません。
+                val entries = unknownMap.entries.toList()
+                val chunkSize = 50
 
-                            val finalSeriesName = canonicalTitle ?: baseTitle
-                            val currentProcessed = processedCount.incrementAndGet()
-                            _syncProgress.value =
-                                _syncProgress.value.copy(current = currentProcessed)
+                entries.chunked(chunkSize).forEach { chunk ->
+                    currentCoroutineContext().ensureActive()
 
-                            originalTitles.map { originalTitle ->
-                                AiSeriesDictionaryEntity(
-                                    originalTitle = originalTitle,
-                                    normalizedSeriesName = finalSeriesName,
-                                    updatedAt = System.currentTimeMillis()
-                                )
+                    val deferreds = chunk.map { (baseTitle, originalTitles) ->
+                        async {
+                            semaphore.withPermit {
+                                currentCoroutineContext().ensureActive() // キャンセル検知
+                                val canonicalTitle =
+                                    WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                                delay(100)
+
+                                val finalSeriesName = canonicalTitle ?: baseTitle
+                                val currentProcessed = processedCount.incrementAndGet()
+                                _syncProgress.value =
+                                    _syncProgress.value.copy(current = currentProcessed)
+
+                                originalTitles.map { originalTitle ->
+                                    AiSeriesDictionaryEntity(
+                                        originalTitle = originalTitle,
+                                        normalizedSeriesName = finalSeriesName,
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                val newDictEntries = deferreds.awaitAll().flatten()
+                    val newDictEntries = deferreds.awaitAll().flatten()
 
-                if (newDictEntries.isNotEmpty()) {
-                    db.withTransaction {
-                        aiSeriesDictionaryDao.insertAll(newDictEntries)
-                        val programDao = db.recordedProgramDao()
-                        val allPrograms = programDao.getAllPrograms()
+                    if (newDictEntries.isNotEmpty()) {
+                        db.withTransaction {
+                            aiSeriesDictionaryDao.insertAll(newDictEntries)
 
-                        val latestDict = aiSeriesDictionaryDao.getAllDictionary()
-                            .associate { it.originalTitle to it.normalizedSeriesName }
+                            // 一旦軽量版で取得
+                            val allPrograms = programDao.getAllTitlesAndSeries()
+                            val latestDict = aiSeriesDictionaryDao.getAllDictionary()
+                                .associate { it.originalTitle to it.normalizedSeriesName }
 
-                        val updatedPrograms = allPrograms.map { prog ->
-                            val updatedSeriesName = latestDict[prog.title] ?: prog.seriesName
-                            prog.copy(seriesName = updatedSeriesName)
+                            // 必要なレコード（seriesNameが変わるもの）だけを再取得して更新するように最適化
+                            allPrograms.forEach { prog ->
+                                val updatedSeriesName = latestDict[prog.title] ?: prog.seriesName
+                                if (prog.seriesName != updatedSeriesName) {
+                                    programDao.updateSeriesName(prog.id, updatedSeriesName)
+                                }
+                            }
                         }
-
-                        programDao.upsertAll(updatedPrograms)
                     }
                 }
             } catch (e: CancellationException) {
@@ -448,5 +472,10 @@ class RecordSyncEngine @Inject constructor(
                 )
             }
         }
+    }
+
+    // 初期構築が完了しているか確認する（Workerからの呼び出し用）
+    suspend fun isInitialBuildCompleted(): Boolean = withContext(Dispatchers.IO) {
+        db.syncMetaDao().getSyncMeta()?.isInitialBuildCompleted == true
     }
 }

@@ -53,25 +53,35 @@ interface RecordedProgramDao {
     @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
     suspend fun getAllPrograms(): List<RecordedProgramEntity>
 
-    // ★追加: チャンネル一覧をSQLite側で一意（DISTINCT）にして取得（数十件のみ、超軽量）
-    @Query("SELECT DISTINCT channel_id as channelId, channel_type as channelType, channel_name as channelName FROM recorded_programs WHERE channel_id IS NOT NULL")
-    fun getDistinctChannelsFlow(): kotlinx.coroutines.flow.Flow<List<ChannelProjection>>
+    // ★追加: 現在のDBに保存されている総録画件数をFlowで取得（爆速）
+    @Query("SELECT COUNT(id) FROM recorded_programs")
+    fun getTotalCountFlow(): kotlinx.coroutines.flow.Flow<Int>
 
-    // ★追加: シリーズのグルーピングをSQLite側に任せる（数百件のみ、超軽量・爆速）
+    // チャンネル一覧をSQLite側で一意（DISTINCT）にして取得（数十件のみ、超軽量）
+    @Query("SELECT DISTINCT channel_id as channelId, channel_type as channelType, channel_name as channelName FROM recorded_programs WHERE channel_id IS NOT NULL")
+    suspend fun getDistinctChannels(): List<ChannelProjection>
+
+    // シリーズのグルーピングをSQLite側に任せる（数百件のみ、超軽量・爆速）
     @Query(
         """
-        SELECT 
-            series_name as seriesName, 
-            COUNT(id) as programCount, 
-            MAX(id) as representativeVideoId, 
-            MAX(is_episodic) as isEpisodic,
-            MAX(genres) as genres 
-        FROM recorded_programs 
-        WHERE series_name != '' 
-        GROUP BY series_name
-    """
+    SELECT 
+        series_name as seriesName, 
+        COUNT(id) as programCount, 
+        MAX(id) as representativeVideoId, 
+        MAX(is_episodic) as isEpisodic,
+        MAX(genres) as genres 
+    FROM recorded_programs 
+    WHERE series_name != '' 
+    GROUP BY series_name
+"""
     )
-    fun getGroupedSeriesFlow(): kotlinx.coroutines.flow.Flow<List<SeriesProjection>>
+    suspend fun getGroupedSeries(): List<SeriesProjection>
+
+    @Query("SELECT id, title, series_name FROM recorded_programs")
+    suspend fun getAllTitlesAndSeries(): List<ProgramTitleProjection>
+
+    @Query("UPDATE recorded_programs SET series_name = :newSeriesName WHERE id = :id")
+    suspend fun updateSeriesName(id: Int, newSeriesName: String)
 
     @Query("DELETE FROM recorded_programs")
     suspend fun clearAll()
@@ -81,6 +91,10 @@ interface RecordedProgramDao {
 interface SyncMetaDao {
     @Query("SELECT * FROM sync_meta WHERE id = 1")
     suspend fun getSyncMeta(): SyncMetaEntity?
+
+    // ★追加: 同期のメタデータをFlowで監視
+    @Query("SELECT * FROM sync_meta WHERE id = 1")
+    fun getSyncMetaFlow(): kotlinx.coroutines.flow.Flow<SyncMetaEntity?>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(meta: SyncMetaEntity)
@@ -99,4 +113,10 @@ data class SeriesProjection(
     val representativeVideoId: Int,
     val isEpisodic: Boolean,
     val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?
+)
+
+data class ProgramTitleProjection(
+    val id: Int,
+    val title: String,
+    @ColumnInfo(name = "series_name") val seriesName: String
 )

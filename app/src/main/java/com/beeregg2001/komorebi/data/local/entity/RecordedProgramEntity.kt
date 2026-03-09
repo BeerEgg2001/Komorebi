@@ -11,18 +11,19 @@ import com.beeregg2001.komorebi.data.model.EpgGenre
     indices = [
         Index(value = ["channel_id", "start_time"]),
         Index(value = ["start_time"]),
-        Index(value = ["title"])
+        Index(value = ["title"]),
+        Index(value = ["series_name"])
     ]
 )
 data class RecordedProgramEntity(
     @PrimaryKey
     val id: Int,
     val title: String,
-    @ColumnInfo(name = "series_name") val seriesName: String = "", // ★追加
-    @ColumnInfo(name = "is_episodic") val isEpisodic: Boolean = false, // ★追加
+    @ColumnInfo(name = "series_name") val seriesName: String = "",
+    @ColumnInfo(name = "is_episodic") val isEpisodic: Boolean = false,
     @ColumnInfo(name = "start_time") val startTime: String,
     @ColumnInfo(name = "end_time") val endTime: String,
-    @ColumnInfo(name = "description") val description: String?,
+    // ★descriptionを削除しました
     @ColumnInfo(name = "video_duration") val videoDuration: Double,
     @ColumnInfo(name = "has_key_frames") val hasKeyFrames: Boolean,
     @ColumnInfo(name = "is_recording") val isRecording: Boolean,

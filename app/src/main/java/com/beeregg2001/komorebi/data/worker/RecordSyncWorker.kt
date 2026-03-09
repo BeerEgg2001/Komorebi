@@ -21,6 +21,16 @@ class RecordSyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         Log.i("RecordSyncWorker", "Periodic sync triggered by WorkManager")
         return try {
+            // ★追加: 初期構築が終わっていない場合は、バックグラウンドでの重い同期をスキップする
+            // これにより、他のアプリの使用中にFire OSが重くなるのを防ぎます
+            if (!syncEngine.isInitialBuildCompleted()) {
+                Log.i(
+                    "RecordSyncWorker",
+                    "Initial build is not completed yet. Skipping background sync to save device resources."
+                )
+                return success()
+            }
+
             syncEngine.syncAllRecords(forceFullSync = false)
             success()
         } catch (e: Exception) {

@@ -9,7 +9,7 @@ object RecordDataMapper {
     fun toEntity(program: RecordedProgram): RecordedProgramEntity {
         val tile = program.recordedVideo.thumbnailInfo?.tile
 
-        // ★API取得直後、未成形の場合の仮設定 (Null安全対応)
+        // API取得直後、未成形の場合の仮設定 (Null安全対応)
         val majorGenre = program.genres?.firstOrNull()?.major ?: ""
         val isEpisodic = program.isEpisodic == true ||
                 majorGenre == "アニメ・特撮" ||
@@ -21,13 +21,13 @@ object RecordDataMapper {
 
         return RecordedProgramEntity(
             id = program.id,
-            title = program.title, // KonomiTV APIのtitleは基本NotNullだがそのまま渡す
+            title = program.title,
             seriesName = seriesName,
             isEpisodic = isEpisodic,
             startTime = program.startTime,
             endTime = program.endTime,
             videoDuration = if (program.duration > 0) program.duration else program.recordedVideo.duration,
-            description = program.description,
+            // ★descriptionの保存を削除
             hasKeyFrames = program.recordedVideo.hasKeyFrames,
             isRecording = program.isRecording,
             playbackPosition = program.playbackPosition,
@@ -64,7 +64,7 @@ object RecordDataMapper {
             title = entity.title,
             seriesName = entity.seriesName,
             isEpisodic = entity.isEpisodic,
-            description = entity.description?: "",
+            description = "", // ★DBからは取得せず空文字をセット（詳細画面を開いた時にAPIから再取得されます）
             detail = null,
             startTime = entity.startTime,
             endTime = entity.endTime,
