@@ -99,7 +99,6 @@ class RecordSyncEngine @Inject constructor(
 
                     if (forceFullSync) {
                         programDao.clearAll()
-                        // ★追加: フル同期時はシリーズ名辞書も綺麗に初期化する
                         aiSeriesDictionaryDao.clearAll()
                         currentMeta =
                             currentMeta.copy(lastSyncedPage = 0, isInitialBuildCompleted = false)
@@ -229,6 +228,7 @@ class RecordSyncEngine @Inject constructor(
                             val idsToDelete = localIds.toSet() - allFetchedIds.toSet()
                             if (idsToDelete.isNotEmpty()) {
                                 Log.i(TAG, "Deleting ${idsToDelete.size} orphan records.")
+                                // ★修正: 999件以上のIN句によるクラッシュを防ぐためチャンク分割
                                 idsToDelete.chunked(900).forEach { chunk ->
                                     programDao.deleteByIds(chunk)
                                 }
@@ -262,7 +262,8 @@ class RecordSyncEngine @Inject constructor(
                     // キャンセルされた場合は正常な中断として処理を終わらせる
                     Log.i(TAG, "Sync cancelled by forceFullSync or WorkManager timeout.")
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
+                    // ★修正: OutOfMemoryError 等のシステム例外もキャッチしてクラッシュを防ぐ
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
                     _syncProgress.value = SyncProgress(
                         isSyncing = false,
@@ -283,7 +284,6 @@ class RecordSyncEngine @Inject constructor(
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
         db.recordedProgramDao().clearAll()
-        // ★追加: データベース完全リセット時にも辞書をクリアする
         aiSeriesDictionaryDao.clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
@@ -295,7 +295,6 @@ class RecordSyncEngine @Inject constructor(
         )
     }
 
-    // smartSyncも実行中にキャンセルできるように activeSyncJob の管理下に入れます
     suspend fun smartSync() {
         val currentJob = currentCoroutineContext().job
 
@@ -352,7 +351,7 @@ class RecordSyncEngine @Inject constructor(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.e(TAG, "Smart sync error: ${e.message}", e)
                 } finally {
                     jobMutex.withLock {
@@ -403,12 +402,11 @@ class RecordSyncEngine @Inject constructor(
                     total = unknownMap.size
                 )
 
+                // ★修正: メモリ逼迫とAPI制限を避けるため並列数を3に制限
                 val semaphore = Semaphore(3)
                 val processedCount = AtomicInteger(0)
                 val programDao = db.recordedProgramDao()
 
-                // 一括ではなく、50件ずつチャンク（バッチ）に分けてDBに保存する
-                // これにより、途中で処理が強制終了されても進捗が失われません。
                 val entries = unknownMap.entries.toList()
                 val chunkSize = 50
 
@@ -418,9 +416,10 @@ class RecordSyncEngine @Inject constructor(
                     val deferreds = chunk.map { (baseTitle, originalTitles) ->
                         async {
                             semaphore.withPermit {
-                                currentCoroutineContext().ensureActive() // キャンセル検知
+                                currentCoroutineContext().ensureActive()
                                 val canonicalTitle =
                                     WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                                // ★修正: 短い待機を入れてシステムへの負荷を下げる
                                 delay(100)
 
                                 val finalSeriesName = canonicalTitle ?: baseTitle
@@ -442,15 +441,14 @@ class RecordSyncEngine @Inject constructor(
                     val newDictEntries = deferreds.awaitAll().flatten()
 
                     if (newDictEntries.isNotEmpty()) {
+                        // ★修正: まとめて更新することでSQLiteの負荷を激減させる
                         db.withTransaction {
                             aiSeriesDictionaryDao.insertAll(newDictEntries)
 
-                            // 一旦軽量版で取得
                             val allPrograms = programDao.getAllTitlesAndSeries()
                             val latestDict = aiSeriesDictionaryDao.getAllDictionary()
                                 .associate { it.originalTitle to it.normalizedSeriesName }
 
-                            // 必要なレコード（seriesNameが変わるもの）だけを再取得して更新するように最適化
                             allPrograms.forEach { prog ->
                                 val updatedSeriesName = latestDict[prog.title] ?: prog.seriesName
                                 if (prog.seriesName != updatedSeriesName) {
@@ -462,7 +460,7 @@ class RecordSyncEngine @Inject constructor(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(TAG, "Background dictionary generation failed", e)
             } finally {
                 _syncProgress.value = SyncProgress(
