@@ -16,9 +16,6 @@ interface RecordedProgramDao {
     @Query("SELECT id FROM recorded_programs")
     suspend fun getAllIds(): List<Int>
 
-    @Query("DELETE FROM recorded_programs WHERE id NOT IN (:apiIds)")
-    suspend fun deleteOrphans(apiIds: List<Int>)
-
     @Query("DELETE FROM recorded_programs WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
 
