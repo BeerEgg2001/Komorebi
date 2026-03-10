@@ -10,6 +10,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.tv.material3.*
@@ -44,6 +49,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
+import com.beeregg2001.komorebi.util.UpdateState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -111,6 +117,9 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
+    // ★追加: アップデーターの状態監視
+    val updateState by homeViewModel.updateState.collectAsState()
+
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
@@ -143,6 +152,14 @@ fun MainRootScreen(
     LaunchedEffect(state.toastMessage) {
         if (state.toastMessage != null) {
             delay(3000); state.toastMessage = null
+        }
+    }
+
+    // ★追加: アップデートエラー時のトースト処理
+    LaunchedEffect(updateState) {
+        if (updateState is UpdateState.Error) {
+            state.toastMessage = (updateState as UpdateState.Error).message
+            homeViewModel.dismissUpdate()
         }
     }
 
@@ -413,7 +430,6 @@ fun MainRootScreen(
                         )
                     }
 
-                    // ★ 修正: 再実行（リトライ）可能なエラーダイアログ
                     if (syncProgress.error != null) {
                         SyncErrorDialog(
                             errorMessage = syncProgress.error!!,
@@ -605,6 +621,30 @@ fun MainRootScreen(
                         AppStrings.TOAST_WATCH_HISTORY_DELETED
                     })
             }
+
+            // ★追加: アップデート利用可能な場合のダイアログ
+            if (updateState is UpdateState.UpdateAvailable) {
+                val available = updateState as UpdateState.UpdateAvailable
+                UpdateDialog(
+                    versionName = available.versionName,
+                    releaseNotes = available.releaseNotes,
+                    onConfirm = { homeViewModel.startUpdateDownload(available.apkUrl) },
+                    onDismiss = { homeViewModel.dismissUpdate() }
+                )
+            }
+
+            // ★追加: ダウンロード中・準備完了のプログレスバナー（画面右下固定）
+            if (updateState is UpdateState.Downloading || updateState is UpdateState.ReadyToInstall) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    UpdateProgressBanner(
+                        updateState = updateState,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(48.dp) // TVのセーフエリアを考慮
+                    )
+                }
+            }
+
             GlobalToast(message = state.toastMessage)
         }
     }
@@ -732,6 +772,151 @@ fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> 
                             .focusRequester(focusRequester)
                     ) { Text("再実行") }
                 }
+            }
+        }
+    }
+}
+
+// ★追加: アプリ内アップデーター用ダイアログ
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun UpdateDialog(
+    versionName: String,
+    releaseNotes: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        focusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f))
+            .zIndex(200f),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp), // ★修正: ClickableSurfaceDefaults.shape を削除
+            colors = SurfaceDefaults.colors(     // ★修正: ClickableSurfaceDefaults.colors を SurfaceDefaults.colors に変更
+                containerColor = colors.surface,
+                contentColor = colors.textPrimary
+            ),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "アップデートのお知らせ",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "最新バージョン ($versionName) が利用可能です。\n\n$releaseNotes\n\nアップデート開始後、Androidのシステム画面が開きますので、「インストール」または「更新」を選択してください。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("後で") }
+
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text("今すぐ更新") }
+                }
+            }
+        }
+    }
+}
+
+// ★追加: アプリ内アップデーター用プログレスバナー（画面右下）
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun UpdateProgressBanner(
+    updateState: UpdateState,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    val isReady = updateState is UpdateState.ReadyToInstall
+    val progress = if (updateState is UpdateState.Downloading) updateState.progressPercentage else 100
+
+    Surface(
+        modifier = modifier.width(280.dp),
+        shape = RoundedCornerShape(8.dp), // ★修正: ClickableSurfaceDefaults.shape を削除
+        colors = SurfaceDefaults.colors(    // ★修正: NonInteractiveSurfaceDefaults.colors を SurfaceDefaults.colors に変更
+            containerColor = colors.surface.copy(alpha = 0.95f),
+            contentColor = colors.textPrimary
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.Download,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isReady) "インストーラ起動中..." else "アップデートをダウンロード中",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            if (!isReady) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(colors.textSecondary.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress / 100f)
+                            .fillMaxHeight()
+                            .background(colors.accent, RoundedCornerShape(2.dp))
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "$progress %",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textSecondary,
+                    modifier = Modifier.align(Alignment.End)
+                )
             }
         }
     }
