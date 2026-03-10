@@ -99,6 +99,7 @@ class RecordSyncEngine @Inject constructor(
 
                     if (forceFullSync) {
                         programDao.clearAll()
+                        // ★追加: フル同期時はシリーズ名辞書も綺麗に初期化する
                         aiSeriesDictionaryDao.clearAll()
                         currentMeta =
                             currentMeta.copy(lastSyncedPage = 0, isInitialBuildCompleted = false)
@@ -123,6 +124,7 @@ class RecordSyncEngine @Inject constructor(
                     val isResumed = currentPage > 1
 
                     var isCompleted = false
+                    var didFullApiScan = false // ★重要: 差分同期時の全消去バグを防ぐためのフラグ
 
                     // 途中再開時はすでに保存済みの件数をカウントの初期値として取得する
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
@@ -143,6 +145,7 @@ class RecordSyncEngine @Inject constructor(
 
                         if (programs.isEmpty()) {
                             isCompleted = true
+                            didFullApiScan = true // 最後まで取得しきった証明
                             break
                         }
 
@@ -156,7 +159,7 @@ class RecordSyncEngine @Inject constructor(
                             }
                             if (allPageItemsMatch) {
                                 isCompleted = true
-                                break
+                                break // didFullApiScan は false のままになる（全取得していないため）
                             }
                         }
 
@@ -201,6 +204,7 @@ class RecordSyncEngine @Inject constructor(
                         )
                         if (totalCount > 0 && processedCount >= totalCount) {
                             isCompleted = true
+                            didFullApiScan = true
                         } else {
                             currentPage++
                             delay(100)
@@ -221,22 +225,22 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     if (isCompleted) {
-                        // 途中からの再開（isResumed == true）の場合は、
-                        // 1ページ目からの完全なIDリストを持っていないため削除処理を行わない
-                        if (!isResumed && allFetchedIds.isNotEmpty()) {
+                        // ★修正: APIを最後までスキャンした場合（didFullApiScan == true）のみ孤児データを削除する
+                        // そうしないと、差分同期で途中終了した時に過去の全録画データが消去されてしまう
+                        if (!isResumed && didFullApiScan && allFetchedIds.isNotEmpty()) {
                             val localIds = programDao.getAllIds()
                             val idsToDelete = localIds.toSet() - allFetchedIds.toSet()
                             if (idsToDelete.isNotEmpty()) {
                                 Log.i(TAG, "Deleting ${idsToDelete.size} orphan records.")
-                                // ★修正: 999件以上のIN句によるクラッシュを防ぐためチャンク分割
+                                // 999件以上の IN 句によるクラッシュを防ぐためチャンク分割
                                 idsToDelete.chunked(900).forEach { chunk ->
                                     programDao.deleteByIds(chunk)
                                 }
                             }
-                        } else if (isResumed) {
+                        } else if (isResumed || !didFullApiScan) {
                             Log.i(
                                 TAG,
-                                "Skipped deleting orphans because sync was resumed from a later page."
+                                "Skipped deleting orphans because sync was partial or resumed."
                             )
                         }
 
@@ -263,7 +267,7 @@ class RecordSyncEngine @Inject constructor(
                     Log.i(TAG, "Sync cancelled by forceFullSync or WorkManager timeout.")
                     throw e
                 } catch (e: Throwable) {
-                    // ★修正: OutOfMemoryError 等のシステム例外もキャッチしてクラッシュを防ぐ
+                    // ★修正: OutOfMemoryError等の重大なエラーもキャッチしてクラッシュを防ぐ
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
                     _syncProgress.value = SyncProgress(
                         isSyncing = false,
@@ -284,6 +288,7 @@ class RecordSyncEngine @Inject constructor(
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
         db.recordedProgramDao().clearAll()
+        // ★追加: データベース完全リセット時にも辞書をクリアする
         aiSeriesDictionaryDao.clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
@@ -402,10 +407,13 @@ class RecordSyncEngine @Inject constructor(
                     total = unknownMap.size
                 )
 
-                // ★修正: メモリ逼迫とAPI制限を避けるため並列数を3に制限
+                // メモリ逼迫とAPI制限を避けるため並列数を3に制限
                 val semaphore = Semaphore(3)
                 val processedCount = AtomicInteger(0)
                 val programDao = db.recordedProgramDao()
+
+                // ★修正: DBからの16,000件の読み込みをループの外に出して1回だけに限定する (超重要)
+                val titleToIds = programDao.getAllTitlesAndSeries().groupBy({ it.title }, { it.id })
 
                 val entries = unknownMap.entries.toList()
                 val chunkSize = 50
@@ -416,10 +424,10 @@ class RecordSyncEngine @Inject constructor(
                     val deferreds = chunk.map { (baseTitle, originalTitles) ->
                         async {
                             semaphore.withPermit {
-                                currentCoroutineContext().ensureActive()
+                                currentCoroutineContext().ensureActive() // キャンセル検知
                                 val canonicalTitle =
                                     WikipediaNormalizer.getCanonicalTitle(baseTitle)
-                                // ★修正: 短い待機を入れてシステムへの負荷を下げる
+                                // 短い待機を入れてシステムへの負荷を下げる
                                 delay(100)
 
                                 val finalSeriesName = canonicalTitle ?: baseTitle
@@ -441,18 +449,15 @@ class RecordSyncEngine @Inject constructor(
                     val newDictEntries = deferreds.awaitAll().flatten()
 
                     if (newDictEntries.isNotEmpty()) {
-                        // ★修正: まとめて更新することでSQLiteの負荷を激減させる
+                        // ★修正: メモリ上のマップ(titleToIds)を使って、該当する番組だけをピンポイントで更新する
+                        // 1チャンクごとに16,000件読み込み直していた処理を廃止し、負荷を劇的に軽減
                         db.withTransaction {
                             aiSeriesDictionaryDao.insertAll(newDictEntries)
 
-                            val allPrograms = programDao.getAllTitlesAndSeries()
-                            val latestDict = aiSeriesDictionaryDao.getAllDictionary()
-                                .associate { it.originalTitle to it.normalizedSeriesName }
-
-                            allPrograms.forEach { prog ->
-                                val updatedSeriesName = latestDict[prog.title] ?: prog.seriesName
-                                if (prog.seriesName != updatedSeriesName) {
-                                    programDao.updateSeriesName(prog.id, updatedSeriesName)
+                            newDictEntries.forEach { dictEntry ->
+                                val ids = titleToIds[dictEntry.originalTitle] ?: emptyList()
+                                ids.forEach { id ->
+                                    programDao.updateSeriesName(id, dictEntry.normalizedSeriesName)
                                 }
                             }
                         }
