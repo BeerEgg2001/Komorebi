@@ -117,7 +117,6 @@ class RecordSyncEngine @Inject constructor(
                     var isCompleted = false
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
-                    // ★修正 OOM-01: List ではなく Set を使って重複保持を避け、メモリを節約
                     val allFetchedIds = mutableSetOf<Int>()
                     val dictionary = aiSeriesDictionaryDao.getAllDictionary()
                         .associate { it.originalTitle to it.normalizedSeriesName }
@@ -179,7 +178,18 @@ class RecordSyncEngine @Inject constructor(
                             }
                             entityBuffer.clear()
 
-                            // ★修正 BUG-03: ここにあった誤った isInitialBuild=false の上書きを削除
+                            // =================================================================
+                            // ★ 復元: 最初の100件が保存されたら、UI（ホーム画面）を開放する！
+                            // （これが無いと1万件終わるまでアプリが操作不能になります）
+                            // =================================================================
+                            if (_syncProgress.value.isInitialBuild) {
+                                _syncProgress.value =
+                                    _syncProgress.value.copy(isInitialBuild = false)
+                                Log.i(
+                                    TAG,
+                                    "First batch saved. Released InitialBuild block to navigate to Home."
+                                )
+                            }
                         }
 
                         processedCount += programs.size
@@ -215,7 +225,6 @@ class RecordSyncEngine @Inject constructor(
                     if (isCompleted) {
                         if (!isResumed && allFetchedIds.isNotEmpty()) {
                             val localIds = programDao.getAllIds()
-                            // ★修正 OOM-01: Setの引き算を安全に行う
                             val idsToDelete = localIds.toSet() - allFetchedIds
                             if (idsToDelete.isNotEmpty()) {
                                 Log.i(TAG, "Deleting ${idsToDelete.size} orphan records.")
@@ -223,7 +232,7 @@ class RecordSyncEngine @Inject constructor(
                                     programDao.deleteByIds(chunk)
                                 }
                             }
-                            allFetchedIds.clear() // 即座にメモリ解放
+                            allFetchedIds.clear()
                         } else if (isResumed) {
                             Log.i(
                                 TAG,
@@ -356,7 +365,6 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun resumeDictionaryResolutionIfNeeded() {
-        // ★修正 PERF-05: 10,000件ロードをやめ、DB側で未解決タイトルだけを抽出させる
         val unknownPrograms = db.recordedProgramDao().getTitlesNotInDictionary()
         val unknownBaseTitlesToOriginals = mutableMapOf<String, MutableSet<String>>()
 
@@ -389,7 +397,6 @@ class RecordSyncEngine @Inject constructor(
                     total = unknownMap.size
                 )
 
-                // ★修正 BUG-06: 危険な async の一斉起動を廃止し、完全な直列処理で API を保護
                 var processedCount = 0
                 val programDao = db.recordedProgramDao()
 
@@ -405,7 +412,6 @@ class RecordSyncEngine @Inject constructor(
                         currentCoroutineContext().ensureActive()
                         val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
 
-                        // ★重要: Wikipedia API制限対策 (IP BAN回避のため確実に800ms待機)
                         delay(800)
 
                         val finalSeriesName = canonicalTitle ?: baseTitle
