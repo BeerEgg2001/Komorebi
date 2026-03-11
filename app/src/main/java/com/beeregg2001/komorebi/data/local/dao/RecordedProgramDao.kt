@@ -13,8 +13,16 @@ interface RecordedProgramDao {
     @Query("SELECT * FROM recorded_programs WHERE id = :id")
     suspend fun getById(id: Int): RecordedProgramEntity?
 
+    @Query("SELECT * FROM recorded_programs WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Int>): List<RecordedProgramEntity>
+
     @Query("SELECT id FROM recorded_programs")
     suspend fun getAllIds(): List<Int>
+
+    // ★修正 BUG-04: 1000件以上でクラッシュするSQLiteのIN句上限エラーを防ぐため封印
+    @Deprecated("Use deleteByIds with chunked(900) instead. This method crashes with 1000+ items.")
+    @Query("DELETE FROM recorded_programs WHERE id NOT IN (:apiIds)")
+    suspend fun deleteOrphans(apiIds: List<Int>)
 
     @Query("DELETE FROM recorded_programs WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
@@ -50,15 +58,12 @@ interface RecordedProgramDao {
     @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
     suspend fun getAllPrograms(): List<RecordedProgramEntity>
 
-    // ★追加: 現在のDBに保存されている総録画件数をFlowで取得（爆速）
     @Query("SELECT COUNT(id) FROM recorded_programs")
     fun getTotalCountFlow(): kotlinx.coroutines.flow.Flow<Int>
 
-    // チャンネル一覧をSQLite側で一意（DISTINCT）にして取得（数十件のみ、超軽量）
     @Query("SELECT DISTINCT channel_id as channelId, channel_type as channelType, channel_name as channelName FROM recorded_programs WHERE channel_id IS NOT NULL")
     suspend fun getDistinctChannels(): List<ChannelProjection>
 
-    // シリーズのグルーピングをSQLite側に任せる（数百件のみ、超軽量・爆速）
     @Query(
         """
     SELECT 
@@ -77,8 +82,21 @@ interface RecordedProgramDao {
     @Query("SELECT id, title, series_name FROM recorded_programs")
     suspend fun getAllTitlesAndSeries(): List<ProgramTitleProjection>
 
+    // ★修正 PERF-05: 辞書に未登録のタイトルだけをDB側で高速に抽出する（OOM回避）
+    @Query(
+        """
+        SELECT p.id, p.title, p.series_name FROM recorded_programs p
+        LEFT JOIN ai_series_dictionary d ON p.title = d.originalTitle
+        WHERE d.originalTitle IS NULL
+    """
+    )
+    suspend fun getTitlesNotInDictionary(): List<ProgramTitleProjection>
+
     @Query("UPDATE recorded_programs SET series_name = :newSeriesName WHERE id = :id")
     suspend fun updateSeriesName(id: Int, newSeriesName: String)
+
+    @Query("UPDATE recorded_programs SET series_name = :newSeriesName WHERE title = :originalTitle")
+    suspend fun updateSeriesNameByOriginalTitle(originalTitle: String, newSeriesName: String)
 
     @Query("DELETE FROM recorded_programs")
     suspend fun clearAll()
@@ -89,7 +107,6 @@ interface SyncMetaDao {
     @Query("SELECT * FROM sync_meta WHERE id = 1")
     suspend fun getSyncMeta(): SyncMetaEntity?
 
-    // ★追加: 同期のメタデータをFlowで監視
     @Query("SELECT * FROM sync_meta WHERE id = 1")
     fun getSyncMetaFlow(): kotlinx.coroutines.flow.Flow<SyncMetaEntity?>
 
@@ -97,7 +114,6 @@ interface SyncMetaDao {
     suspend fun upsert(meta: SyncMetaEntity)
 }
 
-// --- SQLiteから直接グループ化されたデータを受け取るPOJO ---
 data class ChannelProjection(
     val channelId: String,
     val channelType: String?,

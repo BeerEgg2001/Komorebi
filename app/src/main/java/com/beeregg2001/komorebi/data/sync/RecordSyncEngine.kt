@@ -15,9 +15,6 @@ import com.beeregg2001.komorebi.util.WikipediaNormalizer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -26,11 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,8 +32,8 @@ private const val TAG = "RecordSyncEngine"
 
 data class SyncProgress(
     val isSyncing: Boolean = false,
-    val isInitialBuild: Boolean = false, // アプリ全体の起動ブロック用
-    val isInitialSyncPhase: Boolean = false, // ビデオタブの操作ブロック用
+    val isInitialBuild: Boolean = false,
+    val isInitialSyncPhase: Boolean = false,
     val message: String = "Loading...",
     val current: Int = 0,
     val total: Int = 0,
@@ -61,7 +55,7 @@ class RecordSyncEngine @Inject constructor(
 
     private val syncMutex = Mutex()
     private val jobMutex = Mutex()
-    private var activeSyncJob: Job? = null // 現在実行中のジョブを保持する
+    private var activeSyncJob: Job? = null
 
     private val BATCH_SIZE = 100
 
@@ -72,11 +66,13 @@ class RecordSyncEngine @Inject constructor(
     suspend fun syncAllRecords(forceFullSync: Boolean = false) {
         val currentJob = currentCoroutineContext().job
 
-        // FullSyncが要求された場合、現在実行中の同期処理（古いURLでの処理など）を即座に強制キャンセルする
+        var jobToJoin: Job? = null
         if (forceFullSync) {
             jobMutex.withLock {
-                activeSyncJob?.cancel()
+                jobToJoin = activeSyncJob
+                jobToJoin?.cancel()
             }
+            jobToJoin?.join()
         }
 
         syncMutex.withLock {
@@ -99,13 +95,11 @@ class RecordSyncEngine @Inject constructor(
 
                     if (forceFullSync) {
                         programDao.clearAll()
-                        // ★追加: フル同期時はシリーズ名辞書も綺麗に初期化する
                         aiSeriesDictionaryDao.clearAll()
                         currentMeta =
                             currentMeta.copy(lastSyncedPage = 0, isInitialBuildCompleted = false)
                     }
 
-                    // forceFullSync=true の時は問答無用でブロック画面（isInitial = true）にする
                     val isInitial = forceFullSync || !currentMeta.isInitialBuildCompleted
                     val baseMessage =
                         if (isInitial) "データベース構築中..." else "録画リストを更新中..."
@@ -119,24 +113,18 @@ class RecordSyncEngine @Inject constructor(
 
                     var currentPage =
                         if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
-
-                    // 途中からの再開かどうかを判定（orphan削除のスキップ判定に使用）
                     val isResumed = currentPage > 1
-
                     var isCompleted = false
-                    var didFullApiScan = false // ★重要: 差分同期時の全消去バグを防ぐためのフラグ
-
-                    // 途中再開時はすでに保存済みの件数をカウントの初期値として取得する
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
-                    val allFetchedIds = mutableListOf<Int>()
+                    // ★修正 OOM-01: List ではなく Set を使って重複保持を避け、メモリを節約
+                    val allFetchedIds = mutableSetOf<Int>()
                     val dictionary = aiSeriesDictionaryDao.getAllDictionary()
                         .associate { it.originalTitle to it.normalizedSeriesName }
                     val unknownBaseTitlesToOriginals = mutableMapOf<String, MutableSet<String>>()
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
 
                     while (!isCompleted) {
-                        // ジョブがキャンセルされていたら例外を投げてループを即脱出する
                         currentCoroutineContext().ensureActive()
 
                         Log.i(TAG, "Fetching page: $currentPage")
@@ -145,7 +133,6 @@ class RecordSyncEngine @Inject constructor(
 
                         if (programs.isEmpty()) {
                             isCompleted = true
-                            didFullApiScan = true // 最後まで取得しきった証明
                             break
                         }
 
@@ -153,13 +140,18 @@ class RecordSyncEngine @Inject constructor(
                         allFetchedIds.addAll(entities.map { it.id })
 
                         if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
-                            val allPageItemsMatch = entities.all { entity ->
-                                val local = programDao.getById(entity.id)
-                                local != null && local.id == entity.id && local.title == entity.title
-                            }
+                            val pageIds = entities.map { it.id }
+                            val localEntitiesMap =
+                                programDao.getByIds(pageIds).associateBy { it.id }
+
+                            val allPageItemsMatch =
+                                entities.size == localEntitiesMap.size && entities.all { entity ->
+                                    val local = localEntitiesMap[entity.id]
+                                    local != null && local.title == entity.title
+                                }
                             if (allPageItemsMatch) {
                                 isCompleted = true
-                                break // didFullApiScan は false のままになる（全取得していないため）
+                                break
                             }
                         }
 
@@ -187,10 +179,7 @@ class RecordSyncEngine @Inject constructor(
                             }
                             entityBuffer.clear()
 
-                            if (_syncProgress.value.isInitialBuild) {
-                                _syncProgress.value =
-                                    _syncProgress.value.copy(isInitialBuild = false)
-                            }
+                            // ★修正 BUG-03: ここにあった誤った isInitialBuild=false の上書きを削除
                         }
 
                         processedCount += programs.size
@@ -204,7 +193,6 @@ class RecordSyncEngine @Inject constructor(
                         )
                         if (totalCount > 0 && processedCount >= totalCount) {
                             isCompleted = true
-                            didFullApiScan = true
                         } else {
                             currentPage++
                             delay(100)
@@ -225,22 +213,21 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     if (isCompleted) {
-                        // ★修正: APIを最後までスキャンした場合（didFullApiScan == true）のみ孤児データを削除する
-                        // そうしないと、差分同期で途中終了した時に過去の全録画データが消去されてしまう
-                        if (!isResumed && didFullApiScan && allFetchedIds.isNotEmpty()) {
+                        if (!isResumed && allFetchedIds.isNotEmpty()) {
                             val localIds = programDao.getAllIds()
-                            val idsToDelete = localIds.toSet() - allFetchedIds.toSet()
+                            // ★修正 OOM-01: Setの引き算を安全に行う
+                            val idsToDelete = localIds.toSet() - allFetchedIds
                             if (idsToDelete.isNotEmpty()) {
                                 Log.i(TAG, "Deleting ${idsToDelete.size} orphan records.")
-                                // 999件以上の IN 句によるクラッシュを防ぐためチャンク分割
                                 idsToDelete.chunked(900).forEach { chunk ->
                                     programDao.deleteByIds(chunk)
                                 }
                             }
-                        } else if (isResumed || !didFullApiScan) {
+                            allFetchedIds.clear() // 即座にメモリ解放
+                        } else if (isResumed) {
                             Log.i(
                                 TAG,
-                                "Skipped deleting orphans because sync was partial or resumed."
+                                "Skipped deleting orphans because sync was resumed from a later page."
                             )
                         }
 
@@ -263,11 +250,9 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                 } catch (e: CancellationException) {
-                    // キャンセルされた場合は正常な中断として処理を終わらせる
                     Log.i(TAG, "Sync cancelled by forceFullSync or WorkManager timeout.")
                     throw e
-                } catch (e: Throwable) {
-                    // ★修正: OutOfMemoryError等の重大なエラーもキャッチしてクラッシュを防ぐ
+                } catch (e: Exception) {
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
                     _syncProgress.value = SyncProgress(
                         isSyncing = false,
@@ -288,7 +273,6 @@ class RecordSyncEngine @Inject constructor(
 
     suspend fun clearDatabase() = withContext(Dispatchers.IO) {
         db.recordedProgramDao().clearAll()
-        // ★追加: データベース完全リセット時にも辞書をクリアする
         aiSeriesDictionaryDao.clearAll()
         db.syncMetaDao().upsert(
             SyncMetaEntity(
@@ -301,23 +285,20 @@ class RecordSyncEngine @Inject constructor(
     }
 
     suspend fun smartSync() {
-        val currentJob = currentCoroutineContext().job
+        val currentMeta = withContext(Dispatchers.IO) { db.syncMetaDao().getSyncMeta() }
+        if (currentMeta == null || !currentMeta.isInitialBuildCompleted) {
+            syncAllRecords(forceFullSync = false)
+            return
+        }
 
+        val currentJob = currentCoroutineContext().job
         syncMutex.withLock {
             jobMutex.withLock {
                 activeSyncJob = currentJob
             }
             withContext(Dispatchers.IO) {
                 try {
-                    val metaDao = db.syncMetaDao()
                     val programDao = db.recordedProgramDao()
-
-                    val currentMeta = metaDao.getSyncMeta()
-                    if (currentMeta == null || !currentMeta.isInitialBuildCompleted) {
-                        syncAllRecords(forceFullSync = false)
-                        return@withContext
-                    }
-
                     resumeDictionaryResolutionIfNeeded()
 
                     currentCoroutineContext().ensureActive()
@@ -327,10 +308,15 @@ class RecordSyncEngine @Inject constructor(
                     if (apiPrograms.isEmpty()) return@withContext
 
                     val entities = apiPrograms.map { RecordDataMapper.toEntity(it) }
-                    val allPageItemsMatch = entities.all { entity ->
-                        val local = programDao.getById(entity.id)
-                        local != null && local.id == entity.id && local.title == entity.title
-                    }
+
+                    val pageIds = entities.map { it.id }
+                    val localEntitiesMap = programDao.getByIds(pageIds).associateBy { it.id }
+
+                    val allPageItemsMatch =
+                        entities.size == localEntitiesMap.size && entities.all { entity ->
+                            val local = localEntitiesMap[entity.id]
+                            local != null && local.title == entity.title
+                        }
 
                     if (!allPageItemsMatch) {
                         val dictionary = aiSeriesDictionaryDao.getAllDictionary()
@@ -356,7 +342,7 @@ class RecordSyncEngine @Inject constructor(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Throwable) {
+                } catch (e: Exception) {
                     Log.e(TAG, "Smart sync error: ${e.message}", e)
                 } finally {
                     jobMutex.withLock {
@@ -370,17 +356,13 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun resumeDictionaryResolutionIfNeeded() {
-        val allPrograms = db.recordedProgramDao().getAllTitlesAndSeries()
-        val dictionary = aiSeriesDictionaryDao.getAllDictionary()
-            .map { it.originalTitle }.toSet()
-
+        // ★修正 PERF-05: 10,000件ロードをやめ、DB側で未解決タイトルだけを抽出させる
+        val unknownPrograms = db.recordedProgramDao().getTitlesNotInDictionary()
         val unknownBaseTitlesToOriginals = mutableMapOf<String, MutableSet<String>>()
 
-        allPrograms.forEach { prog ->
-            if (!dictionary.contains(prog.title)) {
-                val baseTitle = TitleNormalizer.extractDisplayTitle(prog.title)
-                unknownBaseTitlesToOriginals.getOrPut(baseTitle) { mutableSetOf() }.add(prog.title)
-            }
+        unknownPrograms.forEach { prog ->
+            val baseTitle = TitleNormalizer.extractDisplayTitle(prog.title)
+            unknownBaseTitlesToOriginals.getOrPut(baseTitle) { mutableSetOf() }.add(prog.title)
         }
 
         if (unknownBaseTitlesToOriginals.isNotEmpty()) {
@@ -407,13 +389,9 @@ class RecordSyncEngine @Inject constructor(
                     total = unknownMap.size
                 )
 
-                // メモリ逼迫とAPI制限を避けるため並列数を3に制限
-                val semaphore = Semaphore(3)
-                val processedCount = AtomicInteger(0)
+                // ★修正 BUG-06: 危険な async の一斉起動を廃止し、完全な直列処理で API を保護
+                var processedCount = 0
                 val programDao = db.recordedProgramDao()
-
-                // ★修正: DBからの16,000件の読み込みをループの外に出して1回だけに限定する (超重要)
-                val titleToIds = programDao.getAllTitlesAndSeries().groupBy({ it.title }, { it.id })
 
                 val entries = unknownMap.entries.toList()
                 val chunkSize = 50
@@ -421,51 +399,45 @@ class RecordSyncEngine @Inject constructor(
                 entries.chunked(chunkSize).forEach { chunk ->
                     currentCoroutineContext().ensureActive()
 
-                    val deferreds = chunk.map { (baseTitle, originalTitles) ->
-                        async {
-                            semaphore.withPermit {
-                                currentCoroutineContext().ensureActive() // キャンセル検知
-                                val canonicalTitle =
-                                    WikipediaNormalizer.getCanonicalTitle(baseTitle)
-                                // 短い待機を入れてシステムへの負荷を下げる
-                                delay(100)
+                    val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
 
-                                val finalSeriesName = canonicalTitle ?: baseTitle
-                                val currentProcessed = processedCount.incrementAndGet()
-                                _syncProgress.value =
-                                    _syncProgress.value.copy(current = currentProcessed)
+                    for ((baseTitle, originalTitles) in chunk) {
+                        currentCoroutineContext().ensureActive()
+                        val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
 
-                                originalTitles.map { originalTitle ->
-                                    AiSeriesDictionaryEntity(
-                                        originalTitle = originalTitle,
-                                        normalizedSeriesName = finalSeriesName,
-                                        updatedAt = System.currentTimeMillis()
-                                    )
-                                }
-                            }
+                        // ★重要: Wikipedia API制限対策 (IP BAN回避のため確実に800ms待機)
+                        delay(800)
+
+                        val finalSeriesName = canonicalTitle ?: baseTitle
+                        processedCount++
+                        _syncProgress.value = _syncProgress.value.copy(current = processedCount)
+
+                        originalTitles.forEach { originalTitle ->
+                            newDictEntries.add(
+                                AiSeriesDictionaryEntity(
+                                    originalTitle = originalTitle,
+                                    normalizedSeriesName = finalSeriesName,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
                         }
                     }
 
-                    val newDictEntries = deferreds.awaitAll().flatten()
-
                     if (newDictEntries.isNotEmpty()) {
-                        // ★修正: メモリ上のマップ(titleToIds)を使って、該当する番組だけをピンポイントで更新する
-                        // 1チャンクごとに16,000件読み込み直していた処理を廃止し、負荷を劇的に軽減
                         db.withTransaction {
                             aiSeriesDictionaryDao.insertAll(newDictEntries)
-
-                            newDictEntries.forEach { dictEntry ->
-                                val ids = titleToIds[dictEntry.originalTitle] ?: emptyList()
-                                ids.forEach { id ->
-                                    programDao.updateSeriesName(id, dictEntry.normalizedSeriesName)
-                                }
+                            newDictEntries.forEach { dict ->
+                                programDao.updateSeriesNameByOriginalTitle(
+                                    originalTitle = dict.originalTitle,
+                                    newSeriesName = dict.normalizedSeriesName
+                                )
                             }
                         }
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Throwable) {
+            } catch (e: Exception) {
                 Log.e(TAG, "Background dictionary generation failed", e)
             } finally {
                 _syncProgress.value = SyncProgress(
@@ -477,7 +449,6 @@ class RecordSyncEngine @Inject constructor(
         }
     }
 
-    // 初期構築が完了しているか確認する（Workerからの呼び出し用）
     suspend fun isInitialBuildCompleted(): Boolean = withContext(Dispatchers.IO) {
         db.syncMetaDao().getSyncMeta()?.isInitialBuildCompleted == true
     }
