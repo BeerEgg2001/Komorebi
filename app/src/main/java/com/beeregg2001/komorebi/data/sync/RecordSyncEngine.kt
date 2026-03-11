@@ -412,7 +412,7 @@ class RecordSyncEngine @Inject constructor(
                         currentCoroutineContext().ensureActive()
                         val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
 
-                        delay(800)
+                        delay(300)
 
                         val finalSeriesName = canonicalTitle ?: baseTitle
                         processedCount++
