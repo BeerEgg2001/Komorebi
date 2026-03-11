@@ -218,12 +218,20 @@ fun VideoTabContent(
                                     key = { "rec_${it.id}" }) { program ->
                                     val history =
                                         watchHistory.find { h -> h.program.id.toString() == program.id.toString() }
+                                    // ★修正: 録画中の番組か判定
+                                    val isCurrentlyRecording =
+                                        program.isRecording || program.recordedVideo.status == "Recording"
                                     VideoRecentRecordCard(
                                         program = program,
                                         history = history,
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
-                                        onClick = { onProgramClick(program) },
+                                        // ★修正: 録画中ならクリック無効
+                                        onClick = {
+                                            if (!isCurrentlyRecording) onProgramClick(
+                                                program
+                                            )
+                                        },
                                         onFocus = {
                                             // ★修正: フォーカス時にAPIへ詳細データをリクエストする
                                             focusedProgramId = program.id
@@ -257,7 +265,10 @@ fun VideoTabContent(
                                                 tag = "最近の録画",
                                                 progress = progress
                                             )
-                                        }
+                                        },
+                                        // ★修正: Modifierを使って録画中は半透明にする
+                                        modifier = Modifier.alpha(if (isCurrentlyRecording) 0.5f else 1f),
+                                        isCurrentlyRecording = isCurrentlyRecording
                                     )
                                 }
                             }
@@ -459,7 +470,9 @@ private fun VideoRecentRecordCard(
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
-    onFocus: () -> Unit
+    onFocus: () -> Unit,
+    modifier: Modifier = Modifier,
+    isCurrentlyRecording: Boolean = false // ★追加
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -471,7 +484,8 @@ private fun VideoRecentRecordCard(
 
     Surface(
         onClick = onClick,
-        modifier = Modifier
+        enabled = !isCurrentlyRecording, // ★修正: 録画中ならSurfaceごと無効化
+        modifier = modifier // ★修正: 引数のmodifierを適用
             .width(280.dp)
             .height(160.dp)
             .onFocusChanged { isFocused = it.isFocused || it.hasFocus; if (isFocused) onFocus() },
@@ -524,12 +538,31 @@ private fun VideoRecentRecordCard(
                 } catch (e: Exception) {
                     program.startTime
                 }
-                Text(
-                    text = startFormat,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.accent.copy(alpha = if (isFocused) 1f else 0.8f),
-                    fontWeight = FontWeight.Bold
-                )
+
+                // ★追加: 録画中バッジの表示
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isCurrentlyRecording) {
+                        Box(
+                            modifier = Modifier
+                                .background(colors.accent, RoundedCornerShape(2.dp))
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "録画中",
+                                color = if (colors.isDark) Color.Black else Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = startFormat,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.accent.copy(alpha = if (isFocused) 1f else 0.8f),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = program.title,
@@ -540,7 +573,7 @@ private fun VideoRecentRecordCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (progress != null) {
+            if (progress != null && !isCurrentlyRecording) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomStart)

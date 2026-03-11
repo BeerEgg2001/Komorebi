@@ -52,11 +52,10 @@ fun RecordListItem(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    // ★修正: 録画中かどうかの判定を強固にする（isRecordingフラグ または status文字列）
     val isCurrentlyRecording = program.isRecording || program.recordedVideo.status == "Recording"
 
-    // 再生可能な状態か判定（キーフレームがあるか、または録画中か）
-    val isAnalyzed = program.recordedVideo.hasKeyFrames || isCurrentlyRecording
+    // ★修正: 録画中は選択不可（非アクティブ）にするため、条件を「かつ録画中でないか」に変更
+    val isAnalyzed = program.recordedVideo.hasKeyFrames && !isCurrentlyRecording
 
     val isVisualFocused = isFocused || isPersistentFocused
 
@@ -136,10 +135,12 @@ fun RecordListItem(
         )
     ) {
         Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier
-                .width(100.dp)
-                .fillMaxHeight()
-                .background(colors.surface)) {
+            Box(
+                modifier = Modifier
+                    .width(100.dp)
+                    .fillMaxHeight()
+                    .background(colors.surface)
+            ) {
                 AsyncImage(
                     model = imageRequest,
                     contentDescription = null,
@@ -221,7 +222,6 @@ fun RecordListItem(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    // ★修正: 統合した isCurrentlyRecording を使って判定する
                     if (isCurrentlyRecording) {
                         Text(
                             text = "録画中",
