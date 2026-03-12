@@ -100,6 +100,26 @@ interface RecordedProgramDao {
 
     @Query("DELETE FROM recorded_programs")
     suspend fun clearAll()
+
+    // ★修正: 抽出漏れを防ぐため、NOT IN 構文を使った確実なクエリに変更
+    @Query(
+        """
+        SELECT title FROM recorded_programs 
+        WHERE title NOT IN (SELECT originalTitle FROM ai_series_dictionary)
+        GROUP BY title
+        LIMIT :limit
+        """
+    )
+    suspend fun getUnknownTitles(limit: Int = 50): List<String>
+
+    // ★修正: NOT IN 構文を使った確実なカウントクエリ
+    @Query(
+        """
+        SELECT COUNT(DISTINCT title) FROM recorded_programs 
+        WHERE title NOT IN (SELECT originalTitle FROM ai_series_dictionary)
+        """
+    )
+    suspend fun getUnknownTitlesCount(): Int
 }
 
 @Dao
