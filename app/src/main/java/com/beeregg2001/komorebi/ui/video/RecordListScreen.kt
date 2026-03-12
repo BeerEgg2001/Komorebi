@@ -46,10 +46,12 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.components.*
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
+import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -69,11 +71,6 @@ fun RecordListScreen(
     val scope = rememberCoroutineScope()
     val syncProgress by viewModel.syncProgress.collectAsState()
 
-    // =====================================================================
-    // ★追加: 初回構築中のみ表示される専用のブロック画面
-    // Paging3が裏側で何十回もDBを更新してリストが破壊・再構築を繰り返すため、
-    // クラッシュを防ぐためにリストUIへのアクセスを物理的に遮断します。
-    // =====================================================================
     if (syncProgress.isInitialSyncPhase) {
         val blockFocusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); blockFocusRequester.safeRequestFocus("InitialSyncBlock") }
@@ -135,11 +132,8 @@ fun RecordListScreen(
                 }
             }
         }
-        // ここでreturnすることで、下の不安定なリストUIを一切描画・評価させません
         return
     }
-
-    // --- ここから下は通常のリスト描画処理（初期同期完了後に到達します） ---
 
     val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
     val searchHistory by viewModel.searchHistory.collectAsState()
@@ -162,6 +156,8 @@ fun RecordListScreen(
     val ticketManager = rememberFocusTicketManager()
 
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
+    var focusedSeries by remember { mutableStateOf<SeriesInfo?>(null) }
+    var savedFocusProgramId by remember { mutableStateOf<Int?>(null) }
 
     val paneTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = menuState.isPaneOpen }
@@ -251,12 +247,15 @@ fun RecordListScreen(
         derivedStateOf { isRecLoading || isSeriesLoading || pagedRecordings.loadState.refresh is LoadState.Loading }
     }
 
-    val topBarDownRequester = remember(isCategoryImplemented, isListView, hasContent) {
-        if (!isCategoryImplemented || !hasContent) {
-            if (isListView) focuses.navPane else focuses.searchOpenButton
-        } else {
-            focuses.firstItem
-        }
+    // リスト表示時の TopBar 下キー飛び先。RecordListContent から先頭可視アイテムの requester が通知される。
+    var listContentDownRequester by remember { mutableStateOf<FocusRequester>(focuses.firstItem) }
+
+    val topBarDownRequester = if (isListView && hasContent && isCategoryImplemented) {
+        listContentDownRequester
+    } else if (!isCategoryImplemented || !hasContent) {
+        if (isListView) focuses.navPane else focuses.searchOpenButton
+    } else {
+        focuses.contentContainer
     }
 
     val isNavOverlayVisible = !isListView && menuState.isNavPaneOpen
@@ -268,27 +267,25 @@ fun RecordListScreen(
         when (currentTicket) {
             FocusTicket.LIST_TOP -> {
                 if (hasContent && isListFirstItemReady && !isLoadingAny) {
-                    delay(50)
-                    focuses.firstItem.safeRequestFocus("Ticket_LIST_TOP")
+                    delay(150)
+                    focuses.firstItem.safeRequestFocusWithRetry("Ticket_LIST_TOP")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 } else if (!hasContent && !isLoadingAny) {
-                    delay(50)
-                    if (isListView) focuses.navPane.safeRequestFocus("Ticket_EmptyNav")
-                    else focuses.searchOpenButton.safeRequestFocus("Ticket_EmptySearch")
+                    delay(150)
+                    if (isListView) focuses.navPane.safeRequestFocusWithRetry("Ticket_EmptyNav")
+                    else focuses.searchOpenButton.safeRequestFocusWithRetry("Ticket_EmptySearch")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 }
             }
 
             FocusTicket.NAV_PANE -> {
-                delay(50)
-                focuses.navPane.safeRequestFocus("Ticket_NAV_PANE")
+                focuses.navPane.safeRequestFocusWithRetry("Ticket_NAV_PANE")
                 ticketManager.consume(FocusTicket.NAV_PANE)
             }
 
             FocusTicket.PANE -> {
                 if (menuState.isPaneListReady) {
-                    delay(50)
-                    focuses.paneFirstItem.safeRequestFocus("Ticket_PANE")
+                    focuses.paneFirstItem.safeRequestFocusWithRetry("Ticket_PANE")
                     ticketManager.consume(FocusTicket.PANE)
                 }
             }
@@ -306,6 +303,9 @@ fun RecordListScreen(
     }
 
     val executeSearch: (String) -> Unit = { query ->
+        savedFocusProgramId = null
+        focusedProgram = null
+        focusedSeries = null
         viewModel.searchRecordings(query)
         menuState.isSearchBarVisible = false; menuState.isDetailActive = false
         ticketManager.issue(FocusTicket.LIST_TOP)
@@ -314,6 +314,10 @@ fun RecordListScreen(
     val handleCategorySelect: (RecordCategory) -> Unit = { category ->
         val isSameCategory = selectedCategory == category
         menuState.isSelectionMade = false
+
+        savedFocusProgramId = null
+        focusedProgram = null
+        focusedSeries = null
 
         if (isSameCategory) {
             when (category) {
@@ -360,8 +364,22 @@ fun RecordListScreen(
     }
 
     val handleOpenNavPane = {
+        if (selectedCategory == RecordCategory.SERIES) {
+            savedFocusProgramId = focusedSeries?.representativeVideoId
+        } else {
+            savedFocusProgramId = focusedProgram?.id
+        }
         menuState.isNavPaneOpen = true
         ticketManager.issue(FocusTicket.NAV_PANE)
+    }
+
+    val onRightKeyFromNav = {
+        if (savedFocusProgramId != null) {
+            ticketManager.issue(FocusTicket.TARGET_ID, savedFocusProgramId)
+            savedFocusProgramId = null
+        } else {
+            ticketManager.issue(FocusTicket.LIST_TOP)
+        }
     }
 
     val handleBackPress: () -> Unit = {
@@ -385,7 +403,7 @@ fun RecordListScreen(
 
             menuState.isNavPaneOpen -> {
                 menuState.isNavPaneOpen = false
-                focuses.contentContainer.safeRequestFocus("CloseNavOverlay")
+                onRightKeyFromNav()
             }
 
             menuState.isSearchBarVisible -> {
@@ -467,7 +485,8 @@ fun RecordListScreen(
                                     isSearchBarVisible = menuState.isSearchBarVisible,
                                     onBackPress = handleBackPress,
                                     listState = seriesListState,
-                                    ticketManager = ticketManager
+                                    ticketManager = ticketManager,
+                                    onFocusedSeriesChanged = { focusedSeries = it }
                                 )
                             }
 
@@ -484,19 +503,25 @@ fun RecordListScreen(
                                     backButtonFocusRequester = focuses.backButton,
                                     onProgramClick = onProgramClick,
                                     onSeriesSearch = { keyword ->
-                                        val currentId = focusedProgram?.id
                                         executeSearch(keyword)
-                                        ticketManager.issue(FocusTicket.TARGET_ID, currentId)
+                                        focusedProgram?.id?.let {
+                                            ticketManager.issue(
+                                                FocusTicket.TARGET_ID,
+                                                it
+                                            )
+                                        }
                                     },
                                     isDetailVisible = menuState.isDetailActive,
                                     onDetailStateChange = { menuState.isDetailActive = it },
                                     onBackPress = handleBackPress,
+                                    ticketManager = ticketManager,
                                     listState = listState,
                                     fetchedProgramDetail = programDetail,
                                     onFetchDetail = { viewModel.fetchProgramDetail(it) },
                                     onClearDetail = { viewModel.clearProgramDetail() },
-                                    ticketManager = ticketManager,
-                                    onFocusedItemChanged = { focusedProgram = it }
+                                    onFocusedItemChanged = { focusedProgram = it },
+                                    onOpenNavPane = handleOpenNavPane,
+                                    onTopBarDownRequesterChanged = { listContentDownRequester = it }
                                 )
                             }
                         }
@@ -519,7 +544,8 @@ fun RecordListScreen(
                                     isSearchBarVisible = menuState.isSearchBarVisible,
                                     onBackPress = handleBackPress,
                                     gridState = gridState,
-                                    ticketManager = ticketManager
+                                    ticketManager = ticketManager,
+                                    onFocusedSeriesChanged = { focusedSeries = it }
                                 )
                             }
 
@@ -547,24 +573,20 @@ fun RecordListScreen(
 
                 AnimatedVisibility(
                     visible = !hasContent,
-                    enter = fadeIn(tween(300)),
-                    exit = fadeOut(tween(300))
+                    enter = fadeIn(tween(300)), exit = fadeOut(tween(300))
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(colors.background), // 裏側の空のリストを隠す
+                            .background(colors.background),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isLoadingAny) {
-                            CircularProgressIndicator(color = colors.textPrimary)
-                        } else {
-                            Text(
-                                "録画番組がありません",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = colors.textSecondary.copy(alpha = 0.6f)
-                            )
-                        }
+                        if (isLoadingAny) CircularProgressIndicator(color = colors.textPrimary)
+                        else Text(
+                            "録画番組がありません",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = colors.textSecondary.copy(alpha = 0.6f)
+                        )
                     }
                 }
             }
@@ -594,7 +616,9 @@ fun RecordListScreen(
                     onGenreSelect = { viewModel.updateGenre(it) },
                     onChannelSelect = { viewModel.updateChannel(it) },
                     onDaySelect = { viewModel.updateDay(it) },
-                    onSeriesGenreSelect = { viewModel.updateSeriesGenre(it) })
+                    onSeriesGenreSelect = { viewModel.updateSeriesGenre(it) },
+                    onRightKeyFromNav = onRightKeyFromNav
+                )
             }
         }
 
@@ -634,6 +658,7 @@ fun RecordListScreen(
                 menuState.isNavPaneOpen = false; ticketManager.issue(FocusTicket.LIST_TOP)
             },
             onKeyboardActiveClick = { },
-            onBackButtonFocusChanged = { menuState.isBackButtonFocused = it })
+            onBackButtonFocusChanged = { menuState.isBackButtonFocused = it }
+        )
     }
 }
