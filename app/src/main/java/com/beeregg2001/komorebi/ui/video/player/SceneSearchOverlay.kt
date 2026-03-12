@@ -304,11 +304,15 @@ fun TiledThumbnailItem(
     onClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
+    // ★追加: 表示する時間表示（UI）はそのままに、取得する画像の時間をずらすためのパラメータ
+    imageTimeOffsetSec: Long = 0L,
     overlayContent: @Composable BoxScope.() -> Unit = {}
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    val tileIndex = floor(time / tileInterval).toInt()
+    // ★追加: 実際の画像取得にはオフセットを加算した時間を使用する
+    val fetchTime = time + imageTimeOffsetSec
+    val tileIndex = floor(fetchTime / tileInterval).toInt()
     val col = tileIndex % tileColumns
     val row = tileIndex / tileColumns
 
@@ -356,6 +360,7 @@ fun TiledThumbnailItem(
                     .background(Color.Black.copy(0.7f))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
+                // UI上の表示テキストは元の `time` のまま（シーク先も元の時間）
                 Text(
                     text = formatSecondsToTime(time),
                     color = Color.White,
@@ -566,6 +571,9 @@ fun ChapterListOverlay(
                     val s = lengthSec % 60
                     val lengthText = if (m > 0) "${m}分${s}秒" else "${s}秒"
 
+                    // ★追加: サムネイル取得時間を+5秒オフセットする（ただしチャプター尺が極端に短い場合ははみ出さないように制限）
+                    val offsetSec = minOf(5L, maxOf(0L, lengthSec / 2))
+
                     Box(
                         modifier = if (index == targetIndex) Modifier.focusRequester(focusRequester) else Modifier
                     ) {
@@ -577,6 +585,7 @@ fun ChapterListOverlay(
                             tileInterval = tileInterval,
                             tileWidth = tileWidth,
                             tileHeight = tileHeight,
+                            imageTimeOffsetSec = offsetSec, // ★オフセットを適用
                             onClick = { onSeekRequested(chapter.startTimeMs) },
                             onFocused = { focusedTime = chapter.startTimeMs / 1000 },
                             overlayContent = {
