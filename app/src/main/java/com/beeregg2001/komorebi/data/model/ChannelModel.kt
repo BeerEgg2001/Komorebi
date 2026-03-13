@@ -19,6 +19,8 @@ data class Channel(
     @SerializedName("channel_number") val channelNumber: String,
     @SerializedName("network_id") val networkId: Long, // 追加
     @SerializedName("service_id") val serviceId: Long, // 追加
+    // ★追加: TSIDをパースするためのプロパティ
+    @SerializedName("transport_stream_id") val transportStreamId: Long = 0L,
     val type: String,
     @SerializedName("is_watchable") val isWatchable: Boolean,
     @SerializedName("is_display") val isDisplay: Boolean,

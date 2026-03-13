@@ -146,4 +146,51 @@ class KonomiRepository @Inject constructor(
             throw Exception("Delete reservation failed: ${response.code()} ${response.errorBody()?.string()}")
         }
     }
+
+    //  自動予約条件（キーワード予約）の一覧を取得する
+    suspend fun getReservationConditions(): Result<List<ReservationCondition>> {
+        return try {
+            val response = apiService.getReservationConditions()
+            Result.success(response.reservationConditions)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addReservationCondition(request: ReservationConditionAddRequest): Result<Unit> {
+        return try {
+            val response = apiService.addReservationCondition(request)
+            if (response.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("Failed to add condition: ${response.code()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★自動予約条件の更新
+    suspend fun updateReservationCondition(conditionId: Int, request: ReservationConditionUpdateRequest): Result<ReservationCondition> {
+        return try {
+            val response = apiService.updateReservationCondition(conditionId, request)
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★自動予約条件の削除
+    suspend fun deleteReservationCondition(conditionId: Int): Result<Unit> {
+        return try {
+            val response = apiService.deleteReservationCondition(conditionId)
+            if (response.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("Failed to delete condition: ${response.code()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }

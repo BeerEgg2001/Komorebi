@@ -44,6 +44,7 @@ import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
+import com.beeregg2001.komorebi.ui.reserve.ConditionEditDialog // ★追加
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.AppTheme
@@ -117,7 +118,6 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
-    // ★追加: アップデーターの状態監視
     val updateState by homeViewModel.updateState.collectAsState()
 
     LaunchedEffect(Unit) {
@@ -127,6 +127,7 @@ fun MainRootScreen(
                 "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; else -> 0
             }
             state.hasAppliedStartupTab = true
+            channelViewModel.fetchChannels()
         }
     }
 
@@ -155,7 +156,6 @@ fun MainRootScreen(
         }
     }
 
-    // ★追加: アップデートエラー時のトースト処理
     LaunchedEffect(updateState) {
         if (updateState is UpdateState.Error) {
             state.toastMessage = (updateState as UpdateState.Error).message
@@ -167,6 +167,7 @@ fun MainRootScreen(
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
+            state.editingCondition != null -> state.editingCondition = null // ★追加: 自動予約編集ダイアログ閉じ
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
             state.reserveToDelete != null -> state.reserveToDelete = null
@@ -384,6 +385,10 @@ fun MainRootScreen(
                                 onReserveSelected = { reserveItem ->
                                     state.selectedReserve = reserveItem
                                 },
+                                // ★追加: キーワード自動予約カードがクリックされた時の処理
+                                onConditionClick = { condition ->
+                                    state.editingCondition = condition
+                                },
                                 isReserveOverlayOpen = state.selectedReserve != null,
                                 epgSelectedProgram = state.epgSelectedProgram,
                                 onEpgProgramSelected = { state.epgSelectedProgram = it },
@@ -515,6 +520,42 @@ fun MainRootScreen(
                             }
                         }
                     },
+                    onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM ->
+                        val channel =
+                            groupedChannels.values.flatten().find { it.id == program.channel_id }
+                        var tsId = channel?.transportStreamId?.toInt()
+
+                        if (tsId == null || tsId == 0) {
+                            val epgState = epgViewModel.uiState
+                            if (epgState is EpgUiState.Success) {
+                                val epgChannel =
+                                    epgState.data.find { it.channel.id == program.channel_id }?.channel
+                                tsId = epgChannel?.transport_stream_id?.toInt()
+                            }
+                        }
+
+                        val finalTsId = tsId ?: 0
+
+                        reserveViewModel.addEpgReserve(
+                            keyword = keyword,
+                            networkId = program.network_id,
+                            transportStreamId = finalTsId,
+                            serviceId = program.service_id,
+                            daysOfWeek = daysOfWeek,
+                            startHour = startH,
+                            startMinute = startM,
+                            endHour = endH,
+                            endMinute = endM,
+                            onSuccess = {
+                                scope.launch {
+                                    state.epgSelectedProgram = null
+                                    delay(300)
+                                    state.toastMessage =
+                                        "連ドラ予約 (キーワード自動予約) を登録しました"
+                                }
+                            }
+                        )
+                    },
                     onRecordDetailClick = { program -> state.editingNewProgram = program },
                     onEditReserveClick = { _ ->
                         if (relatedReserve != null) reserveViewModel.refreshReserveItem(
@@ -580,6 +621,55 @@ fun MainRootScreen(
                             null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
                     })
             }
+
+            // ★追加: 自動予約条件の編集・削除ダイアログ
+            if (state.editingCondition != null) {
+                val condition = state.editingCondition!!
+                ConditionEditDialog(
+                    condition = condition,
+                    // ★修正: 引数に keyword を追加し、APIリクエストに渡すように変更
+                    onConfirmUpdate = { keyword, daysOfWeek, startH, startM, endH, endM ->
+                        val service = condition.programSearchCondition.serviceRanges?.firstOrNull()
+                        reserveViewModel.updateEpgReserve(
+                            conditionId = condition.id,
+                            keyword = keyword, // ★ここを更新されたキーワードに変更
+                            networkId = service?.networkId ?: 0,
+                            transportStreamId = service?.transportStreamId ?: 0,
+                            serviceId = service?.serviceId ?: 0,
+                            daysOfWeek = daysOfWeek,
+                            startHour = startH,
+                            startMinute = startM,
+                            endHour = endH,
+                            endMinute = endM,
+                            onSuccess = {
+                                scope.launch {
+                                    state.editingCondition = null
+                                    delay(300)
+                                    state.toastMessage = "予約条件を更新しました"
+                                }
+                            }
+                        )
+                    },
+                    onConfirmDelete = { deleteRelated ->
+                        reserveViewModel.deleteConditionWithCleanup(
+                            condition = condition,
+                            deleteRelatedReserves = deleteRelated,
+                            onSuccess = {
+                                scope.launch {
+                                    state.editingCondition = null
+                                    delay(300)
+                                    state.toastMessage =
+                                        if (deleteRelated) "条件と関連する予約をすべて削除しました" else "予約条件を削除しました"
+                                }
+                            }
+                        )
+                    },
+                    onDismiss = {
+                        state.editingCondition = null
+                    }
+                )
+            }
+
             if (state.reserveToDelete != null) {
                 DeleteConfirmationDialog(
                     title = AppStrings.DIALOG_DELETE_RESERVE_TITLE,
@@ -622,7 +712,6 @@ fun MainRootScreen(
                     })
             }
 
-            // ★追加: アップデート利用可能な場合のダイアログ
             if (updateState is UpdateState.UpdateAvailable) {
                 val available = updateState as UpdateState.UpdateAvailable
                 UpdateDialog(
@@ -633,14 +722,13 @@ fun MainRootScreen(
                 )
             }
 
-            // ★追加: ダウンロード中・準備完了のプログレスバナー（画面右下固定）
             if (updateState is UpdateState.Downloading || updateState is UpdateState.ReadyToInstall) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     UpdateProgressBanner(
                         updateState = updateState,
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(48.dp) // TVのセーフエリアを考慮
+                            .padding(48.dp)
                     )
                 }
             }
@@ -650,9 +738,6 @@ fun MainRootScreen(
     }
 }
 
-/**
- * 右下に表示される汎用の進捗インジケーターコンポーネント
- */
 @Composable
 fun SyncProgressIndicator(
     syncProgress: SyncProgress,
@@ -710,9 +795,6 @@ fun SyncProgressIndicator(
     }
 }
 
-/**
- * 同期エラー時に表示されるダイアログ（再実行ボタン付き）
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
@@ -777,7 +859,6 @@ fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> 
     }
 }
 
-// ★追加: アプリ内アップデーター用ダイアログ
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun UpdateDialog(
@@ -802,8 +883,8 @@ fun UpdateDialog(
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp), // ★修正: ClickableSurfaceDefaults.shape を削除
-            colors = SurfaceDefaults.colors(     // ★修正: ClickableSurfaceDefaults.colors を SurfaceDefaults.colors に変更
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(
                 containerColor = colors.surface,
                 contentColor = colors.textPrimary
             ),
@@ -861,7 +942,6 @@ fun UpdateDialog(
     }
 }
 
-// ★追加: アプリ内アップデーター用プログレスバナー（画面右下）
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun UpdateProgressBanner(
@@ -870,12 +950,13 @@ fun UpdateProgressBanner(
 ) {
     val colors = KomorebiTheme.colors
     val isReady = updateState is UpdateState.ReadyToInstall
-    val progress = if (updateState is UpdateState.Downloading) updateState.progressPercentage else 100
+    val progress =
+        if (updateState is UpdateState.Downloading) updateState.progressPercentage else 100
 
     Surface(
         modifier = modifier.width(280.dp),
-        shape = RoundedCornerShape(8.dp), // ★修正: ClickableSurfaceDefaults.shape を削除
-        colors = SurfaceDefaults.colors(    // ★修正: NonInteractiveSurfaceDefaults.colors を SurfaceDefaults.colors に変更
+        shape = RoundedCornerShape(8.dp),
+        colors = SurfaceDefaults.colors(
             containerColor = colors.surface.copy(alpha = 0.95f),
             contentColor = colors.textPrimary
         )
@@ -901,7 +982,10 @@ fun UpdateProgressBanner(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(4.dp)
-                        .background(colors.textSecondary.copy(alpha = 0.2f), RoundedCornerShape(2.dp))
+                        .background(
+                            colors.textSecondary.copy(alpha = 0.2f),
+                            RoundedCornerShape(2.dp)
+                        )
                 ) {
                     Box(
                         modifier = Modifier

@@ -53,6 +53,8 @@ class MainRootState {
     var showConnectionErrorDialog by mutableStateOf(false)
     var hasAppliedStartupTab by mutableStateOf(false)
 
+    var editingCondition by mutableStateOf<ReservationCondition?>(null)
+
     // ★追加: 戻るボタンの連打ガード
     private var lastBackPressTime by mutableLongStateOf(0L)
     fun canProcessBackPress(): Boolean {

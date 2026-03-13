@@ -79,4 +79,35 @@ interface KonomiApi {
     // 予約削除
     @DELETE("api/recording/reservations/{reservation_id}")
     suspend fun deleteReservation(@Path("reservation_id") reservationId: Int): Response<Unit>
+
+    // =================================================================================
+    // キーワード自動予約条件 (EPG予約) 関連 API
+    // =================================================================================
+
+    // 1. 自動予約条件の一覧取得
+    @GET("api/recording/conditions")
+    suspend fun getReservationConditions(): ReservationConditionsResponse
+
+    // 2. 自動予約条件の新規登録 (成功時は 201 Created が返る)
+    @POST("api/recording/conditions")
+    suspend fun addReservationCondition(@Body request: ReservationConditionAddRequest): Response<Unit>
+
+    // 3. 自動予約条件の個別取得
+    @GET("api/recording/conditions/{reservation_condition_id}")
+    suspend fun getReservationCondition(
+        @Path("reservation_condition_id") conditionId: Int
+    ): ReservationCondition
+
+    // 4. 自動予約条件の更新 (更新後のデータがそのまま返ってくる仕様)
+    @PUT("api/recording/conditions/{reservation_condition_id}")
+    suspend fun updateReservationCondition(
+        @Path("reservation_condition_id") conditionId: Int,
+        @Body request: ReservationConditionUpdateRequest
+    ): ReservationCondition
+
+    // 5. 自動予約条件の削除 (成功時は 204 No Content が返る)
+    @DELETE("api/recording/conditions/{reservation_condition_id}")
+    suspend fun deleteReservationCondition(
+        @Path("reservation_condition_id") conditionId: Int
+    ): Response<Unit>
 }

@@ -3,7 +3,7 @@
 package com.beeregg2001.komorebi.ui.epg
 
 import android.os.Build
-import androidx.activity.compose.BackHandler // ★追加
+import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -33,6 +33,8 @@ import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.reserve.EpgReserveDialog
+import com.beeregg2001.komorebi.util.TitleNormalizer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -53,6 +55,7 @@ fun ProgramDetailScreen(
     onPlayClick: (EpgProgram) -> Unit = {},
     onRecordClick: (EpgProgram) -> Unit = {},
     onRecordDetailClick: (EpgProgram) -> Unit = {},
+    onEpgReserveClick: (program: EpgProgram, keyword: String, daysOfWeek: Set<Int>, startHour: Int, startMin: Int, endHour: Int, endMin: Int) -> Unit = { _, _, _, _, _, _, _ -> },
     onEditReserveClick: (EpgProgram) -> Unit = {},
     onDeleteReserveClick: (EpgProgram) -> Unit = {},
     onBackClick: () -> Unit,
@@ -77,9 +80,15 @@ fun ProgramDetailScreen(
 
     val recordRed = Color(0xFFC62828)
     val recordDarkRed = Color(0xFF421C1C)
+    val seriesReserveOrange = Color(0xFFE65100)
 
     var isReady by remember { mutableStateOf(false) }
     var isClickEnabled by remember { mutableStateOf(false) }
+    var showEpgReserveDialog by remember { mutableStateOf(false) }
+
+    // ★追加: 「連ドラ予約する」ボタンにフォーカスを戻すための Requester
+    val epgReserveButtonRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(program) {
         isClickEnabled = false
@@ -91,9 +100,17 @@ fun ProgramDetailScreen(
         isClickEnabled = true
     }
 
-    // ★追加: 詳細画面表示中の「戻るキー」を確実にキャッチし、背後の画面への誤爆を防ぐ
     BackHandler(enabled = isClickEnabled) {
-        onBackClick()
+        if (showEpgReserveDialog) {
+            showEpgReserveDialog = false
+            // ★修正: 戻るキーでキャンセルした際にもボタンにフォーカスを戻す
+            coroutineScope.launch {
+                delay(100)
+                epgReserveButtonRequester.safeRequestFocus("ProgramDetail")
+            }
+        } else {
+            onBackClick()
+        }
     }
 
     Box(
@@ -107,10 +124,7 @@ fun ProgramDetailScreen(
                 .fillMaxSize()
                 .background(
                     Brush.linearGradient(
-                        colors = listOf(
-                            colors.surface,
-                            colors.background
-                        )
+                        colors = listOf(colors.surface, colors.background)
                     )
                 )
         )
@@ -131,16 +145,20 @@ fun ProgramDetailScreen(
                     Button(
                         onClick = { if (isClickEnabled) onEditReserveClick(program) },
                         colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(
-                                alpha = 0.1f
-                            ), contentColor = colors.textPrimary
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(initialFocusRequester)
                     ) {
-                        Text("予約設定変更", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                        Text(
+                            "予約設定変更",
+                            fontFamily = NotoSansJP,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
+
                     Button(
                         onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
                         colors = ButtonDefaults.colors(
@@ -148,9 +166,7 @@ fun ProgramDetailScreen(
                             contentColor = Color.White
                         ),
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
-                    }
+                    ) { Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold) }
                 } else {
                     if (isBroadcasting) {
                         Button(
@@ -163,7 +179,11 @@ fun ProgramDetailScreen(
                                 contentColor = if (colors.isDark) Color.Black else Color.White
                             )
                         ) {
-                            Text("視聴する", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold)
+                            Text(
+                                "視聴する",
+                                fontFamily = NotoSansJP,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
                         if (isReserved) {
@@ -212,15 +232,30 @@ fun ProgramDetailScreen(
                                 )
                             }
                             Button(
+                                onClick = { if (isClickEnabled) showEpgReserveDialog = true },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = seriesReserveOrange,
+                                    contentColor = Color.White
+                                ),
+                                // ★修正: フォーカスリクエスターを付与
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(epgReserveButtonRequester)
+                            ) {
+                                Text(
+                                    "EPG予約する",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
                                 colors = ButtonDefaults.colors(
                                     containerColor = recordDarkRed,
                                     contentColor = Color.White
                                 ),
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("録画する（詳細設定）", fontFamily = NotoSansJP)
-                            }
+                            ) { Text("録画する（詳細設定）", fontFamily = NotoSansJP) }
                         }
 
                     } else if (isFuture) {
@@ -274,15 +309,30 @@ fun ProgramDetailScreen(
                                 )
                             }
                             Button(
+                                onClick = { if (isClickEnabled) showEpgReserveDialog = true },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = seriesReserveOrange,
+                                    contentColor = Color.White
+                                ),
+                                // ★修正: フォーカスリクエスターを付与
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(epgReserveButtonRequester)
+                            ) {
+                                Text(
+                                    "連ドラ予約する",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Button(
                                 onClick = { if (isClickEnabled) onRecordDetailClick(program) },
                                 colors = ButtonDefaults.colors(
                                     containerColor = recordDarkRed,
                                     contentColor = Color.White
                                 ),
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("録画予約（詳細設定）", fontFamily = NotoSansJP)
-                            }
+                            ) { Text("録画予約（詳細設定）", fontFamily = NotoSansJP) }
                         }
                     } else {
                         Button(
@@ -325,15 +375,12 @@ fun ProgramDetailScreen(
                         border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.5f))),
                         focusedBorder = Border(BorderStroke(2.dp, colors.accent))
                     )
-                ) {
-                    Text("戻る", fontFamily = NotoSansJP)
-                }
+                ) { Text("戻る", fontFamily = NotoSansJP) }
             }
 
             Spacer(modifier = Modifier.width(56.dp))
 
             val scrollState = rememberScrollState()
-            val coroutineScope = rememberCoroutineScope()
 
             Column(
                 modifier = Modifier
@@ -401,6 +448,26 @@ fun ProgramDetailScreen(
                 }
                 Spacer(modifier = Modifier.height(60.dp))
             }
+        }
+
+        if (showEpgReserveDialog) {
+            EpgReserveDialog(
+                initialKeyword = TitleNormalizer.extractDisplayTitle(program.title),
+                initialStartTime = startTime,
+                initialEndTime = endTime,
+                onConfirm = { keyword, daysOfWeek, sH, sM, eH, eM ->
+                    showEpgReserveDialog = false
+                    onEpgReserveClick(program, keyword, daysOfWeek, sH, sM, eH, eM)
+                },
+                onDismiss = {
+                    showEpgReserveDialog = false
+                    // ★修正: キャンセルボタンで閉じた際もボタンにフォーカスを戻す
+                    coroutineScope.launch {
+                        delay(100)
+                        epgReserveButtonRequester.safeRequestFocus("ProgramDetail")
+                    }
+                }
+            )
         }
     }
 }
