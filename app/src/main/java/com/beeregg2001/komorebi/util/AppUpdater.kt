@@ -41,7 +41,7 @@ class AppUpdater @Inject constructor(
     private val client = OkHttpClient()
 
     // ★ご自身のGitHubのversion.jsonのRaw URLに書き換えてください
-    private val versionJsonUrl = "https://raw.githubusercontent.com/BeerEgg2001/Komorebi/features/main/version.json"
+    private val versionJsonUrl = "https://raw.githubusercontent.com/BeerEgg2001/Komorebi/main/version.json"
 
     suspend fun checkForUpdates() = withContext(Dispatchers.IO) {
         _updateState.value = UpdateState.Checking
