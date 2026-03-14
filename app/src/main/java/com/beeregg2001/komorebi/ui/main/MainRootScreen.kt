@@ -8,6 +8,7 @@ import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,8 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -135,11 +138,7 @@ fun MainRootScreen(
 
     LaunchedEffect(state.isRecordListOpen) {
         if (state.isRecordListOpen) {
-            // ★修正: DB構築中（isInitialBuild=true）または辞書構築の初期フェーズ中は
-            // smartSync を呼ばない。二重起動してクラッシュループの原因になる。
-            if (!syncProgress.isSyncing || (!syncProgress.isInitialBuild && !syncProgress.isInitialSyncPhase)) {
-                recordViewModel.triggerSmartSync()
-            }
+            recordViewModel.triggerSmartSync()
         }
     }
 
@@ -173,9 +172,7 @@ fun MainRootScreen(
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
-            // ★追加: 詳細画面（Read Only）を閉じる処理
             state.selectedConditionReserveItem != null -> state.selectedConditionReserveItem = null
-
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
             state.reserveToDelete != null -> state.reserveToDelete = null
@@ -368,7 +365,7 @@ fun MainRootScreen(
                                 onConfirmUpdate = { isEnabled, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
                                     reserveViewModel.updateEpgReserve(
                                         originalCondition = currentCondition,
-                                        isEnabled = isEnabled, // ★追加
+                                        isEnabled = isEnabled,
                                         keyword = keyword,
                                         daysOfWeek = daysOfWeek,
                                         startHour = startH,
@@ -407,7 +404,6 @@ fun MainRootScreen(
                                     )
                                 },
                                 onDismiss = { state.editingCondition = null },
-                                // ★追加: リストアイテムクリックで詳細画面を開く
                                 onReserveItemClick = { state.selectedConditionReserveItem = it }
                             )
                         }
@@ -536,15 +532,13 @@ fun MainRootScreen(
                 }
             }
 
-            // ★新規追加: 条件編集から開かれた番組詳細画面（ReadOnlyモード）
             if (state.selectedConditionReserveItem != null) {
-                val program =
-                    remember(state.selectedConditionReserveItem) { ReserveMapper.toEpgProgram(state.selectedConditionReserveItem!!) }
+                val program = remember(state.selectedConditionReserveItem) { ReserveMapper.toEpgProgram(state.selectedConditionReserveItem!!) }
                 ProgramDetailScreen(
                     program = program,
                     mode = ProgramDetailMode.RESERVE,
                     isReserved = true,
-                    isReadOnly = true, // ★戻るボタンのみ表示
+                    isReadOnly = true,
                     onBackClick = { state.selectedConditionReserveItem = null },
                     initialFocusRequester = detailFocusRequester
                 )
@@ -605,17 +599,14 @@ fun MainRootScreen(
                             }
                         }
                     },
-                    // ★修正: 引数が大幅に増えたコールバックに対応し、ViewModelへパスする
                     onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
-                        val channel =
-                            groupedChannels.values.flatten().find { it.id == program.channel_id }
+                        val channel = groupedChannels.values.flatten().find { it.id == program.channel_id }
                         var tsId = channel?.transportStreamId?.toInt()
 
                         if (tsId == null || tsId == 0) {
                             val epgState = epgViewModel.uiState
                             if (epgState is EpgUiState.Success) {
-                                val epgChannel =
-                                    epgState.data.find { it.channel.id == program.channel_id }?.channel
+                                val epgChannel = epgState.data.find { it.channel.id == program.channel_id }?.channel
                                 tsId = epgChannel?.transport_stream_id?.toInt()
                             }
                         }
@@ -632,7 +623,6 @@ fun MainRootScreen(
                             startMinute = startM,
                             endHour = endH,
                             endMinute = endM,
-                            // ★追加: 詳細設定を全て渡す
                             excludeKeyword = exc,
                             isTitleOnly = tOnly,
                             broadcastType = bType,
@@ -645,8 +635,7 @@ fun MainRootScreen(
                                 scope.launch {
                                     state.epgSelectedProgram = null
                                     delay(300)
-                                    state.toastMessage =
-                                        "EPG予約 (キーワード自動予約) を登録しました"
+                                    state.toastMessage = "EPG予約 (キーワード自動予約) を登録しました"
                                 }
                             }
                         )
@@ -759,9 +748,10 @@ fun MainRootScreen(
                     })
             }
 
+            // ★修正: フォーカス強奪を完全に防ぐ堅牢なアップデートダイアログを使用
             if (updateState is UpdateState.UpdateAvailable) {
                 val available = updateState as UpdateState.UpdateAvailable
-                UpdateDialog(
+                RobustUpdateDialog(
                     versionName = available.versionName,
                     releaseNotes = available.releaseNotes,
                     onConfirm = { homeViewModel.startUpdateDownload(available.apkUrl) },
@@ -781,6 +771,122 @@ fun MainRootScreen(
             }
 
             GlobalToast(message = state.toastMessage)
+        }
+    }
+}
+
+// ★新規追加: 裏画面のフォーカス強奪を防ぐ防衛ループ付きダイアログ
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun RobustUpdateDialog(
+    versionName: String,
+    releaseNotes: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val confirmRequester = remember { FocusRequester() }
+    var isDialogFocused by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        delay(300)
+        runCatching { confirmRequester.requestFocus() }
+    }
+
+    // 裏画面(HomeLauncher等)が遅れてフォーカスを奪った際に、即座にダイアログへ取り返すループ
+    LaunchedEffect(isDialogFocused) {
+        if (!isDialogFocused) {
+            delay(150)
+            runCatching { confirmRequester.requestFocus() }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f))
+            .zIndex(1000f) // 最前面に配置
+            .focusGroup()
+            .focusProperties { exit = { FocusRequester.Cancel } }
+            .onFocusChanged { isDialogFocused = it.hasFocus },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier.width(500.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "アップデートのお知らせ",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "バージョン $versionName が利用可能です。",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                        .background(colors.textPrimary.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = releaseNotes,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textSecondary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        scale = ButtonDefaults.scale(focusedScale = 1.05f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary,
+                            focusedContainerColor = colors.textPrimary,
+                            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+                        )
+                    ) { Text("後で", fontWeight = FontWeight.Bold) }
+
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(confirmRequester),
+                        scale = ButtonDefaults.scale(focusedScale = 1.05f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White,
+                            focusedContainerColor = colors.textPrimary,
+                            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+                        )
+                    ) { Text("ダウンロード", fontWeight = FontWeight.Bold) }
+                }
+            }
         }
     }
 }
