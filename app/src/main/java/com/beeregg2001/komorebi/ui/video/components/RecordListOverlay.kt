@@ -56,11 +56,11 @@ fun RecordListOverlay(
     onGenreSelect: (String?) -> Unit,
     onChannelSelect: (String?) -> Unit,
     onDaySelect: (String?) -> Unit,
-    onSeriesGenreSelect: (String?) -> Unit
+    onSeriesGenreSelect: (String?) -> Unit,
+    onRightKeyFromNav: () -> Unit = {} // ★追加
 ) {
     val colors = KomorebiTheme.colors
 
-    // ★自律回収: 第2階層が開いて準備ができたらチケット回収
     LaunchedEffect(
         ticketManager.currentTicket,
         ticketManager.issueTime,
@@ -120,6 +120,7 @@ fun RecordListOverlay(
                 isOverlay = true,
                 navPaneFocusRequester = focuses.navPane,
                 ticketManager = ticketManager,
+                onRightKeyFromNav = onRightKeyFromNav, // ★
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusProperties {
@@ -128,20 +129,8 @@ fun RecordListOverlay(
                             menuState.isChannelPaneOpen -> focuses.channelPane
                             menuState.isDayPaneOpen -> focuses.dayPane
                             menuState.isSeriesGenrePaneOpen -> focuses.seriesGenrePane
-                            else -> FocusRequester.Cancel
+                            else -> FocusRequester.Cancel // ★完全に標準移動をブロック
                         }
-                    }
-                    .onKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown) {
-                            if (event.key == Key.DirectionRight && !menuState.isPaneOpen) {
-                                menuState.isNavPaneOpen =
-                                    false; focuses.contentContainer.safeRequestFocus(); return@onKeyEvent true
-                            } else if (event.key == Key.Back || event.key == Key.Escape) {
-                                menuState.isNavPaneOpen =
-                                    false; focuses.contentContainer.safeRequestFocus(); return@onKeyEvent true
-                            }
-                        }
-                        false
                     }
             )
         }
@@ -274,8 +263,7 @@ fun RecordListOverlay(
                 isOverlay = false,
                 navPaneFocusRequester = focuses.navPane,
                 ticketManager = ticketManager,
-                contentContainerFocusRequester = focuses.contentContainer, // ★追加: コンテナの的
-                firstItemFocusRequester = focuses.firstItem,               // ★追加: 先頭アイテムの的
+                onRightKeyFromNav = onRightKeyFromNav, // ★
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusProperties {
@@ -284,8 +272,7 @@ fun RecordListOverlay(
                             menuState.isChannelPaneOpen -> focuses.channelPane
                             menuState.isDayPaneOpen -> focuses.dayPane
                             menuState.isSeriesGenrePaneOpen -> focuses.seriesGenrePane
-                            hasContent -> focuses.firstItem
-                            else -> FocusRequester.Cancel
+                            else -> FocusRequester.Cancel // ★完全に標準移動をブロック
                         }
                     }
             )

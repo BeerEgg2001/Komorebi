@@ -20,13 +20,24 @@ import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 
 @Composable
 fun GeneralSettingsContent(
+    totalRecordCount: Int, // ★追加
+    lastSyncedAt: Long, // ★追加
+    onForceSync: () -> Unit, // ★追加
     onClearChannel: () -> Unit,
     onClearHistory: () -> Unit,
+    dbInfoR: FocusRequester, // ★追加
+    forceSyncR: FocusRequester, // ★追加
     clearChannelR: FocusRequester,
     clearHistoryR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
+    // ★追加: 日時のフォーマット
+    val dateFormat =
+        remember { java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault()) }
+    val lastSyncStr =
+        if (lastSyncedAt > 0L) dateFormat.format(java.util.Date(lastSyncedAt)) else "未同期"
+
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
             AppStrings.SETTINGS_CATEGORY_GENERAL,
@@ -34,6 +45,29 @@ fun GeneralSettingsContent(
             color = KomorebiTheme.colors.textPrimary,
             fontWeight = FontWeight.Bold
         )
+
+        // ★追加: データベース情報セクション
+        SettingsSection("データベース情報") {
+            SettingItem(
+                title = "ローカル保存件数",
+                value = "$totalRecordCount 件",
+                icon = Icons.Default.Storage,
+                modifier = Modifier
+                    .focusRequester(dbInfoR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(dbInfoR) }
+            )
+            SettingItem(
+                title = "手動でフル同期を実行",
+                value = "最終同期: $lastSyncStr",
+                icon = Icons.Default.CloudSync,
+                modifier = Modifier
+                    .focusRequester(forceSyncR)
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(forceSyncR); onForceSync() }
+            )
+        }
+
         SettingsSection(AppStrings.SETTINGS_SECTION_DATA_MANAGEMENT) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_CLEAR_CHANNEL_HISTORY,
@@ -55,7 +89,7 @@ fun GeneralSettingsContent(
     }
 }
 
-// ★追加: 録画設定コンテンツ
+// 録画設定コンテンツ
 @Composable
 fun RecordingSettingsContent(
     batchList: List<PostRecordingBatch>,
@@ -75,7 +109,7 @@ fun RecordingSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        SettingsSection("録画後実行batの設定") {
+        SettingsSection("録画後実行バッチの設定") {
             SettingItem(
                 title = "新しいバッチを追加",
                 value = "",
@@ -515,27 +549,27 @@ fun LabSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        SettingsSection("AI強化正規化 (アルファ版)") {
-            SettingItem(
-                "AIによるシリーズ名正規化",
-                enableAi,
-                Icons.Default.AutoAwesome,
-                modifier = Modifier
-                    .focusRequester(enableAiR)
-                    .focusProperties { left = sidebarR },
-                onClick = { onClick(enableAiR); onToggleAi() }
-            )
-            SettingItem(
-                "Gemini API Key",
-                if (apiKey.isEmpty()) "未設定" else "設定済み",
-                Icons.Default.VpnKey,
-                enabled = enableAi == "ON",
-                modifier = Modifier
-                    .focusRequester(apiKeyR)
-                    .focusProperties { left = sidebarR },
-                onClick = { onClick(apiKeyR); onEditApiKey() }
-            )
-        }
+//        SettingsSection("AI強化正規化 (アルファ版)") {
+//            SettingItem(
+//                "AIによるシリーズ名正規化",
+//                enableAi,
+//                Icons.Default.AutoAwesome,
+//                modifier = Modifier
+//                    .focusRequester(enableAiR)
+//                    .focusProperties { left = sidebarR },
+//                onClick = { onClick(enableAiR); onToggleAi() }
+//            )
+//            SettingItem(
+//                "Gemini API Key",
+//                if (apiKey.isEmpty()) "未設定" else "設定済み",
+//                Icons.Default.VpnKey,
+//                enabled = enableAi == "ON",
+//                modifier = Modifier
+//                    .focusRequester(apiKeyR)
+//                    .focusProperties { left = sidebarR },
+//                onClick = { onClick(apiKeyR); onEditApiKey() }
+//            )
+//        }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_EXTERNAL_INTEGRATION) {
             SettingItem(
@@ -555,16 +589,16 @@ fun LabSettingsContent(
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(shobocalR); onShobocal() })
         }
-        SettingsSection(AppStrings.SETTINGS_SECTION_RECORD_DETAIL) {
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_POST_COMMAND,
-                postCmd.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
-                Icons.Default.Terminal,
-                modifier = Modifier
-                    .focusRequester(cmdR)
-                    .focusProperties { left = sidebarR },
-                onClick = { onClick(cmdR); onEditCmd() })
-        }
+//        SettingsSection(AppStrings.SETTINGS_SECTION_RECORD_DETAIL) {
+//            SettingItem(
+//                AppStrings.SETTINGS_ITEM_POST_COMMAND,
+//                postCmd.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+//                Icons.Default.Terminal,
+//                modifier = Modifier
+//                    .focusRequester(cmdR)
+//                    .focusProperties { left = sidebarR },
+//                onClick = { onClick(cmdR); onEditCmd() })
+//        }
     }
 }
 
@@ -587,7 +621,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.7.0 beta",
+            "Version 0.8.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

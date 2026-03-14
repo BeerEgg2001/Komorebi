@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -14,7 +15,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-// ★追加: バッチ設定用のデータモデル
+// バッチ設定用のデータモデル
 data class PostRecordingBatch(
     val name: String,
     val path: String
@@ -23,10 +24,18 @@ data class PostRecordingBatch(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val syncEngine: RecordSyncEngine
+    private val syncEngine: RecordSyncEngine,
+    private val db: AppDatabase
 ) : ViewModel() {
 
     private val gson = Gson()
+
+    val totalRecordCount: StateFlow<Int> = db.recordedProgramDao().getTotalCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val lastSyncedAt: StateFlow<Long> = db.syncMetaDao().getSyncMetaFlow()
+        .map { it?.lastSyncedAt ?: 0L }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -74,7 +83,6 @@ class SettingsViewModel @Inject constructor(
     val defaultPostCommand: StateFlow<String> = settingsRepository.defaultPostCommand
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
-    // ★追加: バッチリストの取得
     val postRecordingBatchList: StateFlow<List<PostRecordingBatch>> =
         settingsRepository.postRecordingBatchList
             .map { json ->
@@ -103,9 +111,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val oldIp = konomiIp.value
             settingsRepository.saveString(SettingsRepository.KONOMI_IP, ip)
-            if (oldIp != ip && oldIp.isNotBlank()) {
-                syncEngine.clearDatabase()
-                syncEngine.syncAllRecords(forceFullSync = true)
+            // ★修正: アプリ起動時に "" やデフォルト値から読み込まれた際はトリガーしない
+            val isDefault = oldIp == "" || oldIp == "https://192-168-xxx-xxx.local.konomi.tv"
+            if (oldIp != ip && !isDefault) {
+                // ★修正: viewModelScopeから直接呼ばず、Engine側の独立スコープを必ず経由させる
+                syncEngine.launchSyncAllRecords(forceFullSync = true)
             }
         }
     }
@@ -114,14 +124,21 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val oldPort = konomiPort.value
             settingsRepository.saveString(SettingsRepository.KONOMI_PORT, port)
-            if (oldPort != port && oldPort.isNotBlank()) {
-                syncEngine.clearDatabase()
-                syncEngine.syncAllRecords(forceFullSync = true)
+            // ★修正: こちらも同様に起動時の誤爆を防ぐ
+            val isDefault = oldPort == "" || oldPort == "7000"
+            if (oldPort != port && !isDefault) {
+                syncEngine.launchSyncAllRecords(forceFullSync = true)
             }
         }
     }
 
-    // ★追加: バッチの追加
+    fun triggerFullSync() {
+        viewModelScope.launch {
+            // ★修正: 直接呼ばず、必ずEngineの管理下で起動させる
+            syncEngine.launchSyncAllRecords(forceFullSync = true)
+        }
+    }
+
     fun addPostRecordingBatch(name: String, path: String) {
         viewModelScope.launch {
             val newList = postRecordingBatchList.value.toMutableList().apply {
@@ -134,7 +151,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★追加: バッチの削除
     fun deletePostRecordingBatch(batch: PostRecordingBatch) {
         viewModelScope.launch {
             val newList = postRecordingBatchList.value.toMutableList().apply {

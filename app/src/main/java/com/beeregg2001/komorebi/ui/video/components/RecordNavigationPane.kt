@@ -8,7 +8,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -29,8 +28,8 @@ fun RecordNavigationPane(
     isOverlay: Boolean,
     navPaneFocusRequester: FocusRequester,
     ticketManager: FocusTicketManager,
-    contentContainerFocusRequester: FocusRequester? = null,
-    firstItemFocusRequester: FocusRequester? = null,
+    // ★追加: ペインから右に戻る際の外部ロジック
+    onRightKeyFromNav: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
@@ -70,21 +69,8 @@ fun RecordNavigationPane(
                         .then(if (index == 0) Modifier.padding(top = 0.dp) else Modifier)
                         .focusRequester(categoryRequesters[category] ?: FocusRequester()),
                     onClick = { onCategorySelect(category) },
-                    onRightKey = {
-                        // ★「透明コンテナの罠」回避ロジック（狙撃順序の逆転：例外キャッチ版）
-                        try {
-                            // 1. まず先頭アイテムを直接狙う（スクロールされていなければ確実に当たる）
-                            firstItemFocusRequester?.requestFocus()
-                        } catch (e: Exception) {
-                            // 2. 失敗した場合、それは「スクロールされて先頭が見えない」状態。
-                            // この時は履歴が残っているはずなので、コンテナへ任せる！
-                            try {
-                                contentContainerFocusRequester?.requestFocus()
-                            } catch (e2: Exception) {
-                                // どちらもダメなら無視
-                            }
-                        }
-                    }
+                    // ★修正: 内部で直接 requestFocus せず、外部に委譲する
+                    onRightKey = onRightKeyFromNav
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }

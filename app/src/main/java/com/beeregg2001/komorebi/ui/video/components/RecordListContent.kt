@@ -7,8 +7,8 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -37,6 +37,7 @@ import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
@@ -69,7 +70,10 @@ fun RecordListContent(
     onFetchDetail: (Int) -> Unit = {},
     onClearDetail: () -> Unit = {},
     onFirstItemBound: (Boolean) -> Unit = {},
-    onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
+    onFocusedItemChanged: (RecordedProgram?) -> Unit = {},
+    onOpenNavPane: () -> Unit = {},
+    // TopBar の下キー時に使うべき FocusRequester を親へ通知。先頭可視アイテムが変わるたびに呼ばれる。
+    onTopBarDownRequesterChanged: (FocusRequester) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
@@ -88,6 +92,37 @@ fun RecordListContent(
     val menuTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
     val isScrollInProgress = listState.isScrollInProgress
+
+    // 先頭可視アイテムが変わるたびに、TopBar の下キー用 requester を親に通知する。
+    // listState.firstVisibleItemIndex が変わると再実行され、対応する specificRequester を返す。
+    // itemFocusRequesters はアイテムが描画されるたびに埋まるため、
+    // 先頭アイテムが画面に入った直後は null になる可能性があるが、その場合は firstItemFocusRequester にフォールバック。
+    val firstVisibleItemIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+    LaunchedEffect(firstVisibleItemIndex, pagedRecordings.itemCount) {
+        val firstVisibleId = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key as? Int
+        val requester = if (firstVisibleId != null) {
+            itemFocusRequesters[firstVisibleId] ?: firstItemFocusRequester
+        } else {
+            firstItemFocusRequester
+        }
+        onTopBarDownRequesterChanged(requester)
+    }
+
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
+            val targetId = ticketManager.targetProgramId
+            val index = (0 until pagedRecordings.itemCount).firstOrNull {
+                pagedRecordings.peek(it)?.id == targetId
+            }
+            if (index != null) {
+                listState.scrollToItem(maxOf(0, index - 1))
+            } else {
+                listState.scrollToItem(0)
+            }
+        } else if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
+            listState.scrollToItem(0)
+        }
+    }
 
     LaunchedEffect(pagedRecordings.itemCount) {
         if (pagedRecordings.itemCount == 0) focusedProgram = null
@@ -114,7 +149,6 @@ fun RecordListContent(
                 .fillMaxSize()
                 .focusRequester(contentContainerFocusRequester)
                 .focusGroup()
-                .focusRestorer()
                 .focusProperties { canFocus = !isAnyMenuOpen }
                 .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
         ) {
@@ -129,6 +163,14 @@ fun RecordListContent(
                     val specificRequester =
                         itemFocusRequesters.getOrPut(program.id) { FocusRequester() }
 
+                    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+                        val ticket = ticketManager.currentTicket
+                        if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
+                            specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID")
+                            ticketManager.consume(FocusTicket.TARGET_ID)
+                        }
+                    }
+
                     RecordListItem(
                         program = program, konomiIp = konomiIp, konomiPort = konomiPort,
                         onClick = { onProgramClick(program, null) },
@@ -137,6 +179,9 @@ fun RecordListContent(
                         modifier = Modifier
                             .focusRequester(specificRequester)
                             .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                            .focusProperties {
+                                left = FocusRequester.Cancel; right = FocusRequester.Cancel
+                            }
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     if (!isSideMenuOpen && !isDetailVisible) {
@@ -148,9 +193,10 @@ fun RecordListContent(
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     if (event.key == Key.DirectionRight) {
-                                        if (!isScrollInProgress) {
-                                            isSideMenuOpen = true
-                                        }
+                                        if (!isScrollInProgress) isSideMenuOpen = true
+                                        return@onKeyEvent true
+                                    } else if (event.key == Key.DirectionLeft) {
+                                        if (!isScrollInProgress) onOpenNavPane()
                                         return@onKeyEvent true
                                     }
                                     if (event.key == Key.Back || event.key == Key.Escape) {
@@ -160,19 +206,6 @@ fun RecordListContent(
                                 false
                             }
                     )
-
-                    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
-                        val ticket = ticketManager.currentTicket
-                        if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
-                            delay(100)
-                            specificRequester.safeRequestFocus("Ticket_TARGET_ID")
-                            ticketManager.consume(FocusTicket.TARGET_ID)
-                        } else if (ticket == FocusTicket.LIST_TOP && index == 0) {
-                            delay(100)
-                            firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP")
-                            ticketManager.consume(FocusTicket.LIST_TOP)
-                        }
-                    }
                 }
             }
         }
@@ -203,6 +236,7 @@ fun RecordListContent(
                     .focusRequester(menuAnchorRequester)
                     .focusable()
                     .focusGroup()
+                    .focusProperties { left = FocusRequester.Cancel }
                     .onKeyEvent { event ->
                         if (!menuTransitionState.isIdle) return@onKeyEvent true
 
@@ -217,13 +251,13 @@ fun RecordListContent(
                                     onClearDetail()
                                     scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
                                 } else {
-                                    val id = focusedProgram?.id
-                                    if (id != null && itemFocusRequesters.containsKey(id)) {
-                                        itemFocusRequesters[id]?.safeRequestFocus()
-                                    } else {
-                                        contentContainerFocusRequester.safeRequestFocus()
-                                    }
                                     isSideMenuOpen = false
+                                    val id = focusedProgram?.id
+                                    if (id != null) {
+                                        ticketManager.issue(FocusTicket.TARGET_ID, id)
+                                    } else {
+                                        ticketManager.issue(FocusTicket.LIST_TOP)
+                                    }
                                 }
                                 return@onKeyEvent true
                             }
@@ -318,7 +352,6 @@ fun RecordListContent(
                                     },
                                     onClick = {
                                         focusedProgram?.let {
-                                            // ★修正: extractSearchKeyword の代わりに直接抽出する
                                             val displayTitle =
                                                 TitleNormalizer.extractDisplayTitle(it.title)
                                             val keyword =

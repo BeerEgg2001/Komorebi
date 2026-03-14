@@ -11,7 +11,9 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import androidx.paging.map
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.local.dao.ChannelProjection
 import com.beeregg2001.komorebi.data.local.dao.RecordedProgramDao
+import com.beeregg2001.komorebi.data.local.dao.SeriesProjection
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -130,8 +132,17 @@ class RecordViewModel @Inject constructor(
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
 
+    // 詳細データ取得APIの連打防止用Job
+    private var detailFetchJob: Job? = null
+
+    fun clearSyncError() {
+        syncEngine.clearError()
+    }
+
     fun fetchProgramDetail(videoId: Int) {
-        viewModelScope.launch(Dispatchers.IO) {
+        detailFetchJob?.cancel()
+        detailFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(300) // 0.3秒フォーカスが留まったらAPIを叩く
             repository.getRecordedProgram(videoId).onSuccess {
                 _programDetail.value = it
             }.onFailure { Log.e(TAG, "Failed to fetch program detail", it) }
@@ -154,18 +165,19 @@ class RecordViewModel @Inject constructor(
         loadSearchHistory()
 
         viewModelScope.launch(Dispatchers.IO) {
-            programDao.getAllProgramsFlow()
-                .debounce(500L)
-                .collect { programs ->
-                    if (programs.isNotEmpty()) {
-                        buildSeriesAndChannelMapsFromEntities(programs)
+            syncEngine.syncProgress.map { it.isSyncing }.distinctUntilChanged()
+                .collect { isSyncing ->
+                    if (!isSyncing) {
+                        val seriesList = programDao.getGroupedSeries()
+                        val channelsList = programDao.getDistinctChannels()
+                        if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
+                            buildSeriesAndChannelMaps(seriesList, channelsList)
+                        }
                     }
                 }
         }
 
-        viewModelScope.launch {
-            syncEngine.syncAllRecords()
-        }
+        syncEngine.launchSyncAllRecords()
     }
 
     fun handleBackNavigation(onExit: () -> Unit) {
@@ -177,7 +189,7 @@ class RecordViewModel @Inject constructor(
     }
 
     fun triggerSmartSync() {
-        viewModelScope.launch { syncEngine.smartSync() }
+        syncEngine.launchSmartSync()
     }
 
     val pagedRecordings: Flow<PagingData<RecordedProgram>> = combine(
@@ -185,42 +197,53 @@ class RecordViewModel @Inject constructor(
     ) { category, channelId, genre, day, query ->
         FilterState(category, channelId, genre, day, query)
     }.flatMapLatest { state ->
-        Pager(
-            config = PagingConfig(
-                pageSize = 30,
-                prefetchDistance = 10,
-                initialLoadSize = 20,
-                enablePlaceholders = false
-            )
-        ) {
-            when {
-                state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
-                state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
-                    state.channelId
-                )
+        flow {
+            // ★修正: 検索条件が変わった瞬間に空のPagingDataを流し、UI上の古いリスト（残像）を強制的に消去する
+            // これにより、遷移時に一瞬全件リストが見えてフォーカスが飛ぶバグを完全に防ぎます。
+            emit(PagingData.empty())
+            delay(50) // UIが空リストを描画してフォーカスをリセットする隙を作る
 
-                state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() -> programDao.getPagingSourceByGenre(
-                    state.genre
+            val pager = Pager(
+                config = PagingConfig(
+                    pageSize = 30,
+                    prefetchDistance = 10,
+                    initialLoadSize = 20,
+                    enablePlaceholders = false
                 )
+            ) {
+                when {
+                    state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
+                    state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
+                        state.channelId
+                    )
 
-                state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
-                    val dayOfWeekStr = when (state.day.replace("曜日", "")) {
-                        "日" -> "0"
-                        "月" -> "1"
-                        "火" -> "2"
-                        "水" -> "3"
-                        "木" -> "4"
-                        "金" -> "5"
-                        "土" -> "6"
-                        else -> "0"
+                    state.category == RecordCategory.GENRE && !state.genre.isNullOrEmpty() -> programDao.getPagingSourceByGenre(
+                        state.genre
+                    )
+
+                    state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
+                        val dayOfWeekStr = when (state.day.replace("曜日", "")) {
+                            "日" -> "0"
+                            "月" -> "1"
+                            "火" -> "2"
+                            "水" -> "3"
+                            "木" -> "4"
+                            "金" -> "5"
+                            "土" -> "6"
+                            else -> "0"
+                        }
+                        programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
                     }
-                    programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
-                }
 
-                state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
-                else -> programDao.getAllPagingSource()
+                    state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
+                    else -> programDao.getAllPagingSource()
+                }
             }
-        }.flow.map { pagingData -> pagingData.map { entity -> RecordDataMapper.toDomainModel(entity) } }
+
+            emitAll(pager.flow.map { pagingData ->
+                pagingData.map { entity -> RecordDataMapper.toDomainModel(entity) }
+            })
+        }
     }.cachedIn(viewModelScope)
 
     fun updateListView(isList: Boolean) {
@@ -287,7 +310,7 @@ class RecordViewModel @Inject constructor(
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
-        viewModelScope.launch { syncEngine.syncAllRecords(forceFullSync = forceRefresh) }
+        syncEngine.launchSyncAllRecords(forceFullSync = forceRefresh)
     }
 
     fun loadNextPage() {}
@@ -384,67 +407,22 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
-    private suspend fun buildSeriesAndChannelMapsFromEntities(
-        entities: List<com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity>
+    private suspend fun buildSeriesAndChannelMaps(
+        seriesList: List<SeriesProjection>,
+        channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
-        val allChannelMap =
-            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
-        val genresSet = mutableSetOf<String>()
-
         try {
-            val programs = entities.map { RecordDataMapper.toDomainModel(it) }
-
-            programs.forEach { prog ->
-                val majorGenre = prog.genres?.firstOrNull()?.major ?: "その他"
-                genresSet.add(majorGenre)
-
-                prog.channel?.let { ch ->
-                    val type = if (ch.type == "GR") "地デジ" else ch.type
-                    val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
-                    if (!channelTypeMap.containsKey(ch.id)) {
-                        val safeDisplayId = ch.displayChannelId.takeIf { it.isNotBlank() } ?: ch.id
-                        channelTypeMap[ch.id] = Triple(ch.name, ch.id, safeDisplayId)
-                    }
+            val allChannelMap =
+                mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+            channelsList.forEach { ch ->
+                val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
+                val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+                if (!channelTypeMap.containsKey(ch.channelId)) {
+                    channelTypeMap[ch.channelId] =
+                        Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
                 }
             }
-
-            // DBから取り出したseriesNameをグループ化の軸にする (Nullable対応)
-            val groupedSeriesList =
-                programs.groupBy { it.seriesName ?: "" }.mapNotNull { (seriesName, progList) ->
-                    if (seriesName.isBlank()) return@mapNotNull null
-
-                    val representative = progList.first()
-                    val majorGenre = representative.genres?.firstOrNull()?.major ?: "その他"
-                    val isEpisodic = progList.any { it.isEpisodic == true }
-
-                    val searchKeyword = TitleNormalizer.toSqlSearchQuery(seriesName)
-
-                    Pair(
-                        majorGenre, SeriesInfo(
-                            displayTitle = seriesName,
-                            searchKeyword = searchKeyword,
-                            programCount = progList.size,
-                            representativeVideoId = representative.id,
-                            isEpisodic = isEpisodic
-                        )
-                    )
-                }
-
-            val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
-            groupedSeriesList.forEach { (genre, seriesInfo) ->
-                if (seriesInfo.programCount >= 2 || seriesInfo.isEpisodic) {
-                    val list = finalGroupedSeries.getOrPut(genre) { mutableListOf() }
-                    list.add(seriesInfo)
-                }
-            }
-
-            val filteredGroupedSeries = finalGroupedSeries.mapValues { entry ->
-                entry.value.sortedBy { it.displayTitle }
-            }.filterValues { it.isNotEmpty() }
-
-            _availableGenres.value = genresSet.sorted()
-            _groupedSeries.value = filteredGroupedSeries
 
             val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
             val extractNumber = { idStr: String ->
@@ -456,11 +434,37 @@ class RecordViewModel @Inject constructor(
                 }
                 .associate { entry ->
                     entry.key to entry.value.values.sortedWith(
-                        compareBy(
-                            { extractNumber(it.third) },
-                            { it.third })
+                        compareBy({ extractNumber(it.third) }, { it.third })
                     ).map { Pair(it.first, it.second) }
                 }
+
+            val genresSet = mutableSetOf<String>()
+            val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
+
+            seriesList.forEach { proj ->
+                if (proj.programCount >= 2 || proj.isEpisodic) {
+                    val majorGenre = proj.genres?.firstOrNull()?.major ?: "その他"
+                    genresSet.add(majorGenre)
+
+                    val searchKeyword = TitleNormalizer.toSqlSearchQuery(proj.seriesName)
+
+                    val seriesInfo = SeriesInfo(
+                        displayTitle = proj.seriesName,
+                        searchKeyword = searchKeyword,
+                        programCount = proj.programCount,
+                        representativeVideoId = proj.representativeVideoId,
+                        isEpisodic = proj.isEpisodic
+                    )
+
+                    val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }
+                    list.add(seriesInfo)
+                }
+            }
+
+            _availableGenres.value = genresSet.sorted()
+            _groupedSeries.value = finalGroupedSeries.mapValues { entry ->
+                entry.value.sortedBy { it.displayTitle }
+            }.filterValues { it.isNotEmpty() }
 
         } catch (e: Exception) {
             Log.e(TAG, "Map Build Error", e)

@@ -1,0 +1,6 @@
+{
+  "versionCode": 4,
+  "versionName": "0.8.0-beta",
+  "releaseNotes": "・DBの軽量化\n・チャプター一覧表示、チャプタースキップ対応\n",
+  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.8.0-beta/Komorebi-0.8.0-beta.apk"
+}

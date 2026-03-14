@@ -56,11 +56,15 @@ fun SettingsScreen(
     val prefs = rememberSettingPreferences(repository)
     val uiState = rememberSettingUiState()
 
+    // ★追加: データベース情報の監視
+    val totalRecordCount by viewModel.totalRecordCount.collectAsState()
+    val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
+
     val categories = listOf(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
         Category(AppStrings.SETTINGS_CATEGORY_PLAYBACK, Icons.Default.PlayCircle),
-        Category("録画設定", Icons.Default.VideoSettings), // ★追加
+        Category("録画設定", Icons.Default.VideoSettings),
         Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
@@ -69,13 +73,18 @@ fun SettingsScreen(
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
 
-    // ★修正: バッチリストの数に応じてRequestersを調整
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
 
     val itemFocusRequesters = remember {
         listOf(
-            listOf(FocusRequester(), FocusRequester()), // 0: General
+            // ★修正: Generalカテゴリの項目を2つから4つに増加（件数、強制同期、Ch履歴、視聴履歴）
+            listOf(
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ), // 0: General
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -234,11 +243,21 @@ fun SettingsScreen(
                 .fillMaxHeight()
                 .padding(vertical = 48.dp, horizontal = 64.dp)
         ) {
-            Column(modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(mainScrollState)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(mainScrollState)
+            ) {
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
+                        totalRecordCount = totalRecordCount, // ★追加
+                        lastSyncedAt = lastSyncedAt, // ★追加
+                        onForceSync = {
+                            uiState.activeDialog = SettingDialogState.ConfirmClear(
+                                "データベースの再構築",
+                                "すべての録画データをサーバーから再取得します。よろしいですか？"
+                            ) { viewModel.triggerFullSync() }
+                        }, // ★追加
                         onClearChannel = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 AppStrings.DIALOG_CLEAR_HISTORY_TITLE,
@@ -251,8 +270,10 @@ fun SettingsScreen(
                                 AppStrings.DIALOG_CLEAR_WATCH_HISTORY_MSG
                             ) { onClearWatchHistory() }
                         },
-                        clearChannelR = itemFocusRequesters[0][0],
-                        clearHistoryR = itemFocusRequesters[0][1],
+                        dbInfoR = itemFocusRequesters[0][0], // ★追加
+                        forceSyncR = itemFocusRequesters[0][1], // ★追加
+                        clearChannelR = itemFocusRequesters[0][2],
+                        clearHistoryR = itemFocusRequesters[0][3],
                         sidebarR = categoryFocusRequesters[0],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 0
@@ -406,7 +427,7 @@ fun SettingsScreen(
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2
                         }
                     )
-                    // ★追加: 録画設定 (カテゴリー3)
+
                     3 -> RecordingSettingsContent(
                         batchList = prefs.postRecordingBatchList,
                         onAdd = {
@@ -430,142 +451,141 @@ fun SettingsScreen(
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3
                         }
                     )
-                    // 以降のインデックスを+1
-                    4 -> HomeDisplaySettingsContent(
-                        isDarkMode = !prefs.currentThemeName.contains("LIGHT"),
-                        themeSeason = when (prefs.currentThemeName) {
-                            "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
-                        },
-                        genre = prefs.pickupGenre,
-                        excludePaid = prefs.excludePaid,
-                        pickupTime = prefs.pickupTime,
-                        startupTab = prefs.startupTab,
-                        modeR = itemFocusRequesters[4][0],
-                        colorR = itemFocusRequesters[4][1],
-                        startR = itemFocusRequesters[4][2],
-                        genreR = itemFocusRequesters[4][3],
-                        timeR = itemFocusRequesters[4][4],
-                        exPaidR = itemFocusRequesters[4][5],
-                        sidebarR = categoryFocusRequesters[4],
-                        onMode = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_BASE_THEME,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
-                                    AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"
-                                ),
-                                if (prefs.currentThemeName.contains("LIGHT")) "LIGHT" else "DARK"
-                            ) {
-                                val nt = getThemeFromModeAndSeason(
-                                    it == "DARK", when (prefs.currentThemeName) {
-                                        "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
-                                    }
-                                ); scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.APP_THEME,
-                                    nt
-                                )
-                            }
-                            }
-                        },
-                        onColor = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
-                                    AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
-                                    AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
-                                ),
-                                when (prefs.currentThemeName) {
-                                    "SPRING", "SPRING_LIGHT" -> "SPRING"; "SUMMER", "SUMMER_LIGHT" -> "SUMMER"; "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"; "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"; else -> "DEFAULT"
-                                }
-                            ) {
-                                val nt = getThemeFromModeAndSeason(
-                                    !prefs.currentThemeName.contains("LIGHT"),
-                                    it
-                                ); scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.APP_THEME,
-                                    nt
-                                )
-                            }
-                            }
-                        },
-                        onStart = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
-                                    AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
-                                    AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
-                                    AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
-                                    AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
-                                ),
-                                prefs.startupTab
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.STARTUP_TAB,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onG = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_PICKUP_GENRE_TITLE,
-                                listOf(
-                                    AppStrings.SETTINGS_GENRE_ANIME to "アニメ",
-                                    AppStrings.SETTINGS_GENRE_MOVIE to "映画",
-                                    AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ",
-                                    AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ",
-                                    AppStrings.SETTINGS_GENRE_MUSIC to "音楽",
-                                    AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ",
-                                    AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"
-                                ),
-                                prefs.pickupGenre
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.HOME_PICKUP_GENRE,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onTime = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_PICKUP_TIME_TITLE,
-                                listOf(
-                                    AppStrings.SETTINGS_TIME_AUTO to "自動",
-                                    AppStrings.SETTINGS_TIME_MORNING to "朝",
-                                    AppStrings.SETTINGS_TIME_NOON to "昼",
-                                    AppStrings.SETTINGS_TIME_NIGHT to "夜"
-                                ),
-                                prefs.pickupTime
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.HOME_PICKUP_TIME,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        onExPaid = {
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.EXCLUDE_PAID_BROADCASTS,
-                                    if (prefs.excludePaid == "ON") "OFF" else "ON"
-                                )
-                            }
-                        },
-                        onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
+
+                    4 -> {
+                        // デフォルトのライトテーマ(HIGHTONE)も正しくライトモードとして判定させる
+                        val isLightMode =
+                            prefs.currentThemeName.contains("LIGHT") || prefs.currentThemeName == "HIGHTONE"
+                        val isDarkMode = !isLightMode
+                        val currentSeason = when (prefs.currentThemeName) {
+                            "SPRING", "SPRING_LIGHT" -> "SPRING"
+                            "SUMMER", "SUMMER_LIGHT" -> "SUMMER"
+                            "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"
+                            "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"
+                            else -> "DEFAULT"
                         }
-                    )
+
+                        HomeDisplaySettingsContent(
+                            isDarkMode = isDarkMode,
+                            themeSeason = currentSeason,
+                            genre = prefs.pickupGenre,
+                            excludePaid = prefs.excludePaid,
+                            pickupTime = prefs.pickupTime,
+                            startupTab = prefs.startupTab,
+                            modeR = itemFocusRequesters[4][0],
+                            colorR = itemFocusRequesters[4][1],
+                            startR = itemFocusRequesters[4][2],
+                            genreR = itemFocusRequesters[4][3],
+                            timeR = itemFocusRequesters[4][4],
+                            exPaidR = itemFocusRequesters[4][5],
+                            sidebarR = categoryFocusRequesters[4],
+                            onMode = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_BASE_THEME,
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
+                                        AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"
+                                    ),
+                                    if (isLightMode) "LIGHT" else "DARK"
+                                ) {
+                                    val nt = getThemeFromModeAndSeason(it == "DARK", currentSeason)
+                                    scope.launch {
+                                        repository.saveString(SettingsRepository.APP_THEME, nt)
+                                    }
+                                }
+                            },
+                            onColor = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_THEME_COLOR,
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
+                                        AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
+                                        AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
+                                        AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
+                                        AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
+                                    ),
+                                    currentSeason
+                                ) {
+                                    val nt = getThemeFromModeAndSeason(isDarkMode, it)
+                                    scope.launch {
+                                        repository.saveString(SettingsRepository.APP_THEME, nt)
+                                    }
+                                }
+                            },
+                            onStart = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_STARTUP_TAB,
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
+                                        AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
+                                        AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
+                                        AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
+                                        AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
+                                    ),
+                                    prefs.startupTab
+                                ) {
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.STARTUP_TAB,
+                                            it
+                                        )
+                                    }
+                                }
+                            },
+                            onG = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.DIALOG_PICKUP_GENRE_TITLE,
+                                    listOf(
+                                        AppStrings.SETTINGS_GENRE_ANIME to "アニメ",
+                                        AppStrings.SETTINGS_GENRE_MOVIE to "映画",
+                                        AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ",
+                                        AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ",
+                                        AppStrings.SETTINGS_GENRE_MUSIC to "音楽",
+                                        AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ",
+                                        AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"
+                                    ),
+                                    prefs.pickupGenre
+                                ) {
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.HOME_PICKUP_GENRE,
+                                            it
+                                        )
+                                    }
+                                }
+                            },
+                            onTime = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.DIALOG_PICKUP_TIME_TITLE,
+                                    listOf(
+                                        AppStrings.SETTINGS_TIME_AUTO to "自動",
+                                        AppStrings.SETTINGS_TIME_MORNING to "朝",
+                                        AppStrings.SETTINGS_TIME_NOON to "昼",
+                                        AppStrings.SETTINGS_TIME_NIGHT to "夜"
+                                    ),
+                                    prefs.pickupTime
+                                ) {
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.HOME_PICKUP_TIME,
+                                            it
+                                        )
+                                    }
+                                }
+                            },
+                            onExPaid = {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.EXCLUDE_PAID_BROADCASTS,
+                                        if (prefs.excludePaid == "ON") "OFF" else "ON"
+                                    )
+                                }
+                            },
+                            onClick = {
+                                uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
+                            }
+                        )
+                    }
 
                     5 -> DisplaySettingsContent(
                         preferences = prefs,
@@ -739,7 +759,7 @@ fun SettingsScreen(
             initialValue = state.initialValue,
             onDismiss = { closeDialog() },
             onConfirm = { state.onConfirm(it); closeDialog() })
-        // ★追加: バッチ入力
+
         is SettingDialogState.BatchInput -> BatchInputDialog(
             onDismiss = { closeDialog() },
             onConfirm = { n, p -> state.onConfirm(n, p); closeDialog() })

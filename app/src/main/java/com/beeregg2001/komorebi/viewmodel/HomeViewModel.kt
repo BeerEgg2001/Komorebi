@@ -11,6 +11,8 @@ import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.EpgRepository
+import com.beeregg2001.komorebi.util.AppUpdater
+import com.beeregg2001.komorebi.util.UpdateState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -28,7 +30,8 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
     private val epgRepository: EpgRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val appUpdater: AppUpdater // ★追加
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
@@ -68,6 +71,9 @@ class HomeViewModel @Inject constructor(
     val genrePickupTimeSlot: StateFlow<String> = _genrePickupTimeSlot.asStateFlow()
 
     private val _sharedEpgData = MutableStateFlow<List<EpgChannelWrapper>>(emptyList())
+
+    // ★追加: アップデート状態をUIに公開
+    val updateState: StateFlow<UpdateState> = appUpdater.updateState
 
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
@@ -156,6 +162,22 @@ class HomeViewModel @Inject constructor(
                     fetchAllTypeGenrePickup()
                 }
         }
+
+        // ★追加: アプリ起動時にアップデートをチェックする
+        viewModelScope.launch {
+            appUpdater.checkForUpdates()
+        }
+    }
+
+    // ★追加: アップデート関連メソッド
+    fun startUpdateDownload(apkUrl: String) {
+        viewModelScope.launch {
+            appUpdater.downloadAndInstallUpdate(apkUrl)
+        }
+    }
+
+    fun dismissUpdate() {
+        appUpdater.resetState()
     }
 
     fun refreshHomeData() {
@@ -197,7 +219,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ★追加: 前回視聴チャンネルの履歴削除
     fun clearLastChannelHistory() {
         viewModelScope.launch {
             try {

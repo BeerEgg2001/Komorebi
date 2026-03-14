@@ -8,19 +8,32 @@ import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
+import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.mapper.ReserveMapper
 import com.beeregg2001.komorebi.data.model.ReserveRecordSettings
+import com.beeregg2001.komorebi.data.sync.SyncProgress
 import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailMode
 import com.beeregg2001.komorebi.ui.epg.ProgramDetailScreen
@@ -31,11 +44,13 @@ import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
+import com.beeregg2001.komorebi.ui.reserve.ConditionEditDialog
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
+import com.beeregg2001.komorebi.util.UpdateState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -91,6 +106,8 @@ fun MainRootScreen(
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
+
+    val conditions by reserveViewModel.conditions.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
 
@@ -103,6 +120,8 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
+    val updateState by homeViewModel.updateState.collectAsState()
+
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
@@ -110,12 +129,17 @@ fun MainRootScreen(
                 "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; else -> 0
             }
             state.hasAppliedStartupTab = true
+            channelViewModel.fetchChannels()
         }
     }
 
     LaunchedEffect(state.isRecordListOpen) {
         if (state.isRecordListOpen) {
-            recordViewModel.triggerSmartSync()
+            // ★修正: DB構築中（isInitialBuild=true）または辞書構築の初期フェーズ中は
+            // smartSync を呼ばない。二重起動してクラッシュループの原因になる。
+            if (!syncProgress.isSyncing || (!syncProgress.isInitialBuild && !syncProgress.isInitialSyncPhase)) {
+                recordViewModel.triggerSmartSync()
+            }
         }
     }
 
@@ -138,10 +162,20 @@ fun MainRootScreen(
         }
     }
 
+    LaunchedEffect(updateState) {
+        if (updateState is UpdateState.Error) {
+            state.toastMessage = (updateState as UpdateState.Error).message
+            homeViewModel.dismissUpdate()
+        }
+    }
+
     BackHandler(enabled = true) {
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
+            // ★追加: 詳細画面（Read Only）を閉じる処理
+            state.selectedConditionReserveItem != null -> state.selectedConditionReserveItem = null
+
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
             state.reserveToDelete != null -> state.reserveToDelete = null
@@ -314,6 +348,70 @@ fun MainRootScreen(
                                 })
                         }
 
+                        state.editingCondition != null -> {
+                            val currentCondition =
+                                conditions.find { it.id == state.editingCondition!!.id }
+                                    ?: state.editingCondition!!
+                            val relatedReserves = reserves.filter {
+                                it.comment.contains(currentCondition.programSearchCondition.keyword)
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(colors.background)
+                                    .background(backgroundBrush)
+                            )
+                            ConditionEditDialog(
+                                condition = currentCondition,
+                                relatedReserves = relatedReserves,
+                                onConfirmUpdate = { isEnabled, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
+                                    reserveViewModel.updateEpgReserve(
+                                        originalCondition = currentCondition,
+                                        isEnabled = isEnabled, // ★追加
+                                        keyword = keyword,
+                                        daysOfWeek = daysOfWeek,
+                                        startHour = startH,
+                                        startMinute = startM,
+                                        endHour = endH,
+                                        endMinute = endM,
+                                        excludeKeyword = exc,
+                                        isTitleOnly = tOnly,
+                                        broadcastType = bType,
+                                        isFuzzySearch = fuzzy,
+                                        duplicateScope = dup,
+                                        priority = pri,
+                                        isEventRelay = relay,
+                                        isExactRecord = exact,
+                                        onSuccess = {
+                                            scope.launch {
+                                                state.editingCondition = null
+                                                delay(300)
+                                                state.toastMessage = "予約条件を更新しました"
+                                            }
+                                        }
+                                    )
+                                },
+                                onConfirmDelete = { deleteRelated ->
+                                    reserveViewModel.deleteConditionWithCleanup(
+                                        condition = currentCondition,
+                                        deleteRelatedReserves = deleteRelated,
+                                        onSuccess = {
+                                            scope.launch {
+                                                state.editingCondition = null
+                                                delay(300)
+                                                state.toastMessage =
+                                                    if (deleteRelated) "条件と関連する予約をすべて削除しました" else "予約条件を削除しました"
+                                            }
+                                        }
+                                    )
+                                },
+                                onDismiss = { state.editingCondition = null },
+                                // ★追加: リストアイテムクリックで詳細画面を開く
+                                onReserveItemClick = { state.selectedConditionReserveItem = it }
+                            )
+                        }
+
                         else -> {
                             HomeLauncherScreen(
                                 channelViewModel = channelViewModel,
@@ -359,6 +457,9 @@ fun MainRootScreen(
                                 onReserveSelected = { reserveItem ->
                                     state.selectedReserve = reserveItem
                                 },
+                                onConditionClick = { condition ->
+                                    state.editingCondition = condition
+                                },
                                 isReserveOverlayOpen = state.selectedReserve != null,
                                 epgSelectedProgram = state.epgSelectedProgram,
                                 onEpgProgramSelected = { state.epgSelectedProgram = it },
@@ -395,6 +496,26 @@ fun MainRootScreen(
                             )
                         }
                     }
+
+                    if (state.selectedChannel == null && state.selectedProgram == null && !syncProgress.isInitialBuild) {
+                        SyncProgressIndicator(
+                            syncProgress = syncProgress,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 40.dp, bottom = 40.dp)
+                        )
+                    }
+
+                    if (syncProgress.error != null) {
+                        SyncErrorDialog(
+                            errorMessage = syncProgress.error!!,
+                            onRetry = {
+                                recordViewModel.clearSyncError()
+                                recordViewModel.triggerSmartSync()
+                            },
+                            onDismiss = { recordViewModel.clearSyncError() }
+                        )
+                    }
                 }
             }
 
@@ -404,7 +525,6 @@ fun MainRootScreen(
                 exit = fadeOut(tween(500))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
-                    // ★修正: progressRatio の計算をここで行う
                     val pRatio =
                         if (syncProgress.total > 0) syncProgress.current.toFloat() / syncProgress.total.toFloat() else 0f
                     LoadingScreen(
@@ -414,6 +534,20 @@ fun MainRootScreen(
                 } else {
                     LoadingScreen()
                 }
+            }
+
+            // ★新規追加: 条件編集から開かれた番組詳細画面（ReadOnlyモード）
+            if (state.selectedConditionReserveItem != null) {
+                val program =
+                    remember(state.selectedConditionReserveItem) { ReserveMapper.toEpgProgram(state.selectedConditionReserveItem!!) }
+                ProgramDetailScreen(
+                    program = program,
+                    mode = ProgramDetailMode.RESERVE,
+                    isReserved = true,
+                    isReadOnly = true, // ★戻るボタンのみ表示
+                    onBackClick = { state.selectedConditionReserveItem = null },
+                    initialFocusRequester = detailFocusRequester
+                )
             }
 
             if (state.selectedReserve != null) {
@@ -470,6 +604,52 @@ fun MainRootScreen(
                                     if (isBroadcasting) AppStrings.TOAST_RECORDING_STARTED else AppStrings.TOAST_RESERVED
                             }
                         }
+                    },
+                    // ★修正: 引数が大幅に増えたコールバックに対応し、ViewModelへパスする
+                    onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
+                        val channel =
+                            groupedChannels.values.flatten().find { it.id == program.channel_id }
+                        var tsId = channel?.transportStreamId?.toInt()
+
+                        if (tsId == null || tsId == 0) {
+                            val epgState = epgViewModel.uiState
+                            if (epgState is EpgUiState.Success) {
+                                val epgChannel =
+                                    epgState.data.find { it.channel.id == program.channel_id }?.channel
+                                tsId = epgChannel?.transport_stream_id?.toInt()
+                            }
+                        }
+
+                        val finalTsId = tsId ?: 0
+
+                        reserveViewModel.addEpgReserve(
+                            keyword = keyword,
+                            networkId = program.network_id,
+                            transportStreamId = finalTsId,
+                            serviceId = program.service_id,
+                            daysOfWeek = daysOfWeek,
+                            startHour = startH,
+                            startMinute = startM,
+                            endHour = endH,
+                            endMinute = endM,
+                            // ★追加: 詳細設定を全て渡す
+                            excludeKeyword = exc,
+                            isTitleOnly = tOnly,
+                            broadcastType = bType,
+                            isFuzzySearch = fuzzy,
+                            duplicateScope = dup,
+                            priority = pri,
+                            isEventRelay = relay,
+                            isExactRecord = exact,
+                            onSuccess = {
+                                scope.launch {
+                                    state.epgSelectedProgram = null
+                                    delay(300)
+                                    state.toastMessage =
+                                        "EPG予約 (キーワード自動予約) を登録しました"
+                                }
+                            }
+                        )
                     },
                     onRecordDetailClick = { program -> state.editingNewProgram = program },
                     onEditReserveClick = { _ ->
@@ -536,6 +716,7 @@ fun MainRootScreen(
                             null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
                     })
             }
+
             if (state.reserveToDelete != null) {
                 DeleteConfirmationDialog(
                     title = AppStrings.DIALOG_DELETE_RESERVE_TITLE,
@@ -577,7 +758,297 @@ fun MainRootScreen(
                         AppStrings.TOAST_WATCH_HISTORY_DELETED
                     })
             }
+
+            if (updateState is UpdateState.UpdateAvailable) {
+                val available = updateState as UpdateState.UpdateAvailable
+                UpdateDialog(
+                    versionName = available.versionName,
+                    releaseNotes = available.releaseNotes,
+                    onConfirm = { homeViewModel.startUpdateDownload(available.apkUrl) },
+                    onDismiss = { homeViewModel.dismissUpdate() }
+                )
+            }
+
+            if (updateState is UpdateState.Downloading || updateState is UpdateState.ReadyToInstall) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    UpdateProgressBanner(
+                        updateState = updateState,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(48.dp)
+                    )
+                }
+            }
+
             GlobalToast(message = state.toastMessage)
+        }
+    }
+}
+
+@Composable
+fun SyncProgressIndicator(
+    syncProgress: SyncProgress,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    val progress = if (syncProgress.total > 0) {
+        syncProgress.current.toFloat() / syncProgress.total.toFloat()
+    } else {
+        0f
+    }
+
+    AnimatedVisibility(
+        visible = syncProgress.isSyncing,
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = modifier
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = colors.surface.copy(alpha = 0.9f),
+                contentColor = colors.textPrimary
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .widthIn(min = 200.dp, max = 300.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = syncProgress.progressText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (syncProgress.total > 0) {
+                    LinearProgressIndicator(
+                        progress = progress,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent,
+                        trackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accent,
+                        trackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(300); focusRequester.safeRequestFocus("SyncError") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "同期エラー",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color(0xFFFF5252),
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("閉じる") }
+
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text("再実行") }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun UpdateDialog(
+    versionName: String,
+    releaseNotes: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        focusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.8f))
+            .zIndex(200f),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(
+                containerColor = colors.surface,
+                contentColor = colors.textPrimary
+            ),
+            modifier = Modifier.width(420.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "アップデートのお知らせ",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "最新バージョン ($versionName) が利用可能です。\n\n$releaseNotes\n\nアップデート開始後、Androidのシステム画面が開きますので、「インストール」または「更新」を選択してください。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("後で") }
+
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text("今すぐ更新") }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun UpdateProgressBanner(
+    updateState: UpdateState,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    val isReady = updateState is UpdateState.ReadyToInstall
+    val progress =
+        if (updateState is UpdateState.Downloading) updateState.progressPercentage else 100
+
+    Surface(
+        modifier = modifier.width(280.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = SurfaceDefaults.colors(
+            containerColor = colors.surface.copy(alpha = 0.95f),
+            contentColor = colors.textPrimary
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.Download,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isReady) "インストーラ起動中..." else "アップデートをダウンロード中",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            if (!isReady) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(
+                            colors.textSecondary.copy(alpha = 0.2f),
+                            RoundedCornerShape(2.dp)
+                        )
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress / 100f)
+                            .fillMaxHeight()
+                            .background(colors.accent, RoundedCornerShape(2.dp))
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "$progress %",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textSecondary,
+                    modifier = Modifier.align(Alignment.End)
+                )
+            }
         }
     }
 }

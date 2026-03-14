@@ -3,7 +3,6 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,7 +33,7 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
@@ -57,7 +56,8 @@ fun RecordSeriesGridContent(
     onBackPress: () -> Unit,
     gridState: TvLazyGridState,
     ticketManager: FocusTicketManager,
-    onFirstItemBound: (Boolean) -> Unit = {}
+    onFirstItemBound: (Boolean) -> Unit = {},
+    onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
@@ -69,6 +69,20 @@ fun RecordSeriesGridContent(
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
     }
 
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
+            val targetId = ticketManager.targetProgramId
+            val index = seriesList.indexOfFirst { it.representativeVideoId == targetId }
+            if (index != -1) {
+                gridState.scrollToItem(maxOf(0, index - 4))
+            } else {
+                gridState.scrollToItem(0)
+            }
+        } else if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
+            gridState.scrollToItem(0)
+        }
+    }
+
     TvLazyVerticalGrid(
         state = gridState,
         columns = TvGridCells.Fixed(4),
@@ -78,43 +92,53 @@ fun RecordSeriesGridContent(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            .focusGroup()
-            .focusRestorer() // 自動復元に任せる
+            // ★修正: focusGroup を削除し、focusRestorer を追加。
+            .focusRestorer { firstItemFocusRequester }
     ) {
         itemsIndexed(seriesList) { index, series ->
             var isFocused by remember { mutableStateOf(false) }
+            val specificRequester = remember { FocusRequester() }
 
-            // ★自律回収: 先頭アイテム（index 0）が描画された瞬間にチケットを拾ってフォーカス
-            if (index == 0) {
-                LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
-                    if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
-                        delay(100) // Composeの準備待ち
-                        firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP_SeriesGrid")
-                        ticketManager.consume(FocusTicket.LIST_TOP)
-                    }
+            LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+                val ticket = ticketManager.currentTicket
+                if (ticket == FocusTicket.TARGET_ID && series.representativeVideoId == ticketManager.targetProgramId) {
+                    specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID_SeriesGrid")
+                    ticketManager.consume(FocusTicket.TARGET_ID)
                 }
             }
 
             val itemModifier = Modifier
                 .aspectRatio(16f / 9f)
-                .onFocusChanged { isFocused = it.isFocused }
+                .focusRequester(specificRequester)
                 .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                .onFocusChanged {
+                    isFocused = it.isFocused
+                    if (it.isFocused) {
+                        onFocusedSeriesChanged(series)
+                    }
+                }
                 .focusProperties {
                     if (index < 4) {
                         up = upFocusTarget
                     }
+                    if (index % 4 == 0) {
+                        left = FocusRequester.Cancel
+                    }
                 }
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
-                        if (event.key == Key.Back || event.key == Key.Escape) {
-                            onBackPress(); true
-                        } else if (event.key == Key.DirectionLeft && index % 4 == 0) {
+                        if (event.key == Key.DirectionLeft && index % 4 == 0) {
                             if (!isScrollInProgress) {
                                 onOpenNavPane()
                             }
-                            true
-                        } else false
-                    } else false
+                            return@onKeyEvent true
+                        }
+                        if (event.key == Key.Back || event.key == Key.Escape) {
+                            onBackPress()
+                            return@onKeyEvent true
+                        }
+                    }
+                    false
                 }
 
             Surface(

@@ -20,6 +20,8 @@ data class ReserveItem(
     @SerializedName("recording_availability")
     val recordingAvailability: String = "Pending",
 
+    val comment: String = "",
+
     @SerializedName("estimated_recording_file_size")
     val estimatedRecordingFileSize: Long = 0L,
 

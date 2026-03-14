@@ -48,12 +48,17 @@ class MainRootState {
 
     // システム状態
     var isDataReady by mutableStateOf(false)
-    var isUiReady by mutableStateOf(false) // ★追加: UIコンポーネントの描画完了
+    var isUiReady by mutableStateOf(false)
     var isSplashFinished by mutableStateOf(false)
     var showConnectionErrorDialog by mutableStateOf(false)
     var hasAppliedStartupTab by mutableStateOf(false)
 
-    // ★追加: 戻るボタンの連打ガード
+    var editingCondition by mutableStateOf<ReservationCondition?>(null)
+
+    // ★追加: 条件編集ダイアログから開かれた番組詳細用の状態
+    var selectedConditionReserveItem by mutableStateOf<ReserveItem?>(null)
+
+    // 戻るボタンの連打ガード
     private var lastBackPressTime by mutableLongStateOf(0L)
     fun canProcessBackPress(): Boolean {
         val currentTime = System.currentTimeMillis()
