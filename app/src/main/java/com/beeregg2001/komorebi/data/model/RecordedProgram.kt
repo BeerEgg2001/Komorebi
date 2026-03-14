@@ -10,8 +10,8 @@ data class RecordedApiResponse(
 data class RecordedProgram(
     val id: Int,
     val title: String,
-    val seriesName: String? = null, // ★Nullableに変更
-    val isEpisodic: Boolean? = false, // ★Nullableに変更
+    val seriesName: String? = null,
+    val isEpisodic: Boolean? = false,
     val description: String,
     val detail: Map<String, String>? = null,
     @SerializedName("start_time") val startTime: String,
@@ -23,6 +23,12 @@ data class RecordedProgram(
     val genres: List<EpgGenre>? = null,
     val isRecording: Boolean = false,
     val playbackPosition: Double = 0.0
+)
+
+// CM区間（チャプター）のデータモデル
+data class CmSection(
+    @SerializedName("start_time") val startTime: Double,
+    @SerializedName("end_time") val endTime: Double
 )
 
 data class RecordedChannel(
@@ -45,7 +51,8 @@ data class RecordedVideo(
     @SerializedName("video_codec") val videoCodec: String,
     @SerializedName("audio_codec") val audioCodec: String,
     @SerializedName("has_key_frames") val hasKeyFrames: Boolean = true,
-    @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null
+    @SerializedName("thumbnail_info") val thumbnailInfo: ThumbnailInfo? = null,
+    @SerializedName("cm_sections") val cmSections: List<CmSection>? = null
 )
 
 data class ThumbnailInfo(

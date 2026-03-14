@@ -67,6 +67,7 @@ fun HomeLauncherScreen(
     epgSelectedProgram: EpgProgram?,
     onEpgProgramSelected: (EpgProgram?) -> Unit,
     onReserveSelected: (ReserveItem) -> Unit = {},
+    onConditionClick: (ReservationCondition) -> Unit = {}, // ★追加: 自動予約条件クリックの中継
     isReserveOverlayOpen: Boolean = false,
     isEpgJumpMenuOpen: Boolean,
     onEpgJumpMenuStateChanged: (Boolean) -> Unit,
@@ -299,7 +300,6 @@ fun HomeLauncherScreen(
                         }
 
                         2 -> {
-                            // ★修正: 引数をVideoTabContentの新しいシグネチャに完全に合わせる
                             VideoTabContent(
                                 konomiIp = konomiIp,
                                 konomiPort = konomiPort,
@@ -374,8 +374,11 @@ fun HomeLauncherScreen(
                             ReserveListScreen(
                                 onBack = { ui.tabFocusRequesters[4].safeRequestFocus(TAG) },
                                 onProgramClick = onReserveSelected,
+                                onConditionClick = onConditionClick, // ★追加: クリック処理を接続
                                 konomiIp = konomiIp, konomiPort = konomiPort,
-                                contentFirstItemRequester = ui.contentFirstItemRequesters[4]
+                                contentFirstItemRequester = ui.contentFirstItemRequesters[4],
+                                topNavFocusRequester = ui.tabFocusRequesters[4],
+                                groupedChannels = groupedChannels
                             )
                             LaunchedEffect(Unit) {
                                 delay(500); onUiReady(); ui.isCurrentTabContentReady = true

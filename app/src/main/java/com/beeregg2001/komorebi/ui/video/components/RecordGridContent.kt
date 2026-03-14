@@ -1,6 +1,5 @@
 package com.beeregg2001.komorebi.ui.video.components
 
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,7 +18,7 @@ import androidx.paging.compose.itemKey
 import androidx.tv.foundation.lazy.grid.TvGridCells
 import androidx.tv.foundation.lazy.grid.TvLazyGridState
 import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
-import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -44,11 +43,27 @@ fun RecordGridContent(
     onOpenNavPane: () -> Unit,
     ticketManager: FocusTicketManager,
     onFirstItemBound: (Boolean) -> Unit = {},
-    onFocusedItemChanged: (RecordedProgram?) -> Unit = {} // ★追加
+    onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
 ) {
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
     LaunchedEffect(isListReady, pagedRecordings.itemCount) {
         onFirstItemBound(isListReady && pagedRecordings.itemCount > 0)
+    }
+
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
+            val targetId = ticketManager.targetProgramId
+            val index = (0 until pagedRecordings.itemCount).firstOrNull {
+                pagedRecordings.peek(it)?.id == targetId
+            }
+            if (index != null) {
+                gridState.scrollToItem(maxOf(0, index - 4))
+            } else {
+                gridState.scrollToItem(0)
+            }
+        } else if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
+            gridState.scrollToItem(0)
+        }
     }
 
     var isFastScrolling by remember { mutableStateOf(false) }
@@ -75,8 +90,8 @@ fun RecordGridContent(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            .focusGroup()
-            .focusRestorer()
+            // ★修正: focusGroup を削除し、focusRestorer を追加。
+            .focusRestorer { firstItemFocusRequester }
     ) {
         items(
             count = pagedRecordings.itemCount,
@@ -89,33 +104,29 @@ fun RecordGridContent(
                 val specificRequester = remember { FocusRequester() }
 
                 if (index == 0) modifier = modifier.focusRequester(firstItemFocusRequester)
-
                 modifier = modifier.focusRequester(specificRequester)
 
-                // ★自律回収システム（グリッド版）
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     val ticket = ticketManager.currentTicket
                     if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
-                        delay(100)
-                        specificRequester.safeRequestFocus("Ticket_TARGET_ID")
+                        specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID")
                         ticketManager.consume(FocusTicket.TARGET_ID)
-                    } else if (ticket == FocusTicket.LIST_TOP && index == 0) {
-                        delay(100)
-                        firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP")
-                        ticketManager.consume(FocusTicket.LIST_TOP)
                     }
                 }
 
                 if (index < 4) modifier = modifier.focusProperties { up = upFocusTarget }
                 if (index % 4 == 0) {
-                    modifier = modifier.onKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
-                            if (!isScrollInProgress) {
-                                onOpenNavPane()
+                    modifier = modifier
+                        .focusProperties { left = FocusRequester.Cancel }
+                        .onKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
+                                if (!isScrollInProgress) {
+                                    onOpenNavPane()
+                                }
+                                return@onKeyEvent true
                             }
-                            true
-                        } else false
-                    }
+                            false
+                        }
                 }
 
                 RecordedCard(
@@ -125,10 +136,9 @@ fun RecordGridContent(
                     isScrolling = isScrollingLambda,
                     onClick = { onProgramClick(program, null) },
                     modifier = modifier
-                        .focusRequester(specificRequester)
                         .onFocusChanged {
                             if (it.isFocused) {
-                                onFocusedItemChanged(program) // ★ここ
+                                onFocusedItemChanged(program)
                             }
                         }
                 )

@@ -4,12 +4,10 @@ import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
-import androidx.work.ListenableWorker.Result.success
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
-import kotlin.Result.Companion.success
 
 @HiltWorker
 class RecordSyncWorker @AssistedInject constructor(
@@ -21,8 +19,16 @@ class RecordSyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         Log.i("RecordSyncWorker", "Periodic sync triggered by WorkManager")
         return try {
+            if (!syncEngine.isInitialBuildCompleted()) {
+                Log.i(
+                    "RecordSyncWorker",
+                    "Initial build is not completed yet. Skipping background sync to save device resources."
+                )
+                return Result.success()
+            }
+
             syncEngine.syncAllRecords(forceFullSync = false)
-            success()
+            Result.success()
         } catch (e: Exception) {
             Result.retry()
         }
@@ -37,7 +43,7 @@ class RecordSyncWorker @AssistedInject constructor(
                 .build()
 
             val request = PeriodicWorkRequestBuilder<RecordSyncWorker>(
-                15, TimeUnit.MINUTES // 15分おきに実行
+                15, TimeUnit.MINUTES
             )
                 .setConstraints(constraints)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.MINUTES)
@@ -45,7 +51,7 @@ class RecordSyncWorker @AssistedInject constructor(
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP, // すでに予約済みなら維持
+                ExistingPeriodicWorkPolicy.KEEP,
                 request
             )
         }

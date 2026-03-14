@@ -3,7 +3,6 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -17,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -35,12 +33,11 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
-import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -59,7 +56,8 @@ fun RecordSeriesContent(
     onBackPress: () -> Unit,
     listState: LazyListState,
     ticketManager: FocusTicketManager,
-    onFirstItemBound: (Boolean) -> Unit = {}
+    onFirstItemBound: (Boolean) -> Unit = {},
+    onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
@@ -67,6 +65,20 @@ fun RecordSeriesContent(
 
     LaunchedEffect(isListReady, seriesList) {
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
+    }
+
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
+            val targetId = ticketManager.targetProgramId
+            val index = seriesList.indexOfFirst { it.representativeVideoId == targetId }
+            if (index != -1) {
+                listState.scrollToItem(maxOf(0, index - 1))
+            } else {
+                listState.scrollToItem(0)
+            }
+        } else if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
+            listState.scrollToItem(0)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -77,20 +89,18 @@ fun RecordSeriesContent(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(contentContainerFocusRequester)
-                .focusGroup()
-                .focusRestorer()
+                // ★修正: focusGroup を削除し、focusRestorer を追加。
+                .focusRestorer { firstItemFocusRequester }
         ) {
             itemsIndexed(seriesList) { index, series ->
                 var isFocused by remember { mutableStateOf(false) }
                 val specificRequester = remember { FocusRequester() }
 
-                if (index == 0) {
-                    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
-                        if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
-                            delay(100)
-                            firstItemFocusRequester.safeRequestFocus("Ticket_LIST_TOP")
-                            ticketManager.consume(FocusTicket.LIST_TOP)
-                        }
+                LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+                    val ticket = ticketManager.currentTicket
+                    if (ticket == FocusTicket.TARGET_ID && series.representativeVideoId == ticketManager.targetProgramId) {
+                        specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID_Series")
+                        ticketManager.consume(FocusTicket.TARGET_ID)
                     }
                 }
 
@@ -100,9 +110,16 @@ fun RecordSeriesContent(
                         .fillMaxWidth()
                         .height(64.dp)
                         .focusRequester(specificRequester)
-                        .onFocusChanged { isFocused = it.isFocused }
                         .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                        .onFocusChanged {
+                            isFocused = it.isFocused
+                            if (it.isFocused) {
+                                onFocusedSeriesChanged(series)
+                            }
+                        }
                         .focusProperties {
+                            left = FocusRequester.Cancel
+                            right = FocusRequester.Cancel
                             if (index == 0) {
                                 up =
                                     if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -110,15 +127,18 @@ fun RecordSeriesContent(
                         }
                         .onKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown) {
-                                if (event.key == Key.Back || event.key == Key.Escape) {
-                                    onBackPress(); true
-                                } else if (event.key == Key.DirectionLeft) {
+                                if (event.key == Key.DirectionLeft) {
                                     if (!isScrollInProgress) {
                                         onOpenNavPane()
                                     }
-                                    true
-                                } else false
-                            } else false
+                                    return@onKeyEvent true
+                                }
+                                if (event.key == Key.Back || event.key == Key.Escape) {
+                                    onBackPress()
+                                    return@onKeyEvent true
+                                }
+                            }
+                            false
                         },
                     scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
                     colors = ClickableSurfaceDefaults.colors(

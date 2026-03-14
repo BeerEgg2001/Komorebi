@@ -9,7 +9,7 @@ object RecordDataMapper {
     fun toEntity(program: RecordedProgram): RecordedProgramEntity {
         val tile = program.recordedVideo.thumbnailInfo?.tile
 
-        // ★API取得直後、未成形の場合の仮設定 (Null安全対応)
+        // API取得直後、未成形の場合の仮設定 (Null安全対応)
         val majorGenre = program.genres?.firstOrNull()?.major ?: ""
         val isEpisodic = program.isEpisodic == true ||
                 majorGenre == "アニメ・特撮" ||
@@ -19,17 +19,21 @@ object RecordDataMapper {
         val seriesName = if (!program.seriesName.isNullOrBlank()) program.seriesName!!
         else TitleNormalizer.extractDisplayTitle(program.title)
 
+        // ★修正: DBに保存する前に、KonomiTVの2種類の録画中ステータスを確実にマージする
+        val isCurrentlyRecording =
+            program.isRecording || program.recordedVideo.status == "Recording"
+
         return RecordedProgramEntity(
             id = program.id,
-            title = program.title, // KonomiTV APIのtitleは基本NotNullだがそのまま渡す
+            title = program.title,
             seriesName = seriesName,
             isEpisodic = isEpisodic,
             startTime = program.startTime,
             endTime = program.endTime,
-            videoDuration = if (program.duration > 0) program.duration else program.recordedVideo.duration,
-            description = program.description,
+            videoDuration = if (program.recordedVideo.duration > 0) program.recordedVideo.duration else program.duration,
+            // ★descriptionの保存を削除
             hasKeyFrames = program.recordedVideo.hasKeyFrames,
-            isRecording = program.isRecording,
+            isRecording = isCurrentlyRecording, // ★修正: マージした確実なフラグをDBに保存
             playbackPosition = program.playbackPosition,
             channelId = program.channel?.id,
             channelType = program.channel?.type,
@@ -64,7 +68,7 @@ object RecordDataMapper {
             title = entity.title,
             seriesName = entity.seriesName,
             isEpisodic = entity.isEpisodic,
-            description = entity.description?: "",
+            description = "", // ★DBからは取得せず空文字をセット（詳細画面を開いた時にAPIから再取得されます）
             detail = null,
             startTime = entity.startTime,
             endTime = entity.endTime,
@@ -72,8 +76,11 @@ object RecordDataMapper {
             isPartiallyRecorded = false,
             channel = if (entity.channelId != null) {
                 RecordedChannel(
-                    id = entity.channelId, displayChannelId = "",
-                    type = entity.channelType ?: "", name = entity.channelName ?: "", channelNumber = ""
+                    id = entity.channelId,
+                    displayChannelId = "",
+                    type = entity.channelType ?: "",
+                    name = entity.channelName ?: "",
+                    channelNumber = ""
                 )
             } else null,
             recordedVideo = RecordedVideo(
