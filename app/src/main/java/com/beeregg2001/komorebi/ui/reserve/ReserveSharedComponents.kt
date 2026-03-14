@@ -26,10 +26,6 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 
-// =================================================================================
-// EPG予約と条件編集で共通して使用されるUIコンポーネント群
-// =================================================================================
-
 enum class NumberSelectType { START_HOUR, START_MINUTE, END_HOUR, END_MINUTE }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -40,6 +36,7 @@ fun TimeSelectButton(text: String, modifier: Modifier = Modifier, onClick: () ->
         onClick = onClick,
         modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = colors.textPrimary.copy(alpha = 0.05f),
             contentColor = colors.textPrimary,
@@ -67,20 +64,18 @@ fun DayOfWeekSelectionDialog(
     var selected by remember { mutableStateOf(initialSelection) }
     val dayOrder = listOf(1, 2, 3, 4, 5, 6, 0)
     val dayLabels = mapOf(
-        0 to "日曜日",
-        1 to "月曜日",
-        2 to "火曜日",
-        3 to "水曜日",
-        4 to "木曜日",
-        5 to "金曜日",
-        6 to "土曜日"
+        0 to "日曜日", 1 to "月曜日", 2 to "火曜日", 3 to "水曜日",
+        4 to "木曜日", 5 to "金曜日", 6 to "土曜日"
     )
 
-    val listFocusRequester = remember { FocusRequester() }
+    // ★修正: TvLazyColumn 自体ではなく、先頭アイテムの Surface に focusRequester を付ける
+    // TvLazyColumn は内部が独自実装で focusRequester を受け付けない
+    val firstItemRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        delay(50)
-        runCatching { listFocusRequester.requestFocus() }
+        // clearFocus(force=true) 後にフォーカスシステムが安定するまで待つ
+        delay(150)
+        runCatching { firstItemRequester.requestFocus() }
     }
 
     Box(
@@ -91,9 +86,10 @@ fun DayOfWeekSelectionDialog(
             .focusGroup()
             .focusProperties { exit = { FocusRequester.Cancel } }
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
-                    onDismiss()
-                    true
+                if (it.type == KeyEventType.KeyDown &&
+                    it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK
+                ) {
+                    onDismiss(); true
                 } else false
             },
         contentAlignment = Alignment.Center
@@ -112,26 +108,32 @@ fun DayOfWeekSelectionDialog(
                     color = colors.textPrimary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-
                 TvLazyColumn(
-                    modifier = Modifier.focusRequester(listFocusRequester),
+                    // ★修正: TvLazyColumn への .focusRequester() を削除
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(dayOrder) { dayValue ->
                         val isSelected = selected.contains(dayValue)
+                        val isFirst = dayValue == dayOrder.first()
                         Surface(
                             onClick = {
                                 selected =
                                     if (isSelected) selected - dayValue else selected + dayValue
                             },
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = if (isSelected) colors.accent.copy(alpha = 0.2f) else Color.Transparent,
                                 contentColor = colors.textPrimary,
                                 focusedContainerColor = colors.textPrimary,
                                 focusedContentColor = if (colors.isDark) Color.Black else Color.White
                             ),
-                            modifier = Modifier.fillMaxWidth()
+                            // ★修正: 先頭アイテムにだけ firstItemRequester を付ける
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (isFirst) Modifier.focusRequester(firstItemRequester) else Modifier
+                                )
                         ) {
                             Row(
                                 modifier = Modifier
@@ -146,9 +148,8 @@ fun DayOfWeekSelectionDialog(
                                 )
                                 if (isSelected) {
                                     Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = colors.accent,
+                                        Icons.Default.Check, contentDescription = null,
+                                        tint = LocalContentColor.current,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -162,16 +163,16 @@ fun DayOfWeekSelectionDialog(
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Button(
-                                onClick = onDismiss,
-                                modifier = Modifier.weight(1f),
+                                onClick = onDismiss, modifier = Modifier.weight(1f),
+                                scale = ButtonDefaults.scale(focusedScale = 1f),
                                 colors = ButtonDefaults.colors(
                                     containerColor = colors.textPrimary.copy(alpha = 0.1f),
                                     contentColor = colors.textPrimary
                                 )
                             ) { Text("キャンセル") }
                             Button(
-                                onClick = { onConfirm(selected) },
-                                modifier = Modifier.weight(1f),
+                                onClick = { onConfirm(selected) }, modifier = Modifier.weight(1f),
+                                scale = ButtonDefaults.scale(focusedScale = 1f),
                                 colors = ButtonDefaults.colors(
                                     containerColor = colors.accent,
                                     contentColor = if (colors.isDark) Color.Black else Color.White
@@ -198,11 +199,14 @@ fun NumberSelectionDialog(
     val listState = rememberTvLazyListState(
         initialFirstVisibleItemIndex = range.indexOf(initialValue).coerceAtLeast(0)
     )
-    val listFocusRequester = remember { FocusRequester() }
+
+    // ★修正: 初期値アイテムの Surface に focusRequester を付ける
+    val initialItemRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        delay(50)
-        runCatching { listFocusRequester.requestFocus() }
+        // clearFocus(force=true) 後にフォーカスシステムが安定するまで待つ
+        delay(150)
+        runCatching { initialItemRequester.requestFocus() }
     }
 
     Box(
@@ -213,9 +217,10 @@ fun NumberSelectionDialog(
             .focusGroup()
             .focusProperties { exit = { FocusRequester.Cancel } }
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
-                    onDismiss()
-                    true
+                if (it.type == KeyEventType.KeyDown &&
+                    it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK
+                ) {
+                    onDismiss(); true
                 } else false
             },
         contentAlignment = Alignment.Center
@@ -238,7 +243,6 @@ fun NumberSelectionDialog(
                     color = colors.textSecondary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-
                 TvLazyColumn(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -246,19 +250,26 @@ fun NumberSelectionDialog(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .focusRequester(listFocusRequester)
+                    // ★修正: TvLazyColumn への .focusRequester() を削除
                 ) {
                     items(range.toList()) { num ->
+                        val isInitial = num == initialValue
                         Surface(
                             onClick = { onConfirm(num) },
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = Color.Transparent,
                                 contentColor = colors.textPrimary,
                                 focusedContainerColor = colors.textPrimary,
                                 focusedContentColor = if (colors.isDark) Color.Black else Color.White
                             ),
-                            modifier = Modifier.width(120.dp)
+                            // ★修正: 初期値アイテムにだけ initialItemRequester を付ける
+                            modifier = Modifier
+                                .width(120.dp)
+                                .then(
+                                    if (isInitial) Modifier.focusRequester(initialItemRequester) else Modifier
+                                )
                         ) {
                             Text(
                                 text = String.format("%02d", num),

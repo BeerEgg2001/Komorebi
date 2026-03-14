@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.reserve
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +22,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -39,23 +41,40 @@ fun EpgReserveDialog(
     initialKeyword: String,
     initialStartTime: OffsetDateTime,
     initialEndTime: OffsetDateTime,
-    onConfirm: (keyword: String, daysOfWeek: Set<Int>, startH: Int, startM: Int, endH: Int, endM: Int) -> Unit,
+    onConfirm: (
+        keyword: String, daysOfWeek: Set<Int>, startH: Int, startM: Int, endH: Int, endM: Int,
+        excludeKeyword: String, isTitleOnly: Boolean, broadcastType: String,
+        isFuzzySearch: Boolean, duplicateScope: String, priority: Int,
+        isEventRelay: Boolean, isExactRecord: Boolean
+    ) -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     var keyword by remember { mutableStateOf(initialKeyword) }
     var isEditingKeyword by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     val startWindow = initialStartTime.minusHours(1)
     val endWindow = initialEndTime.plusHours(1)
 
     // 0:日, 1:月 ... 6:土 (EDCB仕様)
     var selectedDaysOfWeek by remember { mutableStateOf(setOf(startWindow.dayOfWeek.value % 7)) }
-    var startHour by remember { mutableStateOf(startWindow.hour) }
-    var startMinute by remember { mutableStateOf(startWindow.minute) }
-    var endHour by remember { mutableStateOf(endWindow.hour) }
-    var endMinute by remember { mutableStateOf(endWindow.minute) }
+    var startHour by remember { mutableIntStateOf(startWindow.hour) }
+    var startMinute by remember { mutableIntStateOf(startWindow.minute) }
+    var endHour by remember { mutableIntStateOf(endWindow.hour) }
+    var endMinute by remember { mutableIntStateOf(endWindow.minute) }
+
+    // ★追加: 詳細設定用の状態（新規作成時のデフォルト値）
+    var showAdvancedSettings by remember { mutableStateOf(false) }
+    var advExcludeKeyword by remember { mutableStateOf("") }
+    var advIsTitleOnly by remember { mutableStateOf(false) }
+    var advBroadcastType by remember { mutableStateOf("All") }
+    var advIsFuzzySearch by remember { mutableStateOf(true) }
+    var advDuplicateScope by remember { mutableStateOf("SameChannelOnly") }
+    var advPriority by remember { mutableIntStateOf(3) }
+    var advIsEventRelay by remember { mutableStateOf(true) }
+    var advIsExactRecord by remember { mutableStateOf(true) }
 
     var showDayOfWeekDialog by remember { mutableStateOf(false) }
     var numberSelectTarget by remember { mutableStateOf<NumberSelectType?>(null) }
@@ -67,6 +86,7 @@ fun EpgReserveDialog(
     val startMinuteBtnRequester = remember { FocusRequester() }
     val endHourBtnRequester = remember { FocusRequester() }
     val endMinuteBtnRequester = remember { FocusRequester() }
+    val advancedBtnRequester = remember { FocusRequester() } // ★追加
 
     val keyboardController = LocalSoftwareKeyboardController.current
     var isFirstEnter by remember { mutableStateOf(true) }
@@ -98,6 +118,11 @@ fun EpgReserveDialog(
         }
     }
 
+    fun openAdvancedSettings() {
+        focusManager.clearFocus(force = true)
+        showAdvancedSettings = true
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -111,6 +136,9 @@ fun EpgReserveDialog(
                         isEditingKeyword = false
                         keyboardController?.hide()
                         runCatching { firstItemFocusRequester.requestFocus() }
+                    } else if (showAdvancedSettings) {
+                        showAdvancedSettings = false
+                        scope.launch { delay(50); runCatching { advancedBtnRequester.requestFocus() } }
                     } else if (showDayOfWeekDialog) {
                         showDayOfWeekDialog = false
                         scope.launch { delay(50); runCatching { dayOfWeekBtnRequester.requestFocus() } }
@@ -150,7 +178,7 @@ fun EpgReserveDialog(
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
-                    text = "連ドラ予約 (キーワード自動予約)",
+                    text = "EPG予約 (キーワード自動予約)",
                     style = MaterialTheme.typography.headlineSmall,
                     color = colors.textPrimary,
                     fontWeight = FontWeight.Bold,
@@ -208,8 +236,7 @@ fun EpgReserveDialog(
                                 .height(56.dp)
                                 .focusRequester(firstItemFocusRequester),
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp)),
-                            // ★修正: フォーカス時の拡大を無効化
-                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f), // 少しだけ浮き上がらせる
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = colors.textPrimary.copy(alpha = 0.05f),
                                 contentColor = colors.textPrimary,
@@ -246,6 +273,7 @@ fun EpgReserveDialog(
                             onClick = { showDayOfWeekDialog = true },
                             modifier = Modifier.focusRequester(dayOfWeekBtnRequester),
                             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                             colors = ClickableSurfaceDefaults.colors(
                                 containerColor = colors.textPrimary.copy(alpha = 0.05f),
                                 contentColor = colors.textPrimary,
@@ -299,7 +327,31 @@ fun EpgReserveDialog(
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(8.dp))
+
+                // ★追加: 詳細設定ボタン
+                Surface(
+                    onClick = { openAdvancedSettings() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .focusRequester(advancedBtnRequester),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = colors.textPrimary.copy(alpha = 0.05f),
+                        contentColor = colors.textPrimary,
+                        focusedContainerColor = colors.textPrimary,
+                        focusedContentColor = if (colors.isDark) Color.Black else Color.White
+                    )
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) { Text("詳細設定を開く", fontWeight = FontWeight.Bold) }
+                }
+
+                Spacer(Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -307,6 +359,7 @@ fun EpgReserveDialog(
                 ) {
                     Button(
                         onClick = onDismiss,
+                        scale = ButtonDefaults.scale(focusedScale = 1.05f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.textPrimary.copy(alpha = 0.1f),
                             contentColor = colors.textPrimary,
@@ -323,16 +376,47 @@ fun EpgReserveDialog(
                                 startHour,
                                 startMinute,
                                 endHour,
-                                endMinute
+                                endMinute,
+                                advExcludeKeyword, advIsTitleOnly, advBroadcastType,
+                                advIsFuzzySearch, advDuplicateScope, advPriority,
+                                advIsEventRelay, advIsExactRecord
                             )
                         },
+                        scale = ButtonDefaults.scale(focusedScale = 1.05f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.accent,
-                            contentColor = if (colors.isDark) Color.Black else Color.White
+                            contentColor = if (colors.isDark) Color.Black else Color.White,
+                            focusedContainerColor = colors.textPrimary,
+                            focusedContentColor = if (colors.isDark) Color.Black else Color.White
                         )
                     ) { Text("この条件で予約", fontWeight = FontWeight.Bold) }
                 }
             }
+        }
+
+        // ★追加: 詳細設定ダイアログの表示処理
+        if (showAdvancedSettings) {
+            AdvancedSettingsDialog(
+                initialExcludeKeyword = advExcludeKeyword,
+                initialIsTitleOnly = advIsTitleOnly,
+                initialBroadcastType = advBroadcastType,
+                initialIsFuzzySearch = advIsFuzzySearch,
+                initialDuplicateScope = advDuplicateScope,
+                initialPriority = advPriority,
+                initialIsEventRelay = advIsEventRelay,
+                initialIsExactRecord = advIsExactRecord,
+                onConfirm = { exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
+                    advExcludeKeyword = exc; advIsTitleOnly = tOnly; advBroadcastType = bType
+                    advIsFuzzySearch = fuzzy; advDuplicateScope = dup; advPriority = pri
+                    advIsEventRelay = relay; advIsExactRecord = exact
+                    showAdvancedSettings = false
+                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                },
+                onDismiss = {
+                    showAdvancedSettings = false
+                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                }
+            )
         }
 
         if (showDayOfWeekDialog) {

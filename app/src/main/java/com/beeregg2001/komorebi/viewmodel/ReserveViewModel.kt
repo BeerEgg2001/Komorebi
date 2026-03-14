@@ -26,81 +26,61 @@ class ReserveViewModel @Inject constructor(
     private val repository: KonomiRepository
 ) : ViewModel() {
 
+    private val _selectedTabIndex = MutableStateFlow(0)
+    val selectedTabIndex: StateFlow<Int> = _selectedTabIndex.asStateFlow()
+
+    fun updateTabIndex(index: Int) {
+        _selectedTabIndex.value = index
+    }
+
     private val _reserves = MutableStateFlow<List<ReserveItem>>(emptyList())
     val reserves: StateFlow<List<ReserveItem>> = _reserves.asStateFlow()
 
     val normalReserves: StateFlow<List<ReserveItem>> = _reserves
         .map { list -> list.filter { !it.comment.contains("EPG自動予約") } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private val _conditions = MutableStateFlow<List<ReservationCondition>>(emptyList())
     val conditions: StateFlow<List<ReservationCondition>> = _conditions.asStateFlow()
 
-    private val _isLoading = MutableStateFlow(false)
+    private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     init {
+        fetchReserves()
+        fetchConditions()
+    }
+
+    fun fetchReserves(showLoading: Boolean = true) {
         viewModelScope.launch {
-            delay(1000)
-            fetchAll()
+            if (showLoading) _isLoading.value = true
+            repository.getReserves()
+                .onSuccess { list -> _reserves.value = list }
+                .onFailure { e -> Log.e(TAG, "Failed to fetch reservations", e) }
+            if (showLoading) _isLoading.value = false
         }
     }
 
-    fun fetchAll() {
+    fun fetchConditions(showLoading: Boolean = true) {
         viewModelScope.launch {
-            _isLoading.value = true
-            repository.getReserves()
-                .onSuccess { list -> _reserves.value = list.sortedBy { it.program.startTime } }
-                .onFailure { e ->
-                    Log.e(
-                        TAG,
-                        "Failed to fetch reservations. Check data model mismatch.",
-                        e
-                    )
-                }
-
+            if (showLoading) _isLoading.value = true
             repository.getReservationConditions()
                 .onSuccess { list -> _conditions.value = list }
-                .onFailure { e -> Log.e(TAG, "Failed to fetch reservation conditions.", e) }
-
-            _isLoading.value = false
-        }
-    }
-
-    fun fetchReserves() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            repository.getReserves()
-                .onSuccess { list -> _reserves.value = list.sortedBy { it.program.startTime } }
-                .onFailure { e ->
-                    Log.e(
-                        TAG,
-                        "Failed to fetch reservations. Check data model mismatch.",
-                        e
-                    )
-                }
-            _isLoading.value = false
-        }
-    }
-
-    fun fetchConditions() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            repository.getReservationConditions()
-                .onSuccess { list -> _conditions.value = list }
-                .onFailure { e -> Log.e(TAG, "Failed to fetch reservation conditions.", e) }
-            _isLoading.value = false
+                .onFailure { e -> Log.e(TAG, "Failed to fetch conditions", e) }
+            if (showLoading) _isLoading.value = false
         }
     }
 
     fun addReserve(programId: String, onSuccess: () -> Unit) {
-        val defaultSettings = ReserveRecordSettings(
-            isEnabled = true,
-            priority = 3,
-            recordingMode = "SpecifiedService",
-            isEventRelayFollowEnabled = true
-        )
-        addReserveWithSettings(programId, defaultSettings, onSuccess)
+        viewModelScope.launch {
+            _isLoading.value = true
+            val request =
+                ReserveRequest(programId = programId, recordSettings = ReserveRecordSettings())
+            repository.addReserve(request)
+                .onSuccess { fetchReserves(); onSuccess() }
+                .onFailure { e -> Log.e(TAG, "Failed to add reservation", e); onSuccess() }
+            _isLoading.value = false
+        }
     }
 
     fun addReserveWithSettings(
@@ -110,56 +90,27 @@ class ReserveViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             _isLoading.value = true
-            val safeSettings = settings.copy(recordingMode = "SpecifiedService")
-            val request = ReserveRequest(programId = programId, recordSettings = safeSettings)
-
+            val request = ReserveRequest(programId = programId, recordSettings = settings)
             repository.addReserve(request)
-                .onSuccess {
-                    fetchReserves()
-                    onSuccess()
-                }
-                .onFailure { e ->
-                    Log.e(TAG, "Failed to add reservation", e)
-                    onSuccess()
-                }
+                .onSuccess { fetchReserves(); onSuccess() }
+                .onFailure { e -> Log.e(TAG, "Failed to add reservation", e); onSuccess() }
             _isLoading.value = false
         }
     }
 
     fun updateReservation(
-        item: ReserveItem,
+        reserve: ReserveItem,
         newSettings: ReserveRecordSettings,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _isLoading.value = true
-            val safeSettings = newSettings.copy(recordingMode = "SpecifiedService")
-            val request = ReserveRequest(
-                programId = item.program.id,
-                recordSettings = safeSettings
-            )
-            repository.updateReserve(item.id, request)
-                .onSuccess {
-                    fetchReserves()
-                    onSuccess()
-                }
-                .onFailure { e ->
-                    Log.e(TAG, "Failed to update reservation", e)
-                    onSuccess()
-                }
+            val request =
+                ReserveRequest(programId = reserve.program.id, recordSettings = newSettings)
+            repository.updateReserve(reserve.id, request)
+                .onSuccess { fetchReserves(); onSuccess() }
+                .onFailure { e -> Log.e(TAG, "Failed to update reservation", e); onSuccess() }
             _isLoading.value = false
-        }
-    }
-
-    fun refreshReserveItem(reservationId: Int, onComplete: (ReserveItem?) -> Unit) {
-        viewModelScope.launch {
-            repository.getReserves()
-                .onSuccess { list ->
-                    val latest = list.find { it.id == reservationId }
-                    _reserves.value = list.sortedBy { it.program.startTime }
-                    onComplete(latest)
-                }
-                .onFailure { onComplete(null) }
         }
     }
 
@@ -167,93 +118,29 @@ class ReserveViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
             repository.deleteReservation(reservationId)
-                .onSuccess {
-                    fetchReserves()
-                    onSuccess()
-                }
-                .onFailure { e ->
-                    Log.e(TAG, "Failed to delete reservation", e)
-                    fetchReserves()
-                    onSuccess()
-                }
+                .onSuccess { fetchReserves(); onSuccess() }
+                .onFailure { e -> Log.e(TAG, "Failed to delete reservation", e); onSuccess() }
             _isLoading.value = false
         }
     }
 
-    // ★修正: transportStreamId を引数に追加し、0固定を廃止
-    fun addEpgReserve(
-        keyword: String,
-        networkId: Int,
-        transportStreamId: Int, // ★追加
-        serviceId: Int,
-        daysOfWeek: Set<Int>,
-        startHour: Int,
-        startMinute: Int,
-        endHour: Int,
-        endMinute: Int,
-        onSuccess: () -> Unit
-    ) {
+    fun refreshReserveItem(reservationId: Int, onResult: (ReserveItem?) -> Unit) {
         viewModelScope.launch {
-            _isLoading.value = true
-
-            // 日またぎの判定
-            val isNextDay = endHour < startHour || (endHour == startHour && endMinute < startMinute)
-
-            val dateRanges = daysOfWeek.map { dayOfWeek ->
-                com.beeregg2001.komorebi.data.model.ProgramSearchConditionDate(
-                    startDayOfWeek = dayOfWeek,
-                    startHour = startHour,
-                    startMinute = startMinute,
-                    endDayOfWeek = if (isNextDay) (dayOfWeek + 1) % 7 else dayOfWeek,
-                    endHour = endHour,
-                    endMinute = endMinute
-                )
-            }
-
-            val serviceRange = com.beeregg2001.komorebi.data.model.ProgramSearchConditionService(
-                networkId = networkId,
-                transportStreamId = transportStreamId, // ★修正: 0 から引数に変更
-                serviceId = serviceId
-            )
-
-            val searchCondition = com.beeregg2001.komorebi.data.model.ProgramSearchCondition(
-                isEnabled = true,
-                keyword = keyword,
-                serviceRanges = listOf(serviceRange),
-                dateRanges = dateRanges,
-                duplicateTitleCheckScope = "SameChannelOnly",
-                duplicateTitleCheckPeriodDays = 6
-            )
-
-            val recordSettings = com.beeregg2001.komorebi.data.model.RecordSettings(
-                isEnabled = true,
-                priority = 3,
-                recordingMode = "SpecifiedService",
-                isEventRelayFollowEnabled = true
-            )
-
-            val request = com.beeregg2001.komorebi.data.model.ReservationConditionAddRequest(
-                programSearchCondition = searchCondition,
-                recordSettings = recordSettings
-            )
-
-            repository.addReservationCondition(request)
-                .onSuccess {
-                    fetchConditions()
-                    onSuccess()
+            repository.getReserves()
+                .onSuccess { list ->
+                    _reserves.value = list
+                    val item = list.find { it.id == reservationId }
+                    onResult(item)
                 }
-                .onFailure { e ->
-                    Log.e(TAG, "Failed to add EPG reservation", e)
-                    onSuccess()
+                .onFailure {
+                    Log.e(TAG, "Failed to refresh item", it)
+                    onResult(null)
                 }
-
-            _isLoading.value = false
         }
     }
 
-    // ★追加: 登録済みのEPG予約条件を更新する
-    fun updateEpgReserve(
-        conditionId: Int,
+    // ★修正: 引数を大幅に追加し、新規作成のリクエストボディへマッピングする
+    fun addEpgReserve(
         keyword: String,
         networkId: Int,
         transportStreamId: Int,
@@ -263,10 +150,110 @@ class ReserveViewModel @Inject constructor(
         startMinute: Int,
         endHour: Int,
         endMinute: Int,
+        excludeKeyword: String,
+        isTitleOnly: Boolean,
+        broadcastType: String,
+        isFuzzySearch: Boolean,
+        duplicateScope: String,
+        priority: Int,
+        isEventRelay: Boolean,
+        isExactRecord: Boolean,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _isLoading.value = true
+
+            val isNextDay = endHour < startHour || (endHour == startHour && endMinute < startMinute)
+            val dateRanges = daysOfWeek.map { dayOfWeek ->
+                com.beeregg2001.komorebi.data.model.ProgramSearchConditionDate(
+                    startDayOfWeek = dayOfWeek, startHour = startHour, startMinute = startMinute,
+                    endDayOfWeek = if (isNextDay) (dayOfWeek + 1) % 7 else dayOfWeek, endHour = endHour, endMinute = endMinute
+                )
+            }
+
+            val serviceRange = com.beeregg2001.komorebi.data.model.ProgramSearchConditionService(
+                networkId = networkId,
+                transportStreamId = transportStreamId,
+                serviceId = serviceId
+            )
+
+            // ★修正: 詳細設定の値をすべて反映
+            val searchCondition = com.beeregg2001.komorebi.data.model.ProgramSearchCondition(
+                isEnabled = true,
+                keyword = keyword,
+                excludeKeyword = excludeKeyword,
+                isTitleOnly = isTitleOnly,
+                broadcastType = broadcastType,
+                isFuzzySearchEnabled = isFuzzySearch,
+                serviceRanges = listOf(serviceRange),
+                dateRanges = dateRanges,
+                duplicateTitleCheckScope = duplicateScope,
+                duplicateTitleCheckPeriodDays = 6
+            )
+
+            // ★修正: 録画設定側も反映
+            val recordSettings = com.beeregg2001.komorebi.data.model.RecordSettings(
+                isEnabled = true,
+                priority = priority,
+                recordingMode = "SpecifiedService",
+                isEventRelayFollowEnabled = isEventRelay,
+                isExactRecordingEnabled = isExactRecord
+            )
+
+            val request = com.beeregg2001.komorebi.data.model.ReservationConditionAddRequest(
+                programSearchCondition = searchCondition,
+                recordSettings = recordSettings
+            )
+
+            repository.addReservationCondition(request)
+                .onSuccess {
+                    fetchConditions(showLoading = false)
+                    fetchReserves(showLoading = false)
+                    _isLoading.value = false
+                    onSuccess()
+
+                    // EDCBが条件に基づき検索し、実際の予約を生成するのを待つ（3秒後に裏でこっそり更新）
+                    viewModelScope.launch {
+                        delay(3000)
+                        fetchConditions(showLoading = false)
+                        fetchReserves(showLoading = false)
+                    }
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to add EPG reservation", e)
+                    _isLoading.value = false
+                    onSuccess()
+                }
+        }
+    }
+
+    fun updateEpgReserve(
+        originalCondition: ReservationCondition,
+        isEnabled: Boolean,
+        keyword: String,
+        daysOfWeek: Set<Int>,
+        startHour: Int,
+        startMinute: Int,
+        endHour: Int,
+        endMinute: Int,
+        excludeKeyword: String,
+        isTitleOnly: Boolean,
+        broadcastType: String,
+        isFuzzySearch: Boolean,
+        duplicateScope: String,
+        priority: Int,
+        isEventRelay: Boolean,
+        isExactRecord: Boolean,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+
+            val exactComment = "EPG自動予約(${originalCondition.programSearchCondition.keyword})"
+            val relatedReserves = _reserves.value.filter { it.comment == exactComment }
+            relatedReserves.forEach { reserve ->
+                repository.deleteReservation(reserve.id)
+            }
 
             val isNextDay = endHour < startHour || (endHour == startHour && endMinute < startMinute)
             val dateRanges = daysOfWeek.map { dayOfWeek ->
@@ -280,42 +267,50 @@ class ReserveViewModel @Inject constructor(
                 )
             }
 
-            val serviceRange = com.beeregg2001.komorebi.data.model.ProgramSearchConditionService(
-                networkId = networkId, transportStreamId = transportStreamId, serviceId = serviceId
-            )
-
-            val searchCondition = com.beeregg2001.komorebi.data.model.ProgramSearchCondition(
-                isEnabled = true,
+            val searchCondition = originalCondition.programSearchCondition.copy(
+                isEnabled = isEnabled,
                 keyword = keyword,
-                serviceRanges = listOf(serviceRange),
-                dateRanges = dateRanges,
-                duplicateTitleCheckScope = "SameChannelOnly",
-                duplicateTitleCheckPeriodDays = 6
+                excludeKeyword = excludeKeyword,
+                isTitleOnly = isTitleOnly,
+                broadcastType = broadcastType,
+                isFuzzySearchEnabled = isFuzzySearch,
+                duplicateTitleCheckScope = duplicateScope,
+                dateRanges = dateRanges
             )
 
-            val recordSettings = com.beeregg2001.komorebi.data.model.RecordSettings(
-                isEnabled = true,
-                priority = 3,
-                recordingMode = "SpecifiedService",
-                isEventRelayFollowEnabled = true
+            val recordSettings = originalCondition.recordSettings.copy(
+                priority = priority,
+                isEventRelayFollowEnabled = isEventRelay,
+                isExactRecordingEnabled = isExactRecord
             )
 
             val request = com.beeregg2001.komorebi.data.model.ReservationConditionUpdateRequest(
-                programSearchCondition = searchCondition, recordSettings = recordSettings
+                programSearchCondition = searchCondition,
+                recordSettings = recordSettings
             )
 
-            repository.updateReservationCondition(conditionId, request)
+            repository.updateReservationCondition(originalCondition.id, request)
                 .onSuccess {
-                    fetchConditions()
+                    fetchConditions(showLoading = false)
+                    fetchReserves(showLoading = false)
+                    _isLoading.value = false
+                    onSuccess()
+
+                    // EDCBが新しい条件で予約を再構築するのを待つ間、UIをパカパカさせずにこっそり更新
+                    viewModelScope.launch {
+                        delay(3000)
+                        fetchConditions(showLoading = false)
+                        fetchReserves(showLoading = false)
+                    }
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to update EPG reservation", e)
+                    _isLoading.value = false
                     onSuccess()
                 }
-                .onFailure { e -> Log.e(TAG, "Failed to update EPG reservation", e); onSuccess() }
-
-            _isLoading.value = false
         }
     }
 
-    // ★追加: 条件の削除と、付随する関連予約の一掃 (クリーンアップ UseCase)
     fun deleteConditionWithCleanup(
         condition: ReservationCondition,
         deleteRelatedReserves: Boolean,
@@ -323,16 +318,11 @@ class ReserveViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             _isLoading.value = true
-
-            // 1. まず自動予約条件の本体を削除
             repository.deleteReservationCondition(condition.id)
 
-            // 2. 関連予約を一掃する場合
             if (deleteRelatedReserves) {
                 val keyword = condition.programSearchCondition.keyword
-                val exactComment = "EPG自動予約($keyword)" // バックエンドが付与するコメントと完全一致させる
-
-                // 現在の予約リストから、この条件によって登録された番組だけを抽出して全て削除
+                val exactComment = "EPG自動予約($keyword)"
                 val relatedReserves = _reserves.value.filter { it.comment == exactComment }
                 relatedReserves.forEach { reserve ->
                     repository.deleteReservation(reserve.id)

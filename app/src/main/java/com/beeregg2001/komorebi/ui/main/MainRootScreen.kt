@@ -44,7 +44,7 @@ import com.beeregg2001.komorebi.ui.setting.SettingsScreen
 import com.beeregg2001.komorebi.ui.video.RecordListScreen
 import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
 import com.beeregg2001.komorebi.ui.reserve.ReserveSettingsDialog
-import com.beeregg2001.komorebi.ui.reserve.ConditionEditDialog // ★追加
+import com.beeregg2001.komorebi.ui.reserve.ConditionEditDialog
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.AppTheme
@@ -106,6 +106,8 @@ fun MainRootScreen(
     val isSettingsInitialized by settingsViewModel.isSettingsInitialized.collectAsState()
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
+
+    val conditions by reserveViewModel.conditions.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
 
@@ -133,7 +135,11 @@ fun MainRootScreen(
 
     LaunchedEffect(state.isRecordListOpen) {
         if (state.isRecordListOpen) {
-            recordViewModel.triggerSmartSync()
+            // ★修正: DB構築中（isInitialBuild=true）または辞書構築の初期フェーズ中は
+            // smartSync を呼ばない。二重起動してクラッシュループの原因になる。
+            if (!syncProgress.isSyncing || (!syncProgress.isInitialBuild && !syncProgress.isInitialSyncPhase)) {
+                recordViewModel.triggerSmartSync()
+            }
         }
     }
 
@@ -167,7 +173,9 @@ fun MainRootScreen(
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
-            state.editingCondition != null -> state.editingCondition = null // ★追加: 自動予約編集ダイアログ閉じ
+            // ★追加: 詳細画面（Read Only）を閉じる処理
+            state.selectedConditionReserveItem != null -> state.selectedConditionReserveItem = null
+
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
             state.reserveToDelete != null -> state.reserveToDelete = null
@@ -340,6 +348,70 @@ fun MainRootScreen(
                                 })
                         }
 
+                        state.editingCondition != null -> {
+                            val currentCondition =
+                                conditions.find { it.id == state.editingCondition!!.id }
+                                    ?: state.editingCondition!!
+                            val relatedReserves = reserves.filter {
+                                it.comment.contains(currentCondition.programSearchCondition.keyword)
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(colors.background)
+                                    .background(backgroundBrush)
+                            )
+                            ConditionEditDialog(
+                                condition = currentCondition,
+                                relatedReserves = relatedReserves,
+                                onConfirmUpdate = { isEnabled, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
+                                    reserveViewModel.updateEpgReserve(
+                                        originalCondition = currentCondition,
+                                        isEnabled = isEnabled, // ★追加
+                                        keyword = keyword,
+                                        daysOfWeek = daysOfWeek,
+                                        startHour = startH,
+                                        startMinute = startM,
+                                        endHour = endH,
+                                        endMinute = endM,
+                                        excludeKeyword = exc,
+                                        isTitleOnly = tOnly,
+                                        broadcastType = bType,
+                                        isFuzzySearch = fuzzy,
+                                        duplicateScope = dup,
+                                        priority = pri,
+                                        isEventRelay = relay,
+                                        isExactRecord = exact,
+                                        onSuccess = {
+                                            scope.launch {
+                                                state.editingCondition = null
+                                                delay(300)
+                                                state.toastMessage = "予約条件を更新しました"
+                                            }
+                                        }
+                                    )
+                                },
+                                onConfirmDelete = { deleteRelated ->
+                                    reserveViewModel.deleteConditionWithCleanup(
+                                        condition = currentCondition,
+                                        deleteRelatedReserves = deleteRelated,
+                                        onSuccess = {
+                                            scope.launch {
+                                                state.editingCondition = null
+                                                delay(300)
+                                                state.toastMessage =
+                                                    if (deleteRelated) "条件と関連する予約をすべて削除しました" else "予約条件を削除しました"
+                                            }
+                                        }
+                                    )
+                                },
+                                onDismiss = { state.editingCondition = null },
+                                // ★追加: リストアイテムクリックで詳細画面を開く
+                                onReserveItemClick = { state.selectedConditionReserveItem = it }
+                            )
+                        }
+
                         else -> {
                             HomeLauncherScreen(
                                 channelViewModel = channelViewModel,
@@ -385,7 +457,6 @@ fun MainRootScreen(
                                 onReserveSelected = { reserveItem ->
                                     state.selectedReserve = reserveItem
                                 },
-                                // ★追加: キーワード自動予約カードがクリックされた時の処理
                                 onConditionClick = { condition ->
                                     state.editingCondition = condition
                                 },
@@ -465,6 +536,20 @@ fun MainRootScreen(
                 }
             }
 
+            // ★新規追加: 条件編集から開かれた番組詳細画面（ReadOnlyモード）
+            if (state.selectedConditionReserveItem != null) {
+                val program =
+                    remember(state.selectedConditionReserveItem) { ReserveMapper.toEpgProgram(state.selectedConditionReserveItem!!) }
+                ProgramDetailScreen(
+                    program = program,
+                    mode = ProgramDetailMode.RESERVE,
+                    isReserved = true,
+                    isReadOnly = true, // ★戻るボタンのみ表示
+                    onBackClick = { state.selectedConditionReserveItem = null },
+                    initialFocusRequester = detailFocusRequester
+                )
+            }
+
             if (state.selectedReserve != null) {
                 val program =
                     remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }
@@ -520,7 +605,8 @@ fun MainRootScreen(
                             }
                         }
                     },
-                    onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM ->
+                    // ★修正: 引数が大幅に増えたコールバックに対応し、ViewModelへパスする
+                    onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
                         val channel =
                             groupedChannels.values.flatten().find { it.id == program.channel_id }
                         var tsId = channel?.transportStreamId?.toInt()
@@ -546,12 +632,21 @@ fun MainRootScreen(
                             startMinute = startM,
                             endHour = endH,
                             endMinute = endM,
+                            // ★追加: 詳細設定を全て渡す
+                            excludeKeyword = exc,
+                            isTitleOnly = tOnly,
+                            broadcastType = bType,
+                            isFuzzySearch = fuzzy,
+                            duplicateScope = dup,
+                            priority = pri,
+                            isEventRelay = relay,
+                            isExactRecord = exact,
                             onSuccess = {
                                 scope.launch {
                                     state.epgSelectedProgram = null
                                     delay(300)
                                     state.toastMessage =
-                                        "連ドラ予約 (キーワード自動予約) を登録しました"
+                                        "EPG予約 (キーワード自動予約) を登録しました"
                                 }
                             }
                         )
@@ -620,54 +715,6 @@ fun MainRootScreen(
                         state.editingNewProgram =
                             null; scope.launch { delay(200); detailFocusRequester.safeRequestFocus("ProgramDetail") }
                     })
-            }
-
-            // ★追加: 自動予約条件の編集・削除ダイアログ
-            if (state.editingCondition != null) {
-                val condition = state.editingCondition!!
-                ConditionEditDialog(
-                    condition = condition,
-                    // ★修正: 引数に keyword を追加し、APIリクエストに渡すように変更
-                    onConfirmUpdate = { keyword, daysOfWeek, startH, startM, endH, endM ->
-                        val service = condition.programSearchCondition.serviceRanges?.firstOrNull()
-                        reserveViewModel.updateEpgReserve(
-                            conditionId = condition.id,
-                            keyword = keyword, // ★ここを更新されたキーワードに変更
-                            networkId = service?.networkId ?: 0,
-                            transportStreamId = service?.transportStreamId ?: 0,
-                            serviceId = service?.serviceId ?: 0,
-                            daysOfWeek = daysOfWeek,
-                            startHour = startH,
-                            startMinute = startM,
-                            endHour = endH,
-                            endMinute = endM,
-                            onSuccess = {
-                                scope.launch {
-                                    state.editingCondition = null
-                                    delay(300)
-                                    state.toastMessage = "予約条件を更新しました"
-                                }
-                            }
-                        )
-                    },
-                    onConfirmDelete = { deleteRelated ->
-                        reserveViewModel.deleteConditionWithCleanup(
-                            condition = condition,
-                            deleteRelatedReserves = deleteRelated,
-                            onSuccess = {
-                                scope.launch {
-                                    state.editingCondition = null
-                                    delay(300)
-                                    state.toastMessage =
-                                        if (deleteRelated) "条件と関連する予約をすべて削除しました" else "予約条件を削除しました"
-                                }
-                            }
-                        )
-                    },
-                    onDismiss = {
-                        state.editingCondition = null
-                    }
-                )
             }
 
             if (state.reserveToDelete != null) {

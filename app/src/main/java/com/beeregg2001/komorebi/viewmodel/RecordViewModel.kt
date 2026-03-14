@@ -177,9 +177,7 @@ class RecordViewModel @Inject constructor(
                 }
         }
 
-        viewModelScope.launch {
-            syncEngine.syncAllRecords()
-        }
+        syncEngine.launchSyncAllRecords()
     }
 
     fun handleBackNavigation(onExit: () -> Unit) {
@@ -191,7 +189,7 @@ class RecordViewModel @Inject constructor(
     }
 
     fun triggerSmartSync() {
-        viewModelScope.launch { syncEngine.smartSync() }
+        syncEngine.launchSmartSync()
     }
 
     val pagedRecordings: Flow<PagingData<RecordedProgram>> = combine(
@@ -312,7 +310,7 @@ class RecordViewModel @Inject constructor(
     }
 
     fun fetchRecentRecordings(forceRefresh: Boolean = false) {
-        viewModelScope.launch { syncEngine.syncAllRecords(forceFullSync = forceRefresh) }
+        syncEngine.launchSyncAllRecords(forceFullSync = forceRefresh)
     }
 
     fun loadNextPage() {}

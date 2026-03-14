@@ -52,10 +52,17 @@ fun ProgramDetailScreen(
     program: EpgProgram,
     mode: ProgramDetailMode = ProgramDetailMode.EPG,
     isReserved: Boolean = false,
+    isReadOnly: Boolean = false,
     onPlayClick: (EpgProgram) -> Unit = {},
     onRecordClick: (EpgProgram) -> Unit = {},
     onRecordDetailClick: (EpgProgram) -> Unit = {},
-    onEpgReserveClick: (program: EpgProgram, keyword: String, daysOfWeek: Set<Int>, startHour: Int, startMin: Int, endHour: Int, endMin: Int) -> Unit = { _, _, _, _, _, _, _ -> },
+    // ★修正: 引数を大幅に追加して詳細設定を受け取れるように
+    onEpgReserveClick: (
+        program: EpgProgram, keyword: String, daysOfWeek: Set<Int>, startHour: Int, startMin: Int, endHour: Int, endMin: Int,
+        excludeKeyword: String, isTitleOnly: Boolean, broadcastType: String,
+        isFuzzySearch: Boolean, duplicateScope: String, priority: Int,
+        isEventRelay: Boolean, isExactRecord: Boolean
+    ) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
     onEditReserveClick: (EpgProgram) -> Unit = {},
     onDeleteReserveClick: (EpgProgram) -> Unit = {},
     onBackClick: () -> Unit,
@@ -86,7 +93,6 @@ fun ProgramDetailScreen(
     var isClickEnabled by remember { mutableStateOf(false) }
     var showEpgReserveDialog by remember { mutableStateOf(false) }
 
-    // ★追加: 「連ドラ予約する」ボタンにフォーカスを戻すための Requester
     val epgReserveButtonRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -103,7 +109,6 @@ fun ProgramDetailScreen(
     BackHandler(enabled = isClickEnabled) {
         if (showEpgReserveDialog) {
             showEpgReserveDialog = false
-            // ★修正: 戻るキーでキャンセルした際にもボタンにフォーカスを戻す
             coroutineScope.launch {
                 delay(100)
                 epgReserveButtonRequester.safeRequestFocus("ProgramDetail")
@@ -141,217 +146,220 @@ fun ProgramDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.Start
             ) {
-                if (mode == ProgramDetailMode.RESERVE) {
-                    Button(
-                        onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
-                            contentColor = colors.textPrimary
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(initialFocusRequester)
-                    ) {
-                        Text(
-                            "予約設定変更",
-                            fontFamily = NotoSansJP,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Button(
-                        onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = recordRed,
-                            contentColor = Color.White
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("予約を削除", fontFamily = NotoSansJP, fontWeight = FontWeight.Bold) }
-                } else {
-                    if (isBroadcasting) {
+                if (!isReadOnly) {
+                    if (mode == ProgramDetailMode.RESERVE) {
                         Button(
-                            onClick = { if (isClickEnabled) onPlayClick(program) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(initialFocusRequester),
+                            onClick = { if (isClickEnabled) onEditReserveClick(program) },
                             colors = ButtonDefaults.colors(
-                                containerColor = colors.textPrimary,
-                                contentColor = if (colors.isDark) Color.Black else Color.White
-                            )
-                        ) {
-                            Text(
-                                "視聴する",
-                                fontFamily = NotoSansJP,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        if (isReserved) {
-                            Button(
-                                onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = colors.textPrimary.copy(
-                                        alpha = 0.1f
-                                    ), contentColor = colors.textPrimary
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    "予約設定変更",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordRed,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    "予約を削除",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        } else {
-                            Button(
-                                onClick = { if (isClickEnabled) onRecordClick(program) },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordRed,
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Text(
-                                    "録画する",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) showEpgReserveDialog = true },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = seriesReserveOrange,
-                                    contentColor = Color.White
-                                ),
-                                // ★修正: フォーカスリクエスターを付与
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(epgReserveButtonRequester)
-                            ) {
-                                Text(
-                                    "EPG予約する",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) onRecordDetailClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordDarkRed,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("録画する（詳細設定）", fontFamily = NotoSansJP) }
-                        }
-
-                    } else if (isFuture) {
-                        if (isReserved) {
-                            Button(
-                                onClick = { if (isClickEnabled) onEditReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = colors.textPrimary.copy(
-                                        alpha = 0.1f
-                                    ), contentColor = colors.textPrimary
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(initialFocusRequester)
-                            ) {
-                                Text(
-                                    "予約設定変更",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordRed,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    "予約を削除",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        } else {
-                            Button(
-                                onClick = { if (isClickEnabled) onRecordClick(program) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(initialFocusRequester),
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordRed,
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Text(
-                                    "録画予約する",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) showEpgReserveDialog = true },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = seriesReserveOrange,
-                                    contentColor = Color.White
-                                ),
-                                // ★修正: フォーカスリクエスターを付与
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(epgReserveButtonRequester)
-                            ) {
-                                Text(
-                                    "連ドラ予約する",
-                                    fontFamily = NotoSansJP,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Button(
-                                onClick = { if (isClickEnabled) onRecordDetailClick(program) },
-                                colors = ButtonDefaults.colors(
-                                    containerColor = recordDarkRed,
-                                    contentColor = Color.White
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("録画予約（詳細設定）", fontFamily = NotoSansJP) }
-                        }
-                    } else {
-                        Button(
-                            onClick = {},
-                            enabled = false,
-                            colors = ButtonDefaults.colors(
-                                containerColor = colors.textSecondary.copy(
-                                    0.3f
-                                ), contentColor = colors.textSecondary
+                                containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                contentColor = colors.textPrimary
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(initialFocusRequester)
                         ) {
                             Text(
-                                "終了した番組",
+                                "予約設定変更",
                                 fontFamily = NotoSansJP,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+
+                        Button(
+                            onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                            colors = ButtonDefaults.colors(
+                                containerColor = recordRed,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "予約を削除",
+                                fontFamily = NotoSansJP,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        if (isBroadcasting) {
+                            Button(
+                                onClick = { if (isClickEnabled) onPlayClick(program) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(initialFocusRequester),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary,
+                                    contentColor = if (colors.isDark) Color.Black else Color.White
+                                )
+                            ) {
+                                Text(
+                                    "視聴する",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            if (isReserved) {
+                                Button(
+                                    onClick = { if (isClickEnabled) onEditReserveClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                        contentColor = colors.textPrimary
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "予約設定変更",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordRed,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "予約を削除",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            } else {
+                                Button(
+                                    onClick = { if (isClickEnabled) onRecordClick(program) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordRed,
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Text(
+                                        "録画する",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) showEpgReserveDialog = true },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = seriesReserveOrange,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(epgReserveButtonRequester)
+                                ) {
+                                    Text(
+                                        "EPG予約する",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) onRecordDetailClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordDarkRed,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("録画する（詳細設定）", fontFamily = NotoSansJP) }
+                            }
+
+                        } else if (isFuture) {
+                            if (isReserved) {
+                                Button(
+                                    onClick = { if (isClickEnabled) onEditReserveClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                        contentColor = colors.textPrimary
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(initialFocusRequester)
+                                ) {
+                                    Text(
+                                        "予約設定変更",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordRed,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        "予約を削除",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            } else {
+                                Button(
+                                    onClick = { if (isClickEnabled) onRecordClick(program) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(initialFocusRequester),
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordRed,
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Text(
+                                        "録画予約する",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) showEpgReserveDialog = true },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = seriesReserveOrange,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(epgReserveButtonRequester)
+                                ) {
+                                    Text(
+                                        "EPG予約する",
+                                        fontFamily = NotoSansJP,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Button(
+                                    onClick = { if (isClickEnabled) onRecordDetailClick(program) },
+                                    colors = ButtonDefaults.colors(
+                                        containerColor = recordDarkRed,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("録画予約（詳細設定）", fontFamily = NotoSansJP) }
+                            }
+                        } else {
+                            Button(
+                                onClick = {},
+                                enabled = false,
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textSecondary.copy(0.3f),
+                                    contentColor = colors.textSecondary
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(initialFocusRequester)
+                            ) {
+                                Text(
+                                    "終了した番組",
+                                    fontFamily = NotoSansJP,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -361,7 +369,7 @@ fun ProgramDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
-                            if (isPast && mode == ProgramDetailMode.EPG) Modifier.focusRequester(
+                            if (isReadOnly || (isPast && mode == ProgramDetailMode.EPG)) Modifier.focusRequester(
                                 initialFocusRequester
                             ) else Modifier
                         ),
@@ -455,13 +463,29 @@ fun ProgramDetailScreen(
                 initialKeyword = TitleNormalizer.extractDisplayTitle(program.title),
                 initialStartTime = startTime,
                 initialEndTime = endTime,
-                onConfirm = { keyword, daysOfWeek, sH, sM, eH, eM ->
+                // ★修正: 引数を追加
+                onConfirm = { keyword, daysOfWeek, sH, sM, eH, eM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
                     showEpgReserveDialog = false
-                    onEpgReserveClick(program, keyword, daysOfWeek, sH, sM, eH, eM)
+                    onEpgReserveClick(
+                        program,
+                        keyword,
+                        daysOfWeek,
+                        sH,
+                        sM,
+                        eH,
+                        eM,
+                        exc,
+                        tOnly,
+                        bType,
+                        fuzzy,
+                        dup,
+                        pri,
+                        relay,
+                        exact
+                    )
                 },
                 onDismiss = {
                     showEpgReserveDialog = false
-                    // ★修正: キャンセルボタンで閉じた際もボタンにフォーカスを戻す
                     coroutineScope.launch {
                         delay(100)
                         epgReserveButtonRequester.safeRequestFocus("ProgramDetail")

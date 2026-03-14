@@ -82,7 +82,7 @@ fun KeywordConditionCard(
         channelName = reserveMatch?.name ?: channelMatch?.name ?: "不明なチャンネル"
 
         val num = reserveMatch?.channelNumber ?: ""
-        channelNumberText = if (num.isNotEmpty()) "Ch.$num " else ""
+        channelNumberText = if (num.isNotEmpty()) "$num " else ""
 
         val displayId = reserveMatch?.displayChannelId ?: channelMatch?.displayChannelId ?: targetId
 
@@ -101,7 +101,7 @@ fun KeywordConditionCard(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .height(115.dp)
+            .height(68.dp) // ★修正: 88.dp -> 68.dp に大幅縮小してスッキリさせる
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
@@ -121,17 +121,21 @@ fun KeywordConditionCard(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp), // ★修正: 上下パディングをさらに削減
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // --- 左カラム: 優先度 ---
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.width(60.dp)
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.width(48.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Box(modifier = Modifier
-                        .size(24.dp)
-                        .background(badgeBgColor, CircleShape))
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .background(badgeBgColor, CircleShape)
+                    )
                     Text(
                         text = settings.priority.toString(),
                         style = MaterialTheme.typography.labelSmall,
@@ -139,24 +143,29 @@ fun KeywordConditionCard(
                         fontWeight = FontWeight.Bold
                     )
                 }
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     "優先度",
-                    style = MaterialTheme.typography.labelSmall,
                     fontSize = 9.sp,
                     color = subTextColor
                 )
             }
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
+            // --- 中央カラム: キーワード ＆ チャンネル情報 ---
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                // 1行目: キーワード
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.Search,
                         null,
                         tint = contentColor,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = keywordText,
                         style = MaterialTheme.typography.titleMedium,
@@ -176,60 +185,62 @@ fun KeywordConditionCard(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
 
+                // 2行目: チャンネル情報 ＋ 除外キーワード(横に並べることで行数を節約)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (logoUrl != null) {
                         AsyncImage(
                             model = logoUrl,
                             contentDescription = null,
-                            // ★修正: clip() を削除し、純粋な長方形に
                             modifier = Modifier
-                                .size(width = 36.dp, height = 20.dp)
+                                .size(width = 28.dp, height = 16.dp)
                                 .background(Color.White),
                             contentScale = ContentScale.Crop
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                     } else {
                         Icon(
                             Icons.Default.Tv,
                             contentDescription = null,
                             tint = subTextColor,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
                         text = "$channelNumberText$channelName$extraText",
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = contentColor,
                         fontWeight = FontWeight.SemiBold
                     )
-                }
 
-                if (searchCondition.excludeKeyword.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "除外: ${searchCondition.excludeKeyword}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = subTextColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (searchCondition.excludeKeyword.isNotEmpty()) {
+                        Text(
+                            text = "   |   除外: ${searchCondition.excludeKeyword}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = subTextColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxHeight()
+
+            // --- 右カラム: 関連予約数 ＆ 有効フラグ ---
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
             ) {
                 Box(
                     modifier = Modifier
                         .border(
                             1.dp,
-                            if (isFocused) (if (colors.isDark) Color.Black else Color.White) else subTextColor,
-                            RoundedCornerShape(16.dp)
+                            if (isFocused) (if (colors.isDark) Color.Black else Color.White) else subTextColor.copy(
+                                alpha = 0.5f
+                            ),
+                            RoundedCornerShape(12.dp)
                         )
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -240,18 +251,18 @@ fun KeywordConditionCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "関連予約: ${condition.reservationCount}件",
+                            text = "予約数${condition.reservationCount}件", // 「関連予約」の文字を削ってスッキリ
                             color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else subTextColor,
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
                 }
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = if (searchCondition.isEnabled) "有効" else "無効",
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (searchCondition.isEnabled && !isFocused) colors.accent else contentColor,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Bold
                 )
             }
         }

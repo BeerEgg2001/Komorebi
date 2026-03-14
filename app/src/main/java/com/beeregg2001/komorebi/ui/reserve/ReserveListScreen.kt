@@ -42,7 +42,7 @@ fun ReserveListScreen(
     onConditionClick: (ReservationCondition) -> Unit = {},
     konomiIp: String,
     konomiPort: String,
-    groupedChannels: Map<String, List<Channel>> = emptyMap(), // ★追加: チャンネル一覧を受け取る
+    groupedChannels: Map<String, List<Channel>> = emptyMap(),
     contentFirstItemRequester: FocusRequester? = null,
     topNavFocusRequester: FocusRequester? = null,
     viewModel: ReserveViewModel = hiltViewModel()
@@ -53,7 +53,8 @@ fun ReserveListScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val colors = KomorebiTheme.colors
 
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
+    // ★修正: ローカルステートではなくViewModelから状態を取得・更新する
+    val selectedTabIndex by viewModel.selectedTabIndex.collectAsState()
     val tabs = listOf("全ての予約", "通常予約", "キーワード自動予約")
 
     val listFocusRequester = remember { FocusRequester() }
@@ -98,8 +99,8 @@ fun ReserveListScreen(
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = index == selectedTabIndex,
-                        onFocus = { selectedTabIndex = index },
-                        onClick = { selectedTabIndex = index },
+                        onFocus = { viewModel.updateTabIndex(index) }, // ★修正
+                        onClick = { viewModel.updateTabIndex(index) }, // ★修正
                         modifier = Modifier
                             .focusRequester(tabFocusRequesters[index])
                             .then(
@@ -200,7 +201,7 @@ fun ReserveListScreen(
                     2 -> {
                         if (conditions.isEmpty()) {
                             EmptyMessage(
-                                message = "キーワード自動予約の条件は登録されていません。\n番組表の番組詳細から「簡単連ドラ予約」が可能です。",
+                                message = "キーワード自動予約の条件は登録されていません。\n番組表の番組詳細から「EPG予約」が可能です。",
                                 listFocusRequester = listFocusRequester,
                                 targetTabRequester = tabFocusRequesters[2]
                             )
@@ -215,7 +216,6 @@ fun ReserveListScreen(
                                     .focusProperties { up = tabFocusRequesters[2] }
                             ) {
                                 items(conditions) { condition ->
-                                    // ★修正: 追加の引数を渡す
                                     KeywordConditionCard(
                                         condition = condition,
                                         onClick = { onConditionClick(condition) },
