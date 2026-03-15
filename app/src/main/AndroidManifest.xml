@@ -19,6 +19,7 @@
         android:logo="@drawable/tv_banner"
         android:label="@string/app_name"
         android:usesCleartextTraffic="true"
+        android:largeHeap="true"
         android:theme="@style/Theme_Komorebi_Starting">
 
         <provider
