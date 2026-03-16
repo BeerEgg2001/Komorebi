@@ -38,7 +38,8 @@
 機種ごとの確認報告などは作者X([@tamago0602](https://x.com/tamago0602)))へご連絡いただければ、とても嬉しいです
 
 * REGZA 55X8900K (Android TV 10)
-* Fire Tv Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
+* Fire TV Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
+* Fire TV Stick 4K Max 第二世代 (Fire OS 8 Android 11ベース)
 
 ---
 
@@ -123,7 +124,6 @@ Android TV 特有の制約（低スペックなSoC、限られたメモリ）で
 * **管理機能**: 録画済み番組の削除機能、キーワード自動録画。
 * **画質・パフォーマンス**: Amatsukaze 出力 txt によるチャプタースキップ。
 * **UI**: カスタムテーマ、L 字クロップ、KonomiTV ユーザー連携。
-* **操作性改善**: ライブ視聴中の左右キー選局。
 
 ---
 
@@ -152,6 +152,9 @@ Android TV 特有の制約（低スペックなSoC、限られたメモリ）で
 * **DI**: Dagger Hilt
 
 ---
+
+## ビルド方法
+※v0.4.0-betaからFFMpeg関連のバイナリを使用しないように変更しています。0.4.0-beta以降の場合はフォントファイルの追加のみでビルドできると思います。それ以前のバージョンをビルドする際は以下を参考にしてください。
 
 ## ビルド前の準備
 

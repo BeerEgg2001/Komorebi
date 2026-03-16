@@ -67,18 +67,20 @@ class EpgSyncEngine @Inject constructor(
                                     channelType = type
                                 )
 
-                                // Mapperを使ってAPIモデルからRoomエンティティへ変換
-                                val channels = response.channels.map { EpgDataMapper.toChannelEntity(it.channel) }
-                                val programs = response.channels.flatMap { wrapper ->
-                                    wrapper.programs.map { EpgDataMapper.toProgramEntity(it) }
+                                // ★メモリ最適化: flatMapで全番組を一度にメモリ展開せず、
+                                // チャンネルごとに変換・挿入してピーク使用量を抑える
+                                var totalPrograms = 0
+                                for (wrapper in response.channels) {
+                                    val channel = EpgDataMapper.toChannelEntity(wrapper.channel)
+                                    val programs = wrapper.programs.map { EpgDataMapper.toProgramEntity(it) }
+                                    db.withTransaction {
+                                        db.epgDao().insertEpgData(listOf(channel), programs)
+                                    }
+                                    totalPrograms += programs.size
+                                    // programsはここでスコープ外になりGC対象になる
                                 }
 
-                                // DBに一括挿入（重複は自動で上書き更新される）
-                                db.withTransaction {
-                                    db.epgDao().insertEpgData(channels, programs)
-                                }
-
-                                Log.i(TAG, "Successfully synced EPG for $type (Chunk $chunkIndex: ${programs.size} programs)")
+                                Log.i(TAG, "Successfully synced EPG for $type (Chunk $chunkIndex: $totalPrograms programs)")
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
                                 Log.e(TAG, "Error syncing EPG for $type (Chunk $chunkIndex)", e)
