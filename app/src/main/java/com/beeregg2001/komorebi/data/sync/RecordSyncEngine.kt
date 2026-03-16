@@ -1,5 +1,7 @@
 package com.beeregg2001.komorebi.data.sync
 
+import android.app.ActivityManager
+import android.content.Context
 import android.util.Log
 import androidx.room.withTransaction
 import com.beeregg2001.komorebi.data.SettingsRepository
@@ -12,6 +14,7 @@ import com.beeregg2001.komorebi.data.local.entity.SyncMetaEntity
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.util.WikipediaNormalizer
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +58,8 @@ class RecordSyncEngine @Inject constructor(
     private val apiService: KonomiApi,
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
-    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao
+    private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
+    @ApplicationContext private val context: Context
 ) {
     private val _syncProgress = MutableStateFlow(SyncProgress())
     val syncProgress: StateFlow<SyncProgress> = _syncProgress.asStateFlow()
@@ -68,7 +72,17 @@ class RecordSyncEngine @Inject constructor(
     private val smartSyncMutex = Mutex()
     private var activeSyncJob: Job? = null
 
-    private val BATCH_SIZE = 100
+    // ★低メモリ端末（Fire TV Stick等）の判定
+    private val isLowRamDevice: Boolean by lazy {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        am.isLowRamDevice
+    }
+
+    // ★低メモリ端末ではバッチサイズを小さく、通常端末では大きくする
+    private val BATCH_SIZE get() = if (isLowRamDevice) 30 else 100
+
+    // ★低メモリ端末ではGC後の待機時間を長くする
+    private val GC_DELAY_MS get() = if (isLowRamDevice) 2000L else 1200L
 
     fun clearError() {
         _syncProgress.value = _syncProgress.value.copy(error = null)
@@ -151,8 +165,16 @@ class RecordSyncEngine @Inject constructor(
                     val needsOrphanDeletion = !isResumed && (isInitial || forceFullSync)
                     val allFetchedIds = if (needsOrphanDeletion) mutableSetOf<Int>() else null
 
-                    val dictionary = aiSeriesDictionaryDao.getAllDictionary()
-                        .associate { it.originalTitle to it.normalizedSeriesName }
+                    // ★低メモリ端末対応: isLowRamDeviceの場合は辞書をメモリに全展開せず空Mapを渡す。
+                    // series_nameの解決は後続の startDictionaryResolutionLoop() で行われるため
+                    // 初回ビルドの品質への影響はなく、OOM発生を回避できる。
+                    val dictionary: Map<String, String> = if (isLowRamDevice && isInitial) {
+                        Log.i(TAG, "Low RAM device: skipping dictionary preload to save memory.")
+                        emptyMap()
+                    } else {
+                        aiSeriesDictionaryDao.getAllDictionary()
+                            .associate { it.originalTitle to it.normalizedSeriesName }
+                    }
 
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
 
@@ -237,9 +259,9 @@ class RecordSyncEngine @Inject constructor(
                             // これにより数千件のデータでもメモリがパンクせずに完走します。
                             if (isInitial) {
                                 System.gc()
-                                delay(1200)
+                                delay(GC_DELAY_MS)
                             } else {
-                                delay(300)
+                                delay(if (isLowRamDevice) 500L else 300L)
                             }
                         }
                     }
