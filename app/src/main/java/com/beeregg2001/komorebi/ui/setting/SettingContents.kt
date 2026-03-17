@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalComposeUiApi::class)
+
 package com.beeregg2001.komorebi.ui.setting
 
 import androidx.compose.foundation.layout.*
@@ -6,6 +8,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -18,21 +21,21 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun GeneralSettingsContent(
-    totalRecordCount: Int, // ★追加
-    lastSyncedAt: Long, // ★追加
-    onForceSync: () -> Unit, // ★追加
+    totalRecordCount: Int,
+    lastSyncedAt: Long,
+    onForceSync: () -> Unit,
     onClearChannel: () -> Unit,
     onClearHistory: () -> Unit,
-    dbInfoR: FocusRequester, // ★追加
-    forceSyncR: FocusRequester, // ★追加
+    dbInfoR: FocusRequester,
+    forceSyncR: FocusRequester,
     clearChannelR: FocusRequester,
     clearHistoryR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
-    // ★追加: 日時のフォーマット
     val dateFormat =
         remember { java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault()) }
     val lastSyncStr =
@@ -46,7 +49,6 @@ fun GeneralSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        // ★追加: データベース情報セクション
         SettingsSection("データベース情報") {
             SettingItem(
                 title = "ローカル保存件数",
@@ -54,7 +56,10 @@ fun GeneralSettingsContent(
                 icon = Icons.Default.Storage,
                 modifier = Modifier
                     .focusRequester(dbInfoR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加: 上キーでのフォーカス飛びをブロック
+                    },
                 onClick = { onClick(dbInfoR) }
             )
             SettingItem(
@@ -89,7 +94,7 @@ fun GeneralSettingsContent(
     }
 }
 
-// 録画設定コンテンツ
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun RecordingSettingsContent(
     batchList: List<PostRecordingBatch>,
@@ -116,7 +121,10 @@ fun RecordingSettingsContent(
                 icon = Icons.Default.Add,
                 modifier = Modifier
                     .focusRequester(addR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = { onClick(addR); onAdd() }
             )
 
@@ -145,6 +153,7 @@ fun RecordingSettingsContent(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ConnectionSettingsContent(
     kIp: String,
@@ -177,7 +186,10 @@ fun ConnectionSettingsContent(
                 Icons.Default.Dns,
                 modifier = Modifier
                     .focusRequester(kIpR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = {
                     onClick(kIpR); onEdit(
                     AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS,
@@ -284,7 +296,10 @@ fun PlaybackSettingsContent(
                 Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(liveR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = { onClick(liveR); onL() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_VIDEO_QUALITY,
@@ -371,7 +386,10 @@ fun HomeDisplaySettingsContent(
                 Icons.Default.Brightness4,
                 modifier = Modifier
                     .focusRequester(modeR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = { onClick(modeR); onMode() })
             val seasonLabel = when (themeSeason) {
                 "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING; "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER; "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN; "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER; else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
@@ -437,7 +455,10 @@ fun DisplaySettingsContent(
                 Icons.Default.Launch,
                 modifier = Modifier
                     .focusRequester(itemRs[0])
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = { onClick(itemRs[0]); onEditTab() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
@@ -482,7 +503,10 @@ fun CommentSettingsContent(
                 Icons.Default.Visibility,
                 modifier = Modifier
                     .focusRequester(defR)
-                    .focusProperties { left = sidebarR },
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加
+                    },
                 onClick = { onClick(defR); onT() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_SPEED,
@@ -534,11 +558,14 @@ fun CommentSettingsContent(
 fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
     enableAi: String, apiKey: String,
+    baseball: Set<String>,
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
     enableAiR: FocusRequester, apiKeyR: FocusRequester,
+    baseballR: FocusRequester,
     sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
     onToggleAi: () -> Unit, onEditApiKey: () -> Unit,
+    onBaseball: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -549,27 +576,21 @@ fun LabSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-//        SettingsSection("AI強化正規化 (アルファ版)") {
-//            SettingItem(
-//                "AIによるシリーズ名正規化",
-//                enableAi,
-//                Icons.Default.AutoAwesome,
-//                modifier = Modifier
-//                    .focusRequester(enableAiR)
-//                    .focusProperties { left = sidebarR },
-//                onClick = { onClick(enableAiR); onToggleAi() }
-//            )
-//            SettingItem(
-//                "Gemini API Key",
-//                if (apiKey.isEmpty()) "未設定" else "設定済み",
-//                Icons.Default.VpnKey,
-//                enabled = enableAi == "ON",
-//                modifier = Modifier
-//                    .focusRequester(apiKeyR)
-//                    .focusProperties { left = sidebarR },
-//                onClick = { onClick(apiKeyR); onEditApiKey() }
-//            )
-//        }
+        SettingsSection("プロ野球モード (アルファ版)") {
+            val baseballText = if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
+            SettingItem(
+                title = "フォロー球団の設定",
+                value = baseballText,
+                icon = Icons.Default.SportsBaseball,
+                modifier = Modifier
+                    .focusRequester(baseballR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel // ★追加: ここで上方向への移動をブロック
+                    },
+                onClick = { onClick(baseballR); onBaseball() }
+            )
+        }
 
         SettingsSection(AppStrings.SETTINGS_SECTION_EXTERNAL_INTEGRATION) {
             SettingItem(
@@ -589,16 +610,6 @@ fun LabSettingsContent(
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(shobocalR); onShobocal() })
         }
-//        SettingsSection(AppStrings.SETTINGS_SECTION_RECORD_DETAIL) {
-//            SettingItem(
-//                AppStrings.SETTINGS_ITEM_POST_COMMAND,
-//                postCmd.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
-//                Icons.Default.Terminal,
-//                modifier = Modifier
-//                    .focusRequester(cmdR)
-//                    .focusProperties { left = sidebarR },
-//                onClick = { onClick(cmdR); onEditCmd() })
-//        }
     }
 }
 
@@ -621,7 +632,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.8.0 beta",
+            "Version 0.8.0 beta2",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )
@@ -633,7 +644,10 @@ fun AppInfoContent(
             modifier = Modifier
                 .width(400.dp)
                 .focusRequester(licR)
-                .focusProperties { left = sidebarR },
+                .focusProperties {
+                    left = sidebarR
+                    up = FocusRequester.Cancel // ★追加
+                },
             onClick = { onClick(licR); onShow() })
     }
 }

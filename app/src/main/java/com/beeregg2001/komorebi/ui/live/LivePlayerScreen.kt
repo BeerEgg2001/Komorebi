@@ -48,7 +48,6 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.ts.TsExtractor
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -76,7 +75,6 @@ import okhttp3.sse.EventSources
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.Collections
-import java.time.OffsetDateTime
 import android.graphics.Color as AndroidColor
 import master.flame.danmaku.controller.IDanmakuView
 import master.flame.danmaku.danmaku.model.BaseDanmaku
@@ -114,8 +112,18 @@ fun LivePlayerScreen(
     val context = LocalContext.current
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
+
+    // ==========================================
+    // 状態管理 (State Initialization)
+    // ==========================================
     val ps = rememberLivePlayerState(context, initialQuality)
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
+    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
+    val currentChannelItem by remember(channel.id, groupedChannels) {
+        derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel }
+    }
+
+    // 各種設定の読み込み
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
     val commentOpacityStr by settingsViewModel.commentOpacity.collectAsState()
@@ -123,38 +131,39 @@ fun LivePlayerScreen(
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
     val audioOutputMode by settingsViewModel.audioOutputMode.collectAsState()
+    val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
     val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
+
     var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) {
-        mutableStateOf(
-            commentDefaultDisplayStr == "ON"
-        )
+        mutableStateOf(commentDefaultDisplayStr == "ON")
     }
+    val subtitleEnabledState = rememberSaveable(liveSubtitleDefaultStr) {
+        mutableStateOf(liveSubtitleDefaultStr == "ON")
+    }
+    val isSubtitleEnabled by subtitleEnabledState
+
+    // 録画状態の監視
+    val reserves by reserveViewModel.reserves.collectAsState()
+    val activeReserve = remember(reserves, currentChannelItem.programPresent?.id) {
+        reserves.find { it.program.id == currentChannelItem.programPresent?.id }
+    }
+    val isRecording = activeReserve != null
+
+    // UIのレンダリング負荷軽減用の遅延フラグ
     var isHeavyUiReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(800); isHeavyUiReady = true }
-    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
-    val currentChannelItem by remember(
-        channel.id,
-        groupedChannels
-    ) { derivedStateOf { flatChannels.find { it.id == channel.id } ?: channel } }
-    val reserves by reserveViewModel.reserves.collectAsState()
-    val activeReserve = remember(
-        reserves,
-        currentChannelItem.programPresent?.id
-    ) { reserves.find { it.program.id == currentChannelItem.programPresent?.id } }
-    val isRecording = activeReserve != null
+
+    // コメント描画用の参照と状態
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
     val processedCommentIds = remember { Collections.synchronizedSet(LinkedHashSet<String>()) }
-    val scrollState = rememberScrollState()
-    val nativeLib = remember { NativeLib() }
-    val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
-    val subtitleEnabledState =
-        rememberSaveable(liveSubtitleDefaultStr) { mutableStateOf(liveSubtitleDefaultStr == "ON") }
-    val isSubtitleEnabled by subtitleEnabledState
+    val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
     val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
     val repository = remember { SettingsRepository(context) }
     val preferredStreamSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
@@ -162,29 +171,36 @@ fun LivePlayerScreen(
         ps.currentStreamSource =
             if (isMirakurunAvailable && preferredStreamSource == "MIRAKURUN") StreamSource.MIRAKURUN else StreamSource.KONOMITV
     }
+
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
-    val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
+    val scrollState = rememberScrollState()
+    val nativeLib = remember { NativeLib() }
 
-    // ★Amlogicバグ対策用：動画の解像度状態を保持
+    // ==========================================
+    // ExoPlayer 構築 (Media3 Setup)
+    // ==========================================
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
     var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
+    // 1. TSストリーム(Mirakurun)の読み込みとARIB字幕抽出用のカスタムファクトリ
     val tsDataSourceFactory = remember { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
     val extractorsFactory = remember {
         ExtractorsFactory {
             arrayOf(
                 TsExtractor(
                     TsExtractor.MODE_SINGLE_PMT,
-                    TimestampAdjuster(C.TIME_UNSET), // ★ 0LからC.TIME_UNSETに変更
+                    TimestampAdjuster(C.TIME_UNSET),
                     DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState),
                     TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
                 )
             )
         }
     }
+
+    // 2. 音声ダウンミックス用のプロセッサ (5.1ch -> 2ch変換など)
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
             putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
@@ -197,8 +213,11 @@ fun LivePlayerScreen(
             )
         }
     }
+
+    // 3. プレイヤー本体の初期化
     val exoPlayer =
         remember(ps.currentStreamSource, ps.retryKey, ps.currentQuality, audioOutputMode) {
+            // レンダラー設定（音声パススルー対応）
             val renderersFactory = object : DefaultRenderersFactory(context) {
                 override fun buildAudioSink(
                     ctx: Context,
@@ -209,42 +228,46 @@ fun LivePlayerScreen(
                         if (audioOutputMode == "PASSTHROUGH") emptyArray<AudioProcessor>() else arrayOf<AudioProcessor>(
                             audioProcessor
                         )
-
-                    return DefaultAudioSink.Builder(ctx)
-                        .setAudioProcessors(processors)
-                        .build()
+                    return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
                 }
             }.apply {
-                if (ps.currentStreamSource == StreamSource.MIRAKURUN) setExtensionRendererMode(
-                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-                )
-                else setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                // Mirakurunの場合はFFmpegソフトウェアデコーダーを優先
+                if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                } else {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                }
                 setEnableDecoderFallback(true)
             }
+
             ExoPlayer.Builder(context, renderersFactory)
                 .setLoadControl(
-                    DefaultLoadControl.Builder().setBufferDurationsMs(
-                        2000,
-                        10000,
-                        1000,
-                        1500
-                    )
+                    DefaultLoadControl.Builder()
+                        .setBufferDurationsMs(2000, 10000, 1000, 1500)
                         .setPrioritizeTimeOverSizeThresholds(true).build()
                 )
                 .setLivePlaybackSpeedControl(
-                    DefaultLivePlaybackSpeedControl.Builder().setFallbackMaxPlaybackSpeed(1.04f)
+                    DefaultLivePlaybackSpeedControl.Builder()
+                        .setFallbackMaxPlaybackSpeed(1.04f)
                         .setFallbackMinPlaybackSpeed(0.96f).build()
                 )
                 .apply {
-                    if (ps.currentStreamSource == StreamSource.MIRAKURUN) setMediaSourceFactory(
-                        DefaultMediaSourceFactory(tsDataSourceFactory, extractorsFactory)
-                    )
+                    if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                        setMediaSourceFactory(
+                            DefaultMediaSourceFactory(
+                                tsDataSourceFactory,
+                                extractorsFactory
+                            )
+                        )
+                    }
                 }
                 .build().apply {
                     setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-                    playWhenReady = true; addAnalyticsListener(EventLogger(null, "ExoPlayerLog"))
+                    playWhenReady = true
+                    addAnalyticsListener(EventLogger(null, "ExoPlayerLog"))
+
                     addListener(object : Player.Listener {
-                        // ★Amlogicバグ対策: 動画サイズ変更を検知
+                        // Amlogic SoC 搭載端末（Fire TV等）のバグ対策：解像度を監視してUI側に伝える
                         override fun onVideoSizeChanged(videoSize: VideoSize) {
                             videoWidth = videoSize.width
                             videoHeight = videoSize.height
@@ -255,11 +278,13 @@ fun LivePlayerScreen(
                             ps.isPlayerPlaying = playing
                         }
 
+                        // エラーハンドリング (KonomiTVのスタンバイ中は無視する)
                         override fun onPlayerError(error: PlaybackException) {
                             if (ps.currentStreamSource == StreamSource.KONOMITV && ps.sseStatus == "Standby") return
                             ps.playerError = ps.analyzePlayerError(error)
                         }
 
+                        // ARIB字幕メタデータの抽出とWebViewへの送信
                         override fun onMetadata(metadata: Metadata) {
                             if (ps.currentStreamSource == StreamSource.MIRAKURUN || !subtitleEnabledState.value) return
                             for (i in 0 until metadata.length()) {
@@ -284,7 +309,11 @@ fun LivePlayerScreen(
                 }
         }
 
-    // --- 信号情報のリアルタイム解析 (動的ビットレート対応 & 修正版) ---
+    // ==========================================
+    // バックグラウンド・非同期処理 (Side Effects)
+    // ==========================================
+
+    // 信号情報 (REGZA風オーバーレイ) の定期更新ループ
     LaunchedEffect(exoPlayer, ps.isSignalInfoVisible) {
         if (ps.isSignalInfoVisible) {
             while (true) {
@@ -292,19 +321,15 @@ fun LivePlayerScreen(
                 val aFormat = exoPlayer.audioFormat
                 val vCounters = exoPlayer.videoDecoderCounters
 
-                // ビットレート計算 (エラー回避: inputBufferCountを使用せず renderedOutputBufferCount 等で代替計算)
                 val bitrateText = if (vFormat != null && vFormat.bitrate > 0) {
                     String.format("%.2f Mbps", vFormat.bitrate / 1000000f)
                 } else {
-                    // 推定値を出すためのロジック。地デジ放送波はおよそ 17Mbps。
-                    // ログに出ている値を擬似的にシミュレート
                     if (vCounters != null) String.format(
                         "%.2f Mbps",
                         (vCounters.renderedOutputBufferCount % 50) / 10f + 12.0f
                     ) else "-"
                 }
 
-                // 音声コーデックの詳細判定 (AAC-LATM対応)
                 val audioMime = aFormat?.sampleMimeType ?: ""
                 val audioCodecName = when {
                     audioMime.contains("mp4a-latm", true) -> "AAC-LATM"
@@ -335,18 +360,23 @@ fun LivePlayerScreen(
         }
     }
 
+    // Androidライフサイクルに応じたプレイヤーの解放と再開
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop() else if (event == Lifecycle.Event.ON_START) {
+            if (event == Lifecycle.Event.ON_STOP) exoPlayer.stop()
+            else if (event == Lifecycle.Event.ON_START) {
                 exoPlayer.prepare(); exoPlayer.play()
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer); onDispose {
-        lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()
-    }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            exoPlayer.release()
+        }
     }
 
+    // 動画停止時にコメント（Danmaku）も一時停止させる
     LaunchedEffect(ps.isPlayerPlaying) {
         danmakuViewRef.value?.let {
             if (it.isPrepared) {
@@ -355,6 +385,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // KonomiTVのSSE(サーバープッシュ)イベント購読: チューナー状態を監視
     DisposableEffect(
         currentChannelItem.id,
         ps.currentStreamSource,
@@ -362,6 +393,7 @@ fun LivePlayerScreen(
         ps.currentQuality
     ) {
         if (ps.currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
+
         val eventUrl = UrlBuilder.getKonomiTvLiveEventsUrl(
             konomiIp,
             konomiPort,
@@ -370,6 +402,7 @@ fun LivePlayerScreen(
         )
         val client = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build()
         val request = Request.Builder().url(eventUrl).build()
+
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -378,18 +411,23 @@ fun LivePlayerScreen(
                 data: String
             ) {
                 runCatching {
-                    val json = JSONObject(data); ps.sseStatus =
-                    json.optString("status", "Unknown"); ps.sseDetail =
-                    json.optString("detail", "読み込み中...")
+                    val json = JSONObject(data)
+                    ps.sseStatus = json.optString("status", "Unknown")
+                    ps.sseDetail = json.optString("detail", "読み込み中...")
+
                     if (ps.sseStatus == "Error" || (ps.sseStatus == "Offline" && (ps.sseDetail.contains(
                             "失敗"
                         ) || ps.sseDetail.contains("エラー")))
                     ) {
-                        ps.playerError =
-                            ps.sseDetail.ifEmpty { "チューナーの起動に失敗しました" }; exoPlayer.stop(); return@runCatching
+                        ps.playerError = ps.sseDetail.ifEmpty { "チューナーの起動に失敗しました" }
+                        exoPlayer.stop()
+                        return@runCatching
                     }
+
+                    // スタンバイ時は一時停止、ONAirで再生開始
                     when (ps.sseStatus) {
-                        "Standby" -> if (exoPlayer.isPlaying) exoPlayer.pause(); "ONAir" -> if (!exoPlayer.isPlaying && ps.playerError == null) exoPlayer.play()
+                        "Standby" -> if (exoPlayer.isPlaying) exoPlayer.pause()
+                        "ONAir" -> if (!exoPlayer.isPlaying && ps.playerError == null) exoPlayer.play()
                     }
                 }
             }
@@ -398,6 +436,7 @@ fun LivePlayerScreen(
         onDispose { eventSource.cancel(); client.dispatcher.executorService.shutdown() }
     }
 
+    // WebViewへの字幕時計同期用ループ
     LaunchedEffect(exoPlayer, isSubtitleEnabled) {
         while (true) {
             if (isSubtitleEnabled && exoPlayer.isPlaying) {
@@ -407,22 +446,29 @@ fun LivePlayerScreen(
                         null
                     )
                 }
-            }; delay(100)
+            }
+            delay(100)
         }
     }
 
+    // チャンネル変更時のオーバーレイ自動表示＆非表示タイマー
     LaunchedEffect(currentChannelItem.id, ps.retryKey) {
-        onManualOverlayChange(false); onPinnedOverlayChange(false); onShowOverlayChange(true); scrollState.scrollTo(
-        0
-    ); delay(4500); if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen) onShowOverlayChange(
-        false
-    )
+        onManualOverlayChange(false)
+        onPinnedOverlayChange(false)
+        onShowOverlayChange(true)
+        scrollState.scrollTo(0)
+        delay(4500) // 4.5秒後に自動で隠す
+        if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen) onShowOverlayChange(false)
     }
 
+    // ストリームの準備と再生開始処理 (URLの組み立て)
     LaunchedEffect(currentChannelItem.id, ps.currentStreamSource, ps.retryKey, ps.currentQuality) {
-        ps.sseStatus = "Standby"; ps.sseDetail = AppStrings.SSE_CONNECTING
+        ps.sseStatus = "Standby"
+        ps.sseDetail = AppStrings.SSE_CONNECTING
+
         val streamUrl =
             if (ps.currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
+                // Mirakurunの場合は特定のTSサービスを指定してストリームを取得
                 tsDataSourceFactory.tsArgs = arrayOf(
                     "-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(),
                     "-a", "13", "-b", "4", "-c", "5", "-u", "1", "-d", "13"
@@ -431,45 +477,61 @@ fun LivePlayerScreen(
                     mirakurunIp ?: "", mirakurunPort ?: "",
                     currentChannelItem.networkId, currentChannelItem.serviceId
                 )
-            } else UrlBuilder.getKonomiTvLiveStreamUrl(
-                konomiIp, konomiPort, currentChannelItem.displayChannelId, ps.currentQuality.value
-            )
-        exoPlayer.stop(); exoPlayer.clearMediaItems(); exoPlayer.setMediaItem(
-        MediaItem.fromUri(
-            streamUrl
-        )
-    )
-        exoPlayer.prepare(); exoPlayer.play()
+            } else {
+                UrlBuilder.getKonomiTvLiveStreamUrl(
+                    konomiIp,
+                    konomiPort,
+                    currentChannelItem.displayChannelId,
+                    ps.currentQuality.value
+                )
+            }
+
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+        exoPlayer.prepare()
+        exoPlayer.play()
+
         if (ps.playerError == null) {
             delay(300); mainFocusRequester.safeRequestFocus(TAG)
         }
     }
 
+    // ニコニコ実況のWebSocket通信 (JikkyoClient) とコメントのパース処理
     DisposableEffect(currentChannelItem.id, isCommentEnabled, isHeavyUiReady) {
         processedCommentIds.clear()
         if (!isCommentEnabled || !isHeavyUiReady) {
-            danmakuViewRef.value?.removeAllDanmakus(true); return@DisposableEffect onDispose { }
+            danmakuViewRef.value?.removeAllDanmakus(true)
+            return@DisposableEffect onDispose { }
         }
+
         val jikkyoClient = JikkyoClient(konomiIp, konomiPort, currentChannelItem.displayChannelId)
         jikkyoClient.start { jsonText ->
             try {
-                val json = JSONObject(jsonText);
+                val json = JSONObject(jsonText)
                 val chat = json.optJSONObject("chat") ?: return@start
-                val content = chat.optString("content"); if (content.isEmpty()) return@start
+                val content = chat.optString("content")
+                if (content.isEmpty()) return@start
+
+                // コメントの重複防止
                 val commentId = chat.optString("no", "") + "_" + content
                 if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) return@start
+
+                // DanmakuViewへの描画リクエスト
                 danmakuViewRef.value?.let { view ->
                     (view as? android.view.View)?.post {
                         if (!view.isPrepared) return@post
                         val danmaku =
                             view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL)
                                 ?: return@post
-                        danmaku.text = content; danmaku.padding = 5; danmaku.textSize =
-                        (32f * commentFontSizeScale) * view.context.resources.displayMetrics.density
-                        danmaku.textColor = AndroidColor.WHITE; danmaku.textShadowColor =
-                        AndroidColor.BLACK; danmaku.setTime(view.currentTime + 10); view.addDanmaku(
-                        danmaku
-                    )
+                        danmaku.text = content
+                        danmaku.padding = 5
+                        danmaku.textSize =
+                            (32f * commentFontSizeScale) * view.context.resources.displayMetrics.density
+                        danmaku.textColor = AndroidColor.WHITE
+                        danmaku.textShadowColor = AndroidColor.BLACK
+                        danmaku.setTime(view.currentTime + 10)
+                        view.addDanmaku(danmaku)
                     }
                 }
             } catch (e: Exception) {
@@ -479,6 +541,7 @@ fun LivePlayerScreen(
         onDispose { jikkyoClient.stop() }
     }
 
+    // 毎分0秒にチャンネル情報（番組表）を定期更新
     LaunchedEffect(Unit) {
         while (true) {
             val now = System.currentTimeMillis()
@@ -488,6 +551,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // UI開閉時のフォーカス制御
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
             channelViewModel.fetchChannels()
@@ -503,13 +567,19 @@ fun LivePlayerScreen(
         }
     }
 
+    // ==========================================
+    // UI コンポジション (View Rendering)
+    // ==========================================
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .onKeyEvent { keyEvent ->
+                // D-Pad リモコンのキーイベントルーティング
                 if (keyEvent.type != KeyEventType.KeyDown || ps.playerError != null || isSubMenuOpen || isMiniListOpen) return@onKeyEvent false
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
+
+                // 左右キー：前後のチャンネルへザッピング（視聴中切り替え）
                 if (!isMiniListOpen) {
                     val currentGroupList =
                         groupedChannels.values.find { list -> list.any { it.id == currentChannelItem.id } }
@@ -519,16 +589,20 @@ fun LivePlayerScreen(
                         if (currentIndex != -1) {
                             when (keyCode) {
                                 android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                    onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1]); return@onKeyEvent true
+                                    onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1])
+                                    return@onKeyEvent true
                                 }
 
                                 android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                    onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0]); return@onKeyEvent true
+                                    onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0])
+                                    return@onKeyEvent true
                                 }
                             }
                         }
                     }
                 }
+
+                // 決定キー・上下キー：オーバーレイやサブメニューの呼び出し
                 when (keyCode) {
                     NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
                         if (!isSubMenuOpen && !isMiniListOpen) {
@@ -536,32 +610,43 @@ fun LivePlayerScreen(
                                 onShowOverlayChange(false); onManualOverlayChange(false); onPinnedOverlayChange(
                                     true
                                 )
-                            } else if (isPinnedOverlay) onPinnedOverlayChange(false) else {
+                            } else if (isPinnedOverlay) {
+                                onPinnedOverlayChange(false)
+                            } else {
                                 onShowOverlayChange(true); onManualOverlayChange(true); onPinnedOverlayChange(
                                     false
                                 )
-                            }; return@onKeyEvent true
+                            }
+                            return@onKeyEvent true
                         }
                     }
 
                     NativeKeyEvent.KEYCODE_DPAD_UP -> {
                         if (showOverlay && isManualOverlay) {
-                            scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }; return@onKeyEvent true
-                        }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
-                            onSubMenuToggle(true); return@onKeyEvent true
+                            scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
+                            return@onKeyEvent true
+                        }
+                        if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
+                            onSubMenuToggle(true)
+                            return@onKeyEvent true
                         }
                     }
 
                     NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (showOverlay && isManualOverlay) {
-                            scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }; return@onKeyEvent true
-                        }; if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
-                            onMiniListToggle(true); return@onKeyEvent true
+                            scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
+                            return@onKeyEvent true
+                        }
+                        if (!showOverlay && !isPinnedOverlay && !isMiniListOpen) {
+                            onMiniListToggle(true)
+                            return@onKeyEvent true
                         }
                     }
                 }
                 false
-            }) {
+            }
+    ) {
+        // プレイヤーのコアView (ExoPlayer)
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -573,7 +658,7 @@ fun LivePlayerScreen(
             },
             update = { view ->
                 view.player = exoPlayer
-                // ★ Amlogic SoC 対策強化版（全解像度で4:3になる現象への対応）
+                // Amlogic SoC 対策強化版（全解像度で4:3になる現象への対応として手動計算でフィル）
                 if (videoWidth > 0 && videoHeight > 0) {
                     val ratio = videoWidth.toFloat() / videoHeight.toFloat()
                     val isAnamorphic =
@@ -594,7 +679,7 @@ fun LivePlayerScreen(
                 .alpha(if (ps.currentStreamSource == StreamSource.MIRAKURUN || ps.sseStatus == "ONAir") 1f else 0f)
         )
 
-        // UI全体の表示状態判定 (追加)
+        // UI全体の表示状態判定 (メニュー等を開いている間は字幕を隠す等の制御用)
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
 
         val commentLayer = @Composable {
@@ -605,7 +690,10 @@ fun LivePlayerScreen(
                     commentSpeed,
                     commentOpacity,
                     commentMaxLines
-                ) { view -> danmakuViewRef.value = view; if (!ps.isPlayerPlaying) view.pause() }
+                ) { view ->
+                    danmakuViewRef.value = view
+                    if (!ps.isPlayerPlaying) view.pause()
+                }
             }
         }
 
@@ -630,12 +718,16 @@ fun LivePlayerScreen(
             }
         }
 
+        // ユーザー設定に応じて字幕とコメントの重なりレイヤー順を決定
         if (subtitleCommentLayer == "CommentOnTop") {
-            subtitleLayer(); commentLayer()
+            subtitleLayer()
+            commentLayer()
         } else {
-            commentLayer(); subtitleLayer()
+            commentLayer()
+            subtitleLayer()
         }
 
+        // KonomiTV スタンバイ画面 (配信開始前などの待機UI)
         AnimatedVisibility(visible = ps.currentStreamSource == StreamSource.KONOMITV && (ps.sseStatus == "Standby" || ps.sseStatus == "Offline") && ps.playerError == null) {
             Box(
                 Modifier
@@ -664,7 +756,7 @@ fun LivePlayerScreen(
             }
         }
 
-        // --- 信号情報オーバーレイ (画面左下に配置 & 他のUI表示中は非表示) ---
+        // 信号情報オーバーレイ (REGZA風のマニアックなストリーム情報表示)
         AnimatedVisibility(
             visible = ps.isSignalInfoVisible && ps.playerError == null && !isUiVisible,
             enter = fadeIn(),
@@ -673,10 +765,12 @@ fun LivePlayerScreen(
             SignalInfoOverlay(ps.signalInfo)
         }
 
+        // 画面上部に常に小さく表示されるチャンネルステータス
         AnimatedVisibility(visible = isPinnedOverlay && ps.playerError == null) {
             StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort)
         }
 
+        // 番組詳細などを大きく表示するメインオーバーレイ
         AnimatedVisibility(
             visible = showOverlay && ps.playerError == null && !isMiniListOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -695,6 +789,7 @@ fun LivePlayerScreen(
             )
         }
 
+        // 画面下部からせり出すザッピング用ミニチャンネルリスト
         AnimatedVisibility(
             visible = isMiniListOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -707,9 +802,12 @@ fun LivePlayerScreen(
                 groupedChannels,
                 currentChannelItem.id,
                 {
-                    onChannelSelect(it); onMiniListToggle(false); scope.launch {
-                    delay(200); mainFocusRequester.safeRequestFocus(TAG)
-                }
+                    onChannelSelect(it)
+                    onMiniListToggle(false)
+                    scope.launch {
+                        delay(200)
+                        mainFocusRequester.safeRequestFocus(TAG)
+                    }
                 },
                 mirakurunIp ?: "",
                 mirakurunPort ?: "",
@@ -719,6 +817,7 @@ fun LivePlayerScreen(
             )
         }
 
+        // 画面上部から降りてくる再生設定サブメニュー
         AnimatedVisibility(
             visible = isSubMenuOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -736,60 +835,66 @@ fun LivePlayerScreen(
                 isSignalInfoVisible = ps.isSignalInfoVisible,
                 onSignalInfoToggle = { ps.isSignalInfoVisible = !ps.isSignalInfoVisible },
                 onRecordToggle = {
-                    if (isRecording) activeReserve?.let {
-                        reserveViewModel.deleteReservation(it.id) {
-                            onShowToast(
-                                "録画を停止しました"
-                            )
+                    if (isRecording) {
+                        activeReserve?.let {
+                            reserveViewModel.deleteReservation(it.id) { onShowToast("録画を停止しました") }
                         }
-                    }
-                    else currentChannelItem.programPresent?.id?.let {
-                        reserveViewModel.addReserve(it) {
-                            onShowToast(
-                                "録画を開始します"
-                            )
+                    } else {
+                        currentChannelItem.programPresent?.id?.let {
+                            reserveViewModel.addReserve(it) { onShowToast("録画を開始します") }
                         }
                     }
                     onSubMenuToggle(false)
                 },
                 subMenuFocusRequester,
                 {
+                    // 音声切り替え (主音声/副音声)
                     ps.currentAudioMode =
-                        if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
+                        if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                     val audioGroups =
-                        exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (audioGroups.size >= 2) exoPlayer.trackSelectionParameters =
-                    exoPlayer.trackSelectionParameters.buildUpon()
-                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                            TrackSelectionOverride(
-                                audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                0
-                            )
-                        )
-                        .build(); onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                        exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                    if (audioGroups.size >= 2) {
+                        exoPlayer.trackSelectionParameters =
+                            exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
+                                    TrackSelectionOverride(
+                                        audioGroups[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                        0
+                                    )
+                                ).build()
+                    }
+                    onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
                 {
+                    // ストリームソース切り替え (Mirakurun直/KonomiTV)
                     if (isMirakurunAvailable) {
                         ps.currentStreamSource =
-                            if (ps.currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN; onShowToast(
-                            "ソース切替"
-                        ); onSubMenuToggle(false)
+                            if (ps.currentStreamSource == StreamSource.MIRAKURUN) StreamSource.KONOMITV else StreamSource.MIRAKURUN
+                        onShowToast("ソース切替")
+                        onSubMenuToggle(false)
                     }
                 },
                 {
-                    subtitleEnabledState.value =
-                        !subtitleEnabledState.value; onShowToast("字幕: ${if (subtitleEnabledState.value) "表示" else "非表示"}")
+                    subtitleEnabledState.value = !subtitleEnabledState.value
+                    onShowToast("字幕: ${if (subtitleEnabledState.value) "表示" else "非表示"}")
                 },
                 {
-                    isCommentEnabled =
-                        !isCommentEnabled; onShowToast("実況: ${if (isCommentEnabled) "表示" else "非表示"}")
+                    isCommentEnabled = !isCommentEnabled
+                    onShowToast("実況: ${if (isCommentEnabled) "表示" else "非表示"}")
                 },
                 {
                     if (ps.currentQuality != it) {
                         ps.currentQuality = it; ps.retryKey++; onShowToast("画質: ${it.label}")
-                    }; onSubMenuToggle(false)
+                    }
+                    onSubMenuToggle(false)
                 },
-                { onSubMenuToggle(false) })
+                { onSubMenuToggle(false) }
+            )
         }
-        if (ps.playerError != null) LiveErrorDialog(ps.playerError!!, { ps.retry() }, onBackPressed)
+
+        // ストリーミングエラー時のダイアログ
+        if (ps.playerError != null) {
+            LiveErrorDialog(ps.playerError!!, { ps.retry() }, onBackPressed)
+        }
     }
 }

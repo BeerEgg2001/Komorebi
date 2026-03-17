@@ -16,6 +16,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckBox // ★追加
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank // ★追加
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -38,7 +40,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -57,6 +58,14 @@ sealed class SettingDialogState {
         val options: List<Pair<String, String>>,
         val current: String,
         val onSelect: (String) -> Unit
+    ) : SettingDialogState()
+
+    // ★追加: 複数選択可能なダイアログ（プロ野球球団など）用
+    data class MultiSelection(
+        val title: String,
+        val options: List<Pair<String, String>>,
+        val currentSelections: Set<String>,
+        val onConfirm: (Set<String>) -> Unit
     ) : SettingDialogState()
 
     data class ConfirmClear(val title: String, val message: String, val onConfirm: () -> Unit) :
@@ -230,10 +239,8 @@ fun BatchInputDialog(
         Surface(
             shape = RoundedCornerShape(16.dp),
             colors = SurfaceDefaults.colors(containerColor = colors.surface),
-            // ★拡大を考慮して幅を広げる
             modifier = Modifier.width(540.dp)
         ) {
-            // ★内部パディングと間隔を広げる
             Column(
                 modifier = Modifier.padding(32.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -264,7 +271,6 @@ fun BatchInputDialog(
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.textSecondary
                     )
-                    // ★例を変更
                     DialogTextField(
                         value = path,
                         onValueChange = { path = it },
@@ -320,7 +326,7 @@ fun DialogTextField(
         onClick = { focusRequester.requestFocus() },
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp), // ★高さを少し増やして中央感を出す
+            .height(52.dp),
         colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f)),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
@@ -331,10 +337,8 @@ fun DialogTextField(
                 )
             )
         ),
-        // ★拡大率を微調整
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
     ) {
-        // ★アライメントを Alignment.CenterStart に固定し、BasicTextFieldの内部構造を整理
         Box(
             contentAlignment = Alignment.CenterStart,
             modifier = Modifier
@@ -350,7 +354,6 @@ fun DialogTextField(
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .onFocusChanged {
-                        // ★フォーカス時にキーボードを表示
                         if (it.isFocused) {
                             keyboardController?.show()
                         }
@@ -359,7 +362,6 @@ fun DialogTextField(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
                 decorationBox = { innerTextField ->
-                    // ★decorationBox内でもBoxを使用して、Text(プレースホルダ)とinnerTextFieldを確実に中央揃えにする
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) {
                             Text(
@@ -390,29 +392,29 @@ fun SelectionDialog(
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
 
-    // ★追加：フォーカストラップを解除するためのフラグ
     var isClosing by remember { mutableStateOf(false) }
     val initialFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         delay(50)
-        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
+        try {
+            initialFocusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
-            // ★修正：isClosing が true になったらトラップを解除し、親画面への移動を許可する
             .focusProperties {
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
             .focusGroup()
             .onKeyEvent {
-                // ★修正：ハードウェア戻るボタンが裏画面に漏れるのを防ぐため、KeyUpで発火しつつ両方を消費する
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
                     if (it.type == KeyEventType.KeyUp) {
-                        isClosing = true // 閉じる前にトラップ解除
+                        isClosing = true
                         onDismiss()
                     }
                     return@onKeyEvent true
@@ -449,7 +451,7 @@ fun SelectionDialog(
                             label = label,
                             isSelected = isSelected,
                             onClick = {
-                                isClosing = true // ★追加：選択されたのでトラップ解除
+                                isClosing = true
                                 onSelect(value)
                             },
                             modifier = focusModifier
@@ -459,7 +461,7 @@ fun SelectionDialog(
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = {
-                        isClosing = true // ★追加：キャンセルされたのでトラップ解除
+                        isClosing = true
                         onDismiss()
                     },
                     colors = ButtonDefaults.colors(
@@ -514,6 +516,169 @@ fun SelectionDialogItem(
                     tint = if (isFocused) Color.Unspecified else colors.textPrimary
                 )
             }
+        }
+    }
+}
+
+// ★追加: 複数選択（チェックボックス形式）用ダイアログコンポーネント
+@Composable
+fun MultiSelectionDialog(
+    title: String,
+    options: List<Pair<String, String>>,
+    currentSelections: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    // ローカルで選択状態を保持（確定ボタンが押されるまでは本体のStateには反映させない）
+    var selections by remember { mutableStateOf(currentSelections) }
+    val listState = rememberLazyListState()
+
+    var isClosing by remember { mutableStateOf(false) }
+    val initialFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(50)
+        try {
+            initialFocusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
+            .focusGroup()
+            .onKeyEvent {
+                if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    if (it.type == KeyEventType.KeyUp) {
+                        isClosing = true
+                        onDismiss()
+                    }
+                    return@onKeyEvent true
+                }
+                false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(460.dp) // 球団名などが長くなることを考慮して少し広めに
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                LazyColumn(
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 350.dp) // テレビ画面でのスクロール領域を確保
+                ) {
+                    itemsIndexed(options) { index, (label, value) ->
+                        val isSelected = selections.contains(value)
+                        val focusModifier =
+                            if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier
+
+                        MultiSelectionDialogItem(
+                            label = label,
+                            isSelected = isSelected,
+                            onClick = {
+                                // 選択/解除のトグル動作
+                                selections = if (isSelected) {
+                                    selections - value
+                                } else {
+                                    selections + value
+                                }
+                            },
+                            modifier = focusModifier
+                        )
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = {
+                            isClosing = true
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("キャンセル") }
+
+                    Button(
+                        onClick = {
+                            isClosing = true
+                            onConfirm(selections)
+                        },
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("確定", fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
+    }
+}
+
+// ★追加: 複数選択ダイアログ用のチェックボックス付きアイテム
+@Composable
+fun MultiSelectionDialogItem(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (isSelected) colors.textPrimary.copy(0.1f) else Color.Transparent,
+            focusedContainerColor = colors.accent,
+            contentColor = colors.textPrimary,
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
+        ),
+        shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = if (isFocused) Color.Unspecified else if (isSelected) colors.accent else colors.textSecondary
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
