@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
@@ -13,6 +14,8 @@ import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.EpgRepository
 import com.beeregg2001.komorebi.util.AppUpdater
 import com.beeregg2001.komorebi.util.UpdateState
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -25,34 +28,28 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import javax.inject.Inject
 
-/**
- * ホームタブ（アプリ起動時のポータル画面）のUI状態とビジネスロジックを管理するViewModel。
- * 視聴履歴（レジューム再生）、最後に見たチャンネル履歴、ニコニコ実況の盛り上がり（Hotチャンネル）、
- * 設定に基づくおすすめジャンル番組のピックアップ、およびアプリの自動アップデートチェックを統括します。
- */
+data class BaseballGameInfo(
+    val program: EpgProgram,
+    val channel: EpgChannel,
+    val logoUrl: String
+)
+
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: KonomiRepository,
     private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository,
-    private val appUpdater: AppUpdater // ★追加: アプリの自動更新管理
+    private val appUpdater: AppUpdater
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // ==========================================
-    // UI用ステート (Flow)
-    // ==========================================
-
-    // KonomiTVの視聴履歴（途中まで見た録画番組）。ローカルDBからの変更をFlowでリアルタイム監視。
     val watchHistory: StateFlow<List<KonomiHistoryProgram>> = repository.getLocalWatchHistory()
         .map { entities -> entities.map { KonomiDataMapper.toUiModel(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // 過去にライブ視聴したチャンネルの履歴。
-    // EntityからUI用のChannelモデルに変換し、ワンボタンでそのチャンネルに戻れるようにします。
     val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
         .map { entities ->
             entities.map { entity ->
@@ -67,41 +64,49 @@ class HomeViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // ユーザー設定: ホーム画面に表示する「おすすめ番組」のジャンル（例: アニメ、ドラマ等）
     val pickupGenreLabel = settingsRepository.homePickupGenre
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "アニメ")
 
-    // ユーザー設定: 有料放送（WOWOWなど）をおすすめから除外するかどうか
     val excludePaidBroadcasts = settingsRepository.excludePaidBroadcasts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ON")
 
-    // ユーザー設定: おすすめ番組を「いつの時間帯のもの」にするか（朝、昼、夜、自動）
     val pickupTimeSetting = settingsRepository.homePickupTime
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "自動")
 
-    // 上記の設定に基づいて抽出された、おすすめ番組リスト
     private val _genrePickupPrograms = MutableStateFlow<List<Pair<EpgProgram, String>>>(emptyList())
     val genrePickupPrograms: StateFlow<List<Pair<EpgProgram, String>>> =
         _genrePickupPrograms.asStateFlow()
 
-    // 上記のおすすめ番組が「朝」「昼」「夜」どの時間帯のものかを示すUI表示用の文字列
     private val _genrePickupTimeSlot = MutableStateFlow("夜")
     val genrePickupTimeSlot: StateFlow<String> = _genrePickupTimeSlot.asStateFlow()
 
-    // EpgViewModelから共有される、最新の番組表データ（ピックアップ検索用）
     private val _sharedEpgData = MutableStateFlow<List<EpgChannelWrapper>>(emptyList())
 
-    // アプリのアップデート状態（確認中、利用可能、ダウンロード中など）
     val updateState: StateFlow<UpdateState> = appUpdater.updateState
 
-    // ==========================================
-    // データ加工・取得メソッド
-    // ==========================================
+    val favoriteBaseballTeams: StateFlow<Set<String>> = settingsRepository.favoriteBaseballTeams
+        .map { json ->
+            try {
+                val listType = object : TypeToken<List<String>>() {}.type
+                val list: List<String>? = Gson().fromJson(json, listType)
+                list?.toSet() ?: emptySet()
+            } catch (e: Exception) {
+                emptySet()
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
-    /**
-     * ライブタブのチャンネルリストから、「ニコニコ実況の勢い(コメント数/分)」が0より大きいものを抽出し、
-     * 勢い順にソートして上位5件を「今盛り上がっているチャンネル」として返します。
-     */
+    private val _favoriteBaseballGames =
+        MutableStateFlow<List<Pair<String, List<BaseballGameInfo>>>>(emptyList())
+    val favoriteBaseballGames: StateFlow<List<Pair<String, List<BaseballGameInfo>>>> =
+        _favoriteBaseballGames.asStateFlow()
+
+    private val _baseballDateOffset = MutableStateFlow(0)
+    val baseballDateOffset: StateFlow<Int> = _baseballDateOffset.asStateFlow()
+
+    // ★最適化: 野球中継だけを先に抽出したキャッシュを保持し、日付切り替えの負荷をゼロにする
+    private var cachedBaseballPrograms: List<Pair<EpgProgram, EpgChannel>> = emptyList()
+
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
             .filter { (it.jikkyoForce ?: 0) > 0 }
@@ -109,10 +114,6 @@ class HomeViewModel @Inject constructor(
             .take(5)
     }
 
-    /**
-     * 録画予約リストの中から、現在時刻より未来に放送される番組だけを抽出し、
-     * 放送時間が近い順に上位5件を返します。
-     */
     fun getUpcomingReserves(reserves: List<ReserveItem>): List<ReserveItem> {
         val now = OffsetDateTime.now()
         return reserves.filter {
@@ -121,30 +122,22 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.program.startTime }.take(5)
     }
 
-    /**
-     * EpgViewModelから番組表データを受け取って保持します。
-     */
     fun updateEpgData(data: List<EpgChannelWrapper>) {
         _sharedEpgData.value = data
     }
 
-    /**
-     * EPGデータから、ユーザーが設定した「ジャンル」「時間帯」「有料放送除外設定」に
-     * 合致する未来の番組を検索・抽出します。
-     */
     private fun fetchAllTypeGenrePickup() {
         viewModelScope.launch {
             val genre = pickupGenreLabel.value
             val timeSetting = pickupTimeSetting.value
             val isExcludePaid = excludePaidBroadcasts.value == "ON"
 
-            // 現在時刻の1時間前から24時間後までの範囲で検索
             val now = OffsetDateTime.now()
             val startSearch = now.minusHours(1)
-            val endSearch = now.plusHours(24)
+            val endSearch = now.plusDays(3)
 
-            // 地デジ(GR)、BS、CS の全波のEPGデータを並列(async)で取得
             val types = listOf("GR", "BS", "CS")
+
             val allPrograms = types.map { type ->
                 async {
                     epgRepository.getEpgDataStream(startSearch, endSearch, type)
@@ -154,15 +147,117 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().flatten()
 
+            // ★最適化: 全番組データから、日付関係なく「野球中継」だけを抽出してキャッシュする
+            cachedBaseballPrograms = allPrograms.flatMap { wrapper ->
+                wrapper.programs.map { it to wrapper.channel }
+            }.filter { (prog, _) ->
+                // 高速な文字列判定を先に行い、無関係な番組を弾く（Early Exit）
+                val isSports = prog.genres?.any { it.major.contains("スポーツ") } == true
+                if (!isSports) return@filter false
+
+                val isBaseballGenre =
+                    prog.genres?.any { it.middle?.contains("野球") == true } == true || prog.title.contains(
+                        "プロ野球"
+                    )
+                if (!isBaseballGenre) return@filter false
+
+                val excludeKeywords = listOf(
+                    "特集", "ヴィンテージ", "ハイライト", "ダイジェスト", "ニュース",
+                    "名勝負", "傑作選", "セレクション", "トラリンク", "ガンガン！",
+                    "伝説", "回顧", "すぽると", "熱闘", "プロ野球ニュース"
+                )
+                if (excludeKeywords.any { prog.title.contains(it) }) return@filter false
+
+                val matchKeywords = listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE")
+                matchKeywords.any { keyword ->
+                    prog.title.contains(keyword, ignoreCase = true) || prog.description.contains(
+                        keyword,
+                        ignoreCase = true
+                    )
+                }
+            }
+
             _genrePickupPrograms.value =
                 filterGenrePickup(allPrograms, genre, timeSetting, isExcludePaid)
+
+            // キャッシュから本日の試合を生成
+            _favoriteBaseballGames.value = filterFavoriteBaseballGames(
+                cachedBaseballPrograms,
+                favoriteBaseballTeams.value,
+                _baseballDateOffset.value
+            )
         }
     }
 
-    /**
-     * 取得したEPGデータに対して、詳細なフィルタリングを行います。
-     * （ジャンル一致、時間帯一致、無料放送のみなど）
-     */
+    fun updateBaseballDateOffset(offset: Int) {
+        if (offset in 0..2) {
+            _baseballDateOffset.value = offset
+            viewModelScope.launch {
+                if (cachedBaseballPrograms.isNotEmpty()) {
+                    // ★最適化: キャッシュ済みの数十件の野球中継リストから日付で絞り込むだけなので一瞬で完了する
+                    _favoriteBaseballGames.value = filterFavoriteBaseballGames(
+                        cachedBaseballPrograms,
+                        favoriteBaseballTeams.value,
+                        offset
+                    )
+                } else {
+                    fetchAllTypeGenrePickup()
+                }
+            }
+        }
+    }
+
+    private suspend fun filterFavoriteBaseballGames(
+        baseballPrograms: List<Pair<EpgProgram, EpgChannel>>,
+        favoriteTeams: Set<String>,
+        offsetDays: Int
+    ): List<Pair<String, List<BaseballGameInfo>>> = withContext(Dispatchers.Default) {
+        if (favoriteTeams.isEmpty() || baseballPrograms.isEmpty()) return@withContext emptyList()
+
+        val mIp = settingsRepository.mirakurunIp.first()
+        val mPort = settingsRepository.mirakurunPort.first()
+        val kIp = settingsRepository.konomiIp.first()
+        val kPort = settingsRepository.konomiPort.first()
+
+        val now = OffsetDateTime.now()
+        val targetDateStart = now.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
+            if (now.hour < 4) it.minusDays(1) else it
+        }.plusDays(offsetDays.toLong())
+        val targetDateEnd = targetDateStart.plusDays(1)
+
+        val groupedGames = favoriteTeams.mapNotNull { team ->
+            val gamesForTeam = baseballPrograms.filter { (prog, _) ->
+                prog.title.contains(team) || prog.description.contains(team)
+            }.filter { (prog, _) ->
+                // 重い日付のパース処理は、絞り込み済みの対象番組に対してのみ実行する
+                val start = runCatching { OffsetDateTime.parse(prog.start_time) }.getOrNull()
+                    ?: return@filter false
+                start.isAfter(targetDateStart) && start.isBefore(targetDateEnd)
+            }.map { (prog, channel) ->
+                val logoUrl = if (mIp.isNotEmpty() && mPort.isNotEmpty()) {
+                    UrlBuilder.getMirakurunLogoUrl(
+                        mIp,
+                        mPort,
+                        channel.network_id.toLong(),
+                        channel.service_id.toLong()
+                    )
+                } else {
+                    UrlBuilder.getKonomiTvLogoUrl(kIp, kPort, channel.display_channel_id)
+                }
+
+                BaseballGameInfo(
+                    program = prog,
+                    channel = channel,
+                    logoUrl = logoUrl
+                )
+            }.sortedBy { it.program.start_time }
+
+            if (gamesForTeam.isNotEmpty()) team to gamesForTeam else null
+        }
+
+        groupedGames.sortedBy { it.first }
+    }
+
     private suspend fun filterGenrePickup(
         allPrograms: List<EpgChannelWrapper>,
         genre: String,
@@ -172,60 +267,59 @@ class HomeViewModel @Inject constructor(
         if (allPrograms.isEmpty()) return@withContext emptyList()
 
         val now = OffsetDateTime.now()
-
-        // 「自動」設定の場合、現在時刻に応じて提案する時間帯を変化させる
         val actualTimeSlot = if (timeSetting == "自動") {
             val h = now.hour
             if (h in 5..10) "朝" else if (h in 11..17) "昼" else "夜"
         } else {
             timeSetting
         }
-        _genrePickupTimeSlot.value = actualTimeSlot // UIの表示名（「今日の夜の〜」など）に反映
+        _genrePickupTimeSlot.value = actualTimeSlot
 
         allPrograms.flatMap { wrapper ->
             wrapper.programs.map { it to wrapper.channel.name }
         }.filter { (prog, _) ->
+            // ★最適化: 重い日付パースの前に、高速なジャンル・有料放送チェックを行い、合致しないものを弾く
+            val isGenre = prog.genres?.any { it.major.contains(genre) } == true
+            if (!isGenre) return@filter false
+
+            val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
+            if (!isFreeCheckOk) return@filter false
+
             val start = runCatching { OffsetDateTime.parse(prog.start_time) }.getOrNull()
                 ?: return@filter false
 
-            // 1. ジャンルが一致するか
-            val isGenre = prog.genres?.any { it.major.contains(genre) } == true
-
             val t = start.toLocalTime()
-            // 2. 設定された時間帯（朝:5-11時、昼:11-18時、夜:18-5時）に一致するか
             val isTimeMatch = when (actualTimeSlot) {
                 "朝" -> !t.isBefore(LocalTime.of(5, 0)) && t.isBefore(LocalTime.of(11, 0))
                 "昼" -> !t.isBefore(LocalTime.of(11, 0)) && t.isBefore(LocalTime.of(18, 0))
                 else -> !t.isBefore(LocalTime.of(18, 0)) || t.isBefore(LocalTime.of(5, 0))
             }
 
-            // 3. 有料放送を除外するか
-            val isFreeCheckOk = if (isExcludePaid) prog.is_free else true
+            val isWithin24Hours = start.isBefore(now.plusHours(24))
 
-            // 全条件をクリアし、かつ未来の番組であるものを残す
-            isGenre && isTimeMatch && start.isAfter(now) && isFreeCheckOk
-        }.sortedBy { it.first.start_time }.take(15) // 時間順に並べて上位15件を採用
+            isTimeMatch && start.isAfter(now) && isWithin24Hours
+        }.sortedBy { it.first.start_time }.take(15)
     }
 
     init {
-        // 設定（ジャンル、時間、有料放送）が変更されたら、1秒待ってからおすすめ番組を再検索する
         viewModelScope.launch {
-            combine(pickupGenreLabel, pickupTimeSetting, excludePaidBroadcasts) { _, _, _ -> Unit }
+            combine(
+                pickupGenreLabel,
+                pickupTimeSetting,
+                excludePaidBroadcasts,
+                favoriteBaseballTeams
+            ) { _, _, _, _ -> Unit }
                 .collectLatest {
-                    delay(1000) // ユーザーが連続して設定を変えた際のAPI連打を防ぐ
+                    delay(1000)
                     fetchAllTypeGenrePickup()
                 }
         }
 
-        // アプリ起動時に GitHub Releases から最新バージョンのAPKがあるかをチェック
         viewModelScope.launch {
             appUpdater.checkForUpdates()
         }
     }
 
-    // ==========================================
-    // アップデート管理メソッド
-    // ==========================================
     fun startUpdateDownload(apkUrl: String) {
         viewModelScope.launch {
             appUpdater.downloadAndInstallUpdate(apkUrl)
@@ -236,24 +330,13 @@ class HomeViewModel @Inject constructor(
         appUpdater.resetState()
     }
 
-    // ==========================================
-    // ホーム画面のデータリフレッシュ
-    // ==========================================
-    /**
-     * 視聴履歴をサーバーから取得してローカルDBを更新し、
-     * おすすめ番組（ジャンルピックアップ）の再検索を行います。
-     */
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
-
-            // 1. KonomiTVサーバーから最新の視聴履歴を取得
             repository.getWatchHistory().onSuccess { apiHistoryList ->
                 val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
                 val existingEntitiesMap =
                     repository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
-
-                // 2. ローカルDBに存在し、すでにサムネイルのシーク位置などが解析済みの場合はその情報を引き継ぐ
                 val entitiesToSave = apiHistoryList.mapNotNull { history ->
                     val programId = history.program.id.toIntOrNull() ?: return@mapNotNull null
                     val existingEntity = existingEntitiesMap[programId]
@@ -270,21 +353,14 @@ class HomeViewModel @Inject constructor(
                     }
                     newEntity
                 }
-
-                // 3. ローカルDBを更新
                 if (entitiesToSave.isNotEmpty()) repository.saveAllToLocalHistory(entitiesToSave)
             }
-
-            repository.refreshUser() // ユーザーのセッション維持
+            repository.refreshUser()
             fetchAllTypeGenrePickup()
-
             _isLoading.value = false
         }
     }
 
-    // ==========================================
-    // チャンネル視聴履歴の保存・削除
-    // ==========================================
     fun saveLastChannel(channel: Channel) {
         viewModelScope.launch {
             repository.saveLastChannel(

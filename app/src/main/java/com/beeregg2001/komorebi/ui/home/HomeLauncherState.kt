@@ -28,27 +28,33 @@ class HomeLauncherState(
     var watchHistory by mutableStateOf<List<KonomiHistoryProgram>>(emptyList())
     var lastChannels by mutableStateOf<List<Channel>>(emptyList())
     var recentRecordings by mutableStateOf<List<RecordedProgram>>(emptyList())
+    var isLoadingInitial by mutableStateOf(false)
     var isLoadingMore by mutableStateOf(false)
     var reserves by mutableStateOf<List<ReserveItem>>(emptyList())
+
     var hotChannels by mutableStateOf<List<UiChannelState>>(emptyList())
     var upcomingReserves by mutableStateOf<List<ReserveItem>>(emptyList())
     var genrePickup by mutableStateOf<List<Pair<EpgProgram, String>>>(emptyList())
-    var pickupGenreLabel by mutableStateOf("")
-    var genrePickupTimeSlot by mutableStateOf("")
+    var pickupGenreLabel by mutableStateOf("アニメ")
+    var genrePickupTimeSlot by mutableStateOf("夜")
+
     var epgUiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
     var logoUrls by mutableStateOf<List<String>>(emptyList())
-    var isLoadingInitial by mutableStateOf(true)
 
-    // --- ★修正: 録画・シリーズ関連の状態保持を追加 ---
+    // --- 録画・シリーズ関連の状態保持 ---
     var openedSeriesTitle by mutableStateOf<String?>(null)
     var isSeriesListOpen by mutableStateOf(false)
 
-    // --- フォーカスリクエスタ ---
-    val tabFocusRequesters = List(5) { FocusRequester() }
-    val settingsFocusRequester = FocusRequester()
-    val contentFirstItemRequesters = List(5) { FocusRequester() }
+    // ★修正: 球団名ごとにグループ化されたリストを受け取る
+    var favoriteBaseballTeams by mutableStateOf<Set<String>>(emptySet())
+    var favoriteBaseballGames by mutableStateOf<List<Pair<String, List<BaseballGameInfo>>>>(
+        emptyList()
+    )
 
-    // --- 算出プロパティ ---
+    val tabFocusRequesters = List(6) { FocusRequester() }
+    val contentFirstItemRequesters = List(6) { FocusRequester() }
+    val settingsFocusRequester = FocusRequester()
+
     val watchHistoryPrograms: List<RecordedProgram>
         @RequiresApi(Build.VERSION_CODES.O) get() = watchHistory.map {
             KonomiDataMapper.toDomainModel(it)
@@ -62,14 +68,10 @@ class HomeLauncherState(
         isRecordListOpen: Boolean,
         isReserveOverlayOpen: Boolean
     ): Boolean {
-        // ★修正: シリーズリストが開いている際もフルスクリーン判定に含める
         return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null ||
                 isSettingsOpen || isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
     }
 
-    /**
-     * タブ切り替え時のリフレッシュ処理
-     */
     @RequiresApi(Build.VERSION_CODES.O)
     fun onTabSelected(
         index: Int,
@@ -112,6 +114,15 @@ class HomeLauncherState(
         }
         onBackTriggered()
     }
+
+    fun requestFocusToCurrentTab() {
+        tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus("HomeLauncher_CurrentTab")
+    }
+
+    fun requestFocusToCurrentContent() {
+        contentFirstItemRequesters.getOrNull(selectedTabIndex)
+            ?.safeRequestFocus("HomeLauncher_Content")
+    }
 }
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -150,6 +161,9 @@ fun rememberHomeLauncherState(
         val eData = state.epgUiState
         if (eData is EpgUiState.Success) eData.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList()
     }
+
+    state.favoriteBaseballTeams = homeViewModel.favoriteBaseballTeams.collectAsState().value
+    state.favoriteBaseballGames = homeViewModel.favoriteBaseballGames.collectAsState().value
 
     return state
 }

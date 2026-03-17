@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.data
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -46,7 +47,6 @@ class SettingsRepository @Inject constructor(
 
         val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
 
-        // ★追加: 贔屓球団のリストを保存するためのキー
         val FAVORITE_BASEBALL_TEAMS = stringPreferencesKey("favorite_baseball_teams")
 
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
@@ -100,9 +100,11 @@ class SettingsRepository @Inject constructor(
     val postRecordingBatchList: Flow<String> =
         context.dataStore.data.map { it[POST_RECORDING_BATCH_LIST] ?: "[]" }
 
-    // ★追加: 贔屓球団のリストを取得するFlow
-    val favoriteBaseballTeams: Flow<String> =
-        context.dataStore.data.map { it[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
+    val favoriteBaseballTeams: Flow<String> = context.dataStore.data.map {
+        val result = it[FAVORITE_BASEBALL_TEAMS] ?: "[]"
+        Log.i("BaseballDebug", "[SettingsRepository] Read from DataStore: $result")
+        result
+    }
 
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
     val enableAiNormalization: Flow<String> =
@@ -127,6 +129,10 @@ class SettingsRepository @Inject constructor(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,
         value: String
     ) {
+        Log.i(
+            "BaseballDebug",
+            "[SettingsRepository] Saving to DataStore - Key: ${key.name}, Value: $value"
+        )
         context.dataStore.edit { settings ->
             settings[key] = value
         }
