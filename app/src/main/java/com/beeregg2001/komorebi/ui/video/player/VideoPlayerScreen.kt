@@ -34,7 +34,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -85,6 +84,7 @@ fun VideoPlayerScreen(
         recordViewModel.fetchProgramDetail(program.id)
     }
 
+    // チャプター周りの処理
     LaunchedEffect(fetchedDetail) {
         if (fetchedDetail != null && fetchedDetail?.id == program.id) {
             currentProgram = fetchedDetail!!
@@ -105,6 +105,7 @@ fun VideoPlayerScreen(
 
     val vs = rememberVideoPlayerState(initialQuality)
 
+    // サブメニュー用の設定
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
     val commentOpacityStr by settingsViewModel.commentOpacity.collectAsState()
@@ -141,6 +142,7 @@ fun VideoPlayerScreen(
     var videoHeight by remember { mutableIntStateOf(0) }
     var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
+    // 操作用のState
     var isChapterListOpen by remember { mutableStateOf(false) }
     var rightKeyDownTime by remember { mutableLongStateOf(0L) }
     var isRightKeyLongPressed by remember { mutableStateOf(false) }
@@ -154,28 +156,16 @@ fun VideoPlayerScreen(
         allComments.addAll(recordViewModel.getArchivedComments(program.recordedVideo.id))
     }
 
-    val audioProcessor = remember {
-        ChannelMixingAudioProcessor().apply {
-            putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
-        }
-    }
-
+    // ★修正: カスタムの AudioProcessor を削除し、ExoPlayer 標準の安定した設定を使用する
     val exoPlayer = remember(vs.currentQuality) {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            init {
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_OFF)
-            }
-
-            override fun buildAudioSink(
-                ctx: Context,
-                enableFloat: Boolean,
-                enableParams: Boolean
-            ): DefaultAudioSink? =
-                DefaultAudioSink.Builder(ctx).setAudioProcessors(arrayOf(audioProcessor)).build()
+        val renderersFactory = DefaultRenderersFactory(context).apply {
+            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
         }
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0")
             .setAllowCrossProtocolRedirects(true)
+
+        // プレイヤー構築
         ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
                 val mediaItem = MediaItem.Builder().setUri(
@@ -187,6 +177,7 @@ fun VideoPlayerScreen(
                         vs.currentQuality.value
                     )
                 ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+
                 setMediaItem(mediaItem)
                 setAudioAttributes(
                     AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
@@ -203,6 +194,7 @@ fun VideoPlayerScreen(
                         vs.isPlayerPlaying = playing
                     }
 
+                    // 字幕データをaribb24.jsへ回す
                     override fun onMetadata(metadata: Metadata) {
                         if (!vs.isSubtitleEnabled) return
                         for (i in 0 until metadata.length()) {
@@ -229,6 +221,7 @@ fun VideoPlayerScreen(
             }
     }
 
+    // シーンサーチ、チャプター一覧を表示する際は映像を一時停止
     LaunchedEffect(isSceneSearchOpen, isChapterListOpen) {
         if (isSceneSearchOpen || isChapterListOpen) {
             vs.wasPlayingBeforeSceneSearch = exoPlayer.isPlaying
@@ -238,6 +231,7 @@ fun VideoPlayerScreen(
         }
     }
 
+    // 画面中央に表示する操作系オーバーレイの表示設定
     LaunchedEffect(vs.indicatorState) {
         if (vs.indicatorState != null) {
             delay(2000)
@@ -245,6 +239,7 @@ fun VideoPlayerScreen(
         }
     }
 
+    // 画質変更時の処理
     DisposableEffect(vs.currentQuality, currentSessionId) {
         recordViewModel.startStreamMaintenance(
             program,
@@ -254,6 +249,7 @@ fun VideoPlayerScreen(
         onDispose { recordViewModel.stopStreamMaintenance() }
     }
 
+    // 番組名、プログレスバー表示オーバーレイの設定
     LaunchedEffect(
         showControls,
         isSubMenuOpen,
@@ -266,6 +262,7 @@ fun VideoPlayerScreen(
         }
     }
 
+    // サブメニューやシーンサーチ、チャプター一覧表示時のフォーカス移動
     LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, isChapterListOpen, showControls) {
         delay(150)
         if (isSubMenuOpen) {
@@ -279,6 +276,7 @@ fun VideoPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
+            // 操作キーイベント
             .onKeyEvent { keyEvent ->
                 if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen) return@onKeyEvent false
 
@@ -310,7 +308,6 @@ fun VideoPlayerScreen(
                                     isRightKeyLongPressed = true
                                     onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    // ★修正: ジャンプ先もマージされた綺麗な境界を使う
                                     val mergedCms =
                                         mergeCmSections(currentProgram.recordedVideo.cmSections)
                                     val boundaries = getChapterBoundaries(duration, mergedCms)
@@ -354,7 +351,6 @@ fun VideoPlayerScreen(
                                     isLeftKeyLongPressed = true
                                     onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    // ★修正: ジャンプ先もマージされた綺麗な境界を使う
                                     val mergedCms =
                                         mergeCmSections(currentProgram.recordedVideo.cmSections)
                                     val boundaries = getChapterBoundaries(duration, mergedCms)
@@ -400,7 +396,6 @@ fun VideoPlayerScreen(
                                 if (!isDownKeyLongPressed && elapsed > 500) {
                                     isDownKeyLongPressed = true
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    // ★修正: マージされた境界数でチェックする
                                     val mergedCms =
                                         mergeCmSections(currentProgram.recordedVideo.cmSections)
                                     val hasChapters =
@@ -434,6 +429,7 @@ fun VideoPlayerScreen(
                     else -> false
                 }
             }) {
+        // 映像レイヤー
         AndroidView(
             factory = {
                 PlayerView(it).apply {
@@ -463,6 +459,7 @@ fun VideoPlayerScreen(
                 .focusable()
         )
 
+        // 実況コメントレイヤー
         val commentLayer = @Composable {
             if (isHeavyUiReady) {
                 ArchivedCommentOverlay(
@@ -472,6 +469,7 @@ fun VideoPlayerScreen(
                 )
             }
         }
+        // 字幕レイヤー
         val subtitleLayer = @Composable {
             if (isHeavyUiReady) {
                 AndroidView(
@@ -492,18 +490,21 @@ fun VideoPlayerScreen(
             }
         }
 
+        // 設定画面からのレイヤー設定によって、上下を入れ替える
         if (subtitleCommentLayer == "CommentOnTop") {
             subtitleLayer(); commentLayer()
         } else {
             commentLayer(); subtitleLayer()
         }
 
+        // 番組名、プログレスバーレイヤー
         PlayerControls(
             exoPlayer,
             currentProgram.title,
             showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen
         )
 
+        // シーンサーチレイヤー
         AnimatedVisibility(
             isSceneSearchOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -526,6 +527,7 @@ fun VideoPlayerScreen(
                 })
         }
 
+        // チャプター一覧レイヤー
         AnimatedVisibility(
             isChapterListOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -548,6 +550,7 @@ fun VideoPlayerScreen(
             )
         }
 
+        // サブメニューレイヤー
         AnimatedVisibility(
             isSubMenuOpen,
             enter = slideInVertically { -it } + fadeIn(),

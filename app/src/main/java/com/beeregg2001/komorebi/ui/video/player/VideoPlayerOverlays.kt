@@ -13,6 +13,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 
+
+/* 画面中央に表示される再生・一時停止等のオーバーレイを表示するメソッド */
 @Composable
 fun PlaybackIndicator(state: IndicatorState?) {
     AnimatedVisibility(
