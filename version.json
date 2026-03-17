@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "0.8.0-beta",
-  "releaseNotes": "・DBの軽量化\n・チャプター一覧表示、チャプタースキップ対応\n・アプリ内アップデートに対応\n・EPG自動予約機能追加\n",
-  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.8.0-beta/Komorebi-0.8.0-beta.apk"
+  "versionCode": 5,
+  "versionName": "0.8.0-bet2",
+  "releaseNotes": "・DB構築処理の見直し（thanks stuayu!）\n・録画再生時に再生速度を変更した際の音ズレに暫定対応\n・ライブ視聴時に実況コメントが表示されないことがある問題に暫定対応\n",
+  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.8.0-beta2/Komorebi-0.8.0-beta2.apk"
 }

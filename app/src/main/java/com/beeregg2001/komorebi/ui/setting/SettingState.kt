@@ -28,7 +28,8 @@ class SettingPreferences(
     val labAnnict: String,
     val labShobocal: String,
     val defaultPostCommand: String,
-    val postRecordingBatchList: List<PostRecordingBatch>, // ★追加
+    val postRecordingBatchList: List<PostRecordingBatch>,
+    val favoriteBaseballTeams: Set<String>, // ★追加
     val geminiApiKey: String,
     val enableAiNormalization: String,
     val pickupGenre: String,
@@ -52,6 +53,17 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         }
     }
 
+    // ★追加: 贔屓球団のデコード
+    val baseballTeamsJson = repository.favoriteBaseballTeams.collectAsState(initial = "[]").value
+    val favoriteTeams = remember(baseballTeamsJson) {
+        try {
+            val type = object : TypeToken<Set<String>>() {}.type
+            gson.fromJson<Set<String>>(baseballTeamsJson, type) ?: emptySet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+    }
+
     return SettingPreferences(
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "").value,
@@ -72,7 +84,8 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
-        postRecordingBatchList = batchList, // ★追加
+        postRecordingBatchList = batchList,
+        favoriteBaseballTeams = favoriteTeams, // ★追加
         geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value,
         enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value,
         pickupGenre = repository.homePickupGenre.collectAsState(initial = "アニメ").value,

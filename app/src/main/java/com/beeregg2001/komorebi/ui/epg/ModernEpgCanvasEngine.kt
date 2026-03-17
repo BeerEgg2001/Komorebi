@@ -46,6 +46,11 @@ import java.time.Duration
 import java.time.OffsetDateTime
 import kotlinx.coroutines.delay
 
+/**
+ * 独自のCanvas描画を用いた超高速なEPG(電子番組表)コンポーネント。
+ * 標準のLazyList系では処理落ちする数千件の番組データを、数学的な座標計算とカリング(画面外の描画省略)
+ * を用いてシームレスにスクロールできるようにしています。
+ */
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun ModernEpgCanvasEngine_Smooth(
@@ -65,20 +70,27 @@ fun ModernEpgCanvasEngine_Smooth(
     reserves: List<ReserveItem> = emptyList(),
     onUpdateTargetTime: (OffsetDateTime) -> Unit,
     onRequestJumpToNow: () -> Unit,
-    // ★追加: 検索ボタン用
     searchButtonFocusRequester: FocusRequester,
     onSearchClick: () -> Unit
 ) {
+    // ==========================================
+    // 1. 初期化とリソースの準備
+    // ==========================================
     val density = LocalDensity.current
     val colors = KomorebiTheme.colors
+
+    // 描画設定(EpgConfig)と状態管理(EpgState)を初期化
     val config = remember(density, colors) { EpgConfig(density, colors) }
     val epgState = remember { EpgState(config) }
+
+    // Canvas上でテキストや画像を描画するためのツールを準備
     val textMeasurer = rememberTextMeasurer()
     val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
     val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
     val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
     val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
 
+    // ヘッダーに表示する放送波タブ（地デジ、BSなど）を決定
     val visibleTabs = remember(availableTypes) {
         val all =
             listOf("地デジ" to "GR", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "SKY")
@@ -87,21 +99,31 @@ fun ModernEpgCanvasEngine_Smooth(
     val subTabFocusRequesters =
         remember(visibleTabs.size) { List(visibleTabs.size) { FocusRequester() } }
 
+    // ==========================================
+    // 2. UI状態・フラグの管理
+    // ==========================================
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
     var hasRenderedFirstFrame by remember { mutableStateOf(false) }
+
+    // isJumping: 放送波切り替えや日時ジャンプ時など、アニメーションさせずに一瞬で移動させるためのフラグ
     var isJumping by remember { mutableStateOf(false) }
     var isLongPressHandled by remember { mutableStateOf(false) }
 
     var lastRequestedTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     var isNextUpdateSeamless by remember { mutableStateOf(false) }
 
-    LaunchedEffect(epgState.hasData) { if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow() }
+    // 起動時の初期スクロール（現在時刻へのジャンプ）
+    LaunchedEffect(epgState.hasData) {
+        if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
+    }
 
+    // 番組表からヘッダーへフォーカスを戻す際の遅延処理（フォーカスロスト防止）
     LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
         if (isHeaderVisible && pendingHeaderFocusIndex != null) {
-            val index = pendingHeaderFocusIndex!!; delay(50)
+            val index = pendingHeaderFocusIndex!!
+            delay(50) // アニメーションの完了を待つ
             if (index == -2) topTabFocusRequester.safeRequestFocus("Epg_TopTab")
             else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].safeRequestFocus(
                 "Epg_SubTab"
@@ -110,15 +132,18 @@ fun ModernEpgCanvasEngine_Smooth(
         }
     }
 
+    // APIから新しい番組データを受け取った時の処理
     LaunchedEffect(uiState) {
         if (uiState is EpgUiState.Success) {
             val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
             lastLoadedType = currentType
-            if (isTypeChanged) hasRenderedFirstFrame = false
+            if (isTypeChanged) hasRenderedFirstFrame = false // タブ切り替え時は描画をリセット
 
+            // 新データ適用時はアニメーションを無効化(isJumping = true)して即座に反映させる
             isJumping = true
             lastRequestedTargetTime = null
 
+            // EpgStateにデータを流し込み、内部の座標計算を更新
             epgState.updateData(
                 newData = uiState.data,
                 targetTime = uiState.targetTime,
@@ -127,19 +152,28 @@ fun ModernEpgCanvasEngine_Smooth(
             isNextUpdateSeamless = false
 
             delay(100)
-            isJumping = false
+            isJumping = false // アニメーションを再有効化
         }
     }
 
+    // ==========================================
+    // 3. UI コンポジションとアニメーション
+    // ==========================================
     BoxWithConstraints {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
+
+        // 画面サイズが変更されたらEpgStateに通知して再計算させる
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
 
+        // スクロールアニメーションの設定
+        // isJumping が true の場合は snap() で一瞬で移動し、それ以外は spring() で滑らかに移動する
         val scrollSpec = if (isJumping) snap() else spring<Float>(
             dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = 2500f
         )
+
+        // epgStateの目標座標(targetX)に向かって、実際の描画座標(scrollX)をアニメーションさせる
         val scrollX by animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
         val scrollY by animateFloatAsState(epgState.targetScrollY, scrollSpec, label = "sY")
         val animX by animateFloatAsState(epgState.targetAnimX, scrollSpec, label = "aX")
@@ -149,6 +183,7 @@ fun ModernEpgCanvasEngine_Smooth(
         val animValues = EpgAnimValues(scrollX, scrollY, animX, animY, animH)
 
         Column(modifier = Modifier.fillMaxSize()) {
+            // 上部のヘッダー（放送波タブや検索ボタン）
             AnimatedVisibility(
                 visible = isHeaderVisible,
                 enter = expandVertically(),
@@ -158,29 +193,35 @@ fun ModernEpgCanvasEngine_Smooth(
                     topTabFocusRequester = topTabFocusRequester,
                     headerFocusRequester = headerFocusRequester,
                     jumpMenuFocusRequester = jumpButtonFocusRequester,
-                    searchButtonFocusRequester = searchButtonFocusRequester, // ★追加
+                    searchButtonFocusRequester = searchButtonFocusRequester,
                     gridFocusRequester = gridFocusRequester,
                     subTabFocusRequesters = subTabFocusRequesters,
                     availableBroadcastingTypes = visibleTabs,
                     onEpgJumpMenuStateChanged = onEpgJumpMenuStateChanged,
-                    onSearchClick = onSearchClick, // ★追加
+                    onSearchClick = onSearchClick,
                     onTypeChanged = onTypeChanged,
                     currentType = currentType
                 )
             }
 
             var isContentFocused by remember { mutableStateOf(false) }
+
+            // 番組表のメイン描画領域 (CanvasをホストするBox)
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .focusRequester(gridFocusRequester)
+                    // グリッドにフォーカスが当たったら、上部のヘッダーを隠して画面を広く使う
                     .onFocusChanged {
-                        isContentFocused = it.isFocused; if (it.isFocused) isHeaderVisible = false
+                        isContentFocused = it.isFocused
+                        if (it.isFocused) isHeaderVisible = false
                     }
                     .onKeyEvent { event ->
+                        // 戻るボタン操作のハンドリング
                         if (event.key == Key.Back) {
                             if (event.type == KeyEventType.KeyDown) {
+                                // 長押しで現在時刻へ一発ジャンプ
                                 if (event.nativeKeyEvent.isLongPress) {
                                     isJumping = true
                                     isLongPressHandled = true
@@ -195,6 +236,7 @@ fun ModernEpgCanvasEngine_Smooth(
                                     isJumping = false
                                     return@onKeyEvent true
                                 } else {
+                                    // 通常の「戻る」操作：上部のヘッダーを再表示してフォーカスを戻す
                                     isJumping = false
                                     isHeaderVisible = true
                                     pendingHeaderFocusIndex =
@@ -204,22 +246,44 @@ fun ModernEpgCanvasEngine_Smooth(
                                 }
                             }
                         }
+
+                        // D-Pad 十字キーによるフォーカス（スクロール）移動の制御
                         if (event.type == KeyEventType.KeyDown) {
                             when (event.key) {
+                                // 左右: チャンネル（列）の移動
                                 Key.DirectionRight -> {
-                                    epgState.updatePositions(epgState.focusedCol + 1, epgState.focusedMin); true
+                                    epgState.updatePositions(
+                                        epgState.focusedCol + 1,
+                                        epgState.focusedMin
+                                    ); true
                                 }
+
                                 Key.DirectionLeft -> {
-                                    epgState.updatePositions(epgState.focusedCol - 1, epgState.focusedMin); true
+                                    epgState.updatePositions(
+                                        epgState.focusedCol - 1,
+                                        epgState.focusedMin
+                                    ); true
                                 }
+
+                                // 下: 時間帯（行）の移動
                                 Key.DirectionDown -> {
                                     val next = epgState.currentFocusedProgram?.let {
-                                        Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.end_time, epgState.baseTime)).toMinutes().toInt()
+                                        Duration.between(
+                                            epgState.baseTime,
+                                            EpgDataConverter.safeParseTime(
+                                                it.end_time,
+                                                epgState.baseTime
+                                            )
+                                        ).toMinutes().toInt()
                                     } ?: (epgState.focusedMin + 30)
 
+                                    // 現在取得している番組表データの一番下まで到達した場合、翌日のデータをAPIから取得要求する
                                     if (next >= epgState.maxScrollMinutes) {
-                                        val currentTarget = (uiState as? EpgUiState.Success)?.targetTime ?: OffsetDateTime.now()
-                                        val nextDayStart = epgState.baseTime.plusDays(1).plusHours(1)
+                                        val currentTarget =
+                                            (uiState as? EpgUiState.Success)?.targetTime
+                                                ?: OffsetDateTime.now()
+                                        val nextDayStart =
+                                            epgState.baseTime.plusDays(1).plusHours(1)
                                         if (lastRequestedTargetTime != nextDayStart) {
                                             lastRequestedTargetTime = nextDayStart
                                             onUpdateTargetTime(nextDayStart)
@@ -229,19 +293,36 @@ fun ModernEpgCanvasEngine_Smooth(
                                         epgState.updatePositions(epgState.focusedCol, next); true
                                     }
                                 }
+
+                                // 上: 時間帯（行）の移動
                                 Key.DirectionUp -> {
                                     val prev = epgState.currentFocusedProgram?.let {
-                                        Duration.between(epgState.baseTime, EpgDataConverter.safeParseTime(it.start_time, epgState.baseTime)).toMinutes().toInt() - 1
+                                        Duration.between(
+                                            epgState.baseTime,
+                                            EpgDataConverter.safeParseTime(
+                                                it.start_time,
+                                                epgState.baseTime
+                                            )
+                                        ).toMinutes().toInt() - 1
                                     } ?: (epgState.focusedMin - 30)
 
+                                    // 取得しているデータの一番上まで到達した場合の処理
                                     if (prev < 0) {
-                                        val todayStart = OffsetDateTime.now().withHour(4).withMinute(0).withSecond(0).withNano(0).let {
-                                            if (OffsetDateTime.now().hour < 4) it.minusDays(1) else it
-                                        }
+                                        val todayStart =
+                                            OffsetDateTime.now().withHour(4).withMinute(0)
+                                                .withSecond(0).withNano(0).let {
+                                                    if (OffsetDateTime.now().hour < 4) it.minusDays(
+                                                        1
+                                                    ) else it
+                                                }
+                                        // すでに一番最初（当日朝4時）の場合は、上部のヘッダーにフォーカスを逃がす
                                         if (!epgState.baseTime.isBefore(todayStart)) {
                                             isHeaderVisible = true
-                                            pendingHeaderFocusIndex = visibleTabs.indexOfFirst { it.second == currentType }.coerceAtLeast(0)
+                                            pendingHeaderFocusIndex =
+                                                visibleTabs.indexOfFirst { it.second == currentType }
+                                                    .coerceAtLeast(0)
                                         } else {
+                                            // 前日のデータをAPIから取得要求する
                                             val prevDayEnd = epgState.baseTime.minusHours(1)
                                             if (lastRequestedTargetTime != prevDayEnd) {
                                                 lastRequestedTargetTime = prevDayEnd
@@ -253,11 +334,14 @@ fun ModernEpgCanvasEngine_Smooth(
                                         epgState.updatePositions(epgState.focusedCol, prev); true
                                     }
                                 }
+
+                                // 決定キー: 選択中の番組詳細画面を開く
                                 Key.DirectionCenter, Key.Enter -> {
                                     epgState.currentFocusedProgram?.let {
                                         if (it.title != "（番組情報なし）") onProgramSelected(it)
                                     }; true
                                 }
+
                                 else -> false
                             }
                         } else false
@@ -265,6 +349,7 @@ fun ModernEpgCanvasEngine_Smooth(
                     .focusable()
             ) {
                 if (epgState.hasData) {
+                    // drawWithCache で Canvas に描画命令を送信 (EpgDrawerに委譲)
                     Spacer(
                         modifier = Modifier
                             .fillMaxSize()
@@ -273,7 +358,7 @@ fun ModernEpgCanvasEngine_Smooth(
                                     drawer.draw(
                                         drawScope = this,
                                         state = epgState,
-                                        animValues = animValues,
+                                        animValues = animValues, // アニメーション中のスクロール座標を渡す
                                         logoPainters = logoPainters,
                                         isGridFocused = isContentFocused || epgState.hasData,
                                         reserveMap = reserveMap,
@@ -284,9 +369,12 @@ fun ModernEpgCanvasEngine_Smooth(
                             })
                 }
 
+                // データ読み込み中、または内部計算中のローディング表示
                 if (uiState is EpgUiState.Loading || epgState.isCalculating || (!hasRenderedFirstFrame && !isJumping)) {
                     Box(
-                        Modifier.fillMaxSize().background(colors.background.copy(alpha = 0.5f)),
+                        Modifier
+                            .fillMaxSize()
+                            .background(colors.background.copy(alpha = 0.5f)),
                         contentAlignment = Alignment.Center
                     ) { CircularProgressIndicator(color = colors.textPrimary) }
                 }
@@ -295,17 +383,20 @@ fun ModernEpgCanvasEngine_Smooth(
     }
 }
 
+/**
+ * 画面上部のヘッダー領域（日時指定ボタン、放送波タブ、検索ボタン）
+ */
 @Composable
 fun EpgHeaderSection(
     topTabFocusRequester: FocusRequester,
     headerFocusRequester: FocusRequester,
     jumpMenuFocusRequester: FocusRequester,
-    searchButtonFocusRequester: FocusRequester, // ★追加
+    searchButtonFocusRequester: FocusRequester,
     gridFocusRequester: FocusRequester,
     subTabFocusRequesters: List<FocusRequester>,
     availableBroadcastingTypes: List<Pair<String, String>>,
     onEpgJumpMenuStateChanged: (Boolean) -> Unit,
-    onSearchClick: () -> Unit, // ★追加
+    onSearchClick: () -> Unit,
     onTypeChanged: (String) -> Unit,
     currentType: String
 ) {
@@ -321,6 +412,7 @@ fun EpgHeaderSection(
             .height(48.dp)
             .background(colors.surface.copy(alpha = 0.95f))
     ) {
+        // 中央の放送波選択タブ（地デジ、BS、CSなど）
         Row(
             modifier = Modifier.align(Alignment.Center),
             horizontalArrangement = Arrangement.Center
@@ -338,9 +430,11 @@ fun EpgHeaderSection(
                         .then(if (isTarget) Modifier.focusRequester(headerFocusRequester) else Modifier)
                         .focusRequester(requester)
                         .focusProperties {
-                            left = if (index == 0) jumpMenuFocusRequester else subTabFocusRequesters[index - 1]
-                            // ★修正: 一番右のタブの「右」は検索ボタンに繋ぐ
-                            right = if (index == availableBroadcastingTypes.size - 1) searchButtonFocusRequester else subTabFocusRequesters[index + 1]
+                            // 十字キーでのフォーカス移動先を指定
+                            left =
+                                if (index == 0) jumpMenuFocusRequester else subTabFocusRequesters[index - 1]
+                            right =
+                                if (index == availableBroadcastingTypes.size - 1) searchButtonFocusRequester else subTabFocusRequesters[index + 1]
                             down = gridFocusRequester
                             up = topTabFocusRequester
                         }
@@ -377,6 +471,7 @@ fun EpgHeaderSection(
                         color = if (isTabFocused) (if (colors.isDark) Color.Black else Color.White) else colors.textPrimary,
                         fontSize = 15.sp
                     )
+                    // 選択中のタブの下部にインジケーター（線）を描画
                     if (currentType == apiValue && !isTabFocused) Box(
                         Modifier
                             .align(Alignment.BottomCenter)
@@ -389,7 +484,7 @@ fun EpgHeaderSection(
         }
 
         // ============================
-        // ★追加: 検索ボタン (右端)
+        // 検索ボタン (右端)
         // ============================
         var isSearchBtnFocused by remember { mutableStateOf(false) }
         Box(
@@ -400,7 +495,8 @@ fun EpgHeaderSection(
                 .onFocusChanged { isSearchBtnFocused = it.isFocused }
                 .focusRequester(searchButtonFocusRequester)
                 .focusProperties {
-                    left = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters.last() else jumpMenuFocusRequester
+                    left =
+                        if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters.last() else jumpMenuFocusRequester
                     down = gridFocusRequester
                     up = topTabFocusRequester
                 }
@@ -413,8 +509,13 @@ fun EpgHeaderSection(
                     }
                     if (event.type == KeyEventType.KeyDown) {
                         when (event.key) {
-                            Key.DirectionUp -> { topTabFocusRequester.safeRequestFocus("EpgSearch_Up"); return@onKeyEvent true }
-                            Key.DirectionCenter, Key.Enter -> { onSearchClick(); return@onKeyEvent true }
+                            Key.DirectionUp -> {
+                                topTabFocusRequester.safeRequestFocus("EpgSearch_Up"); return@onKeyEvent true
+                            }
+
+                            Key.DirectionCenter, Key.Enter -> {
+                                onSearchClick(); return@onKeyEvent true
+                            }
                         }
                     }
                     false
@@ -430,7 +531,9 @@ fun EpgHeaderSection(
             )
         }
 
+        // ============================
         // 日時指定ボタン (左端)
+        // ============================
         var isJumpBtnFocused by remember { mutableStateOf(false) }
         Box(
             modifier = Modifier
@@ -440,7 +543,8 @@ fun EpgHeaderSection(
                 .onFocusChanged { isJumpBtnFocused = it.isFocused }
                 .focusRequester(jumpMenuFocusRequester)
                 .focusProperties {
-                    right = if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else searchButtonFocusRequester
+                    right =
+                        if (subTabFocusRequesters.isNotEmpty()) subTabFocusRequesters[0] else searchButtonFocusRequester
                     down = gridFocusRequester; up = topTabFocusRequester
                 }
                 .onKeyEvent { event ->
@@ -452,8 +556,13 @@ fun EpgHeaderSection(
                     }
                     if (event.type == KeyEventType.KeyDown) {
                         when (event.key) {
-                            Key.DirectionUp -> { topTabFocusRequester.safeRequestFocus("EpgJump_Up"); return@onKeyEvent true }
-                            Key.DirectionCenter, Key.Enter -> { onEpgJumpMenuStateChanged(true); return@onKeyEvent true }
+                            Key.DirectionUp -> {
+                                topTabFocusRequester.safeRequestFocus("EpgJump_Up"); return@onKeyEvent true
+                            }
+
+                            Key.DirectionCenter, Key.Enter -> {
+                                onEpgJumpMenuStateChanged(true); return@onKeyEvent true
+                            }
                         }
                     }
                     false

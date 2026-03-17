@@ -55,6 +55,11 @@ import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/**
+ * 「ビデオ」タブから遷移する、すべての録画番組・シリーズを探すための総合リスト画面。
+ * Paging3を用いた無限スクロールリスト、サイドナビゲーション（カテゴリやジャンルでの絞り込み）、
+ * 検索バー、そしてリスト/グリッド表示の切り替えなどを統括します。
+ */
 @androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -62,7 +67,7 @@ fun RecordListScreen(
     viewModel: RecordViewModel = hiltViewModel(),
     konomiIp: String,
     konomiPort: String,
-    customTitle: String? = null,
+    customTitle: String? = null, // 特定のシリーズだけを開く際に外部から指定されるタイトル
     onProgramClick: (RecordedProgram, Double?) -> Unit,
     onBack: () -> Unit,
     isFromVideoTabSearch: Boolean = false
@@ -71,7 +76,12 @@ fun RecordListScreen(
     val scope = rememberCoroutineScope()
     val syncProgress by viewModel.syncProgress.collectAsState()
 
+    // ==========================================
+    // 1. 初回DB構築中のブロッキングUI
+    // ==========================================
+    // アプリ初回起動時の「全件同期」が終わるまでは、リストを描画せずにプログレス画面を表示して待機させる
     if (syncProgress.isInitialSyncPhase) {
+        // フォーカスが他へ逃げないようにトラップを仕掛ける
         val blockFocusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); blockFocusRequester.safeRequestFocus("InitialSyncBlock") }
 
@@ -132,10 +142,16 @@ fun RecordListScreen(
                 }
             }
         }
-        return
+        return // 初回構築中はこの画面を描画してここでリターン（以降の複雑なリストUIを描画しない）
     }
 
+    // ==========================================
+    // 2. ViewModelからのデータ・Stateの収集
+    // ==========================================
+    // Paging3のストリームをComposeのLazyリストで扱える形に変換
     val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
+
+    // サイドメニューや検索に必要な各種メタデータ群
     val searchHistory by viewModel.searchHistory.collectAsState()
     val groupedChannels by viewModel.groupedChannels.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
@@ -143,6 +159,7 @@ fun RecordListScreen(
     val selectedDay by viewModel.selectedDay.collectAsState()
     val availableGenres by viewModel.availableGenres.collectAsState()
     val groupedSeries by viewModel.groupedSeries.collectAsState()
+
     val isSeriesLoading by viewModel.isSeriesLoading.collectAsState()
     val activeSearchQuery by viewModel.activeSearchQuery.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
@@ -151,17 +168,26 @@ fun RecordListScreen(
     val programDetail by viewModel.programDetail.collectAsState()
     val isRecLoading by viewModel.isRecordingLoading.collectAsState()
 
+    // UI開閉状態（ペイン、詳細画面など）を管理するカスタムStateクラス
     val menuState = rememberRecordListMenuState()
+
+    // テレビUI特有の「フォーカス位置」を強制指定するためのFocusRequester群
     val focuses = rememberRecordListFocusRequesters()
+
+    // FocusTicketManager: "非同期的にリストが描画された直後にフォーカスを当てる" ためのチケット発行システム
     val ticketManager = rememberFocusTicketManager()
 
+    // ==========================================
+    // 3. ローカルUI Stateの管理
+    // ==========================================
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var focusedSeries by remember { mutableStateOf<SeriesInfo?>(null) }
-    var savedFocusProgramId by remember { mutableStateOf<Int?>(null) }
+    var savedFocusProgramId by remember { mutableStateOf<Int?>(null) } // サイドメニュー等へ移動した際に元の位置を記憶
 
     val paneTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = menuState.isPaneOpen }
 
+    // ライフサイクル監視: 他画面からこの画面に戻ってきた際、「未視聴」カテゴリならリストを更新する
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -177,6 +203,7 @@ fun RecordListScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // 画面上部に表示するタイトルを、現在の絞り込み条件（カテゴリや曜日等）に応じて動的に生成
     val currentDisplayTitle by remember(
         selectedCategory, selectedGenre, selectedDay, selectedSeriesGenre, customTitle
     ) {
@@ -193,6 +220,10 @@ fun RecordListScreen(
         )
     }
 
+    // ==========================================
+    // 4. リスト・グリッドのスクロール状態管理
+    // ==========================================
+    // カテゴリや検索条件が変わった際、スクロール位置をリセットするために一意のキー(stateKey)を生成してStateを再生成する
     val stateKey = remember(
         selectedCategory,
         selectedGenre,
@@ -208,6 +239,7 @@ fun RecordListScreen(
     val gridState = remember(stateKey) { TvLazyGridState() }
     val seriesListState = remember(stateKey) { LazyListState() }
 
+    // フォーカスチケットを発行して良いか（最初の要素が描画されているか）を判定するロジック
     val isListFirstItemReady by remember(
         selectedCategory, isListView, pagedRecordings.itemCount, groupedSeries
     ) {
@@ -223,6 +255,7 @@ fun RecordListScreen(
         selectedCategory == RecordCategory.ALL || selectedCategory == RecordCategory.UNWATCHED || selectedCategory == RecordCategory.GENRE || selectedCategory == RecordCategory.SERIES || selectedCategory == RecordCategory.CHANNEL || selectedCategory == RecordCategory.TIME
     }
 
+    // 現在の条件に合致するコンテンツが存在するかどうかのフラグ
     val hasContent by remember(
         selectedCategory,
         pagedRecordings.itemCount,
@@ -247,7 +280,7 @@ fun RecordListScreen(
         derivedStateOf { isRecLoading || isSeriesLoading || pagedRecordings.loadState.refresh is LoadState.Loading }
     }
 
-    // リスト表示時の TopBar 下キー飛び先。RecordListContent から先頭可視アイテムの requester が通知される。
+    // 上部の検索バー等から下キーを押した際に、リスト内の適切な要素へフォーカスを流すための設定
     var listContentDownRequester by remember { mutableStateOf<FocusRequester>(focuses.firstItem) }
 
     val topBarDownRequester = if (isListView && hasContent && isCategoryImplemented) {
@@ -260,17 +293,22 @@ fun RecordListScreen(
 
     val isNavOverlayVisible = !isListView && menuState.isNavPaneOpen
 
+    // ==========================================
+    // 5. 非同期フォーカスチケットの消費ループ
+    // ==========================================
     val currentTicket = ticketManager.currentTicket
     val issueTime = ticketManager.issueTime
 
     LaunchedEffect(currentTicket, issueTime, isListFirstItemReady, hasContent, isLoadingAny) {
         when (currentTicket) {
             FocusTicket.LIST_TOP -> {
+                // コンテンツがあり、かつ描画が終わったら、リストの先頭へフォーカスを移動
                 if (hasContent && isListFirstItemReady && !isLoadingAny) {
                     delay(150)
                     focuses.firstItem.safeRequestFocusWithRetry("Ticket_LIST_TOP")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 } else if (!hasContent && !isLoadingAny) {
+                    // コンテンツがない場合はサイドメニューや検索ボタンへ逃す
                     delay(150)
                     if (isListView) focuses.navPane.safeRequestFocusWithRetry("Ticket_EmptyNav")
                     else focuses.searchOpenButton.safeRequestFocusWithRetry("Ticket_EmptySearch")
@@ -294,6 +332,7 @@ fun RecordListScreen(
         }
     }
 
+    // 初回起動時のフォーカス要求
     LaunchedEffect(Unit) {
         if (menuState.isInitialFocusRequested) {
             delay(200)
@@ -302,6 +341,11 @@ fun RecordListScreen(
         }
     }
 
+    // ==========================================
+    // 6. ユーザーアクションのハンドリング関数
+    // ==========================================
+
+    // 検索実行時の処理
     val executeSearch: (String) -> Unit = { query ->
         savedFocusProgramId = null
         focusedProgram = null
@@ -311,6 +355,7 @@ fun RecordListScreen(
         ticketManager.issue(FocusTicket.LIST_TOP)
     }
 
+    // 左サイドメニューでカテゴリ（全ての録画、未視聴、ジャンル別など）を選択した時の処理
     val handleCategorySelect: (RecordCategory) -> Unit = { category ->
         val isSameCategory = selectedCategory == category
         menuState.isSelectionMade = false
@@ -319,6 +364,7 @@ fun RecordListScreen(
         focusedProgram = null
         focusedSeries = null
 
+        // 既に選択済みのカテゴリを再タップした場合は、サブペインを開くか、全件リストをリフレッシュする
         if (isSameCategory) {
             when (category) {
                 RecordCategory.GENRE -> {
@@ -345,6 +391,8 @@ fun RecordListScreen(
                 }
             }
         } else {
+            // 別のカテゴリを選択した場合
+            // フォーカス迷子を防ぐため一時的にSafeHouse(画面外の1px)へフォーカスを逃がす
             focuses.loadingSafeHouse.safeRequestFocus("SafeHouse_CategoryChange")
             viewModel.updateCategory(category)
 
@@ -363,6 +411,7 @@ fun RecordListScreen(
         }
     }
 
+    // 左キーなどでメインリストからサイドメニューを展開する際の処理
     val handleOpenNavPane = {
         if (selectedCategory == RecordCategory.SERIES) {
             savedFocusProgramId = focusedSeries?.representativeVideoId
@@ -373,6 +422,7 @@ fun RecordListScreen(
         ticketManager.issue(FocusTicket.NAV_PANE)
     }
 
+    // サイドメニューから右キーでメインリストに戻る際の処理（元の位置を復元する）
     val onRightKeyFromNav = {
         if (savedFocusProgramId != null) {
             ticketManager.issue(FocusTicket.TARGET_ID, savedFocusProgramId)
@@ -382,6 +432,7 @@ fun RecordListScreen(
         }
     }
 
+    // リモコンの戻るボタンが押された際の階層的ルーティング
     val handleBackPress: () -> Unit = {
         when {
             menuState.isDetailActive -> menuState.isDetailActive = false
@@ -432,13 +483,19 @@ fun RecordListScreen(
 
     BackHandler(enabled = !menuState.isDetailActive) { handleBackPress() }
 
+    // リスト/グリッド表示形式による左パディングのアニメーション
     val contentStartPadding by animateDpAsState(
         targetValue = if (isListView && !menuState.isSearchBarVisible && activeSearchQuery.isEmpty()) 268.dp else 28.dp,
         animationSpec = tween(350, easing = FastOutSlowInEasing),
         label = "ContentStartPadding"
     )
 
+    // ==========================================
+    // 7. UI コンポジション (画面描画)
+    // ==========================================
     Box(modifier = Modifier.fillMaxSize()) {
+        // SafeHouse: 画面全体が再構築される際、フォーカスがシステムによって強奪されないよう、
+        // 画面外に隠した1x1ピクセルの透明なBoxに一時的に避難させます。
         Box(
             modifier = Modifier
                 .size(1.dp)
@@ -447,6 +504,7 @@ fun RecordListScreen(
                 .focusable()
         )
 
+        // メインコンテンツエリア (リスト・グリッド本体)
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -458,6 +516,7 @@ fun RecordListScreen(
                     .fillMaxSize()
                     .padding(start = contentStartPadding, end = 28.dp, bottom = 20.dp)
                     .focusProperties {
+                        // サイドメニューや詳細ペインが開いている間は、背後のリストへのフォーカス移動をブロック
                         if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible) {
                             up = FocusRequester.Cancel; down = FocusRequester.Cancel; left =
                                 FocusRequester.Cancel; right = FocusRequester.Cancel
@@ -466,6 +525,7 @@ fun RecordListScreen(
 
                 key(stateKey, isListView) {
                     if (isListView) {
+                        // ▼ リスト表示モード
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
                                 val list =
@@ -526,6 +586,7 @@ fun RecordListScreen(
                             }
                         }
                     } else {
+                        // ▼ グリッド（カード）表示モード
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
                                 val list =
@@ -571,6 +632,7 @@ fun RecordListScreen(
                     }
                 }
 
+                // 番組が存在しない、またはAPI読み込み中の表示
                 AnimatedVisibility(
                     visible = !hasContent,
                     enter = fadeIn(tween(300)), exit = fadeOut(tween(300))
@@ -591,6 +653,7 @@ fun RecordListScreen(
                 }
             }
 
+            // 左側に表示されるサイドナビゲーション・カテゴリ選択ペイン群
             Box(
                 modifier = Modifier
                     .zIndex(5f)
@@ -622,6 +685,7 @@ fun RecordListScreen(
             }
         }
 
+        // 画面上部に固定されるヘッダーバー (検索バー、戻るボタン、リスト/グリッド切替ボタン等)
         RecordScreenTopBar(
             modifier = Modifier
                 .fillMaxWidth()

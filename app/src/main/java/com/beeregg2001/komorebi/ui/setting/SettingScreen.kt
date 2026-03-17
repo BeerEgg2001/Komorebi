@@ -56,7 +56,6 @@ fun SettingsScreen(
     val prefs = rememberSettingPreferences(repository)
     val uiState = rememberSettingUiState()
 
-    // ★追加: データベース情報の監視
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
 
@@ -78,7 +77,6 @@ fun SettingsScreen(
 
     val itemFocusRequesters = remember {
         listOf(
-            // ★修正: Generalカテゴリの項目を2つから4つに増加（件数、強制同期、Ch履歴、視聴履歴）
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -100,7 +98,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ), // 2: Playback
-            listOf(FocusRequester()), // 3: Recording (Addボタン分) - 動的リストはbatchItemRsで管理
+            listOf(FocusRequester()), // 3: Recording
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -122,7 +120,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester()
+                FocusRequester(),
+                FocusRequester() // ★追加: プロ野球用に追加
             ), // 7: Lab
             listOf(FocusRequester()) // 8: AppInfo
         )
@@ -250,14 +249,14 @@ fun SettingsScreen(
             ) {
                 when (uiState.selectedCategoryIndex) {
                     0 -> GeneralSettingsContent(
-                        totalRecordCount = totalRecordCount, // ★追加
-                        lastSyncedAt = lastSyncedAt, // ★追加
+                        totalRecordCount = totalRecordCount,
+                        lastSyncedAt = lastSyncedAt,
                         onForceSync = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 "データベースの再構築",
                                 "すべての録画データをサーバーから再取得します。よろしいですか？"
                             ) { viewModel.triggerFullSync() }
-                        }, // ★追加
+                        },
                         onClearChannel = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 AppStrings.DIALOG_CLEAR_HISTORY_TITLE,
@@ -270,8 +269,8 @@ fun SettingsScreen(
                                 AppStrings.DIALOG_CLEAR_WATCH_HISTORY_MSG
                             ) { onClearWatchHistory() }
                         },
-                        dbInfoR = itemFocusRequesters[0][0], // ★追加
-                        forceSyncR = itemFocusRequesters[0][1], // ★追加
+                        dbInfoR = itemFocusRequesters[0][0],
+                        forceSyncR = itemFocusRequesters[0][1],
                         clearChannelR = itemFocusRequesters[0][2],
                         clearHistoryR = itemFocusRequesters[0][3],
                         sidebarR = categoryFocusRequesters[0],
@@ -453,7 +452,6 @@ fun SettingsScreen(
                     )
 
                     4 -> {
-                        // デフォルトのライトテーマ(HIGHTONE)も正しくライトモードとして判定させる
                         val isLightMode =
                             prefs.currentThemeName.contains("LIGHT") || prefs.currentThemeName == "HIGHTONE"
                         val isDarkMode = !isLightMode
@@ -677,11 +675,13 @@ fun SettingsScreen(
                         postCmd = prefs.defaultPostCommand,
                         enableAi = prefs.enableAiNormalization,
                         apiKey = prefs.geminiApiKey,
+                        baseball = prefs.favoriteBaseballTeams, // ★追加
                         annictR = itemFocusRequesters[7][0],
                         shobocalR = itemFocusRequesters[7][1],
                         cmdR = itemFocusRequesters[7][2],
                         enableAiR = itemFocusRequesters[7][3],
                         apiKeyR = itemFocusRequesters[7][4],
+                        baseballR = itemFocusRequesters[7][5], // ★追加
                         sidebarR = categoryFocusRequesters[7],
                         onAnnict = {
                             scope.launch {
@@ -733,6 +733,30 @@ fun SettingsScreen(
                                 }
                             }
                         },
+                        onBaseball = { // ★追加: プロ野球モードの設定ダイアログを開く
+                            // 一般的にEPGの番組表に含まれる球団名（検索キーワード）のマッピング
+                            val npbTeams = listOf(
+                                "阪神タイガース" to "阪神",
+                                "広島東洋カープ" to "広島",
+                                "横浜DeNAベイスターズ" to "DeNA",
+                                "読売ジャイアンツ" to "巨人",
+                                "東京ヤクルトスワローズ" to "ヤクルト",
+                                "中日ドラゴンズ" to "中日",
+                                "オリックス・バファローズ" to "オリックス",
+                                "千葉ロッテマリーンズ" to "ロッテ",
+                                "福岡ソフトバンクホークス" to "ソフトバンク",
+                                "東北楽天ゴールデンイーグルス" to "楽天",
+                                "埼玉西武ライオンズ" to "西武",
+                                "北海道日本ハムファイターズ" to "日本ハム"
+                            )
+                            uiState.activeDialog = SettingDialogState.MultiSelection(
+                                "フォロー球団の選択",
+                                npbTeams,
+                                prefs.favoriteBaseballTeams
+                            ) { selectedTeams ->
+                                viewModel.updateFavoriteBaseballTeams(selectedTeams)
+                            }
+                        },
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7
                         }
@@ -770,6 +794,15 @@ fun SettingsScreen(
             current = state.current,
             onDismiss = { closeDialog() },
             onSelect = { state.onSelect(it); closeDialog() })
+
+        // ★追加: 複数選択ダイアログの表示処理
+        is SettingDialogState.MultiSelection -> MultiSelectionDialog(
+            title = state.title,
+            options = state.options,
+            currentSelections = state.currentSelections,
+            onDismiss = { closeDialog() },
+            onConfirm = { state.onConfirm(it); closeDialog() }
+        )
 
         is SettingDialogState.ConfirmClear -> ConfirmClearDialog(
             title = state.title,

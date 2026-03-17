@@ -95,6 +95,18 @@ class SettingsViewModel @Inject constructor(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // ★追加: 贔屓球団のリストを Set<String> として Flow で提供
+    val favoriteBaseballTeams: StateFlow<Set<String>> = settingsRepository.favoriteBaseballTeams
+        .map { json ->
+            try {
+                val type = object : TypeToken<Set<String>>() {}.type
+                gson.fromJson<Set<String>>(json, type) ?: emptySet()
+            } catch (e: Exception) {
+                emptySet()
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
     val startupTab: StateFlow<String> = settingsRepository.startupTab
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "ホーム")
     val appTheme: StateFlow<String> = settingsRepository.appTheme
@@ -111,10 +123,8 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val oldIp = konomiIp.value
             settingsRepository.saveString(SettingsRepository.KONOMI_IP, ip)
-            // ★修正: アプリ起動時に "" やデフォルト値から読み込まれた際はトリガーしない
             val isDefault = oldIp == "" || oldIp == "https://192-168-xxx-xxx.local.konomi.tv"
             if (oldIp != ip && !isDefault) {
-                // ★修正: viewModelScopeから直接呼ばず、Engine側の独立スコープを必ず経由させる
                 syncEngine.launchSyncAllRecords(forceFullSync = true)
             }
         }
@@ -124,7 +134,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val oldPort = konomiPort.value
             settingsRepository.saveString(SettingsRepository.KONOMI_PORT, port)
-            // ★修正: こちらも同様に起動時の誤爆を防ぐ
             val isDefault = oldPort == "" || oldPort == "7000"
             if (oldPort != port && !isDefault) {
                 syncEngine.launchSyncAllRecords(forceFullSync = true)
@@ -134,7 +143,6 @@ class SettingsViewModel @Inject constructor(
 
     fun triggerFullSync() {
         viewModelScope.launch {
-            // ★修正: 直接呼ばず、必ずEngineの管理下で起動させる
             syncEngine.launchSyncAllRecords(forceFullSync = true)
         }
     }
@@ -159,6 +167,16 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.saveString(
                 SettingsRepository.POST_RECORDING_BATCH_LIST,
                 gson.toJson(newList)
+            )
+        }
+    }
+
+    // ★追加: 贔屓球団の更新と保存
+    fun updateFavoriteBaseballTeams(teams: Set<String>) {
+        viewModelScope.launch {
+            settingsRepository.saveString(
+                SettingsRepository.FAVORITE_BASEBALL_TEAMS,
+                gson.toJson(teams)
             )
         }
     }
