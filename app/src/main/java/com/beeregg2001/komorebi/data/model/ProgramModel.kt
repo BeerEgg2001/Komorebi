@@ -30,7 +30,7 @@ data class EpgChannel(
 )
 data class EpgProgram(
     val id: String, val channel_id: String, val network_id: Int, val service_id: Int,
-    val event_id: Int, val title: String, val desczription: String, val extended: String? = null,
+    val event_id: Int, val title: String, val description: String, val extended: String? = null,
     val detail: Map<String, String>?, val start_time: String, val end_time: String,
     val duration: Int, val is_free: Boolean, val genres: List<EpgGenre>?, val video_type: String?,
     val audio_type: String?, val audio_sampling_rate: String?
