@@ -10,7 +10,9 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
@@ -18,8 +20,12 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -39,6 +45,7 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import kotlinx.coroutines.delay
 
 // ==============================================
 // 本物のプレイヤーを配置した DualDisplayPlayer コンポーネント
@@ -76,21 +83,49 @@ fun DualDisplayPlayer(
         label = "rightWeight"
     )
 
+    // ★追加: 無操作状態（5秒経過）を監視するフラグ
+    var isIdle by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.lastInteractionTime) {
+        isIdle = false
+        delay(5000L) // 5秒間操作がなければ idle 状態へ
+        isIdle = true
+    }
+
+    // ★追加: 枠線の色をアニメーションさせる（Idle時は透明度の高い色に）
+    val leftBorderColor by animateColorAsState(
+        targetValue = if (state.activeDualPlayerIndex == 0) {
+            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(500),
+        label = "leftBorderColor"
+    )
+
+    val rightBorderColor by animateColorAsState(
+        targetValue = if (state.activeDualPlayerIndex == 1) {
+            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(500),
+        label = "rightBorderColor"
+    )
+
     Row(
         modifier = Modifier
             .fillMaxSize()
             .focusable()
     ) {
         // --- 左画面 (メインプレイヤー) ---
-        val leftBorderColor =
-            if (state.activeDualPlayerIndex == 0) colors.accent else Color.Transparent
         Box(
             modifier = Modifier
                 .weight(animatedLeftWeight)
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, leftBorderColor)
+                .border(4.dp, leftBorderColor) // ★変更: アニメーション付きの色を適用
         ) {
             AndroidView(
                 factory = {
@@ -159,15 +194,13 @@ fun DualDisplayPlayer(
         }
 
         // --- 右画面 (サブプレイヤー) ---
-        val rightBorderColor =
-            if (state.activeDualPlayerIndex == 1) colors.accent else Color.Transparent
         Box(
             modifier = Modifier
                 .weight(animatedRightWeight)
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, rightBorderColor)
+                .border(4.dp, rightBorderColor) // ★変更: アニメーション付きの色を適用
         ) {
             if (state.dualRightChannel != null) {
                 AndroidView(
@@ -269,20 +302,48 @@ fun DualDisplayMock(
         label = "rightWeight"
     )
 
+    // ★追加: 無操作状態（5秒経過）を監視するフラグ
+    var isIdle by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.lastInteractionTime) {
+        isIdle = false
+        delay(5000L)
+        isIdle = true
+    }
+
+    // ★追加: 枠線の色をアニメーションさせる（Idle時は透明度の高い色に）
+    val leftBorderColor by animateColorAsState(
+        targetValue = if (state.activeDualPlayerIndex == 0) {
+            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(500),
+        label = "leftBorderColor"
+    )
+
+    val rightBorderColor by animateColorAsState(
+        targetValue = if (state.activeDualPlayerIndex == 1) {
+            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(500),
+        label = "rightBorderColor"
+    )
+
     Row(
         modifier = Modifier
             .fillMaxSize()
             .focusable()
     ) {
-        val leftBorderColor =
-            if (state.activeDualPlayerIndex == 0) colors.accent else Color.Transparent
         Box(
             modifier = Modifier
                 .weight(animatedLeftWeight)
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, leftBorderColor)
+                .border(4.dp, leftBorderColor) // ★変更: アニメーション付きの色を適用
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -324,15 +385,13 @@ fun DualDisplayMock(
             )
         }
 
-        val rightBorderColor =
-            if (state.activeDualPlayerIndex == 1) colors.accent else Color.Transparent
         Box(
             modifier = Modifier
                 .weight(animatedRightWeight)
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, rightBorderColor)
+                .border(4.dp, rightBorderColor) // ★変更: アニメーション付きの色を適用
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 val rightText = when {

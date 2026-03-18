@@ -130,6 +130,11 @@ fun LivePlayerScreen(
 
     var isHeavyUiReady by remember { mutableStateOf(false) }
 
+    // ★追加: LaunchedEffect内で常に最新のUI状態を参照できるよう rememberUpdatedState でキャプチャする
+    val currentIsManualOverlay by rememberUpdatedState(isManualOverlay)
+    val currentIsPinnedOverlay by rememberUpdatedState(isPinnedOverlay)
+    val currentIsSubMenuOpen by rememberUpdatedState(isSubMenuOpen)
+
     LaunchedEffect(Unit) { delay(800); isHeavyUiReady = true }
 
     val isEmulator =
@@ -161,7 +166,6 @@ fun LivePlayerScreen(
     var videoHeight by remember { mutableIntStateOf(0) }
     var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
-    // ★修正: LivePlayerScreen 側で DataSourceFactory を保持する
     val tsDataSourceFactory =
         remember(nativeLib) { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
 
@@ -181,7 +185,7 @@ fun LivePlayerScreen(
         },
         onIsPlayingChanged = { ps.isPlayerPlaying = it },
         onPlayerError = {
-            if (!(ps.currentStreamSource == StreamSource.KONOMITV && ps.sseStatus == "Standby")) {
+            if (!(ps.currentStreamSource == StreamSource.KONOMITV && (ps.sseStatus == "Standby" || ps.sseStatus == "Restart"))) {
                 ps.playerError = ps.analyzePlayerError(it)
             }
         }
@@ -191,7 +195,6 @@ fun LivePlayerScreen(
     var dualVideoHeight by remember { mutableIntStateOf(0) }
     var dualPixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
-    // ★修正: サブ画面用 DataSourceFactory を保持する
     val dualTsDataSourceFactory =
         remember(nativeLib) { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
 
@@ -209,8 +212,8 @@ fun LivePlayerScreen(
             dualVideoWidth = it.width; dualVideoHeight = it.height; dualPixelWidthHeightRatio =
             it.pixelWidthHeightRatio
         },
-        onIsPlayingChanged = { /* サブの再生状態はメインと同期させるため監視しない */ },
-        onPlayerError = { /* サブのエラーはメインのステータスに影響させない */ }
+        onIsPlayingChanged = { /* サブ画面の再生状態はメインと同期するため監視しない */ },
+        onPlayerError = { /* サブ画面のエラーはメインのステータスに影響させない */ }
     )
 
     // ==========================================
@@ -263,6 +266,10 @@ fun LivePlayerScreen(
         ps.currentQuality,
         ps.isDualDisplayMode
     ) {
+        if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") {
+            return@LaunchedEffect
+        }
+
         ps.sseStatus = "Standby"
         ps.sseDetail = AppStrings.SSE_CONNECTING
 
@@ -271,7 +278,6 @@ fun LivePlayerScreen(
 
         val streamUrl =
             if (ps.currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
-                // ★修正: setMediaSourceFactory は呼ばず、プロパティの書き換えだけで処理する
                 tsDataSourceFactory.tsArgs = arrayOf(
                     "-x", "18/38/39", "-n", currentChannelItem.serviceId.toString(),
                     "-a", "13", "-b", "4", "-c", "5", "-u", "1", "-d", "13"
@@ -306,6 +312,10 @@ fun LivePlayerScreen(
     ) {
         val rightChannel = ps.dualRightChannel
         if (ps.isDualDisplayMode && rightChannel != null) {
+            if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") {
+                return@LaunchedEffect
+            }
+
             ps.dualSseStatus = "Standby"
             ps.dualSseDetail = AppStrings.SSE_CONNECTING
 
@@ -314,7 +324,6 @@ fun LivePlayerScreen(
 
             val streamUrl =
                 if (ps.currentStreamSource == StreamSource.MIRAKURUN && isMirakurunAvailable) {
-                    // ★修正: setMediaSourceFactory は呼ばず、プロパティの書き換えだけで処理する
                     dualTsDataSourceFactory.tsArgs = arrayOf(
                         "-x", "18/38/39", "-n", rightChannel.serviceId.toString(),
                         "-a", "13", "-b", "4", "-c", "5", "-u", "1", "-d", "13"
@@ -350,6 +359,8 @@ fun LivePlayerScreen(
         if (ps.currentStreamSource != StreamSource.KONOMITV || !ps.isDualDisplayMode || ps.dualRightChannel == null) return@DisposableEffect onDispose { }
 
         val rightChannel = ps.dualRightChannel!!
+        if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") return@DisposableEffect onDispose { }
+
         val targetQuality =
             if (ps.isDualDisplayMode && ps.currentQuality.value.contains("1080")) "720p" else ps.currentQuality.value
 
@@ -377,9 +388,17 @@ fun LivePlayerScreen(
                     val status = json.optString("status", "Unknown")
                     ps.dualSseStatus = status
                     ps.dualSseDetail = json.optString("detail", "読み込み中...")
+
                     when (status) {
-                        "Standby" -> if (dualExoPlayer.isPlaying) dualExoPlayer.pause()
-                        "ONAir" -> if (!dualExoPlayer.isPlaying) dualExoPlayer.play()
+                        "Standby", "Restart" -> if (dualExoPlayer.isPlaying) dualExoPlayer.pause()
+                        "ONAir" -> {
+                            if (dualExoPlayer.playerError != null) {
+                                dualExoPlayer.prepare()
+                            }
+                            if (!dualExoPlayer.isPlaying) dualExoPlayer.play()
+                        }
+
+                        "Offline", "Error" -> dualExoPlayer.stop()
                     }
                 }
             }
@@ -420,6 +439,9 @@ fun LivePlayerScreen(
         ps.isDualDisplayMode
     ) {
         if (ps.currentStreamSource != StreamSource.KONOMITV) return@DisposableEffect onDispose { }
+        if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") {
+            return@DisposableEffect onDispose { }
+        }
 
         val targetQuality =
             if (ps.isDualDisplayMode && ps.currentQuality.value.contains("1080")) "720p" else ps.currentQuality.value
@@ -457,8 +479,16 @@ fun LivePlayerScreen(
                     }
 
                     when (ps.sseStatus) {
-                        "Standby" -> if (exoPlayer.isPlaying) exoPlayer.pause()
-                        "ONAir" -> if (!exoPlayer.isPlaying && ps.playerError == null) exoPlayer.play()
+                        "Standby", "Restart" -> if (exoPlayer.isPlaying) exoPlayer.pause()
+                        "ONAir" -> {
+                            if (exoPlayer.playerError != null || ps.playerError != null) {
+                                ps.playerError = null
+                                exoPlayer.prepare()
+                            }
+                            if (!exoPlayer.isPlaying && ps.playerError == null) exoPlayer.play()
+                        }
+
+                        "Offline" -> exoPlayer.stop()
                     }
                 }
             }
@@ -471,11 +501,17 @@ fun LivePlayerScreen(
         currentChannelItem.id,
         isCommentEnabled,
         isHeavyUiReady,
-        ps.isDualDisplayMode
+        ps.isDualDisplayMode,
+        ps.sseStatus
     ) {
         processedCommentIds.clear()
-        if (!isCommentEnabled || !isHeavyUiReady || ps.isDualDisplayMode) {
+
+        if (!isCommentEnabled || !isHeavyUiReady || ps.isDualDisplayMode || ps.sseStatus != "ONAir") {
             danmakuViewRef.value?.removeAllDanmakus(true)
+            return@DisposableEffect onDispose { }
+        }
+
+        if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") {
             return@DisposableEffect onDispose { }
         }
 
@@ -565,7 +601,10 @@ fun LivePlayerScreen(
         onShowOverlayChange(true)
         scrollState.scrollTo(0)
         delay(4500)
-        if (!isManualOverlay && !isPinnedOverlay && !isSubMenuOpen) onShowOverlayChange(false)
+        // ★修正: 最新のオーバーレイ状態を参照して閉じるか判定
+        if (!currentIsManualOverlay && !currentIsPinnedOverlay && !currentIsSubMenuOpen) onShowOverlayChange(
+            false
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -581,7 +620,7 @@ fun LivePlayerScreen(
         if (isMiniListOpen) {
             channelViewModel.fetchChannels()
             delay(200); listFocusRequester.safeRequestFocus(TAG)
-        } else if (!isManualOverlay && !isSubMenuOpen) {
+        } else if (!currentIsManualOverlay && !currentIsSubMenuOpen) {
             delay(100); mainFocusRequester.safeRequestFocus(TAG)
         }
     }

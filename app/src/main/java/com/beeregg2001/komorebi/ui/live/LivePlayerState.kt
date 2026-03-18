@@ -73,6 +73,9 @@ class LivePlayerState(
     // センターキーの長押し判定用フラグ
     var isCenterLongPressHandled by mutableStateOf(false)
 
+    // 最後の操作時刻（無操作フェードアウト判定用）
+    var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
+
     /**
      * 二画面モード中に決定キーを押した際、サイズを切り替えるロジック
      */
@@ -164,6 +167,11 @@ class LivePlayerState(
         val isActionDown = keyEvent.type == KeyEventType.KeyDown
         val isActionUp = keyEvent.type == KeyEventType.KeyUp
 
+        // 何らかのキーが押されたら操作時刻をリセット
+        if (isActionDown) {
+            this.lastInteractionTime = System.currentTimeMillis()
+        }
+
         if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER || keyCode == android.view.KeyEvent.KEYCODE_ENTER) {
             if (isActionDown) {
                 if (keyEvent.nativeKeyEvent.repeatCount > 0 && !isCenterLongPressHandled) {
@@ -225,11 +233,19 @@ class LivePlayerState(
                     if (currentIndex != -1) {
                         when (keyCode) {
                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                // ★追加: ザッピング時に手動表示中のオーバーレイ状態をリセットする
+                                onManualOverlayChange(false)
+                                onPinnedOverlayChange(false)
+                                onShowOverlayChange(false)
                                 onChannelSelect(currentGroupList[if (currentIndex > 0) currentIndex - 1 else currentGroupList.size - 1])
                                 return true
                             }
 
                             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                // ★追加: ザッピング時に手動表示中のオーバーレイ状態をリセットする
+                                onManualOverlayChange(false)
+                                onPinnedOverlayChange(false)
+                                onShowOverlayChange(false)
                                 onChannelSelect(currentGroupList[if (currentIndex < currentGroupList.size - 1) currentIndex + 1 else 0])
                                 return true
                             }

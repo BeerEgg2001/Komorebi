@@ -65,7 +65,7 @@ fun EpgReserveDialog(
     var endHour by remember { mutableIntStateOf(endWindow.hour) }
     var endMinute by remember { mutableIntStateOf(endWindow.minute) }
 
-    // ★追加: 詳細設定用の状態（新規作成時のデフォルト値）
+    // 詳細設定用の状態（新規作成時のデフォルト値）
     var showAdvancedSettings by remember { mutableStateOf(false) }
     var advExcludeKeyword by remember { mutableStateOf("") }
     var advIsTitleOnly by remember { mutableStateOf(false) }
@@ -86,7 +86,7 @@ fun EpgReserveDialog(
     val startMinuteBtnRequester = remember { FocusRequester() }
     val endHourBtnRequester = remember { FocusRequester() }
     val endMinuteBtnRequester = remember { FocusRequester() }
-    val advancedBtnRequester = remember { FocusRequester() } // ★追加
+    val advancedBtnRequester = remember { FocusRequester() }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     var isFirstEnter by remember { mutableStateOf(true) }
@@ -135,7 +135,11 @@ fun EpgReserveDialog(
                     if (isEditingKeyword) {
                         isEditingKeyword = false
                         keyboardController?.hide()
-                        runCatching { firstItemFocusRequester.requestFocus() }
+                        // 修正: UIの再構築を待ってからフォーカスを当てる
+                        scope.launch {
+                            delay(50)
+                            runCatching { firstItemFocusRequester.requestFocus() }
+                        }
                     } else if (showAdvancedSettings) {
                         showAdvancedSettings = false
                         scope.launch { delay(50); runCatching { advancedBtnRequester.requestFocus() } }
@@ -214,7 +218,11 @@ fun EpgReserveDialog(
                                 onDone = {
                                     isEditingKeyword = false
                                     keyboardController?.hide()
-                                    runCatching { firstItemFocusRequester.requestFocus() }
+                                    // 修正: UIの再構築を待ってからフォーカスを当てる
+                                    scope.launch {
+                                        delay(50)
+                                        runCatching { firstItemFocusRequester.requestFocus() }
+                                    }
                                 }
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -329,7 +337,6 @@ fun EpgReserveDialog(
 
                 Spacer(Modifier.height(8.dp))
 
-                // ★追加: 詳細設定ボタン
                 Surface(
                     onClick = { openAdvancedSettings() },
                     modifier = Modifier
@@ -394,7 +401,6 @@ fun EpgReserveDialog(
             }
         }
 
-        // ★追加: 詳細設定ダイアログの表示処理
         if (showAdvancedSettings) {
             AdvancedSettingsDialog(
                 initialExcludeKeyword = advExcludeKeyword,
