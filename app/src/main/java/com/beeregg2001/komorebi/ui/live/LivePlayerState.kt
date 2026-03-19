@@ -76,12 +76,17 @@ class LivePlayerState(
     // 最後の操作時刻（無操作フェードアウト判定用）
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
+    // Mirakurunで二画面を開こうとした際の警告ダイアログフラグ
+    var showMirakurunDualWarningDialog by mutableStateOf(false)
+
+    // ★追加: 二画面モード開始前のストリームソースを記憶
+    var previousStreamSource by mutableStateOf<StreamSource?>(null)
+
     /**
      * 二画面モード中に決定キーを押した際、サイズを切り替えるロジック
      */
     fun toggleDualScreenSize() {
         if (activeDualPlayerIndex == 0) {
-            // 左画面がフォーカスされている場合
             if (leftScreenWeight == 1f && rightScreenWeight == 1f) {
                 leftScreenWeight = 0.6f
                 rightScreenWeight = 1.4f
@@ -93,7 +98,6 @@ class LivePlayerState(
                 rightScreenWeight = 1f
             }
         } else {
-            // 右画面がフォーカスされている場合
             if (rightScreenWeight == 1f && leftScreenWeight == 1f) {
                 rightScreenWeight = 0.6f
                 leftScreenWeight = 1.4f
@@ -117,7 +121,7 @@ class LivePlayerState(
                 when (cause.responseCode) {
                     404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
                     503 -> AppStrings.ERR_TUNER_FULL
-                    else -> "サーバーエラー (HTTP ${cause.responseCode})"
+                    else -> String.format(AppStrings.ERR_SERVER_HTTP, cause.responseCode)
                 }
             }
 
@@ -129,7 +133,7 @@ class LivePlayerState(
                 }
             }
 
-            cause is java.io.IOException -> "データ読み込みエラー: ${cause.message}"
+            cause is java.io.IOException -> String.format(AppStrings.ERR_DATA_READ, cause.message)
             else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
         }
     }
@@ -140,7 +144,7 @@ class LivePlayerState(
     }
 
     /**
-     * キーイベントのハンドリング（LivePlayerScreenから分離）
+     * キーイベントのハンドリング
      */
     fun handleKeyEvent(
         keyEvent: KeyEvent,
@@ -167,7 +171,6 @@ class LivePlayerState(
         val isActionDown = keyEvent.type == KeyEventType.KeyDown
         val isActionUp = keyEvent.type == KeyEventType.KeyUp
 
-        // 何らかのキーが押されたら操作時刻をリセット
         if (isActionDown) {
             this.lastInteractionTime = System.currentTimeMillis()
         }
@@ -185,7 +188,7 @@ class LivePlayerState(
                         this.sseDetail = AppStrings.SSE_CONNECTING
                         this.dualSseStatus = "Standby"
                         this.dualSseDetail = AppStrings.SSE_CONNECTING
-                        onShowToast("左右の画面を入れ替えました")
+                        onShowToast(AppStrings.TOAST_DUAL_SCREEN_SWAPPED)
                     }
                     return true
                 }
@@ -233,7 +236,6 @@ class LivePlayerState(
                     if (currentIndex != -1) {
                         when (keyCode) {
                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                // ★追加: ザッピング時に手動表示中のオーバーレイ状態をリセットする
                                 onManualOverlayChange(false)
                                 onPinnedOverlayChange(false)
                                 onShowOverlayChange(false)
@@ -242,7 +244,6 @@ class LivePlayerState(
                             }
 
                             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                // ★追加: ザッピング時に手動表示中のオーバーレイ状態をリセットする
                                 onManualOverlayChange(false)
                                 onPinnedOverlayChange(false)
                                 onShowOverlayChange(false)
@@ -283,6 +284,13 @@ class LivePlayerState(
                     this.isDualDisplayMode = false
                     this.leftScreenWeight = 1f
                     this.rightScreenWeight = 1f
+
+                    // ★追加: 二画面モード終了時に元のソースへ戻す
+                    this.previousStreamSource?.let {
+                        this.currentStreamSource = it
+                        this.previousStreamSource = null
+                    }
+
                     return true
                 }
             }

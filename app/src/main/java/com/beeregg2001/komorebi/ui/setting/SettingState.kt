@@ -27,15 +27,17 @@ class SettingPreferences(
     val audioOutputMode: String,
     val labAnnict: String,
     val labShobocal: String,
+    val labAllowMirakurunDual: String,
     val defaultPostCommand: String,
     val postRecordingBatchList: List<PostRecordingBatch>,
-    val favoriteBaseballTeams: Set<String>, // ★追加
+    val favoriteBaseballTeams: Set<String>,
     val geminiApiKey: String,
     val enableAiNormalization: String,
     val pickupGenre: String,
     val excludePaid: String,
     val pickupTime: String,
     val startupTab: String,
+    val startupChannel: String, // ★追加
     val currentThemeName: String,
     val defaultRecordListView: String
 )
@@ -52,13 +54,11 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
             emptyList()
         }
     }
-
-    // ★追加: 贔屓球団のデコード
-    val baseballTeamsJson = repository.favoriteBaseballTeams.collectAsState(initial = "[]").value
-    val favoriteTeams = remember(baseballTeamsJson) {
+    val favoriteTeamsJson = repository.favoriteBaseballTeams.collectAsState(initial = "[]").value
+    val favoriteTeams = remember(favoriteTeamsJson) {
         try {
             val type = object : TypeToken<Set<String>>() {}.type
-            gson.fromJson<Set<String>>(baseballTeamsJson, type) ?: emptySet()
+            gson.fromJson<Set<String>>(favoriteTeamsJson, type) ?: emptySet()
         } catch (e: Exception) {
             emptySet()
         }
@@ -66,9 +66,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
 
     return SettingPreferences(
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
-        konomiPort = repository.konomiPort.collectAsState(initial = "").value,
+        konomiPort = repository.konomiPort.collectAsState(initial = "7000").value,
         mirakurunIp = repository.mirakurunIp.collectAsState(initial = "").value,
-        mirakurunPort = repository.mirakurunPort.collectAsState(initial = "").value,
+        mirakurunPort = repository.mirakurunPort.collectAsState(initial = "40772").value,
         preferredSource = repository.preferredStreamSource.collectAsState(initial = "KONOMITV").value,
         commentSpeed = repository.commentSpeed.collectAsState(initial = "1.0").value,
         commentFontSize = repository.commentFontSize.collectAsState(initial = "1.0").value,
@@ -77,21 +77,23 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         commentDefaultDisplay = repository.commentDefaultDisplay.collectAsState(initial = "ON").value,
         liveQuality = repository.liveQuality.collectAsState(initial = "1080p-60fps").value,
         videoQuality = repository.videoQuality.collectAsState(initial = "1080p-60fps").value,
-        liveSubtitleDefault = repository.liveSubtitleDefault.collectAsState(initial = "OFF").value,
-        videoSubtitleDefault = repository.videoSubtitleDefault.collectAsState(initial = "OFF").value,
-        subtitleCommentLayer = repository.subtitleCommentLayer.collectAsState(initial = "CommentOnTop").value,
+        liveSubtitleDefault = repository.liveSubtitleDefault.collectAsState(initial = "ON").value,
+        videoSubtitleDefault = repository.videoSubtitleDefault.collectAsState(initial = "ON").value,
+        subtitleCommentLayer = repository.subtitleCommentLayer.collectAsState(initial = "COMMENT_TOP").value,
         audioOutputMode = repository.audioOutputMode.collectAsState(initial = "DOWNMIX").value,
         labAnnict = repository.labAnnictIntegration.collectAsState(initial = "OFF").value,
         labShobocal = repository.labShobocalIntegration.collectAsState(initial = "OFF").value,
+        labAllowMirakurunDual = repository.labAllowMirakurunDual.collectAsState(initial = "OFF").value,
         defaultPostCommand = repository.defaultPostCommand.collectAsState(initial = "").value,
         postRecordingBatchList = batchList,
-        favoriteBaseballTeams = favoriteTeams, // ★追加
+        favoriteBaseballTeams = favoriteTeams,
         geminiApiKey = repository.geminiApiKey.collectAsState(initial = "").value,
         enableAiNormalization = repository.enableAiNormalization.collectAsState(initial = "OFF").value,
         pickupGenre = repository.homePickupGenre.collectAsState(initial = "アニメ").value,
         excludePaid = repository.excludePaidBroadcasts.collectAsState(initial = "ON").value,
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
+        startupChannel = repository.startupChannel.collectAsState(initial = "OFF").value, // ★追加
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
     )

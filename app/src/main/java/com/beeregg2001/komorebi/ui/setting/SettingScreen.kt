@@ -33,6 +33,7 @@ import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
+import com.beeregg2001.komorebi.viewmodel.ChannelViewModel // ★追加
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -44,7 +45,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onClearLastChannel: () -> Unit = {},
     onClearWatchHistory: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    channelViewModel: ChannelViewModel = hiltViewModel() // ★追加: チャンネルリスト取得用
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -58,6 +60,10 @@ fun SettingsScreen(
 
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
+
+    // ★追加: チャンネル一覧を平坦化して取得（起動時チャンネルの選択肢用）
+    val groupedChannels by channelViewModel.groupedChannels.collectAsState()
+    val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
     val categories = listOf(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
@@ -107,7 +113,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ), // 4: Home
-            listOf(FocusRequester(), FocusRequester()), // 5: Display
+            listOf(FocusRequester(), FocusRequester(), FocusRequester()), // 5: Display (★アイテム追加)
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -121,7 +127,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester() // ★追加: プロ野球用に追加
+                FocusRequester(),
+                FocusRequester()
             ), // 7: Lab
             listOf(FocusRequester()) // 8: AppInfo
         )
@@ -608,6 +615,21 @@ fun SettingsScreen(
                                 }
                             }
                         },
+                        // ★追加: 起動時チャンネルの選択肢生成
+                        onEditStartupChannel = {
+                            val baseOptions = listOf(
+                                AppStrings.SETTINGS_VALUE_STARTUP_OFF to "OFF",
+                                AppStrings.SETTINGS_VALUE_STARTUP_LAST to "LAST_WATCHED"
+                            )
+                            val channelOptions = flatChannels.map { it.name to it.id }
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                AppStrings.DIALOG_STARTUP_CHANNEL_TITLE,
+                                baseOptions + channelOptions,
+                                prefs.startupChannel
+                            ) {
+                                viewModel.updateStartupChannel(it)
+                            }
+                        },
                         onEditDefaultView = {
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
@@ -675,13 +697,15 @@ fun SettingsScreen(
                         postCmd = prefs.defaultPostCommand,
                         enableAi = prefs.enableAiNormalization,
                         apiKey = prefs.geminiApiKey,
-                        baseball = prefs.favoriteBaseballTeams, // ★追加
+                        baseball = prefs.favoriteBaseballTeams,
+                        mirakurunDual = prefs.labAllowMirakurunDual,
                         annictR = itemFocusRequesters[7][0],
                         shobocalR = itemFocusRequesters[7][1],
                         cmdR = itemFocusRequesters[7][2],
                         enableAiR = itemFocusRequesters[7][3],
                         apiKeyR = itemFocusRequesters[7][4],
-                        baseballR = itemFocusRequesters[7][5], // ★追加
+                        baseballR = itemFocusRequesters[7][5],
+                        dualR = itemFocusRequesters[7][6],
                         sidebarR = categoryFocusRequesters[7],
                         onAnnict = {
                             scope.launch {
@@ -733,8 +757,7 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        onBaseball = { // ★追加: プロ野球モードの設定ダイアログを開く
-                            // 一般的にEPGの番組表に含まれる球団名（検索キーワード）のマッピング
+                        onBaseball = {
                             val npbTeams = listOf(
                                 "阪神タイガース" to "阪神",
                                 "広島東洋カープ" to "広島",
@@ -755,6 +778,14 @@ fun SettingsScreen(
                                 prefs.favoriteBaseballTeams
                             ) { selectedTeams ->
                                 viewModel.updateFavoriteBaseballTeams(selectedTeams)
+                            }
+                        },
+                        onToggleMirakurunDual = {
+                            scope.launch {
+                                repository.saveString(
+                                    SettingsRepository.LAB_ALLOW_MIRAKURUN_DUAL,
+                                    if (prefs.labAllowMirakurunDual == "ON") "OFF" else "ON"
+                                )
                             }
                         },
                         onClick = {
@@ -795,7 +826,6 @@ fun SettingsScreen(
             onDismiss = { closeDialog() },
             onSelect = { state.onSelect(it); closeDialog() })
 
-        // ★追加: 複数選択ダイアログの表示処理
         is SettingDialogState.MultiSelection -> MultiSelectionDialog(
             title = state.title,
             options = state.options,

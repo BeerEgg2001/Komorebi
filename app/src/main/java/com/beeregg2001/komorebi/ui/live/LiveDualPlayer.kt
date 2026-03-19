@@ -35,12 +35,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
+import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
@@ -83,7 +85,6 @@ fun DualDisplayPlayer(
         label = "rightWeight"
     )
 
-    // ★追加: 無操作状態（5秒経過）を監視するフラグ
     var isIdle by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.lastInteractionTime) {
@@ -92,7 +93,6 @@ fun DualDisplayPlayer(
         isIdle = true
     }
 
-    // ★追加: 枠線の色をアニメーションさせる（Idle時は透明度の高い色に）
     val leftBorderColor by animateColorAsState(
         targetValue = if (state.activeDualPlayerIndex == 0) {
             if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
@@ -125,11 +125,14 @@ fun DualDisplayPlayer(
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, leftBorderColor) // ★変更: アニメーション付きの色を適用
+                .border(4.dp, leftBorderColor)
         ) {
             AndroidView(
                 factory = {
                     PlayerView(it).apply {
+                        // [解説: プレイヤーの初期紐付け]
+                        // STATE_IDLEのチェックを外し、最初からプレイヤーを紐付けておくことで、
+                        // 準備完了と同時にスムーズに映像が出力されるようにします。
                         player = mainPlayer
                         useController = false
                         keepScreenOn = true
@@ -137,8 +140,17 @@ fun DualDisplayPlayer(
                     }
                 },
                 update = { view ->
-                    view.player = mainPlayer
+                    // [解説: プレイヤーの更新]
+                    if (view.player != mainPlayer) {
+                        view.player = mainPlayer
+                    }
                     view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                },
+                onRelease = { view ->
+                    // [解説: メモリリークとデッドロックの防止]
+                    // ComposeのツリーからAndroidViewが破棄される際（1画面に戻る等）、
+                    // PlayerViewとExoPlayerの紐付けを確実に解除し、OSのリソース回収を助けます。
+                    view.player = null
                 },
                 modifier = Modifier.fillMaxSize()
             )
@@ -200,12 +212,13 @@ fun DualDisplayPlayer(
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, rightBorderColor) // ★変更: アニメーション付きの色を適用
+                .border(4.dp, rightBorderColor)
         ) {
             if (state.dualRightChannel != null) {
                 AndroidView(
                     factory = {
                         PlayerView(it).apply {
+                            // [解説: サブプレイヤーの初期紐付け]
                             player = dualPlayer
                             useController = false
                             keepScreenOn = true
@@ -213,8 +226,15 @@ fun DualDisplayPlayer(
                         }
                     },
                     update = { view ->
-                        view.player = dualPlayer
+                        // [解説: サブプレイヤーの更新]
+                        if (view.player != dualPlayer) {
+                            view.player = dualPlayer
+                        }
                         view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    },
+                    onRelease = { view ->
+                        // [解説: サブプレイヤー解放時の安全なデタッチ]
+                        view.player = null
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -272,7 +292,7 @@ fun DualDisplayPlayer(
             } else {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        if (isMiniListOpen) "チャンネル選択中..." else "（未選択）",
+                        if (isMiniListOpen) AppStrings.DUAL_RIGHT_SELECTING else AppStrings.DUAL_RIGHT_UNSELECTED,
                         color = Color.White.copy(alpha = 0.5f),
                         style = MaterialTheme.typography.headlineSmall
                     )
@@ -302,7 +322,6 @@ fun DualDisplayMock(
         label = "rightWeight"
     )
 
-    // ★追加: 無操作状態（5秒経過）を監視するフラグ
     var isIdle by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.lastInteractionTime) {
@@ -311,7 +330,6 @@ fun DualDisplayMock(
         isIdle = true
     }
 
-    // ★追加: 枠線の色をアニメーションさせる（Idle時は透明度の高い色に）
     val leftBorderColor by animateColorAsState(
         targetValue = if (state.activeDualPlayerIndex == 0) {
             if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
@@ -343,11 +361,11 @@ fun DualDisplayMock(
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, leftBorderColor) // ★変更: アニメーション付きの色を適用
+                .border(4.dp, leftBorderColor)
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "左画面\n(720p上限 モック)",
+                    AppStrings.DUAL_MOCK_LEFT,
                     color = Color.White.copy(alpha = 0.5f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     style = MaterialTheme.typography.headlineSmall
@@ -391,13 +409,13 @@ fun DualDisplayMock(
                 .fillMaxHeight()
                 .padding(2.dp)
                 .background(Color.Black)
-                .border(4.dp, rightBorderColor) // ★変更: アニメーション付きの色を適用
+                .border(4.dp, rightBorderColor)
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 val rightText = when {
-                    state.activeDualPlayerIndex == 1 && isMiniListOpen -> "チャンネル選択中...\n(720p上限 モック)"
-                    state.dualRightChannel != null -> "右画面\n(720p上限 モック)"
-                    else -> "右画面\n（未選択）\n(720p上限 モック)"
+                    state.activeDualPlayerIndex == 1 && isMiniListOpen -> AppStrings.DUAL_MOCK_RIGHT_SELECTING
+                    state.dualRightChannel != null -> AppStrings.DUAL_MOCK_RIGHT_SELECTED
+                    else -> AppStrings.DUAL_MOCK_RIGHT_UNSELECTED
                 }
                 Text(
                     rightText,
@@ -460,7 +478,8 @@ fun DualChannelInfoOverlay(
         UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
-    val displayType = if (channel.type.uppercase() == "GR") "地デジ" else channel.type
+    val displayType =
+        if (channel.type.uppercase() == "GR") AppStrings.CHANNEL_TYPE_GR else channel.type
 
     Row(
         modifier = modifier
@@ -505,7 +524,7 @@ fun DualChannelInfoOverlay(
             }
             Spacer(modifier = Modifier.height(4.dp))
             androidx.tv.material3.Text(
-                text = channel.programPresent?.title ?: "番組情報なし",
+                text = channel.programPresent?.title ?: AppStrings.PROGRAM_INFO_NONE,
                 style = androidx.tv.material3.MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.9f),
                 maxLines = 1,

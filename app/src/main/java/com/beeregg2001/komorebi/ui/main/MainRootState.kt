@@ -53,9 +53,10 @@ class MainRootState {
     var showConnectionErrorDialog by mutableStateOf(false)
     var hasAppliedStartupTab by mutableStateOf(false)
 
-    var editingCondition by mutableStateOf<ReservationCondition?>(null)
+    // ★追加: 起動時チャンネルの適用フラグ
+    var hasAppliedStartupChannel by mutableStateOf(false)
 
-    // ★追加: 条件編集ダイアログから開かれた番組詳細用の状態
+    var editingCondition by mutableStateOf<ReservationCondition?>(null)
     var selectedConditionReserveItem by mutableStateOf<ReserveItem?>(null)
 
     // 戻るボタンの連打ガード

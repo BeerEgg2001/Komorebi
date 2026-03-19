@@ -437,6 +437,86 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
     }
 }
 
+// ★追加: Mirakurunソース時に二画面を開始しようとした際の警告ダイアログ
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun MirakurunDualWarningDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(300)
+        focusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(450.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "ソース切り替えの確認",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "メイン画面をMirakurunソースで再生しているときはKonomiTVソースに切り替えます。\nよろしいですか？",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("キャンセル") }
+
+                    Button(
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.accent,
+                            contentColor = if (colors.isDark) Color.Black else Color.White
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                    ) { Text("OK") }
+                }
+            }
+        }
+    }
+}
+
 fun formatChannelType(type: String): String = when (type.uppercase()) {
     "GR" -> "地デジ"
     "BS" -> "BS"

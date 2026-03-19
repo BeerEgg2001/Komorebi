@@ -45,7 +45,7 @@ fun rememberKomorebiPlayer(
     retryKey: Int,
     subtitleEnabledState: MutableState<Boolean>,
     webViewRef: MutableState<WebView?>,
-    tsDataSourceFactory: TsReadExDataSourceFactory, // ★修正: 引数で受け取る
+    tsDataSourceFactory: TsReadExDataSourceFactory,
     onVideoSizeChanged: (VideoSize) -> Unit,
     onIsPlayingChanged: (Boolean) -> Unit,
     onPlayerError: (PlaybackException) -> Unit
@@ -108,6 +108,12 @@ fun rememberKomorebiPlayer(
         }
 
         ExoPlayer.Builder(context, renderersFactory)
+            // [解説: ハードウェアリソース解放猶予]
+            // ExoPlayerが破棄されたり、画面からデタッチされたりする際に、
+            // 古いデバイス等でOSがリソースをロックしてタイムアウト（ANR）するのを防ぐため、
+            // デフォルトの2000msから10000msに猶予を延長しています。
+            .setReleaseTimeoutMs(10000)
+            .setDetachSurfaceTimeoutMs(10000)
             .setLoadControl(
                 DefaultLoadControl.Builder().setBufferDurationsMs(2000, 10000, 1000, 1500)
                     .setPrioritizeTimeOverSizeThresholds(true).build()
