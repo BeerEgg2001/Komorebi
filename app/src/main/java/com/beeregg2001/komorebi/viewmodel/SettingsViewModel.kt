@@ -80,9 +80,21 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val labShobocalIntegration: StateFlow<String> = settingsRepository.labShobocalIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
+    // ★追加: 隠しスイッチの公開
+    val labAllowMirakurunDual: StateFlow<String> = settingsRepository.labAllowMirakurunDual
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val defaultPostCommand: StateFlow<String> = settingsRepository.defaultPostCommand
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
+    // ★追加: 起動時チャンネルのStateFlow
+    val startupChannel: StateFlow<String> = settingsRepository.startupChannel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
+
+    // [解説: 設定の保存関数]
+    // UI(SettingScreen)から選択されたチャンネル情報(IDやOFFなど)をデータストアに書き込みます。
+    fun updateStartupChannel(value: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.STARTUP_CHANNEL, value)
+    }
     val postRecordingBatchList: StateFlow<List<PostRecordingBatch>> =
         settingsRepository.postRecordingBatchList
             .map { json ->
@@ -201,5 +213,10 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun getStartupTabOnce(): String {
         return settingsRepository.getStartupTabOnce()
+    }
+
+    // ★追加: 隠しスイッチの更新
+    fun updateLabAllowMirakurunDual(value: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.LAB_ALLOW_MIRAKURUN_DUAL, value)
     }
 }

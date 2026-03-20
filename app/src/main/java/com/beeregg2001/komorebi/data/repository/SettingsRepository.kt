@@ -34,21 +34,19 @@ class SettingsRepository @Inject constructor(
 
         val LIVE_QUALITY = stringPreferencesKey("live_quality")
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
-
         val LIVE_SUBTITLE_DEFAULT = stringPreferencesKey("live_subtitle_default")
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
-
         val AUDIO_OUTPUT_MODE = stringPreferencesKey("audio_output_mode")
 
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
-        val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
+        val LAB_ALLOW_MIRAKURUN_DUAL = stringPreferencesKey("lab_allow_mirakurun_dual")
 
+        val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
         val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
 
         val FAVORITE_BASEBALL_TEAMS = stringPreferencesKey("favorite_baseball_teams")
-
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
 
@@ -57,15 +55,18 @@ class SettingsRepository @Inject constructor(
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
 
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
+
+        // [解説: データストアのキー]
+        // 起動時に再生するチャンネル（OFF, LAST_WATCHED, チャンネルID）を保存するためのキーを追加します。
+        val STARTUP_CHANNEL = stringPreferencesKey("startup_channel")
         val APP_THEME = stringPreferencesKey("app_theme")
         val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
     }
 
-    val konomiIp: Flow<String> =
-        context.dataStore.data.map { it[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
+    val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "" }
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
     val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
-    val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "" }
+    val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "40772" }
     val preferredStreamSource: Flow<String> =
         context.dataStore.data.map { it[PREFERRED_STREAM_SOURCE] ?: "KONOMITV" }
 
@@ -80,13 +81,12 @@ class SettingsRepository @Inject constructor(
     val liveQuality: Flow<String> = context.dataStore.data.map { it[LIVE_QUALITY] ?: "1080p-60fps" }
     val videoQuality: Flow<String> =
         context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
-
     val liveSubtitleDefault: Flow<String> =
-        context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
+        context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "ON" }
     val videoSubtitleDefault: Flow<String> =
-        context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
+        context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "ON" }
     val subtitleCommentLayer: Flow<String> =
-        context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
+        context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "COMMENT_TOP" }
     val audioOutputMode: Flow<String> =
         context.dataStore.data.map { it[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
 
@@ -94,18 +94,16 @@ class SettingsRepository @Inject constructor(
         context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
     val labShobocalIntegration: Flow<String> =
         context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
+    val labAllowMirakurunDual: Flow<String> =
+        context.dataStore.data.map { it[LAB_ALLOW_MIRAKURUN_DUAL] ?: "OFF" }
+
     val defaultPostCommand: Flow<String> =
         context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
-
     val postRecordingBatchList: Flow<String> =
         context.dataStore.data.map { it[POST_RECORDING_BATCH_LIST] ?: "[]" }
 
-    val favoriteBaseballTeams: Flow<String> = context.dataStore.data.map {
-        val result = it[FAVORITE_BASEBALL_TEAMS] ?: "[]"
-        Log.i("BaseballDebug", "[SettingsRepository] Read from DataStore: $result")
-        result
-    }
-
+    val favoriteBaseballTeams: Flow<String> =
+        context.dataStore.data.map { it[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
     val enableAiNormalization: Flow<String> =
         context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
@@ -117,6 +115,11 @@ class SettingsRepository @Inject constructor(
     val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
 
     val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
+
+    // [解説: データ読み取りフロー]
+    // デフォルト値は "OFF"（設定しない）としてフローを提供します。
+    val startupChannel: Flow<String> = context.dataStore.data.map { it[STARTUP_CHANNEL] ?: "OFF" }
+
     val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
     val defaultRecordListView: Flow<String> =
         context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
@@ -143,10 +146,9 @@ class SettingsRepository @Inject constructor(
         var ip = prefs[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv"
         val port = prefs[KONOMI_PORT] ?: "7000"
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
-            ip = "https://$ip"
+            ip = "http://$ip"
         }
-        val base = ip.removeSuffix("/")
-        return "$base:$port/"
+        return "$ip:$port"
     }
 
     suspend fun getStartupTabOnce(): String {

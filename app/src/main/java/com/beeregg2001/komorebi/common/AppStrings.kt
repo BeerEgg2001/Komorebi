@@ -3,30 +3,47 @@ package com.beeregg2001.komorebi.common
 object AppStrings {
     // 初期設定・起動時
     const val SETUP_REQUIRED_TITLE = "初期設定が必要です"
-    const val SETUP_REQUIRED_MESSAGE = "サーバーへの接続情報が設定されていません。\n設定画面から接続先を入力してください。"
+    const val SETUP_REQUIRED_MESSAGE =
+        "サーバーへの接続情報が設定されていません。\n設定画面から接続先を入力してください。"
     const val GO_TO_SETTINGS = "設定画面へ移動"
     const val GO_TO_SETTINGS_SHORT = "設定画面へ"
     const val CONNECTION_ERROR_TITLE = "接続エラー"
-    const val CONNECTION_ERROR_MESSAGE = "サーバーへの接続に失敗しました。\n設定を確認するか、サーバーの状態を確認してください。"
+    const val CONNECTION_ERROR_MESSAGE =
+        "サーバーへの接続に失敗しました。\n設定を確認するか、サーバーの状態を確認してください。"
     const val EXIT_APP = "アプリ終了"
     const val EXIT_APP_FULL = "アプリを終了する"
 
     // OS非対応
     const val INCOMPATIBLE_OS_TITLE = "非対応のOSバージョン"
-    const val INCOMPATIBLE_OS_MESSAGE = "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API %d) は現在サポートされていません。"
+    const val INCOMPATIBLE_OS_MESSAGE =
+        "本アプリの実行には Android 8.0 (API 26) 以上が必要です。\nお使いの端末 (API %d) は現在サポートされていません。"
 
     // 共通ボタン
     const val BUTTON_CANCEL = "キャンセル"
     const val BUTTON_DELETE = "削除する"
     const val BUTTON_RETRY = "再読み込み"
     const val BUTTON_BACK = "戻る"
+    const val BUTTON_OK = "OK"
+    const val BUTTON_CONFIRM = "決定"
+
+    // 曜日
+    const val DAY_SUN = "日"
+    const val DAY_MON = "月"
+    const val DAY_TUE = "火"
+    const val DAY_WED = "水"
+    const val DAY_THU = "木"
+    const val DAY_FRI = "金"
+    const val DAY_SAT = "土"
 
     // ライブ視聴
     const val LIVE_PLAYER_ERROR_TITLE = "再生エラー"
+    const val LIVE_PLAYER_INIT_ERROR = "プレイヤーの初期化に失敗しました。再試行してください。"
 
     // 状態監視・SSEイベント関連
     const val SSE_CONNECTING = "チューナーに接続しています..."
     const val SSE_OFFLINE = "放送が終了しました"
+    const val STATUS_LOADING = "読み込み中..."
+    const val ERR_TUNER_START_FAILED = "チューナーの起動に失敗しました"
 
     // サブメニュー項目
     const val MENU_AUDIO = "音声切替"
@@ -36,12 +53,16 @@ object AppStrings {
     const val MENU_COMMENT = "コメント表示"
 
     // エラー詳細メッセージ
-    const val ERR_TUNER_FULL = "チューナーに空きがありません (503)\n他の録画や視聴が終了するのを待ってください。"
-    const val ERR_CHANNEL_NOT_FOUND = "チャンネルが見つかりません (404)\n放送局の都合や番組改編により、現在放送されていない可能性があります。"
+    const val ERR_TUNER_FULL =
+        "チューナーに空きがありません (503)\n他の録画や視聴が終了するのを待ってください。"
+    const val ERR_CHANNEL_NOT_FOUND =
+        "チャンネルが見つかりません (404)\n放送局の都合や番組改編により、現在放送されていない可能性があります。"
     const val ERR_CONNECTION_REFUSED = "接続が拒否されました"
     const val ERR_TIMEOUT = "通信がタイムアウトしました"
     const val ERR_NETWORK = "ネットワークエラーが発生しました"
     const val ERR_UNKNOWN = "不明なエラー"
+    const val ERR_SERVER_HTTP = "サーバーエラー (HTTP %d)"
+    const val ERR_DATA_READ = "データ読み込みエラー: %s"
 
     // 予約関連
     const val TOAST_RECORDING_STARTED = "録画を開始しました"
@@ -50,10 +71,106 @@ object AppStrings {
     const val DIALOG_DELETE_RESERVE_TITLE = "予約の削除"
     const val DIALOG_DELETE_RESERVE_MESSAGE = "この予約を削除してもよろしいですか？\n%s"
     const val TOAST_RESERVE_DELETED = "予約を削除しました"
+    const val TOAST_RECORDING_STOPPED = "録画を停止しました"
+    const val TOAST_RECORDING_STARTING = "録画を開始します"
+
+    // EPG予約関連画面
+    const val DIALOG_EPG_RESERVE_TITLE = "EPG予約 (キーワード自動予約)"
+    const val LABEL_TRACKING_KEYWORD = "追跡キーワード"
+    const val LABEL_TRACKING_CRITERIA = "追跡基準 (時間絞り込み)"
+    const val FORMAT_EVERY_WEEK = "毎週(%s)"
+    const val BUTTON_OPEN_ADVANCED_SETTINGS = "詳細設定を開く"
+    const val BUTTON_RESERVE_WITH_CONDITION = "この条件で予約"
+    const val DIALOG_SELECT_HOUR_TITLE = "時を選択"
+    const val DIALOG_SELECT_MINUTE_TITLE = "分を選択"
+    const val DIALOG_SELECT_DAY_TITLE = "曜日を選択"
+
+    // 詳細設定画面
+    const val DIALOG_ADVANCED_SETTINGS_TITLE = "EPG予約 詳細設定"
+    const val LABEL_EXCLUDE_KEYWORD = "除外キーワード"
+    const val LABEL_TITLE_ONLY_SEARCH = "番組名のみを検索対象にする"
+    const val LABEL_TARGET_BROADCAST = "検索対象の放送波"
+    const val LABEL_FUZZY_SEARCH = "あいまい検索を有効にする"
+    const val LABEL_DUPLICATE_AVOIDANCE = "重複予約の回避"
+    const val LABEL_RECORD_PRIORITY = "録画優先度 (1:最低 〜 5:最高)"
+    const val LABEL_EVENT_RELAY = "イベントリレー追従"
+    const val LABEL_EXACT_RECORD = "ぴったり録画"
+    const val BROADCAST_ALL = "全て"
+    const val BROADCAST_GR = "地デジ"
+    const val BROADCAST_BS = "ＢＳ"
+    const val BROADCAST_CS = "ＣＳ"
+    const val DUPLICATE_NONE = "しない"
+    const val DUPLICATE_SAME_CHANNEL = "同じチャンネルのみ"
+    const val DUPLICATE_ALL_CHANNELS = "全てのチャンネル"
+    const val VALUE_YES = "する"
+    const val VALUE_NO = "しない"
+    const val VALUE_NONE = "なし"
+    const val BUTTON_APPLY_AND_BACK = "適用して戻る"
+
+    // 条件編集ダイアログ
+    const val DIALOG_CONDITION_EDIT_TITLE = "自動予約条件の編集・削除"
+    const val LABEL_ENABLE_AUTO_RESERVE = "自動予約を有効にする"
+    const val BUTTON_DELETE_CONDITION = "この条件を削除"
+    const val BUTTON_SAVE_CHANGES = "変更を保存"
+    const val LABEL_MATCHING_RESERVES = "条件に一致する予約一覧"
+    const val DIALOG_DELETE_CONFIRM_TITLE = "削除の確認"
+    const val DIALOG_DELETE_CONDITION_MSG = "この自動予約条件を削除しますか？"
+    const val DIALOG_DELETE_CONDITION_DESC =
+        "この自動予約条件を削除しますか？\n(関連する予約もオプションで一緒に削除できます)"
+    const val CHECKBOX_DELETE_RELATED_RESERVES = "関連する予約（%d件）もすべて削除する"
+
+    // 予約リスト画面
+    const val TITLE_RESERVE_LIST = "録画予約"
+    const val TAB_SINGLE_RESERVE = "単発予約"
+    const val TAB_AUTO_RESERVE = "自動予約 (EPG)"
+    const val MSG_NO_RESERVES = "予約されている番組はありません。"
+    const val MSG_NO_CONDITIONS = "自動予約の条件が登録されていません。"
 
     // 履歴関連
     const val TOAST_CHANNEL_HISTORY_DELETED = "チャンネル履歴を削除しました"
     const val TOAST_WATCH_HISTORY_DELETED = "視聴履歴を削除しました"
+
+    // ライブ視聴トースト関連
+    const val TOAST_DUAL_SCREEN_SWAPPED = "左右の画面を入れ替えました"
+    const val TOAST_AUDIO_CHANGED = "音声: %s"
+    const val TOAST_SOURCE_SWITCHED = "ソース切替"
+    const val TOAST_SUBTITLE_CHANGED = "字幕: %s"
+    const val TOAST_COMMENT_CHANGED = "実況: %s"
+    const val TOAST_QUALITY_CHANGED = "画質: %s"
+
+    // 各種状態・ラベル
+    const val STATE_SHOW = "表示"
+    const val STATE_HIDE = "非表示"
+    const val AUDIO_MAIN = "主音声"
+    const val AUDIO_SUB = "副音声"
+    const val CHANNEL_TYPE_GR = "地デジ"
+    const val PROGRAM_INFO_NONE = "番組情報なし"
+    const val STATUS_RECORDING = "録画中"
+
+    // 二画面・モック関連
+    const val DUAL_MOCK_LEFT = "左画面\n(720p上限 モック)"
+    const val DUAL_MOCK_RIGHT_SELECTING = "チャンネル選択中...\n(720p上限 モック)"
+    const val DUAL_MOCK_RIGHT_SELECTED = "右画面\n(720p上限 モック)"
+    const val DUAL_MOCK_RIGHT_UNSELECTED = "右画面\n（未選択）\n(720p上限 モック)"
+    const val DUAL_RIGHT_SELECTING = "チャンネル選択中..."
+    const val DUAL_RIGHT_UNSELECTED = "（未選択）"
+
+    // オーバーレイ・信号情報
+    const val OVERLAY_SIGNAL_INFO = "信号情報"
+    const val OVERLAY_VIDEO_RES = "映像解像度"
+    const val OVERLAY_VIDEO_CODEC = "映像コーデック"
+    const val OVERLAY_VIDEO_BITRATE = "映像ビットレート"
+    const val OVERLAY_SYNC_FREQ = "垂直同期周波数"
+    const val OVERLAY_DROP_FRAME = "ドロップフレーム"
+    const val OVERLAY_AUDIO_CODEC = "音声コーデック"
+    const val OVERLAY_AUDIO_CH = "音声チャンネル"
+    const val OVERLAY_AUDIO_SAMPLE = "サンプリング周波数"
+    const val OVERLAY_BUFFER = "バッファ残量"
+
+    // ダイアログ関連
+    const val DIALOG_MIRAKURUN_WARNING_TITLE = "ソース切り替えの確認"
+    const val DIALOG_MIRAKURUN_WARNING_MSG =
+        "メイン画面をMirakurunソースで再生しているときはKonomiTVソースに切り替えます。\nよろしいですか？"
 
     // --- 設定画面 ---
     const val SETTINGS_TITLE = "設定"
@@ -129,15 +246,22 @@ object AppStrings {
     const val SETTINGS_ITEM_BASE_THEME = "基本テーマ"
     const val SETTINGS_VALUE_THEME_DARK = "ダークモード"
     const val SETTINGS_VALUE_THEME_LIGHT = "ライトモード"
-    const val SETTINGS_SECTION_THEME = "テーマ設定" // ★追加
+    const val SETTINGS_SECTION_THEME = "テーマ設定"
     const val SETTINGS_ITEM_THEME_COLOR = "テーマカラー・季節"
-    const val SETTINGS_ITEM_APP_THEME = "アプリのテーマ" // ★追加
+    const val SETTINGS_ITEM_APP_THEME = "アプリのテーマ"
     const val SETTINGS_VALUE_SEASON_SPRING = "春"
     const val SETTINGS_VALUE_SEASON_SUMMER = "夏"
     const val SETTINGS_VALUE_SEASON_AUTUMN = "秋"
     const val SETTINGS_VALUE_SEASON_WINTER = "冬"
     const val SETTINGS_VALUE_SEASON_DEFAULT = "デフォルト"
+
+    // ★追加: 起動時のチャンネル設定
     const val SETTINGS_ITEM_STARTUP_TAB = "起動時のデフォルトタブ"
+    const val SETTINGS_ITEM_STARTUP_CHANNEL = "起動時に再生するチャンネル"
+    const val SETTINGS_VALUE_STARTUP_OFF = "設定しない (タブ設定を優先)"
+    const val SETTINGS_VALUE_STARTUP_LAST = "前回最後に視聴したチャンネル"
+    const val DIALOG_STARTUP_CHANNEL_TITLE = "起動時のチャンネルを選択"
+
     const val SETTINGS_VALUE_TAB_HOME = "ホーム"
     const val SETTINGS_VALUE_TAB_LIVE = "ライブ"
     const val SETTINGS_VALUE_TAB_VIDEO = "ビデオ"
@@ -167,7 +291,7 @@ object AppStrings {
     const val SETTINGS_VALUE_EXCLUDE_OFF = "OFF"
 
     // 録画リスト設定
-    const val SETTINGS_SECTION_RECORD_LIST = "録画リスト" // ★修正
+    const val SETTINGS_SECTION_RECORD_LIST = "録画リスト"
     const val SETTINGS_ITEM_DEFAULT_RECORD_VIEW = "録画一覧の初期表示形式"
     const val SETTINGS_VALUE_VIEW_LIST = "リスト形式"
     const val SETTINGS_VALUE_VIEW_GRID = "グリッド形式"

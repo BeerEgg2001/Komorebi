@@ -58,7 +58,7 @@ fun GeneralSettingsContent(
                     .focusRequester(dbInfoR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加: 上キーでのフォーカス飛びをブロック
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(dbInfoR) }
             )
@@ -123,7 +123,7 @@ fun RecordingSettingsContent(
                     .focusRequester(addR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(addR); onAdd() }
             )
@@ -188,7 +188,7 @@ fun ConnectionSettingsContent(
                     .focusRequester(kIpR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = {
                     onClick(kIpR); onEdit(
@@ -298,7 +298,7 @@ fun PlaybackSettingsContent(
                     .focusRequester(liveR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(liveR); onL() })
             SettingItem(
@@ -388,7 +388,7 @@ fun HomeDisplaySettingsContent(
                     .focusRequester(modeR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(modeR); onMode() })
             val seasonLabel = when (themeSeason) {
@@ -435,8 +435,10 @@ fun HomeDisplaySettingsContent(
 @Composable
 fun DisplaySettingsContent(
     preferences: SettingPreferences,
+    startupChannelName: String, // ★追加: 変換済みのチャンネル名を受け取る
     sidebarR: FocusRequester,
     onEditTab: () -> Unit,
+    onEditStartupChannel: () -> Unit,
     onEditDefaultView: () -> Unit,
     itemRs: List<FocusRequester>,
     onClick: (FocusRequester) -> Unit
@@ -457,17 +459,28 @@ fun DisplaySettingsContent(
                     .focusRequester(itemRs[0])
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(itemRs[0]); onEditTab() })
+
+            // ★修正: パラメータで渡された番組名を表示する
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_STARTUP_CHANNEL,
+                startupChannelName,
+                Icons.Default.LiveTv,
+                modifier = Modifier
+                    .focusRequester(itemRs[1])
+                    .focusProperties { left = sidebarR },
+                onClick = { onClick(itemRs[1]); onEditStartupChannel() })
+
             SettingItem(
                 AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
                 if (preferences.defaultRecordListView == "LIST") AppStrings.SETTINGS_VALUE_VIEW_LIST else AppStrings.SETTINGS_VALUE_VIEW_GRID,
                 Icons.Default.GridView,
                 modifier = Modifier
-                    .focusRequester(itemRs[1])
+                    .focusRequester(itemRs[2])
                     .focusProperties { left = sidebarR },
-                onClick = { onClick(itemRs[1]); onEditDefaultView() })
+                onClick = { onClick(itemRs[2]); onEditDefaultView() })
         }
     }
 }
@@ -505,7 +518,7 @@ fun CommentSettingsContent(
                     .focusRequester(defR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // ★追加
+                        up = FocusRequester.Cancel
                     },
                 onClick = { onClick(defR); onT() })
             SettingItem(
@@ -559,13 +572,14 @@ fun LabSettingsContent(
     annict: String, shobocal: String, postCmd: String,
     enableAi: String, apiKey: String,
     baseball: Set<String>,
+    mirakurunDual: String,
     annictR: FocusRequester, shobocalR: FocusRequester, cmdR: FocusRequester,
     enableAiR: FocusRequester, apiKeyR: FocusRequester,
-    baseballR: FocusRequester,
+    baseballR: FocusRequester, dualR: FocusRequester,
     sidebarR: FocusRequester,
     onAnnict: () -> Unit, onShobocal: () -> Unit, onEditCmd: () -> Unit,
     onToggleAi: () -> Unit, onEditApiKey: () -> Unit,
-    onBaseball: () -> Unit,
+    onBaseball: () -> Unit, onToggleMirakurunDual: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -576,6 +590,21 @@ fun LabSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
+        SettingsSection("プレイヤー (実験的)") {
+            SettingItem(
+                title = "Mirakurunソースの2画面同時再生を許可",
+                value = mirakurunDual,
+                icon = Icons.Default.VerticalSplit,
+                modifier = Modifier
+                    .focusRequester(dualR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel
+                    },
+                onClick = { onClick(dualR); onToggleMirakurunDual() }
+            )
+        }
+
         SettingsSection("プロ野球モード (アルファ版)") {
             val baseballText = if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
             SettingItem(
@@ -584,10 +613,7 @@ fun LabSettingsContent(
                 icon = Icons.Default.SportsBaseball,
                 modifier = Modifier
                     .focusRequester(baseballR)
-                    .focusProperties {
-                        left = sidebarR
-                        up = FocusRequester.Cancel // ★追加: ここで上方向への移動をブロック
-                    },
+                    .focusProperties { left = sidebarR },
                 onClick = { onClick(baseballR); onBaseball() }
             )
         }
@@ -632,7 +658,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.8.0 beta2",
+            "Version 0.9.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )
@@ -646,7 +672,7 @@ fun AppInfoContent(
                 .focusRequester(licR)
                 .focusProperties {
                     left = sidebarR
-                    up = FocusRequester.Cancel // ★追加
+                    up = FocusRequester.Cancel
                 },
             onClick = { onClick(licR); onShow() })
     }
