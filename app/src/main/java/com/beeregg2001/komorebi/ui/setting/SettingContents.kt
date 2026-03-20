@@ -435,9 +435,10 @@ fun HomeDisplaySettingsContent(
 @Composable
 fun DisplaySettingsContent(
     preferences: SettingPreferences,
+    startupChannelName: String, // ★追加: 変換済みのチャンネル名を受け取る
     sidebarR: FocusRequester,
     onEditTab: () -> Unit,
-    onEditStartupChannel: () -> Unit, // ★追加
+    onEditStartupChannel: () -> Unit,
     onEditDefaultView: () -> Unit,
     itemRs: List<FocusRequester>,
     onClick: (FocusRequester) -> Unit
@@ -462,14 +463,10 @@ fun DisplaySettingsContent(
                     },
                 onClick = { onClick(itemRs[0]); onEditTab() })
 
-            // ★追加: 起動時に再生するチャンネル
+            // ★修正: パラメータで渡された番組名を表示する
             SettingItem(
                 AppStrings.SETTINGS_ITEM_STARTUP_CHANNEL,
-                when (preferences.startupChannel) {
-                    "OFF" -> AppStrings.SETTINGS_VALUE_STARTUP_OFF
-                    "LAST_WATCHED" -> AppStrings.SETTINGS_VALUE_STARTUP_LAST
-                    else -> preferences.startupChannel // IDをそのまま表示（SettingScreenで名前に変換済みのものを渡すことも可能ですが、ここではシンプルに保持する）
-                },
+                startupChannelName,
                 Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(itemRs[1])
@@ -481,7 +478,7 @@ fun DisplaySettingsContent(
                 if (preferences.defaultRecordListView == "LIST") AppStrings.SETTINGS_VALUE_VIEW_LIST else AppStrings.SETTINGS_VALUE_VIEW_GRID,
                 Icons.Default.GridView,
                 modifier = Modifier
-                    .focusRequester(itemRs[2]) // ★ずらした
+                    .focusRequester(itemRs[2])
                     .focusProperties { left = sidebarR },
                 onClick = { onClick(itemRs[2]); onEditDefaultView() })
         }
@@ -661,7 +658,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 0.8.0 beta2",
+            "Version 0.9.0 beta",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

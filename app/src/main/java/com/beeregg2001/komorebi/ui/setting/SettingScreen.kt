@@ -33,7 +33,7 @@ import com.beeregg2001.komorebi.ui.components.InputDialog
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
-import com.beeregg2001.komorebi.viewmodel.ChannelViewModel // ★追加
+import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -46,7 +46,7 @@ fun SettingsScreen(
     onClearLastChannel: () -> Unit = {},
     onClearWatchHistory: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
-    channelViewModel: ChannelViewModel = hiltViewModel() // ★追加: チャンネルリスト取得用
+    channelViewModel: ChannelViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -61,7 +61,6 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
 
-    // ★追加: チャンネル一覧を平坦化して取得（起動時チャンネルの選択肢用）
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
@@ -113,7 +112,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ), // 4: Home
-            listOf(FocusRequester(), FocusRequester(), FocusRequester()), // 5: Display (★アイテム追加)
+            listOf(FocusRequester(), FocusRequester(), FocusRequester()), // 5: Display
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -592,66 +591,77 @@ fun SettingsScreen(
                         )
                     }
 
-                    5 -> DisplaySettingsContent(
-                        preferences = prefs,
-                        sidebarR = categoryFocusRequesters[5],
-                        onEditTab = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
-                                    AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
-                                    AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
-                                    AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
-                                    AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
-                                ),
-                                prefs.startupTab
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.STARTUP_TAB,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        // ★追加: 起動時チャンネルの選択肢生成
-                        onEditStartupChannel = {
-                            val baseOptions = listOf(
-                                AppStrings.SETTINGS_VALUE_STARTUP_OFF to "OFF",
-                                AppStrings.SETTINGS_VALUE_STARTUP_LAST to "LAST_WATCHED"
-                            )
-                            val channelOptions = flatChannels.map { it.name to it.id }
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.DIALOG_STARTUP_CHANNEL_TITLE,
-                                baseOptions + channelOptions,
-                                prefs.startupChannel
-                            ) {
-                                viewModel.updateStartupChannel(it)
-                            }
-                        },
-                        onEditDefaultView = {
-                            uiState.activeDialog = SettingDialogState.Selection(
-                                AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_VIEW_LIST to "LIST",
-                                    AppStrings.SETTINGS_VALUE_VIEW_GRID to "GRID"
-                                ),
-                                prefs.defaultRecordListView
-                            ) {
-                                scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.DEFAULT_RECORD_LIST_VIEW,
-                                        it
-                                    )
-                                }
-                            }
-                        },
-                        itemRs = itemFocusRequesters[5],
-                        onClick = {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
+                    5 -> {
+                        // [解説: 設定画面でのチャンネル名の解決]
+                        // 起動時チャンネルとして保存されているIDを、flatChannelsの中から検索して実際の番組名に変換します。
+                        val channelName = when (prefs.startupChannel) {
+                            "OFF" -> AppStrings.SETTINGS_VALUE_STARTUP_OFF
+                            "LAST_WATCHED" -> AppStrings.SETTINGS_VALUE_STARTUP_LAST
+                            else -> flatChannels.find { it.id == prefs.startupChannel }?.name
+                                ?: prefs.startupChannel
                         }
-                    )
+
+                        DisplaySettingsContent(
+                            preferences = prefs,
+                            startupChannelName = channelName, // ★追加
+                            sidebarR = categoryFocusRequesters[5],
+                            onEditTab = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_STARTUP_TAB,
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_TAB_HOME to "ホーム",
+                                        AppStrings.SETTINGS_VALUE_TAB_LIVE to "ライブ",
+                                        AppStrings.SETTINGS_VALUE_TAB_VIDEO to "ビデオ",
+                                        AppStrings.SETTINGS_VALUE_TAB_EPG to "番組表",
+                                        AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
+                                    ),
+                                    prefs.startupTab
+                                ) {
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.STARTUP_TAB,
+                                            it
+                                        )
+                                    }
+                                }
+                            },
+                            onEditStartupChannel = {
+                                val baseOptions = listOf(
+                                    AppStrings.SETTINGS_VALUE_STARTUP_OFF to "OFF",
+                                    AppStrings.SETTINGS_VALUE_STARTUP_LAST to "LAST_WATCHED"
+                                )
+                                val channelOptions = flatChannels.map { it.name to it.id }
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.DIALOG_STARTUP_CHANNEL_TITLE,
+                                    baseOptions + channelOptions,
+                                    prefs.startupChannel
+                                ) {
+                                    viewModel.updateStartupChannel(it)
+                                }
+                            },
+                            onEditDefaultView = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_VIEW_LIST to "LIST",
+                                        AppStrings.SETTINGS_VALUE_VIEW_GRID to "GRID"
+                                    ),
+                                    prefs.defaultRecordListView
+                                ) {
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.DEFAULT_RECORD_LIST_VIEW,
+                                            it
+                                        )
+                                    }
+                                }
+                            },
+                            itemRs = itemFocusRequesters[5],
+                            onClick = {
+                                uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
+                            }
+                        )
+                    }
 
                     6 -> CommentSettingsContent(
                         def = prefs.commentDefaultDisplay,

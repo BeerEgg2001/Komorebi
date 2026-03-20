@@ -56,7 +56,6 @@ import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import com.beeregg2001.komorebi.util.UpdateState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.first
 import java.time.LocalTime
 import java.time.OffsetDateTime
 
@@ -126,6 +125,9 @@ fun MainRootScreen(
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
 
+    // ★追加: データベースから読み込んだ「前回視聴したチャンネルの履歴」を監視します。
+    val lastChannels by homeViewModel.lastWatchedChannelFlow.collectAsState(initial = emptyList())
+
     val conditions by reserveViewModel.conditions.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
@@ -148,8 +150,7 @@ fun MainRootScreen(
     // 3. アプリ起動時の初期処理
     // ==========================================
 
-    // [解説: 起動時ルーティング処理]
-    // ユーザー設定に応じて「指定タブ」または「指定チャンネル（LivePlayer）」へ遷移します。
+    // 起動時ルーティング処理: ユーザー設定に応じて「指定タブ」を初期化
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
@@ -161,9 +162,17 @@ fun MainRootScreen(
         }
     }
 
-    // チャンネル一覧と前回視聴履歴の取得が完了したタイミングで、起動時チャンネルの判定を行う
-    LaunchedEffect(groupedChannels, state.hasAppliedStartupTab, isSettingsInitialized) {
-        if (isSettingsInitialized && state.hasAppliedStartupTab && !state.hasAppliedStartupChannel && groupedChannels.isNotEmpty()) {
+    // [解説: 起動時チャンネルの判定と遷移]
+    // isLoadingフラグを使って、データベースからの読み込み（lastChannelsなど）が確実に完了するのを待ってから判定します。
+    LaunchedEffect(
+        groupedChannels,
+        state.hasAppliedStartupTab,
+        isSettingsInitialized,
+        isChannelLoading,
+        isHomeLoading,
+        lastChannels
+    ) {
+        if (isSettingsInitialized && state.hasAppliedStartupTab && !state.hasAppliedStartupChannel && !isChannelLoading && !isHomeLoading && groupedChannels.isNotEmpty()) {
             state.hasAppliedStartupChannel = true // 一度だけ実行
 
             val flatChannels = groupedChannels.values.flatten()
@@ -171,8 +180,8 @@ fun MainRootScreen(
                 val startupChannelId = startupChannelSetting
                 if (startupChannelId != "OFF") {
                     val targetChannel = if (startupChannelId == "LAST_WATCHED") {
-                        // 前回最後に視聴したチャンネルを取得
-                        val lastHistory = homeViewModel.lastWatchedChannelFlow.first().firstOrNull()
+                        // データベースの読み込みが完了した「lastChannels」から取得
+                        val lastHistory = lastChannels.firstOrNull()
                         flatChannels.find { it.id == lastHistory?.id } ?: flatChannels.first()
                     } else {
                         // 個別に指定されたチャンネルIDを検索
@@ -187,7 +196,7 @@ fun MainRootScreen(
                     state.isReturningFromPlayer = false
                     state.currentTabIndex = 1 // 背後のタブをライブにしておく
 
-                    // ★追加: ホーム画面を経由しないため、強制的にUI準備完了フラグを立てて無限ロードを防ぐ
+                    // ホーム画面を経由しないため、強制的にUI準備完了フラグを立てて無限ロードを防ぐ
                     state.isUiReady = true
                 }
             }
@@ -592,7 +601,7 @@ fun MainRootScreen(
             AnimatedVisibility(
                 visible = !state.isUiReady && !state.showConnectionErrorDialog && isSettingsInitialized,
                 enter = fadeIn(),
-                exit = fadeOut(tween(250)) // ★修正: フェードアウトの時間を短くして残像を減らす
+                exit = fadeOut(tween(250))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
                     val pRatio =

@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
+  "versionCode": 6,
   "versionName": "0.9.0-beta",
-  "releaseNotes": "・DB構築処理の見直し（thanks stuayu!）\n・録画再生時に再生速度を変更した際の音ズレに暫定対応\n・ライブ視聴時に実況コメントが表示されないことがある問題に暫定対応\n",
+  "releaseNotes": "・二画面機能に対応\n・番組表UIを刷新\n・設定画面に「起動時に再生するチャンネル」項目を追加。\n・その他細かいバグを修正\n",
   "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.9.0-beta/Komorebi-0.9.0-beta.apk"
 }

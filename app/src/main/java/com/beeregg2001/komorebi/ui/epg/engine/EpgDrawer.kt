@@ -6,6 +6,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.PathEffect
@@ -14,6 +15,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.style.TextAlign
@@ -64,32 +66,29 @@ class EpgDrawer(
             val nowTime = OffsetDateTime.now()
             val nowMs = System.currentTimeMillis()
 
+            // テーマがダークモードかライトモードかを判定
+            val isDarkTheme = config.colorBg.luminance() < 0.5f
+
             // ==========================================
             // 1. 番組表メインエリア (Program Grid)
             // ==========================================
-            // 左側の時間軸(twPx)と上部のヘッダー(hhAreaPx)を除外した領域にのみ番組を描画します。
             clipRect(left = config.twPx, top = config.hhAreaPx) {
-                // スクロール量に基づいて、画面内に見えているチャンネル（列）のインデックスを計算
                 val startCol = ((-curX) / config.cwPx).toInt().coerceAtLeast(0)
                 val endCol = ((-curX + size.width - config.twPx) / config.cwPx).toInt()
                     .coerceAtMost(state.uiChannels.lastIndex)
 
                 if (startCol <= endCol && state.uiChannels.isNotEmpty()) {
-                    // スクロール量に基づいて、画面内に見えている時間（Y座標）の範囲を計算
                     val visibleTopY = -curY - config.hhAreaPx
                     val visibleBottomY = visibleTopY + size.height
 
                     for (c in startCol..endCol) {
                         val uiChannel = state.uiChannels[c]
-                        // このチャンネル列のX座標（左端）
                         val x = config.twPx + curX + (c * config.cwPx)
 
                         for (uiProg in uiChannel.uiPrograms) {
-                            // プログラムが画面外（上すぎる、または下すぎる）場合は描画をスキップ（カリング）
                             if (uiProg.topY + uiProg.height < visibleTopY) continue
                             if (uiProg.topY > visibleBottomY) break
 
-                            // プログラムの絶対Y座標と高さ
                             val py = config.hhAreaPx + curY + uiProg.topY
                             val ph = uiProg.height
                             val isPast = uiProg.endTimeMs < nowMs
@@ -98,7 +97,6 @@ class EpgDrawer(
 
                             val reserve = reserveMap[p.id]
 
-                            // 録画予約の競合状態チェック
                             val isPartial =
                                 reserve != null && (reserve.recordingAvailability == "Partial" || reserve.recordingAvailability == "Partially")
                             val isDuplicated =
@@ -107,14 +105,12 @@ class EpgDrawer(
                                     ignoreCase = true
                                 ))
 
-                            // 隣の列にはみ出さないよう、列の幅でクリッピング
                             clipRect(
                                 left = x,
                                 top = config.hhAreaPx,
                                 right = x + config.cwPx,
                                 bottom = size.height
                             ) {
-                                // 背景色の決定（過去、予約競合、空き領域など）
                                 val bgColor = when {
                                     isPartial -> config.colorReserveBorderPartial.copy(alpha = 0.2f)
                                     isDuplicated -> config.colorReserveBgDuplicated
@@ -123,37 +119,59 @@ class EpgDrawer(
                                     else -> config.colorProgramNormal
                                 }
 
-                                // 番組の枠（矩形）を描画
-                                drawRect(
-                                    color = bgColor,
-                                    topLeft = Offset(x + 1f, py + 1f),
-                                    size = Size(config.cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
-                                )
-
-                                // ジャンル別の左端カラーバーを描画
                                 if (!isEmpty) {
                                     val majorGenre = p.genres?.firstOrNull()?.major
                                     val genreColor = EpgUtils.getGenreColor(majorGenre)
+
+                                    // 通常時のパステルグラデーション
+                                    val startAlpha =
+                                        if (isPast) (if (isDarkTheme) 0.1f else 0.03f) else (if (isDarkTheme) 0.2f else 0.06f)
+                                    val endAlpha =
+                                        if (isPast) 0.0f else (if (isDarkTheme) 0.05f else 0.01f)
+
+                                    val baseColor = bgColor.compositeOver(config.colorBg)
+                                    val startColor =
+                                        genreColor.copy(alpha = startAlpha).compositeOver(baseColor)
+                                    val endColor =
+                                        genreColor.copy(alpha = endAlpha).compositeOver(baseColor)
+
+                                    val gradientBrush = Brush.horizontalGradient(
+                                        colors = listOf(startColor, endColor),
+                                        startX = x + 1f,
+                                        endX = x + config.cwPx - 1f
+                                    )
+
+                                    drawRect(
+                                        brush = gradientBrush,
+                                        topLeft = Offset(x + 1f, py + 1f),
+                                        size = Size(config.cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
+                                    )
+
                                     drawRect(
                                         color = genreColor,
                                         topLeft = Offset(x + 1f, py + 1f),
                                         size = Size(6f, (ph - 2f).coerceAtLeast(0f))
                                     )
+                                } else {
+                                    drawRect(
+                                        color = bgColor,
+                                        topLeft = Offset(x + 1f, py + 1f),
+                                        size = Size(config.cwPx - 2f, (ph - 2f).coerceAtLeast(0f))
+                                    )
                                 }
 
-                                // 番組の高さが十分にある場合のみテキストを描画（短すぎる番組は文字を省略）
                                 if (ph > 20f) {
                                     val iconSize = 12.sp.toPx()
                                     val iconPadding = 2.dp.toPx()
                                     val iconOffset =
                                         if (reserve != null) iconSize + iconPadding else 0f
 
-                                    // タイトルテキストのサイズ計測とキャッシュ（パフォーマンス最適化）
-                                    // ★修正: 白やグレーの固定を排除し、config のテーマカラーを参照する
+                                    val titleColor =
+                                        if (isPast || isEmpty) config.colorTextPast else config.colorTextPrimary
                                     val titleLayout = state.textLayoutCache.getOrPut(p.id) {
                                         textMeasurer.measure(
                                             text = p.title,
-                                            style = config.styleTitle.copy(color = if (isPast || isEmpty) config.colorTextPast else config.colorTextPrimary),
+                                            style = config.styleTitle.copy(color = titleColor),
                                             constraints = Constraints(
                                                 maxWidth = (config.cwPx - 16f - iconOffset).toInt()
                                                     .coerceAtLeast(0),
@@ -164,16 +182,16 @@ class EpgDrawer(
                                     }
                                     val titleH = titleLayout.size.height.toFloat()
 
-                                    // 説明文（あらすじ）のサイズ計測とキャッシュ
                                     var descLayout: TextLayoutResult? = null
                                     var descH = 0f
                                     if (!isEmpty && (ph - titleH - 12f) > 20f && !p.description.isNullOrBlank()) {
+                                        val descColor =
+                                            if (isPast) config.colorTextPast else config.colorTextSecondary
                                         val descKey = p.id + "d"
                                         descLayout = state.textLayoutCache.getOrPut(descKey) {
-                                            // ★修正: 説明文の色もテーマに同期
                                             textMeasurer.measure(
                                                 text = p.description,
-                                                style = config.styleDesc.copy(color = if (isPast) config.colorTextPast else config.colorTextSecondary),
+                                                style = config.styleDesc.copy(color = descColor),
                                                 constraints = Constraints(
                                                     maxWidth = (config.cwPx - 16f).toInt(),
                                                     maxHeight = (ph - titleH - 16f).toInt()
@@ -185,7 +203,6 @@ class EpgDrawer(
                                         descH = descLayout.size.height.toFloat()
                                     }
 
-                                    // スクロール時に、番組の枠が画面外にはみ出しても、テキストが常に画面内に留まるように追従させる計算（Sticky Header風の挙動）
                                     val textTotalH =
                                         titleH + if (descLayout != null) descH + 2f else 0f
                                     val baseShiftY = maxOf(0f, config.hhAreaPx - py)
@@ -193,11 +210,9 @@ class EpgDrawer(
                                     val shiftY = minOf(baseShiftY, maxShiftY)
                                     val titleY = py + 8f + shiftY
 
-                                    // 録画予約アイコン（赤丸 または 時計）の描画
                                     if (reserve != null) {
                                         val iconY = titleY + (titleH - iconSize) / 2
                                         if (reserve.isRecordingInProgress) {
-                                            // 録画中の場合は赤丸
                                             drawCircle(
                                                 color = Color(0xFFE53935),
                                                 radius = iconSize / 2,
@@ -207,7 +222,6 @@ class EpgDrawer(
                                                 )
                                             )
                                         } else {
-                                            // 予約済みの場合は時計アイコン（一部競合時は色を変える）
                                             val clockColor =
                                                 if (isPartial) config.colorReserveBorderPartial else Color.Red
                                             translate(left = x + 10f, top = iconY) {
@@ -221,7 +235,6 @@ class EpgDrawer(
                                         }
                                     }
 
-                                    // ヘッダーに隠れない部分のみテキストを描画
                                     if (titleY + titleH > config.hhAreaPx) {
                                         drawText(
                                             titleLayout,
@@ -236,7 +249,6 @@ class EpgDrawer(
                                     }
                                 }
 
-                                // 予約済み番組の外枠（破線）を描画
                                 if (reserve != null) {
                                     val borderColor =
                                         if (isPartial) config.colorReserveBorderPartial else config.colorReserveBorder
@@ -260,10 +272,8 @@ class EpgDrawer(
             // 2. 現在時刻線 (Current Time Line)
             // ==========================================
             if (nowTime.isAfter(state.baseTime) && nowTime.isBefore(state.limitTime)) {
-                // 番組表の基準時間から現在時刻までのオフセット分（ピクセル）を計算
                 val nowOff = Duration.between(state.baseTime, nowTime).toMinutes().toFloat()
                 val nowY = config.hhAreaPx + curY + (nowOff / 60f * config.hhPx)
-                // 現在時刻のY座標が画面内にあれば横線を引く
                 if (nowY > config.hhAreaPx && nowY < size.height) {
                     drawLine(
                         config.colorCurrentTimeLine,
@@ -271,7 +281,6 @@ class EpgDrawer(
                         Offset(size.width, nowY),
                         strokeWidth = 3f
                     )
-                    // 左端の装飾丸
                     drawCircle(
                         config.colorCurrentTimeLine,
                         radius = 6f,
@@ -283,9 +292,7 @@ class EpgDrawer(
             // ==========================================
             // 3. フォーカス枠 (Focused Program Overlay)
             // ==========================================
-            // 最前面に描画するため、他プログラムの描画ループとは別に処理します。
             if (state.currentFocusedProgram != null && isGridFocused) {
-                // アニメーション中の座標と高さ
                 val fx = config.twPx + curX + animValues.animX
                 val fy = config.hhAreaPx + curY + animValues.animY
                 val fh = animValues.animH
@@ -306,42 +313,100 @@ class EpgDrawer(
                             ignoreCase = true
                         ))
 
-                    // フォーカス枠の背景色（通常、競合中などで変化）
-                    val focusBgColor = when {
+                    val endTimeMs = try {
+                        OffsetDateTime.parse(p.end_time).toInstant().toEpochMilli()
+                    } catch (e: Exception) {
+                        0L
+                    }
+                    val isPast = endTimeMs > 0 && endTimeMs < nowMs
+                    val isEmpty = p.title == "（番組情報なし）"
+
+                    // 背景の映像（透過）を遮断するため、純粋な白またはダークグレーをベースとします
+                    val opaqueBase = if (isDarkTheme) Color(0xFF1A1A1A) else Color.White
+
+                    // [解説: 背景色は通常セルと全く同じ]
+                    // 特別な色付けをせず、グリッドの通常セルと全く同じベースカラーを採用します。
+                    val bgColor = when {
                         isPartial -> config.colorReserveBorderPartial.copy(alpha = 0.2f)
-                            .compositeOver(config.colorBg) // ★修正: Color.Black を排除
-                        isDuplicated -> config.colorReserveBgDuplicated
-                        else -> config.colorFocusBg
+                            .compositeOver(opaqueBase)
+
+                        isDuplicated -> config.colorReserveBgDuplicated.compositeOver(opaqueBase)
+                        isEmpty -> config.colorProgramEmpty.compositeOver(opaqueBase)
+                        isPast -> config.colorProgramPast.compositeOver(opaqueBase)
+                        else -> config.colorProgramNormal.compositeOver(opaqueBase)
                     }
 
-                    // 枠全体の塗りつぶし
-                    drawRect(
-                        focusBgColor,
-                        Offset(fx + 1f, fy + 1f),
-                        Size(config.cwPx - 2f, fh - 2f)
-                    )
-
-                    // ジャンルカラーバー
-                    if (p.title != "（番組情報なし）") {
+                    // 塗りつぶし描画
+                    if (!isEmpty) {
                         val majorGenre = p.genres?.firstOrNull()?.major
                         val genreColor = EpgUtils.getGenreColor(majorGenre)
+
+                        // グリッドと全く同じグラデーションを再現
+                        val startAlpha =
+                            if (isPast) (if (isDarkTheme) 0.1f else 0.03f) else (if (isDarkTheme) 0.2f else 0.06f)
+                        val endAlpha = if (isPast) 0.0f else (if (isDarkTheme) 0.05f else 0.01f)
+
+                        val baseColor = bgColor
+                        val startColor =
+                            genreColor.copy(alpha = startAlpha).compositeOver(baseColor)
+                        val endColor = genreColor.copy(alpha = endAlpha).compositeOver(baseColor)
+
+                        val gradientBrush = Brush.horizontalGradient(
+                            colors = listOf(startColor, endColor),
+                            startX = fx + 1f,
+                            endX = fx + config.cwPx - 1f
+                        )
+
+                        drawRect(
+                            brush = gradientBrush,
+                            topLeft = Offset(fx + 1f, fy + 1f),
+                            size = Size(config.cwPx - 2f, (fh - 2f).coerceAtLeast(0f))
+                        )
+
                         drawRect(
                             color = genreColor,
                             topLeft = Offset(fx + 1f, fy + 1f),
                             size = Size(6f, (fh - 2f).coerceAtLeast(0f))
                         )
+                    } else {
+                        drawRect(
+                            color = bgColor,
+                            topLeft = Offset(fx + 1f, fy + 1f),
+                            size = Size(config.cwPx - 2f, (fh - 2f).coerceAtLeast(0f))
+                        )
                     }
 
+                    // [解説: torne風シャドウ（グロー）効果]
+                    // 枠線の周囲に透明度の高いStrokeを重ねて描画し、浮き上がるような光を表現します
+                    val shadowColor = if (isDarkTheme) config.colorFocusBorder else Color.Black
+                    for (i in 6 downTo 1) {
+                        val alpha = if (isDarkTheme) {
+                            (0.5f - (i * 0.08f)).coerceIn(0f, 1f)
+                        } else {
+                            (0.25f - (i * 0.04f)).coerceIn(0f, 1f)
+                        }
+                        drawRoundRect(
+                            color = shadowColor.copy(alpha = alpha),
+                            topLeft = Offset(fx - i * 1.5f, fy - i * 1.5f),
+                            size = Size(config.cwPx + i * 3f, fh + i * 3f),
+                            cornerRadius = CornerRadius(6f),
+                            style = Stroke(width = 3f)
+                        )
+                    }
+
+                    // テキストとアイコンの描画（文字色も通常セルと全く同じにします）
                     val iconSize = 12.sp.toPx()
                     val iconPadding = 2.dp.toPx()
                     val iconOffset = if (reserve != null) iconSize + iconPadding else 0f
+
+                    val titleColor =
+                        if (isPast || isEmpty) config.colorTextPast else config.colorTextPrimary
                     val cacheKeyF = p.id + "f"
 
-                    // フォーカス時のテキストは通常時とスタイル（色など）が異なるため別キーでキャッシュ
                     val titleLayout = state.textLayoutCache.getOrPut(cacheKeyF) {
                         textMeasurer.measure(
                             text = p.title,
-                            style = config.styleTitle,
+                            style = config.styleTitle.copy(color = titleColor),
                             constraints = Constraints(
                                 maxWidth = (config.cwPx - 20f - iconOffset).toInt().coerceAtLeast(0)
                             )
@@ -350,12 +415,14 @@ class EpgDrawer(
                     val titleH = titleLayout.size.height.toFloat()
 
                     var descLayout: TextLayoutResult? = null
-                    if (p.title != "（番組情報なし）" && !p.description.isNullOrBlank()) {
+                    if (!isEmpty && !p.description.isNullOrBlank()) {
+                        val descColor =
+                            if (isPast) config.colorTextPast else config.colorTextSecondary
                         val descCacheKey = p.id + "fd"
                         descLayout = state.textLayoutCache.getOrPut(descCacheKey) {
                             textMeasurer.measure(
                                 text = p.description ?: "",
-                                style = config.styleDesc,
+                                style = config.styleDesc.copy(color = descColor),
                                 constraints = Constraints(
                                     maxWidth = (config.cwPx - 20f).toInt(),
                                     maxHeight = (fh - titleH - 25f).toInt().coerceAtLeast(0)
@@ -365,7 +432,6 @@ class EpgDrawer(
                         }
                     }
 
-                    // テキストの追従（Sticky Header）計算
                     val textTotalH =
                         titleH + if (descLayout != null) descLayout.size.height + 4f else 0f
                     val baseShiftY = maxOf(0f, config.hhAreaPx - fy)
@@ -373,7 +439,6 @@ class EpgDrawer(
                     val shiftY = minOf(baseShiftY, maxShiftY)
                     val titleY = fy + 8f + shiftY
 
-                    // 予約アイコンの描画（フォーカス時も最前面に描画）
                     if (reserve != null) {
                         val iconY = titleY + (titleH - iconSize) / 2
                         if (reserve.isRecordingInProgress) {
@@ -404,7 +469,6 @@ class EpgDrawer(
                         drawText(descLayout, topLeft = Offset(fx + 10f, titleY + titleH + 4f))
                     }
 
-                    // 予約済みの破線枠（フォーカス時）
                     if (reserve != null) {
                         val borderColor =
                             if (isPartial) config.colorReserveBorderPartial else config.colorReserveBorder
@@ -418,12 +482,12 @@ class EpgDrawer(
                         )
                     }
 
-                    // 最も外側のハイライト枠線（太線）
+                    // 最も外側のハイライト枠線
                     drawRoundRect(
                         config.colorFocusBorder,
                         Offset(fx - 1f, fy - 1f),
                         Size(config.cwPx + 2f, fh + 2f),
-                        CornerRadius(2f),
+                        CornerRadius(4f),
                         Stroke(4f)
                     )
                 }
@@ -434,7 +498,6 @@ class EpgDrawer(
             // ==========================================
             clipRect(left = 0f, top = config.hhAreaPx, right = config.twPx, bottom = size.height) {
                 val totalHours = 24 * 14
-                // スクロール量から見えている時間帯（時間）を算出
                 val startHour = (-curY / config.hhPx).toInt().coerceAtLeast(0)
                 val endHour = ((-curY + size.height - config.hhAreaPx) / config.hhPx).toInt()
                     .coerceAtMost(totalHours)
@@ -443,7 +506,6 @@ class EpgDrawer(
                     val fy = config.hhAreaPx + curY + (h * config.hhPx)
                     val hour = (state.baseTime.hour + h) % 24
 
-                    // 時間帯に応じた背景色（朝/昼/夜）
                     val bgColor = when (hour) {
                         in 4..10 -> config.colorTimeHourEven
                         in 11..17 -> config.colorTimeHourOdd
@@ -451,7 +513,6 @@ class EpgDrawer(
                     }
                     drawRect(bgColor, Offset(0f, fy), Size(config.twPx, config.hhPx))
 
-                    // AM/PM と数字の描画
                     val amPmLayout =
                         textMeasurer.measure(if (hour < 12) "AM" else "PM", config.styleAmPm)
                     val hourLayout = textMeasurer.measure(hour.toString(), config.styleTime)
@@ -470,7 +531,6 @@ class EpgDrawer(
                         )
                     )
 
-                    // 1時間ごとの区切り線
                     drawLine(config.colorGridLine, Offset(0f, fy), Offset(config.twPx, fy), 3f)
                 }
             }
@@ -501,7 +561,6 @@ class EpgDrawer(
                         )
                         val startX = x + (config.cwPx - (logoW + 6f + numLayout.size.width)) / 2
 
-                        // チャンネルロゴ（画像）の描画処理。アスペクト比を維持しつつスケーリング
                         if (c < logoPainters.size) {
                             val painter = logoPainters[c]
                             translate(startX, 6f) {
@@ -524,7 +583,6 @@ class EpgDrawer(
                             }
                         }
 
-                        // チャンネル番号と放送局名の描画
                         drawText(
                             numLayout,
                             topLeft = Offset(
@@ -546,7 +604,6 @@ class EpgDrawer(
                             )
                         )
 
-                        // 縦の区切り線
                         drawLine(
                             config.colorGridLine,
                             Offset(x, 0f),
@@ -562,18 +619,15 @@ class EpgDrawer(
             // ==========================================
             drawRect(config.colorBg, Offset.Zero, Size(config.twPx, config.hhAreaPx))
 
-            // スクロール量（Y座標）から、現在画面最上部に見えている日時を逆算して表示
             val disp =
                 state.baseTime.plusMinutes((-curY / config.hhPx * 60).toLong().coerceAtLeast(0))
             val dateStr = "${disp.monthValue}/${disp.dayOfMonth}"
             val dayStr = "(${disp.dayOfWeek.getDisplayName(JavaTextStyle.SHORT, Locale.JAPANESE)})"
 
-            // ★修正: 白固定をテーマカラーに
             val dayColor = when (disp.dayOfWeek.value) {
                 7 -> Color(0xFFFF5252); 6 -> Color(0xFF448AFF); else -> config.colorTextPrimary
             }
 
-            // 日付と曜日の色を変えるためのリッチテキスト処理
             val dateLayout = textMeasurer.measure(
                 text = AnnotatedString(
                     text = "$dateStr\n$dayStr",
@@ -582,7 +636,7 @@ class EpgDrawer(
                             SpanStyle(color = config.colorTextPrimary, fontSize = 11.sp),
                             0,
                             dateStr.length
-                        ), // ★修正
+                        ),
                         AnnotatedString.Range(
                             SpanStyle(color = dayColor, fontSize = 11.sp),
                             dateStr.length + 1,
@@ -604,7 +658,6 @@ class EpgDrawer(
                 )
             )
 
-            // 境界の太線
             drawLine(
                 config.colorGridLine,
                 Offset(config.twPx, 0f),
