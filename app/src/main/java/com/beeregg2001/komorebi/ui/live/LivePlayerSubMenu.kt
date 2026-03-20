@@ -41,6 +41,8 @@ fun TopSubMenuUI(
     isCommentEnabled: Boolean,
     isRecording: Boolean,
     isSignalInfoVisible: Boolean,
+    isDualDisplayMode: Boolean, // 二画面モードフラグ
+    onDualDisplayToggle: () -> Unit, // 二画面トグル
     onSignalInfoToggle: () -> Unit,
     onRecordToggle: () -> Unit,
     focusRequester: FocusRequester,
@@ -55,6 +57,29 @@ fun TopSubMenuUI(
     var isQualityMode by remember { mutableStateOf(false) }
     val qualityFocusRequester = remember { FocusRequester() }
     val mainQualityButtonRequester = remember { FocusRequester() }
+
+    // ★追加: 二画面モード時に1080pを除外した選択肢を生成
+    val availableQualities = remember(isDualDisplayMode) {
+        if (isDualDisplayMode) {
+            StreamQuality.entries.filter { !it.name.contains("1080") && !it.label.contains("1080") }
+        } else {
+            StreamQuality.entries.toList()
+        }
+    }
+
+    // ★追加: 二画面モード中に現在の設定が1080pだった場合、UI上の表示を720pに補正する
+    val effectiveQuality = remember(currentQuality, isDualDisplayMode, availableQualities) {
+        if (isDualDisplayMode && (currentQuality.name.contains("1080") || currentQuality.label.contains(
+                "1080"
+            ))
+        ) {
+            availableQualities.find { it.name.contains("720") || it.label.contains("720") }
+                ?: availableQualities.firstOrNull()
+                ?: currentQuality
+        } else {
+            currentQuality
+        }
+    }
 
     LaunchedEffect(Unit) {
         delay(100)
@@ -120,84 +145,127 @@ fun TopSubMenuUI(
                     .padding(horizontal = 32.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
-                // 録画ボタン
-                MenuTileItem(
-                    title = if (isRecording) "録画停止" else "録画開始",
-                    icon = if (isRecording) Icons.Default.StopCircle else Icons.Default.RadioButtonChecked,
-                    subtitle = if (isRecording) "録画中" else "番組を録画",
-                    onClick = onRecordToggle,
-                    modifier = Modifier
-                        .focusRequester(focusRequester)
-                        .focusProperties { down = FocusRequester.Cancel },
-                    contentColor = if (isRecording) Color(0xFFFF5252) else colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                if (isDualDisplayMode) {
+                    // 二画面ボタン (終了)
+                    MenuTileItem(
+                        title = "二画面", icon = Icons.Default.PictureInPicture,
+                        subtitle = "終了",
+                        onClick = { onDualDisplayToggle(); onCloseMenu() },
+                        modifier = Modifier
+                            .focusRequester(focusRequester)
+                            .focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // 音声切り替え
-                MenuTileItem(
-                    title = AppStrings.MENU_AUDIO, icon = Icons.Default.PlayArrow,
-                    subtitle = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
-                    onClick = onAudioToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                    // 字幕切り替え
+                    MenuTileItem(
+                        title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
+                        subtitle = if (isSubtitleEnabled) "表示" else "非表示",
+                        onClick = onSubtitleToggle,
+                        enabled = isSubtitleSupported,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // ★追加: 信号情報ボタン
-                MenuTileItem(
-                    title = "信号情報", icon = Icons.Default.Info,
-                    subtitle = if (isSignalInfoVisible) "表示中" else "非表示",
-                    onClick = { onSignalInfoToggle(); onCloseMenu() },
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                    // ★修正: 画質切り替え (720p上限に補正された品質を表示)
+                    MenuTileItem(
+                        title = AppStrings.MENU_QUALITY, icon = Icons.Default.Settings,
+                        subtitle = effectiveQuality.label,
+                        onClick = { isQualityMode = !isQualityMode },
+                        enabled = currentSource == StreamSource.KONOMITV,
+                        modifier = Modifier
+                            .focusRequester(mainQualityButtonRequester)
+                            .focusProperties {
+                                if (!isQualityMode) down = FocusRequester.Cancel
+                            },
+                        contentColor = colors.textPrimary
+                    )
+                } else {
+                    // --- 通常モード時のフルメニュー ---
+                    MenuTileItem(
+                        title = if (isRecording) "録画停止" else "録画開始",
+                        icon = if (isRecording) Icons.Default.StopCircle else Icons.Default.RadioButtonChecked,
+                        subtitle = if (isRecording) "録画中" else "番組を録画",
+                        onClick = onRecordToggle,
+                        modifier = Modifier
+                            .focusRequester(focusRequester)
+                            .focusProperties { down = FocusRequester.Cancel },
+                        contentColor = if (isRecording) Color(0xFFFF5252) else colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // 字幕
-                MenuTileItem(
-                    title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
-                    subtitle = if (isSubtitleEnabled) "表示" else "非表示",
-                    onClick = onSubtitleToggle,
-                    enabled = isSubtitleSupported,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                    MenuTileItem(
+                        title = "二画面", icon = Icons.Default.PictureInPicture,
+                        subtitle = "開始",
+                        onClick = { onDualDisplayToggle(); onCloseMenu() },
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // コメント
-                MenuTileItem(
-                    title = AppStrings.MENU_COMMENT, icon = Icons.Default.Chat,
-                    subtitle = if (isCommentEnabled) "表示" else "非表示",
-                    onClick = onCommentToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                    MenuTileItem(
+                        title = AppStrings.MENU_AUDIO, icon = Icons.Default.PlayArrow,
+                        subtitle = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
+                        onClick = onAudioToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // 画質
-                MenuTileItem(
-                    title = AppStrings.MENU_QUALITY, icon = Icons.Default.Settings,
-                    subtitle = currentQuality.label,
-                    onClick = { isQualityMode = !isQualityMode },
-                    enabled = currentSource == StreamSource.KONOMITV,
-                    modifier = Modifier
-                        .focusRequester(mainQualityButtonRequester)
-                        .focusProperties {
-                            if (!isQualityMode) down = FocusRequester.Cancel
-                        },
-                    contentColor = colors.textPrimary
-                )
-                Spacer(Modifier.width(16.dp))
+                    MenuTileItem(
+                        title = "信号情報", icon = Icons.Default.Info,
+                        subtitle = if (isSignalInfoVisible) "表示中" else "非表示",
+                        onClick = { onSignalInfoToggle(); onCloseMenu() },
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
 
-                // ソース
-                MenuTileItem(
-                    title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
-                    subtitle = if (currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
-                    onClick = { onSourceToggle(); onCloseMenu() },
-                    enabled = isMirakurunAvailable,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
-                )
+                    MenuTileItem(
+                        title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
+                        subtitle = if (isSubtitleEnabled) "表示" else "非表示",
+                        onClick = onSubtitleToggle,
+                        enabled = isSubtitleSupported,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
+
+                    MenuTileItem(
+                        title = AppStrings.MENU_COMMENT, icon = Icons.Default.Chat,
+                        subtitle = if (isCommentEnabled) "表示" else "非表示",
+                        onClick = onCommentToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
+
+                    // ★修正: 画質
+                    MenuTileItem(
+                        title = AppStrings.MENU_QUALITY, icon = Icons.Default.Settings,
+                        subtitle = effectiveQuality.label,
+                        onClick = { isQualityMode = !isQualityMode },
+                        enabled = currentSource == StreamSource.KONOMITV,
+                        modifier = Modifier
+                            .focusRequester(mainQualityButtonRequester)
+                            .focusProperties {
+                                if (!isQualityMode) down = FocusRequester.Cancel
+                            },
+                        contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
+
+                    MenuTileItem(
+                        title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
+                        subtitle = if (currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
+                        onClick = { onSourceToggle(); onCloseMenu() },
+                        enabled = isMirakurunAvailable,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary
+                    )
+                }
             }
 
             AnimatedVisibility(visible = isQualityMode) {
@@ -218,11 +286,12 @@ fun TopSubMenuUI(
                             .padding(horizontal = 32.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        StreamQuality.entries.forEach { quality ->
+                        // ★修正: 二画面時は1080pが除外されたavailableQualitiesでループを回す
+                        availableQualities.forEach { quality ->
                             MenuTileItem(
                                 title = quality.label,
-                                icon = if (currentQuality == quality) Icons.Default.CheckCircle else Icons.Default.Settings,
-                                subtitle = if (currentQuality == quality) "選択中" else "",
+                                icon = if (effectiveQuality == quality) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                subtitle = if (effectiveQuality == quality) "選択中" else "",
                                 onClick = {
                                     onQualitySelect(quality)
                                     isQualityMode = false
@@ -233,7 +302,7 @@ fun TopSubMenuUI(
                                 },
                                 modifier = Modifier
                                     .then(
-                                        if (currentQuality == quality) Modifier.focusRequester(
+                                        if (effectiveQuality == quality) Modifier.focusRequester(
                                             qualityFocusRequester
                                         ) else Modifier
                                     )

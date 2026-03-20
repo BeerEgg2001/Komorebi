@@ -4,7 +4,7 @@ import androidx.compose.runtime.*
 import com.beeregg2001.komorebi.data.model.*
 
 /**
- * MainRootScreenのすべてのUI状態（変数）を管理するState Holderクラス
+ * MainRootScreenのすべてのUI状態(変数)を管理するState Holderクラス
  */
 @Stable
 class MainRootState {
@@ -46,6 +46,9 @@ class MainRootState {
     var lastSelectedProgramId by mutableStateOf<String?>(null)
     var isReturningFromPlayer by mutableStateOf(false)
 
+    // ★追加: 再生から戻った際にフォーカスすべき録画番組のID
+    var lastPlayedRecordingId by mutableStateOf<Int?>(null)
+
     // システム状態
     var isDataReady by mutableStateOf(false)
     var isUiReady by mutableStateOf(false)
@@ -53,9 +56,10 @@ class MainRootState {
     var showConnectionErrorDialog by mutableStateOf(false)
     var hasAppliedStartupTab by mutableStateOf(false)
 
-    var editingCondition by mutableStateOf<ReservationCondition?>(null)
+    // ★追加: 起動時チャンネルの適用フラグ
+    var hasAppliedStartupChannel by mutableStateOf(false)
 
-    // ★追加: 条件編集ダイアログから開かれた番組詳細用の状態
+    var editingCondition by mutableStateOf<ReservationCondition?>(null)
     var selectedConditionReserveItem by mutableStateOf<ReserveItem?>(null)
 
     // 戻るボタンの連打ガード

@@ -56,7 +56,6 @@ fun ProgramDetailScreen(
     onPlayClick: (EpgProgram) -> Unit = {},
     onRecordClick: (EpgProgram) -> Unit = {},
     onRecordDetailClick: (EpgProgram) -> Unit = {},
-    // ★修正: 引数を大幅に追加して詳細設定を受け取れるように
     onEpgReserveClick: (
         program: EpgProgram, keyword: String, daysOfWeek: Set<Int>, startHour: Int, startMin: Int, endHour: Int, endMin: Int,
         excludeKeyword: String, isTitleOnly: Boolean, broadcastType: String,
@@ -68,14 +67,33 @@ fun ProgramDetailScreen(
     onBackClick: () -> Unit,
     initialFocusRequester: FocusRequester
 ) {
+    // 軽量化された番組データ(ID欠落)の場合、channel_id から自動的に補完する
+    val safeProgram = remember(program) {
+        var nId = program.network_id
+        var sId = program.service_id
+
+        if (nId == 0 || sId == 0) {
+            val nidMatch = Regex("NID(\\d+)").find(program.channel_id)
+            val sidMatch = Regex("SID(\\d+)").find(program.channel_id)
+
+            if (nId == 0) nId = nidMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            if (sId == 0) sId = sidMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        }
+
+        program.copy(
+            network_id = nId,
+            service_id = sId
+        )
+    }
+
     val now = OffsetDateTime.now()
     val startTime = try {
-        OffsetDateTime.parse(program.start_time)
+        OffsetDateTime.parse(safeProgram.start_time)
     } catch (e: Exception) {
         now
     }
     val endTime = try {
-        OffsetDateTime.parse(program.end_time)
+        OffsetDateTime.parse(safeProgram.end_time)
     } catch (e: Exception) {
         now
     }
@@ -96,7 +114,7 @@ fun ProgramDetailScreen(
     val epgReserveButtonRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(program) {
+    LaunchedEffect(safeProgram) {
         isClickEnabled = false
         yield()
         delay(100)
@@ -149,7 +167,7 @@ fun ProgramDetailScreen(
                 if (!isReadOnly) {
                     if (mode == ProgramDetailMode.RESERVE) {
                         Button(
-                            onClick = { if (isClickEnabled) onEditReserveClick(program) },
+                            onClick = { if (isClickEnabled) onEditReserveClick(safeProgram) },
                             colors = ButtonDefaults.colors(
                                 containerColor = colors.textPrimary.copy(alpha = 0.1f),
                                 contentColor = colors.textPrimary
@@ -166,7 +184,7 @@ fun ProgramDetailScreen(
                         }
 
                         Button(
-                            onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                            onClick = { if (isClickEnabled) onDeleteReserveClick(safeProgram) },
                             colors = ButtonDefaults.colors(
                                 containerColor = recordRed,
                                 contentColor = Color.White
@@ -182,7 +200,7 @@ fun ProgramDetailScreen(
                     } else {
                         if (isBroadcasting) {
                             Button(
-                                onClick = { if (isClickEnabled) onPlayClick(program) },
+                                onClick = { if (isClickEnabled) onPlayClick(safeProgram) },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusRequester(initialFocusRequester),
@@ -200,7 +218,7 @@ fun ProgramDetailScreen(
 
                             if (isReserved) {
                                 Button(
-                                    onClick = { if (isClickEnabled) onEditReserveClick(program) },
+                                    onClick = { if (isClickEnabled) onEditReserveClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = colors.textPrimary.copy(alpha = 0.1f),
                                         contentColor = colors.textPrimary
@@ -214,7 +232,7 @@ fun ProgramDetailScreen(
                                     )
                                 }
                                 Button(
-                                    onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                                    onClick = { if (isClickEnabled) onDeleteReserveClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = recordRed,
                                         contentColor = Color.White
@@ -229,7 +247,7 @@ fun ProgramDetailScreen(
                                 }
                             } else {
                                 Button(
-                                    onClick = { if (isClickEnabled) onRecordClick(program) },
+                                    onClick = { if (isClickEnabled) onRecordClick(safeProgram) },
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.colors(
                                         containerColor = recordRed,
@@ -259,7 +277,7 @@ fun ProgramDetailScreen(
                                     )
                                 }
                                 Button(
-                                    onClick = { if (isClickEnabled) onRecordDetailClick(program) },
+                                    onClick = { if (isClickEnabled) onRecordDetailClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = recordDarkRed,
                                         contentColor = Color.White
@@ -271,7 +289,7 @@ fun ProgramDetailScreen(
                         } else if (isFuture) {
                             if (isReserved) {
                                 Button(
-                                    onClick = { if (isClickEnabled) onEditReserveClick(program) },
+                                    onClick = { if (isClickEnabled) onEditReserveClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = colors.textPrimary.copy(alpha = 0.1f),
                                         contentColor = colors.textPrimary
@@ -287,7 +305,7 @@ fun ProgramDetailScreen(
                                     )
                                 }
                                 Button(
-                                    onClick = { if (isClickEnabled) onDeleteReserveClick(program) },
+                                    onClick = { if (isClickEnabled) onDeleteReserveClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = recordRed,
                                         contentColor = Color.White
@@ -302,7 +320,7 @@ fun ProgramDetailScreen(
                                 }
                             } else {
                                 Button(
-                                    onClick = { if (isClickEnabled) onRecordClick(program) },
+                                    onClick = { if (isClickEnabled) onRecordClick(safeProgram) },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusRequester(initialFocusRequester),
@@ -334,7 +352,7 @@ fun ProgramDetailScreen(
                                     )
                                 }
                                 Button(
-                                    onClick = { if (isClickEnabled) onRecordDetailClick(program) },
+                                    onClick = { if (isClickEnabled) onRecordDetailClick(safeProgram) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = recordDarkRed,
                                         contentColor = Color.White
@@ -427,7 +445,7 @@ fun ProgramDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = program.title,
+                    text = safeProgram.title,
                     style = MaterialTheme.typography.displaySmall.copy(
                         fontWeight = FontWeight.Bold,
                         lineHeight = 46.sp
@@ -444,7 +462,7 @@ fun ProgramDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = program.description ?: "説明はありません。",
+                    text = safeProgram.description ?: "説明はありません。",
                     style = MaterialTheme.typography.bodyLarge,
                     color = colors.textSecondary,
                     fontFamily = NotoSansJP,
@@ -452,7 +470,7 @@ fun ProgramDetailScreen(
                 )
 
                 if (isReady) {
-                    ProgramDetailedInfo(program)
+                    ProgramDetailedInfo(safeProgram)
                 }
                 Spacer(modifier = Modifier.height(60.dp))
             }
@@ -460,14 +478,13 @@ fun ProgramDetailScreen(
 
         if (showEpgReserveDialog) {
             EpgReserveDialog(
-                initialKeyword = TitleNormalizer.extractDisplayTitle(program.title),
+                initialKeyword = TitleNormalizer.extractDisplayTitle(safeProgram.title),
                 initialStartTime = startTime,
                 initialEndTime = endTime,
-                // ★修正: 引数を追加
                 onConfirm = { keyword, daysOfWeek, sH, sM, eH, eM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
                     showEpgReserveDialog = false
                     onEpgReserveClick(
-                        program,
+                        safeProgram,
                         keyword,
                         daysOfWeek,
                         sH,

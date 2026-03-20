@@ -94,7 +94,6 @@ fun MainRootScreen(
         runCatching { AppTheme.valueOf(themeName) }.getOrDefault(AppTheme.MONOTONE)
     }
 
-    // 選択されたテーマ名から、背景装飾用の「季節」を判定
     val themeSeason = remember(themeName) {
         when (themeName) {
             "SPRING", "SPRING_LIGHT" -> "SPRING"
@@ -105,7 +104,6 @@ fun MainRootScreen(
         }
     }
 
-    // アプリ全体の時計（背景の動的グラデーション等に使用するため1分ごとに更新）
     var currentTime by remember { mutableStateOf(LocalTime.now()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -127,6 +125,9 @@ fun MainRootScreen(
     val watchHistory by homeViewModel.watchHistory.collectAsState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
 
+    // ★追加: データベースから読み込んだ「前回視聴したチャンネルの履歴」を監視します。
+    val lastChannels by homeViewModel.lastWatchedChannelFlow.collectAsState(initial = emptyList())
+
     val conditions by reserveViewModel.conditions.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
     val syncProgress by recordViewModel.syncProgress.collectAsState()
@@ -140,32 +141,74 @@ fun MainRootScreen(
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
+    // 起動時チャンネル設定の収集
+    val startupChannelSetting by settingsViewModel.startupChannel.collectAsState()
+
     val updateState by homeViewModel.updateState.collectAsState()
 
     // ==========================================
     // 3. アプリ起動時の初期処理
     // ==========================================
 
-    // ユーザーが設定した「起動時に表示するタブ」を適用
+    // 起動時ルーティング処理: ユーザー設定に応じて「指定タブ」を初期化
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
             state.currentTabIndex = when (tab) {
                 "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; else -> 0
             }
+            channelViewModel.fetchChannels() // チャンネル情報を先に取得
             state.hasAppliedStartupTab = true
-            channelViewModel.fetchChannels() // タブ適用と同時にチャンネル情報をフェッチ
         }
     }
 
-    // 録画リストを開いた瞬間に、新しい録画がないかバックグラウンドでスマート同期を行う
+    // [解説: 起動時チャンネルの判定と遷移]
+    // isLoadingフラグを使って、データベースからの読み込み（lastChannelsなど）が確実に完了するのを待ってから判定します。
+    LaunchedEffect(
+        groupedChannels,
+        state.hasAppliedStartupTab,
+        isSettingsInitialized,
+        isChannelLoading,
+        isHomeLoading,
+        lastChannels
+    ) {
+        if (isSettingsInitialized && state.hasAppliedStartupTab && !state.hasAppliedStartupChannel && !isChannelLoading && !isHomeLoading && groupedChannels.isNotEmpty()) {
+            state.hasAppliedStartupChannel = true // 一度だけ実行
+
+            val flatChannels = groupedChannels.values.flatten()
+            if (flatChannels.isNotEmpty()) {
+                val startupChannelId = startupChannelSetting
+                if (startupChannelId != "OFF") {
+                    val targetChannel = if (startupChannelId == "LAST_WATCHED") {
+                        // データベースの読み込みが完了した「lastChannels」から取得
+                        val lastHistory = lastChannels.firstOrNull()
+                        flatChannels.find { it.id == lastHistory?.id } ?: flatChannels.first()
+                    } else {
+                        // 個別に指定されたチャンネルIDを検索
+                        flatChannels.find { it.id == startupChannelId } ?: flatChannels.first()
+                    }
+
+                    // プレイヤー画面へ直接遷移
+                    state.selectedChannel = targetChannel
+                    state.lastSelectedChannelId = targetChannel.id
+                    state.lastSelectedProgramId = null
+                    homeViewModel.saveLastChannel(targetChannel)
+                    state.isReturningFromPlayer = false
+                    state.currentTabIndex = 1 // 背後のタブをライブにしておく
+
+                    // ホーム画面を経由しないため、強制的にUI準備完了フラグを立てて無限ロードを防ぐ
+                    state.isUiReady = true
+                }
+            }
+        }
+    }
+
     LaunchedEffect(state.isRecordListOpen) {
         if (state.isRecordListOpen) {
             recordViewModel.triggerSmartSync()
         }
     }
 
-    // 設定画面を閉じた際の再描画・データ再取得処理
     val closeSettingsAndRefresh = {
         state.isSettingsOpen = false
         state.isDataReady = false
@@ -179,14 +222,12 @@ fun MainRootScreen(
         reserveViewModel.fetchReserves()
     }
 
-    // トーストメッセージを3秒表示した後に自動で消去するループ
     LaunchedEffect(state.toastMessage) {
         if (state.toastMessage != null) {
             delay(3000); state.toastMessage = null
         }
     }
 
-    // アップデート（APKダウンロード）中のエラーをトーストで通知
     LaunchedEffect(updateState) {
         if (updateState is UpdateState.Error) {
             state.toastMessage = (updateState as UpdateState.Error).message
@@ -197,20 +238,16 @@ fun MainRootScreen(
     // ==========================================
     // 4. グローバル バックハンドラー (Back Navigation)
     // ==========================================
-    // Android TVのリモコンの「戻る」ボタンが押されたときの挙動を、
-    // 現在開いている画面やダイアログの状態に応じて優先順位をつけてルーティングします。
     BackHandler(enabled = true) {
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
-            // ダイアログ・編集画面系を閉じる
             state.selectedConditionReserveItem != null -> state.selectedConditionReserveItem = null
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
             state.reserveToDelete != null -> state.reserveToDelete = null
             state.showDeleteConfirmDialog -> state.showDeleteConfirmDialog = false
 
-            // プレイヤーのメニュー系を閉じる
             state.isPlayerMiniListOpen -> state.isPlayerMiniListOpen = false
             state.playerIsSubMenuOpen -> state.playerIsSubMenuOpen = false
             state.isPlayerSubMenuOpen -> state.isPlayerSubMenuOpen = false
@@ -218,7 +255,6 @@ fun MainRootScreen(
                 state.isPlayerSceneSearchOpen = false; state.showPlayerControls = false
             }
 
-            // プレイヤー画面自体を閉じてメインUIに戻る
             state.selectedChannel != null -> {
                 state.selectedChannel = null; state.isReturningFromPlayer = true
             }
@@ -228,34 +264,26 @@ fun MainRootScreen(
                     true; state.isReturningFromPlayer = true
             }
 
-            // その他、設定画面やサブ画面を閉じる
             state.isSettingsOpen -> closeSettingsAndRefresh()
             state.epgSelectedProgram != null -> state.epgSelectedProgram = null
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
 
-            // 録画リスト画面から戻る
             state.isRecordListOpen -> {
                 state.isRecordListOpen = false
-                // もしシリーズ画面から録画リストに飛んでいた場合は、シリーズ画面に戻る
                 if (state.openedSeriesTitle != null) {
                     state.isSeriesListOpen = true; state.openedSeriesTitle = null
                 }
                 recordViewModel.searchRecordings("")
             }
 
-            // シリーズリスト画面から戻る
             state.isSeriesListOpen -> {
                 state.isSeriesListOpen = false; recordViewModel.searchRecordings("")
             }
 
-            // 接続エラー画面の場合はアプリを終了
             state.showConnectionErrorDialog -> onExitApp()
-
-            // まだデータ読み込み中の場合は何もしない
             !(state.isDataReady && state.isUiReady) -> {}
 
-            // どれにも当てはまらない（メインUIのトップにいる）場合は、HomeLauncherScreen 側にバック処理を委譲
             else -> state.triggerHomeBack = true
         }
     }
@@ -263,7 +291,6 @@ fun MainRootScreen(
     // ==========================================
     // 5. ローディング・スプラッシュ画面の解除判定
     // ==========================================
-    // チャンネルとホームデータの取得が完了したか、エラーが発生したかをチェック
     LaunchedEffect(isChannelLoading, isHomeLoading) {
         if (!isChannelLoading && !isHomeLoading) {
             delay(300)
@@ -275,12 +302,10 @@ fun MainRootScreen(
         }
     }
 
-    // 各タブに応じたデータの準備が完了したら、スプラッシュ(LoadingScreen)を終了する
     LaunchedEffect(isEpgReady, state.isDataReady, isSettingsInitialized, state.currentTabIndex) {
         if (!isSettingsInitialized) {
             delay(500); state.isSplashFinished = true
         } else if (state.currentTabIndex == 3) {
-            // 番組表タブが初期表示の場合は、番組表データ(isEpgReady)の完了も待つ
             if (isEpgReady && state.isDataReady) {
                 delay(300); state.isSplashFinished = true
             }
@@ -291,17 +316,15 @@ fun MainRootScreen(
         }
     }
 
-    // 画面にメインUIを表示して良いかどうかの最終フラグ
     val isSystemReady =
-        ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) && state.hasAppliedStartupTab
+        ((state.isDataReady && state.isSplashFinished) || (!isSettingsInitialized && state.isSplashFinished)) &&
+                state.hasAppliedStartupTab && (startupChannelSetting == "OFF" || state.hasAppliedStartupChannel)
 
     // ==========================================
     // 6. UI コンポジション
     // ==========================================
     KomorebiTheme(theme = currentTheme) {
         val colors = KomorebiTheme.colors
-
-        // 時刻とテーマに応じたグラデーション背景を生成
         val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
 
         Box(
@@ -310,7 +333,6 @@ fun MainRootScreen(
                 .background(colors.background)
                 .background(backgroundBrush)
         ) {
-            // プレイヤー画面でなければ、右下に季節の装飾アイコン（桜や雪の結晶など）を表示
             if (state.selectedChannel == null && state.selectedProgram == null) {
                 SeasonalDecor(
                     season = themeSeason,
@@ -319,15 +341,12 @@ fun MainRootScreen(
                 )
             }
 
-            // メインコンテンツの表示条件:
-            // 準備完了済み かつ 初期設定済み かつ エラー画面でない かつ DBの初回構築中でない
             val showMainContent =
                 isSystemReady && isSettingsInitialized && !state.showConnectionErrorDialog && !(syncProgress.isSyncing && syncProgress.isInitialBuild)
 
             if (showMainContent) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     when {
-                        // ライブ視聴画面 (LivePlayerScreen)
                         state.selectedChannel != null -> {
                             LivePlayerScreen(
                                 channel = state.selectedChannel!!,
@@ -357,7 +376,6 @@ fun MainRootScreen(
                                 onShowToast = { state.toastMessage = it })
                         }
 
-                        // 録画視聴画面 (VideoPlayerScreen)
                         state.selectedProgram != null -> {
                             VideoPlayerScreen(
                                 program = state.selectedProgram!!,
@@ -376,7 +394,6 @@ fun MainRootScreen(
                                 onShowToast = { state.toastMessage = it })
                         }
 
-                        // 録画リスト・検索画面 (RecordListScreen)
                         state.isRecordListOpen -> {
                             RecordListScreen(
                                 konomiIp = konomiIp, konomiPort = konomiPort,
@@ -387,7 +404,6 @@ fun MainRootScreen(
                                     val history =
                                         watchHistory.find { it.program.id.toString() == program.id.toString() }
 
-                                    // 続きから再生する位置の判定（強制的、履歴、番組自体のレジュームポイント）
                                     val resumePos = when {
                                         forcedPosition != null -> forcedPosition
                                         program.playbackPosition > 5.0 && (duration <= 0 || program.playbackPosition < (duration - 10)) -> program.playbackPosition
@@ -410,7 +426,6 @@ fun MainRootScreen(
                                 })
                         }
 
-                        // 自動予約条件の編集ダイアログ (ConditionEditDialog)
                         state.editingCondition != null -> {
                             val currentCondition =
                                 conditions.find { it.id == state.editingCondition!!.id }
@@ -418,7 +433,6 @@ fun MainRootScreen(
                             val relatedReserves =
                                 reserves.filter { it.comment.contains(currentCondition.programSearchCondition.keyword) }
 
-                            // 背景を暗くするためのBox
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -474,7 +488,6 @@ fun MainRootScreen(
                             )
                         }
 
-                        // 全てのサブ画面が開いていない場合、メインのナビゲーションUI (HomeLauncherScreen) を表示
                         else -> {
                             HomeLauncherScreen(
                                 channelViewModel = channelViewModel,
@@ -560,7 +573,6 @@ fun MainRootScreen(
                         }
                     }
 
-                    // 録画DBの構築完了後、バックグラウンドでの同期中は右下に小さくインジケーターを表示
                     if (state.selectedChannel == null && state.selectedProgram == null && !syncProgress.isInitialBuild) {
                         SyncProgressIndicator(
                             syncProgress = syncProgress,
@@ -570,7 +582,6 @@ fun MainRootScreen(
                         )
                     }
 
-                    // 同期エラー発生時のダイアログ
                     if (syncProgress.error != null) {
                         SyncErrorDialog(
                             errorMessage = syncProgress.error!!,
@@ -590,7 +601,7 @@ fun MainRootScreen(
             AnimatedVisibility(
                 visible = !state.isUiReady && !state.showConnectionErrorDialog && isSettingsInitialized,
                 enter = fadeIn(),
-                exit = fadeOut(tween(500))
+                exit = fadeOut(tween(250))
             ) {
                 if (syncProgress.isSyncing && syncProgress.isInitialBuild) {
                     val pRatio =
@@ -608,7 +619,6 @@ fun MainRootScreen(
             // 8. 予約・番組詳細系のオーバーレイダイアログ群
             // ==========================================
 
-            // 自動予約条件プレビューリストから番組を選んだ際の詳細画面
             if (state.selectedConditionReserveItem != null) {
                 val program =
                     remember(state.selectedConditionReserveItem) { ReserveMapper.toEpgProgram(state.selectedConditionReserveItem!!) }
@@ -622,7 +632,6 @@ fun MainRootScreen(
                 )
             }
 
-            // 単発予約リストから番組を選んだ際の詳細・編集画面
             if (state.selectedReserve != null) {
                 val program =
                     remember(state.selectedReserve) { ReserveMapper.toEpgProgram(state.selectedReserve!!) }
@@ -631,7 +640,6 @@ fun MainRootScreen(
                     onBackClick = { state.selectedReserve = null },
                     onDeleteReserveClick = { _ -> state.reserveToDelete = state.selectedReserve },
                     onEditReserveClick = { _ ->
-                        // 編集画面を開く直前に、最新の予約設定をAPIから再取得して不整合を防ぐ
                         reserveViewModel.refreshReserveItem(state.selectedReserve!!.id) { latest ->
                             state.editingReserveItem = latest ?: state.selectedReserve
                         }
@@ -640,7 +648,6 @@ fun MainRootScreen(
                 )
             }
 
-            // 番組表（EPG）から番組を選んだ際の詳細画面
             if (state.epgSelectedProgram != null) {
                 val relatedReserve =
                     reserves.find { it.program.id == state.epgSelectedProgram!!.id }
@@ -665,7 +672,6 @@ fun MainRootScreen(
                             scope.launch {
                                 state.epgSelectedProgram = null; delay(300)
 
-                                // 現在放送中の番組を「録画する」とした場合は「録画を開始しました」、未来なら「予約しました」と文言を変える
                                 val now = OffsetDateTime.now()
                                 val start = try {
                                     OffsetDateTime.parse(program.start_time)
@@ -684,7 +690,6 @@ fun MainRootScreen(
                         }
                     },
                     onEpgReserveClick = { program, keyword, daysOfWeek, startH, startM, endH, endM, exc, tOnly, bType, fuzzy, dup, pri, relay, exact ->
-                        // EPG予約に必要な TransportStreamId (tsId) を解決
                         val channel =
                             groupedChannels.values.flatten().find { it.id == program.channel_id }
                         var tsId = channel?.transportStreamId?.toInt()
@@ -742,7 +747,6 @@ fun MainRootScreen(
                 )
             }
 
-            // 予約設定の編集ダイアログ（詳細設定）
             if (state.editingReserveItem != null) {
                 ReserveSettingsDialog(
                     programTitle = state.editingReserveItem!!.program.title,
@@ -766,7 +770,6 @@ fun MainRootScreen(
                     })
             }
 
-            // 新規の単発予約時の詳細設定ダイアログ
             if (state.editingNewProgram != null) {
                 val defaultSettings = remember {
                     ReserveRecordSettings(
@@ -797,7 +800,6 @@ fun MainRootScreen(
                     })
             }
 
-            // 予約削除の確認ダイアログ
             if (state.reserveToDelete != null) {
                 DeleteConfirmationDialog(
                     title = AppStrings.DIALOG_DELETE_RESERVE_TITLE,
@@ -823,19 +825,16 @@ fun MainRootScreen(
             // ==========================================
             // 9. 初期設定とエラー処理
             // ==========================================
-            // アプリ初回起動時（設定が空）の場合に表示する案内ダイアログ
             if (!isSettingsInitialized && !state.isSettingsOpen && state.isSplashFinished) {
                 InitialSetupDialog(onConfirm = { state.isSettingsOpen = true })
             }
 
-            // KonomiTVサーバーへの接続に失敗した場合のダイアログ
             if (state.showConnectionErrorDialog && isSettingsInitialized && !state.isSettingsOpen) {
                 ConnectionErrorDialog(onGoToSettings = {
                     state.showConnectionErrorDialog = false; state.isSettingsOpen = true
                 }, onExit = onExitApp)
             }
 
-            // アプリ全体の設定画面
             if (state.isSettingsOpen) {
                 SettingsScreen(
                     onBack = closeSettingsAndRefresh,
@@ -852,7 +851,6 @@ fun MainRootScreen(
             // ==========================================
             // 10. アプリ内アップデート（OTA Update）UI
             // ==========================================
-            // 新しいバージョンが見つかった場合のダイアログ
             if (updateState is UpdateState.UpdateAvailable) {
                 val available = updateState as UpdateState.UpdateAvailable
                 RobustUpdateDialog(
@@ -863,7 +861,6 @@ fun MainRootScreen(
                 )
             }
 
-            // ダウンロード中、およびインストール準備中の進行状況バナー（画面右下）
             if (updateState is UpdateState.Downloading || updateState is UpdateState.ReadyToInstall) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     UpdateProgressBanner(
@@ -875,7 +872,6 @@ fun MainRootScreen(
                 }
             }
 
-            // 全ての画面の上に重ねるグローバルトースト
             GlobalToast(message = state.toastMessage)
         }
     }
@@ -883,8 +879,6 @@ fun MainRootScreen(
 
 /**
  * 新規追加: 裏画面のフォーカス強奪を防ぐ防衛ループ付きダイアログ
- * Android TVでは、ダイアログ表示中に背後のリスト（HomeLauncherScreen等）がデータをロードし終えると
- * 勝手にフォーカスを奪ってしまう現象が発生するため、それを検知して強制的にフォーカスを取り返します。
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -898,13 +892,11 @@ fun RobustUpdateDialog(
     val confirmRequester = remember { FocusRequester() }
     var isDialogFocused by remember { mutableStateOf(true) }
 
-    // ダイアログ表示直後にボタンへフォーカスを当てる
     LaunchedEffect(Unit) {
         delay(300)
         runCatching { confirmRequester.requestFocus() }
     }
 
-    // 裏画面(HomeLauncher等)が遅れてフォーカスを奪った際に、即座にダイアログへ取り返すループ
     LaunchedEffect(isDialogFocused) {
         if (!isDialogFocused) {
             delay(150)
@@ -1054,7 +1046,6 @@ fun SyncProgressIndicator(
                         trackColor = colors.textPrimary.copy(alpha = 0.2f)
                     )
                 } else {
-                    // 総数が不明な場合は不確定（Indeterminate）のプログレスバーを表示
                     LinearProgressIndicator(
                         modifier = Modifier.fillMaxWidth(),
                         color = colors.accent,
@@ -1133,10 +1124,6 @@ fun SyncErrorDialog(errorMessage: String, onRetry: () -> Unit, onDismiss: () -> 
     }
 }
 
-/**
- * 旧バージョンのシンプルなアップデートダイアログ。
- * 現在は `RobustUpdateDialog` がメインで使用されます。
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun UpdateDialog(
@@ -1220,9 +1207,6 @@ fun UpdateDialog(
     }
 }
 
-/**
- * APKのダウンロード中、およびインストール準備中に表示される小さなバナー。
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun UpdateProgressBanner(
