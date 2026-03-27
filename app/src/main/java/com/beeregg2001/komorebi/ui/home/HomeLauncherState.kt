@@ -3,12 +3,37 @@ package com.beeregg2001.komorebi.ui.home
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.viewmodel.*
-import com.beeregg2001.komorebi.common.safeRequestFocus
+
+// ホーム画面専用のチケットマネージャー
+enum class HomeFocusTicket { NONE, TAB_BAR, CONTENT_TOP }
+
+@Stable
+class HomeFocusTicketManager {
+    var currentTicket by mutableStateOf(HomeFocusTicket.NONE)
+        private set
+    var issueTime by mutableLongStateOf(0L)
+        private set
+
+    fun issue(ticket: HomeFocusTicket) {
+        currentTicket = ticket
+        issueTime = System.currentTimeMillis()
+    }
+
+    fun consume(ticket: HomeFocusTicket) {
+        if (currentTicket == ticket) {
+            currentTicket = HomeFocusTicket.NONE
+        }
+    }
+}
+
+@Composable
+fun rememberHomeFocusTicketManager() = remember { HomeFocusTicketManager() }
 
 /**
  * HomeLauncherScreen の UI状態とビジネスロジックを管理する State Holder
@@ -24,7 +49,7 @@ class HomeLauncherState(
     var topNavHasFocus by mutableStateOf(false)
     var isCurrentTabContentReady by mutableStateOf(false)
 
-    // --- データ保持 (rememberHomeLauncherState から自動更新される) ---
+    // --- データ保持 ---
     var watchHistory by mutableStateOf<List<KonomiHistoryProgram>>(emptyList())
     var lastChannels by mutableStateOf<List<Channel>>(emptyList())
     var recentRecordings by mutableStateOf<List<RecordedProgram>>(emptyList())
@@ -41,24 +66,67 @@ class HomeLauncherState(
     var epgUiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
     var logoUrls by mutableStateOf<List<String>>(emptyList())
 
-    // --- 録画・シリーズ関連の状態保持 ---
     var openedSeriesTitle by mutableStateOf<String?>(null)
     var isSeriesListOpen by mutableStateOf(false)
 
-    // ★修正: 球団名ごとにグループ化されたリストを受け取る
     var favoriteBaseballTeams by mutableStateOf<Set<String>>(emptySet())
     var favoriteBaseballGames by mutableStateOf<List<Pair<String, List<BaseballGameInfo>>>>(
         emptyList()
     )
 
-    val tabFocusRequesters = List(6) { FocusRequester() }
-    val contentFirstItemRequesters = List(6) { FocusRequester() }
+    val tabFocusRequesters = List(10) { FocusRequester() }
+    val contentFirstItemRequesters = List(10) { FocusRequester() }
     val settingsFocusRequester = FocusRequester()
+
+    // 🌟 フォーカスが迷子になった時の避難所
+    val safeHouseRequester = FocusRequester()
 
     val watchHistoryPrograms: List<RecordedProgram>
         @RequiresApi(Build.VERSION_CODES.O) get() = watchHistory.map {
             KonomiDataMapper.toDomainModel(it)
         }
+
+    fun onTabSelected(
+        index: Int,
+        onTabChange: (Int) -> Unit,
+        homeViewModel: HomeViewModel,
+        channelViewModel: ChannelViewModel,
+        recordViewModel: RecordViewModel,
+        reserveViewModel: ReserveViewModel
+    ) {
+        onTabChange(index)
+        isCurrentTabContentReady = false
+        when (index) {
+            0 -> {
+                homeViewModel.refreshHomeData()
+                channelViewModel.startPolling()
+            }
+
+            1 -> {
+                channelViewModel.startPolling()
+            }
+
+            2 -> {
+                channelViewModel.stopPolling()
+                recordViewModel.fetchRecentRecordings(forceRefresh = false)
+            }
+
+            3 -> {
+                channelViewModel.stopPolling()
+            }
+
+            4 -> {
+                channelViewModel.stopPolling()
+                reserveViewModel.fetchReserves()
+            }
+
+            5 -> {
+                channelViewModel.stopPolling()
+            }
+
+            else -> channelViewModel.stopPolling()
+        }
+    }
 
     fun isFullScreen(
         selectedChannel: Channel?,
@@ -72,56 +140,30 @@ class HomeLauncherState(
                 isSettingsOpen || isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    fun onTabSelected(
-        index: Int,
-        onTabChange: (Int) -> Unit,
-        homeViewModel: HomeViewModel,
-        channelViewModel: ChannelViewModel,
-        recordViewModel: RecordViewModel,
-        reserveViewModel: ReserveViewModel
-    ) {
-        if (selectedTabIndex == index) return
-
-        isCurrentTabContentReady = false
-        selectedTabIndex = index
-        onTabChange(index)
-        when (index) {
-            0 -> {
-                homeViewModel.refreshHomeData()
-                channelViewModel.fetchChannels()
-            }
-
-            1 -> channelViewModel.fetchChannels()
-            2 -> recordViewModel.fetchRecentRecordings(forceRefresh = false)
-            4 -> reserveViewModel.fetchReserves()
-        }
-    }
-
+    // 🌟 修正: タブ切り替え時のフォーカス消失（迷子）を防ぐための SafeHouse 退避を追加
     fun handleBackNavigation(
-        onTabChange: (Int) -> Unit, onFinalBack: () -> Unit, onBackTriggered: () -> Unit
+        onTabChange: (Int) -> Unit,
+        onFinalBack: () -> Unit,
+        onBackTriggered: () -> Unit,
+        requestTopNavFocus: () -> Unit,
+        escapeToSafeHouse: () -> Unit // ★新規追加: 安全地帯への退避
     ) {
         if (!topNavHasFocus) {
-            tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus("Home_Back")
+            // 1. コンテンツにいる場合：まずは安全地帯に逃がしてからトップナビに戻す
+            escapeToSafeHouse()
+            requestTopNavFocus()
+            onBackTriggered()
+        } else if (selectedTabIndex != 0) {
+            // 2. トップナビにいてホーム以外の場合：UIが消滅する前に安全地帯に逃がす
+            escapeToSafeHouse()
+            selectedTabIndex = 0
+            onTabChange(0)
+            requestTopNavFocus() // 確実にホームのタブにフォーカスを当て直す
+            onBackTriggered()
         } else {
-            if (selectedTabIndex > 0) {
-                isCurrentTabContentReady = false
-                selectedTabIndex = 0
-                onTabChange(0)
-            } else {
-                onFinalBack()
-            }
+            // 3. ホームタブのトップナビにいる場合：アプリ終了
+            onFinalBack()
         }
-        onBackTriggered()
-    }
-
-    fun requestFocusToCurrentTab() {
-        tabFocusRequesters.getOrNull(selectedTabIndex)?.safeRequestFocus("HomeLauncher_CurrentTab")
-    }
-
-    fun requestFocusToCurrentContent() {
-        contentFirstItemRequesters.getOrNull(selectedTabIndex)
-            ?.safeRequestFocus("HomeLauncher_Content")
     }
 }
 
@@ -135,11 +177,33 @@ fun rememberHomeLauncherState(
     recordViewModel: RecordViewModel,
     reserveViewModel: ReserveViewModel
 ): HomeLauncherState {
-    val savedTabIndex = rememberSaveable { mutableIntStateOf(initialTabIndex) }
-    val state = remember { HomeLauncherState(savedTabIndex.intValue) }
 
-    LaunchedEffect(state.selectedTabIndex) {
-        savedTabIndex.intValue = state.selectedTabIndex
+    val state = rememberSaveable(
+        saver = Saver(
+            save = {
+                listOf(
+                    it.selectedTabIndex,
+                    it.internalLastPlayerChannelId,
+                    it.openedSeriesTitle,
+                    it.isSeriesListOpen
+                )
+            },
+            restore = {
+                @Suppress("UNCHECKED_CAST")
+                val list = it as List<Any?>
+                HomeLauncherState(list[0] as Int).apply {
+                    internalLastPlayerChannelId = list[1] as String?
+                    openedSeriesTitle = list[2] as String?
+                    isSeriesListOpen = list[3] as Boolean
+                }
+            }
+        )
+    ) {
+        HomeLauncherState(initialTabIndex)
+    }
+
+    LaunchedEffect(initialTabIndex) {
+        state.selectedTabIndex = initialTabIndex
     }
 
     state.watchHistory = homeViewModel.watchHistory.collectAsState().value

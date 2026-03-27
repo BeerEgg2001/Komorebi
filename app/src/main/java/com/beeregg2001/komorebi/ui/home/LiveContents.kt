@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,6 +47,7 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.UiChannelState
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
@@ -74,6 +77,10 @@ fun LiveContent(
 ) {
     val liveRows by channelViewModel.liveRows.collectAsState()
     val listState = rememberLazyListState()
+
+    // 各ジャンル行の横スクロール状態を個別に記憶する Map
+    val rowStates = remember { mutableStateMapOf<String, LazyListState>() }
+
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
     val colors = KomorebiTheme.colors
@@ -105,9 +112,70 @@ fun LiveContent(
 
     LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
 
+    // 🌟 修正: 復帰処理にログを追加
     LaunchedEffect(isReturningFromPlayer, liveRows.isNotEmpty()) {
+        Log.i(
+            "KomorebiFocus",
+            "[LiveContent] 復帰エフェクト起動 - isReturning: $isReturningFromPlayer, isLiveRowsReady: ${liveRows.isNotEmpty()}"
+        )
         if (isReturningFromPlayer && liveRows.isNotEmpty()) {
-            delay(200); targetChannelFocusRequester.safeRequestFocus(TAG); onReturnFocusConsumed()
+            val targetId = lastFocusedChannelId
+            Log.i("KomorebiFocus", "[LiveContent] 目標のチャンネルID: $targetId")
+
+            if (targetId != null) {
+                var rowIndex = -1
+                var colIndex = -1
+                var genreId = ""
+
+                // 対象のチャンネルが「何行目の何列目」にあるかを検索
+                for (i in liveRows.indices) {
+                    val idx = liveRows[i].channels.indexOfFirst { it.channel.id == targetId }
+                    if (idx != -1) {
+                        rowIndex = i
+                        colIndex = idx
+                        genreId = liveRows[i].genreId
+                        break
+                    }
+                }
+
+                Log.i(
+                    "KomorebiFocus",
+                    "[LiveContent] 検索結果 -> Row: $rowIndex, Col: $colIndex, Genre: $genreId"
+                )
+
+                if (rowIndex != -1 && colIndex != -1) {
+                    // ① 縦方向にジャンルの行までスクロール
+                    listState.scrollToItem(maxOf(0, rowIndex))
+                    // ② 横方向に該当のチャンネルまでスクロール
+                    val rState = rowStates.getOrPut(genreId) { LazyListState() }
+                    rState.scrollToItem(maxOf(0, colIndex - 1))
+
+                    Log.i(
+                        "KomorebiFocus",
+                        "[LiveContent] スクロール完了。200ms後にフォーカスを要求します..."
+                    )
+                    delay(200)
+                    targetChannelFocusRequester.safeRequestFocusWithRetry("LiveChannelTarget")
+                    Log.i("KomorebiFocus", "[LiveContent] フォーカス要求完了。フラグを下ろします。")
+                    onReturnFocusConsumed()
+                } else {
+                    Log.w(
+                        "KomorebiFocus",
+                        "[LiveContent] 対象チャンネルが見つかりません。トップナビにフォールバックします。"
+                    )
+                    delay(200)
+                    topNavFocusRequester.safeRequestFocusWithRetry("LiveNavFallback")
+                    onReturnFocusConsumed()
+                }
+            } else {
+                Log.w(
+                    "KomorebiFocus",
+                    "[LiveContent] targetId が null です。トップナビにフォールバックします。"
+                )
+                delay(200)
+                topNavFocusRequester.safeRequestFocusWithRetry("LiveNavFallback")
+                onReturnFocusConsumed()
+            }
         }
     }
 
@@ -167,6 +235,7 @@ fun LiveContent(
                             )
 
                             LazyRow(
+                                state = rowStates.getOrPut(row.genreId) { LazyListState() },
                                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 contentPadding = PaddingValues(horizontal = 48.dp),
                                 modifier = Modifier
@@ -521,7 +590,6 @@ fun CompactChannelCard(
                     AsyncImage(
                         model = logoUrl,
                         contentDescription = uiState.name,
-                        // ★修正: パディングを削除し、ContentScale.Crop に変更して16:9で上下をクロップ
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )

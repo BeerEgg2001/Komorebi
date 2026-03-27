@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.ui.video.components
 
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -8,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
@@ -46,21 +46,30 @@ fun RecordGridContent(
     onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
 ) {
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+
     LaunchedEffect(isListReady, pagedRecordings.itemCount) {
         onFirstItemBound(isListReady && pagedRecordings.itemCount > 0)
     }
 
-    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+    // 🌟 修正1: pagedRecordings.itemCount をキーに含めることで、非同期ロード後にも再評価されるようにする
+    LaunchedEffect(
+        ticketManager.currentTicket,
+        ticketManager.issueTime,
+        pagedRecordings.itemCount
+    ) {
         if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
             val targetId = ticketManager.targetProgramId
             val index = (0 until pagedRecordings.itemCount).firstOrNull {
                 pagedRecordings.peek(it)?.id == targetId
             }
             if (index != null) {
-                gridState.scrollToItem(maxOf(0, index - 4))
-            } else {
-                gridState.scrollToItem(0)
+                // グリッドの場合、対象アイテムの1行（4アイテム）上が見えるようにスクロールする
+                val targetRowFirstIndex = index - (index % 4)
+                gridState.scrollToItem(maxOf(0, targetRowFirstIndex - 4))
             }
+            // 🌟 修正2: else ブロック( scrollToItem(0) )を削除。
+            // データがまだロードされていない時に強制的に一番上に戻されてしまうバグを防止します。
+
         } else if (ticketManager.currentTicket == FocusTicket.LIST_TOP) {
             gridState.scrollToItem(0)
         }
@@ -90,8 +99,9 @@ fun RecordGridContent(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            // ★修正: focusGroup を削除し、focusRestorer を追加。
-            .focusRestorer { firstItemFocusRequester }
+            // 🌟 修正3: focusRestorer を削除し、安全な focusGroup() に変更。
+            // 画面外の FocusRequester を参照しようとして発生するクラッシュを完全に防ぎます。
+            .focusGroup()
     ) {
         items(
             count = pagedRecordings.itemCount,
@@ -100,23 +110,26 @@ fun RecordGridContent(
         ) { index ->
             val program = pagedRecordings[index]
             if (program != null) {
-                var modifier = Modifier.aspectRatio(16f / 9f)
+                var itemModifier = Modifier.aspectRatio(16f / 9f)
                 val specificRequester = remember { FocusRequester() }
 
-                if (index == 0) modifier = modifier.focusRequester(firstItemFocusRequester)
-                modifier = modifier.focusRequester(specificRequester)
+                // 複数の FocusRequester を繋げる形に修正
+                if (index == 0) itemModifier = itemModifier.focusRequester(firstItemFocusRequester)
+                itemModifier = itemModifier.focusRequester(specificRequester)
 
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     val ticket = ticketManager.currentTicket
                     if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
-                        specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID")
+                        // 🌟 修正4: スクロールやレイアウトが完了するのを少し待ってから確実にフォーカスを要求する
+                        delay(100)
+                        specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID_Grid")
                         ticketManager.consume(FocusTicket.TARGET_ID)
                     }
                 }
 
-                if (index < 4) modifier = modifier.focusProperties { up = upFocusTarget }
+                if (index < 4) itemModifier = itemModifier.focusProperties { up = upFocusTarget }
                 if (index % 4 == 0) {
-                    modifier = modifier
+                    itemModifier = itemModifier
                         .focusProperties { left = FocusRequester.Cancel }
                         .onKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
@@ -135,7 +148,7 @@ fun RecordGridContent(
                     konomiPort = konomiPort,
                     isScrolling = isScrollingLambda,
                     onClick = { onProgramClick(program, null) },
-                    modifier = modifier
+                    modifier = itemModifier
                         .onFocusChanged {
                             if (it.isFocused) {
                                 onFocusedItemChanged(program)
