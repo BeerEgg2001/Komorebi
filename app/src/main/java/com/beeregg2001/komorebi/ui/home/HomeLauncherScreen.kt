@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -172,15 +173,22 @@ fun HomeLauncherScreen(
         }
     }
 
+    // 🌟 修正: isFullScreenMode が false (閉じた時) の処理を整理
     LaunchedEffect(isFullScreenMode) {
         if (!isFullScreenMode && !isReturningFromPlayer) {
             delay(300)
-            if (safeTabIndex == 4) ui.contentFirstItemRequesters[4].safeRequestFocus(TAG)
-            else if (safeTabIndex != 3) ticketManager.issue(HomeFocusTicket.TAB_BAR)
+            if (safeTabIndex == 4) {
+                Log.i(
+                    "KomorebiFocus",
+                    "[HomeLauncher] 録画予約タブ(Index 4)への復帰なので、フォーカス復元は子画面(ReserveListScreen)のチケットシステムに任せます。"
+                )
+                // ⚠️ ここでの強制的なフォーカス上書き（ui.contentFirstItemRequesters[4].safeRequestFocus）を削除しました！
+            } else if (safeTabIndex != 3) {
+                ticketManager.issue(HomeFocusTicket.TAB_BAR)
+            }
         }
     }
 
-    // MainRootScreen (親) からの戻るシグナル（主にコンテンツ内にいる場合に反応）
     LaunchedEffect(triggerBack) {
         if (triggerBack) {
             Log.i(
@@ -243,7 +251,6 @@ fun HomeLauncherScreen(
                         .height(80.dp)
                         .padding(top = 8.dp, start = 40.dp, end = 40.dp)
                         .onFocusChanged { ui.topNavHasFocus = it.hasFocus }
-                        // 🌟 最重要修正: タブバーで戻るキーが押されたら、システムに横取りされる前に自前でキャッチして処理する！
                         .onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
                                 Log.i(
@@ -263,7 +270,7 @@ fun HomeLauncherScreen(
                                         }
                                     }
                                 )
-                                return@onPreviewKeyEvent true // イベントを消費して迷子を防ぐ
+                                return@onPreviewKeyEvent true
                             }
                             false
                         },
@@ -275,7 +282,6 @@ fun HomeLauncherScreen(
                         selectedTabIndex = safeTabIndex,
                         modifier = Modifier
                             .weight(1f)
-                            // 🌟 修正: 悪さをしていた focusGroup() を削除
                             .focusProperties {
                                 canFocus = !isReturningFromPlayer
                             },
@@ -491,7 +497,9 @@ fun HomeLauncherScreen(
                                 konomiPort = konomiPort,
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[4],
                                 topNavFocusRequester = ui.tabFocusRequesters[4],
-                                groupedChannels = groupedChannels
+                                groupedChannels = groupedChannels,
+                                // 🌟 追加: ダイアログの開閉状態を子画面に伝達し、復帰トリガーにする
+                                isReserveOverlayOpen = isReserveOverlayOpen
                             )
                             LaunchedEffect(Unit) {
                                 delay(500); onUiReady(); ui.isCurrentTabContentReady = true
