@@ -61,6 +61,15 @@ class ReserveViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    // 🌟 追加: フォーカス復帰用のID記憶（画面破棄対策）
+    var lastClickedReserveId: Int? = null
+    var lastClickedConditionId: Int? = null
+
+    fun clearFocusMemory() {
+        lastClickedReserveId = null
+        lastClickedConditionId = null
+    }
+
     init {
         // ViewModel生成時に初期データをサーバーから取得
         fetchReserves()

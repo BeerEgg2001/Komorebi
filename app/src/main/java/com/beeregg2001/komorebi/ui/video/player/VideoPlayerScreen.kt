@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.os.Build
 import android.util.Base64
 import android.util.Log
+import android.view.TextureView
 import android.view.View
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
@@ -18,6 +19,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
@@ -32,12 +34,13 @@ import androidx.media3.common.*
 import androidx.media3.common.audio.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
@@ -80,11 +83,12 @@ fun VideoPlayerScreen(
     var currentProgram by remember { mutableStateOf(program) }
     val fetchedDetail by recordViewModel.programDetail.collectAsState()
 
+    var isBuffering by remember { mutableStateOf(false) }
+
     LaunchedEffect(program.id) {
         recordViewModel.fetchProgramDetail(program.id)
     }
 
-    // チャプター周りの処理
     LaunchedEffect(fetchedDetail) {
         if (fetchedDetail != null && fetchedDetail?.id == program.id) {
             currentProgram = fetchedDetail!!
@@ -105,7 +109,6 @@ fun VideoPlayerScreen(
 
     val vs = rememberVideoPlayerState(initialQuality)
 
-    // サブメニュー用の設定
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
     val commentOpacityStr by settingsViewModel.commentOpacity.collectAsState()
@@ -142,7 +145,6 @@ fun VideoPlayerScreen(
     var videoHeight by remember { mutableIntStateOf(0) }
     var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
-    // 操作用のState
     var isChapterListOpen by remember { mutableStateOf(false) }
     var rightKeyDownTime by remember { mutableLongStateOf(0L) }
     var isRightKeyLongPressed by remember { mutableStateOf(false) }
@@ -156,18 +158,50 @@ fun VideoPlayerScreen(
         allComments.addAll(recordViewModel.getArchivedComments(program.recordedVideo.id))
     }
 
-    // ★修正: カスタムの AudioProcessor を削除し、ExoPlayer 標準の安定した設定を使用する
     val exoPlayer = remember(vs.currentQuality) {
-        val renderersFactory = DefaultRenderersFactory(context).apply {
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                ctx: Context,
+                enableFloat: Boolean,
+                enableParams: Boolean
+            ): DefaultAudioSink? {
+                return DefaultAudioSink.Builder(ctx)
+                    .setEnableAudioTrackPlaybackParams(false)
+                    .build()
+            }
+        }.apply {
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+            setEnableDecoderFallback(true)
         }
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory().setUserAgent("DTVClient/1.0")
-            .setAllowCrossProtocolRedirects(true)
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory().apply {
+            setUserAgent("DTVClient/1.0")
+            setAllowCrossProtocolRedirects(true)
+            setConnectTimeoutMs(90000)
+            setReadTimeoutMs(90000)
+        }
 
-        // プレイヤー構築
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                30000,
+                30000,
+                1500,
+                3000
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        // ★修正: setAllowChunklessPreparation(true) を削除
+        // これにより、MPEG-TSのメタデータ不足によるデコーダーのサイレントフリーズを防ぎ、
+        // 最初のチャンクを確実に読み込んでから安定して再生を開始させます。
+        val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
+
         ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(HlsMediaSource.Factory(httpDataSourceFactory)).build().apply {
+            .setMediaSourceFactory(hlsMediaSourceFactory)
+            .setLoadControl(loadControl)
+            .build().apply {
+                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+
                 val mediaItem = MediaItem.Builder().setUri(
                     UrlBuilder.getVideoPlaylistUrl(
                         konomiIp,
@@ -194,7 +228,20 @@ fun VideoPlayerScreen(
                         vs.isPlayerPlaying = playing
                     }
 
-                    // 字幕データをaribb24.jsへ回す
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        isBuffering = (playbackState == Player.STATE_BUFFERING)
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
+                        scope.launch {
+                            isBuffering = true
+                            delay(3000L)
+                            prepare()
+                            playWhenReady = true
+                        }
+                    }
+
                     override fun onMetadata(metadata: Metadata) {
                         if (!vs.isSubtitleEnabled) return
                         for (i in 0 until metadata.length()) {
@@ -221,7 +268,6 @@ fun VideoPlayerScreen(
             }
     }
 
-    // シーンサーチ、チャプター一覧を表示する際は映像を一時停止
     LaunchedEffect(isSceneSearchOpen, isChapterListOpen) {
         if (isSceneSearchOpen || isChapterListOpen) {
             vs.wasPlayingBeforeSceneSearch = exoPlayer.isPlaying
@@ -231,7 +277,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 画面中央に表示する操作系オーバーレイの表示設定
     LaunchedEffect(vs.indicatorState) {
         if (vs.indicatorState != null) {
             delay(2000)
@@ -239,7 +284,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // 画質変更時の処理
     DisposableEffect(vs.currentQuality, currentSessionId) {
         recordViewModel.startStreamMaintenance(
             program,
@@ -249,7 +293,6 @@ fun VideoPlayerScreen(
         onDispose { recordViewModel.stopStreamMaintenance() }
     }
 
-    // 番組名、プログレスバー表示オーバーレイの設定
     LaunchedEffect(
         showControls,
         isSubMenuOpen,
@@ -262,7 +305,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // サブメニューやシーンサーチ、チャプター一覧表示時のフォーカス移動
     LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, isChapterListOpen, showControls) {
         delay(150)
         if (isSubMenuOpen) {
@@ -276,7 +318,6 @@ fun VideoPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
-            // 操作キーイベント
             .onKeyEvent { keyEvent ->
                 if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen) return@onKeyEvent false
 
@@ -429,27 +470,39 @@ fun VideoPlayerScreen(
                     else -> false
                 }
             }) {
-        // 映像レイヤー
         AndroidView(
-            factory = {
-                PlayerView(it).apply {
-                    player = exoPlayer
-                    useController = false
+            factory = { ctx ->
+                AspectRatioFrameLayout(ctx).apply {
                     keepScreenOn = true
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+
+                    val textureView = TextureView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                    }
+                    addView(textureView)
                 }
             },
             update = { view ->
-                view.player = exoPlayer
+                val textureView = view.getChildAt(0) as TextureView
+                exoPlayer.setVideoTextureView(textureView)
+
                 if (videoWidth > 0 && videoHeight > 0) {
-                    val ratio = videoWidth.toFloat() / videoHeight.toFloat()
+                    val ratio =
+                        (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
+                    view.setAspectRatio(ratio)
+
                     val isAnamorphic =
                         (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
                     val is16by9 = ratio >= 1.7f
-                    if (isAnamorphic || is16by9) {
-                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    val targetMode = if (isAnamorphic || is16by9) {
+                        AspectRatioFrameLayout.RESIZE_MODE_FILL
                     } else {
-                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                    if (view.resizeMode != targetMode) {
+                        view.resizeMode = targetMode
                     }
                 }
             },
@@ -459,9 +512,8 @@ fun VideoPlayerScreen(
                 .focusable()
         )
 
-        // 実況コメントレイヤー
         val commentLayer = @Composable {
-            if (isHeavyUiReady) {
+            if (isHeavyUiReady && vs.isCommentEnabled) {
                 ArchivedCommentOverlay(
                     Modifier.fillMaxSize(), allComments, { exoPlayer.currentPosition },
                     vs.isPlayerPlaying, vs.isCommentEnabled, commentSpeed,
@@ -469,7 +521,7 @@ fun VideoPlayerScreen(
                 )
             }
         }
-        // 字幕レイヤー
+
         val subtitleLayer = @Composable {
             if (isHeavyUiReady) {
                 AndroidView(
@@ -490,21 +542,25 @@ fun VideoPlayerScreen(
             }
         }
 
-        // 設定画面からのレイヤー設定によって、上下を入れ替える
         if (subtitleCommentLayer == "CommentOnTop") {
             subtitleLayer(); commentLayer()
         } else {
             commentLayer(); subtitleLayer()
         }
 
-        // 番組名、プログレスバーレイヤー
+        if (isBuffering) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                color = androidx.compose.ui.graphics.Color.White
+            )
+        }
+
         PlayerControls(
             exoPlayer,
             currentProgram.title,
             showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen
         )
 
-        // シーンサーチレイヤー
         AnimatedVisibility(
             isSceneSearchOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -527,7 +583,6 @@ fun VideoPlayerScreen(
                 })
         }
 
-        // チャプター一覧レイヤー
         AnimatedVisibility(
             isChapterListOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -550,7 +605,6 @@ fun VideoPlayerScreen(
             )
         }
 
-        // サブメニューレイヤー
         AnimatedVisibility(
             isSubMenuOpen,
             enter = slideInVertically { -it } + fadeIn(),

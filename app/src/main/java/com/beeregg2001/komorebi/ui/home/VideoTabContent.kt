@@ -36,7 +36,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyRow
 import androidx.tv.foundation.lazy.list.items
@@ -48,10 +47,14 @@ import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.home.components.HomeHeroDashboard
 import com.beeregg2001.komorebi.ui.home.components.HomeHeroInfo
 import com.beeregg2001.komorebi.ui.home.components.SectionHeader
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.video.FocusTicket
+import com.beeregg2001.komorebi.ui.video.FocusTicketManager
+import com.beeregg2001.komorebi.ui.video.rememberFocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import kotlinx.coroutines.delay
@@ -74,21 +77,28 @@ fun VideoTabContent(
     onOpenedSeriesTitleChange: (String?) -> Unit,
     recordViewModel: RecordViewModel,
     watchHistory: List<KonomiHistoryProgram> = emptyList(),
-    isTopNavFocused: Boolean = false
+    isTopNavFocused: Boolean = false,
+    // 🌟 追加: 復帰用の引数を受け取る
+    isReturningFromPlayer: Boolean = false,
+    lastPlayedProgramId: String? = null,
+    onReturnFocusConsumed: () -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
+
+    // 🌟 追加: スクロールやフォーカスを制御するための状態
+    val ticketManager = rememberFocusTicketManager()
     val listState = rememberTvLazyListState()
+    val recentRowState = rememberTvLazyListState()
+    val historyRowState = rememberTvLazyListState()
 
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val groupedSeries by recordViewModel.groupedSeries.collectAsState()
     val availableGenres by recordViewModel.availableGenres.collectAsState()
     val selectedGenre by recordViewModel.selectedSeriesGenre.collectAsState()
 
-    // ★追加: ViewModelからAPIで取得した番組詳細データを監視する
     val programDetail by recordViewModel.programDetail.collectAsState()
     var focusedProgramId by remember { mutableStateOf<Int?>(null) }
 
-    // 初期表示のヒーロー情報
     val initialHeroInfo = remember {
         HomeHeroInfo(
             title = "Video Contents",
@@ -102,7 +112,6 @@ fun VideoTabContent(
     var pendingHeroInfo by remember { mutableStateOf<HomeHeroInfo?>(initialHeroInfo) }
     var currentHeroInfo by remember { mutableStateOf<HomeHeroInfo?>(initialHeroInfo) }
 
-    // トップナビ（タブ）にフォーカスが戻ったらヒーローをリセット
     LaunchedEffect(isTopNavFocused) {
         if (isTopNavFocused) {
             pendingHeroInfo = initialHeroInfo
@@ -117,7 +126,6 @@ fun VideoTabContent(
         }
     }
 
-    // ★追加: 詳細データ（description等）がAPIから降ってきたら、バナーの情報を更新する
     LaunchedEffect(programDetail, focusedProgramId) {
         val detail = programDetail
         if (detail != null && detail.id == focusedProgramId) {
@@ -133,15 +141,56 @@ fun VideoTabContent(
         }
     }
 
-    val animatedScrollProgress by animateFloatAsState(
-        targetValue = if (listState.layoutInfo.totalItemsCount > 0) {
-            listState.firstVisibleItemIndex.toFloat() / listState.layoutInfo.totalItemsCount.toFloat()
-        } else 0f,
-        animationSpec = tween(300),
-        label = "ScrollProgress"
-    )
+    // 🌟 追加: 復帰時にチケットを発行する
+    LaunchedEffect(isReturningFromPlayer) {
+        if (isReturningFromPlayer) {
+            delay(200) // リストが初期化されるのを待つ
+            val targetId = lastPlayedProgramId?.toIntOrNull()
+            if (targetId != null) {
+                ticketManager.issue(FocusTicket.TARGET_ID, targetId)
+            } else {
+                contentFirstItemRequester.safeRequestFocusWithRetry("VideoTabFallback")
+                onReturnFocusConsumed() // フラグを下ろす
+            }
+        }
+    }
 
-    // 上部ナビゲーションへ戻るキーイベント
+    // 🌟 追加: TARGET_ID チケットが発行されたら、該当する行までスクロールする
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID) {
+            val targetId = ticketManager.targetProgramId?.toString() ?: return@LaunchedEffect
+
+            var currentIndex = 1 // 0は「録画リストボタン」
+            var recentColIndex = -1
+            var historyColIndex = -1
+
+            if (recentRecordings.isNotEmpty()) recentColIndex = currentIndex++
+            if (watchHistory.isNotEmpty()) historyColIndex = currentIndex++
+
+            // 「最近の録画」にあるか探す
+            val rIndex = recentRecordings.take(20).indexOfFirst { it.id.toString() == targetId }
+            if (rIndex != -1 && recentColIndex != -1) {
+                listState.scrollToItem(recentColIndex)
+                recentRowState.scrollToItem(maxOf(0, rIndex - 1)) // 少し手前までスクロール
+                return@LaunchedEffect
+            }
+
+            // 「視聴履歴」にあるか探す
+            val hIndex = watchHistory.take(20).indexOfFirst { it.program.id.toString() == targetId }
+            if (hIndex != -1 && historyColIndex != -1) {
+                listState.scrollToItem(historyColIndex)
+                historyRowState.scrollToItem(maxOf(0, hIndex - 1))
+                return@LaunchedEffect
+            }
+
+            // 見つからなかった場合は先頭へ
+            delay(300)
+            ticketManager.consume(FocusTicket.TARGET_ID)
+            contentFirstItemRequester.safeRequestFocusWithRetry("VideoTabNotFoundFallback")
+            onReturnFocusConsumed()
+        }
+    }
+
     val upToTabModifier = Modifier.onKeyEvent {
         if (it.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
             it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
@@ -153,7 +202,6 @@ fun VideoTabContent(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // --- 1. 上部: ヒーローゾーン (HomeContentsと同じ構成) ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -163,7 +211,6 @@ fun VideoTabContent(
             HomeHeroDashboard(info = currentHeroInfo ?: initialHeroInfo)
         }
 
-        // --- 2. 下部: スクロール領域 ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -175,18 +222,13 @@ fun VideoTabContent(
                 contentPadding = PaddingValues(bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
             ) {
-                // --- 録画リストボタン (セクション最上部) ---
                 item {
                     RecordListBannerButton(
                         modifier = Modifier
                             .focusRequester(contentFirstItemRequester)
                             .then(upToTabModifier)
                             .padding(start = 48.dp, top = 12.dp),
-                        onClick = {
-                            // 検索状態をクリアして全録画を表示
-                            recordViewModel.clearSearch()
-                            onShowAllRecordings()
-                        },
+                        onClick = { recordViewModel.clearSearch(); onShowAllRecordings() },
                         onFocus = {
                             focusedProgramId = null
                             pendingHeroInfo = HomeHeroInfo(
@@ -200,7 +242,6 @@ fun VideoTabContent(
                     )
                 }
 
-                // --- 最近の録画 ---
                 if (recentRecordings.isNotEmpty()) {
                     item {
                         Column {
@@ -210,52 +251,45 @@ fun VideoTabContent(
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
                             TvLazyRow(
+                                state = recentRowState, // 🌟 追加
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(
                                     recentRecordings.take(20),
                                     key = { "rec_${it.id}" }) { program ->
-                                    val history =
-                                        watchHistory.find { h -> h.program.id.toString() == program.id.toString() }
-                                    // ★修正: 録画中の番組か判定
                                     val isCurrentlyRecording =
                                         program.isRecording || program.recordedVideo.status == "Recording"
                                     VideoRecentRecordCard(
                                         program = program,
-                                        history = history,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
-                                        // ★修正: 録画中ならクリック無効
+                                        history = watchHistory.find { h -> h.program.id.toString() == program.id.toString() },
+                                        konomiIp = konomiIp, konomiPort = konomiPort,
+                                        ticketManager = ticketManager, // 🌟 追加
+                                        onReturnFocusConsumed = onReturnFocusConsumed, // 🌟 追加
                                         onClick = {
                                             if (!isCurrentlyRecording) onProgramClick(
                                                 program
                                             )
                                         },
                                         onFocus = {
-                                            // ★修正: フォーカス時にAPIへ詳細データをリクエストする
                                             focusedProgramId = program.id
                                             recordViewModel.fetchProgramDetail(program.id)
-
                                             val startFormat = try {
                                                 OffsetDateTime.parse(program.startTime)
                                                     .format(DateTimeFormatter.ofPattern("yyyy/M/d(E) HH:mm"))
                                             } catch (e: Exception) {
                                                 program.startTime
                                             }
-
                                             val duration =
                                                 if (program.duration > 0) program.duration else program.recordedVideo.duration
                                             val progress =
-                                                if (duration > 0 && program.playbackPosition > 5.0) {
-                                                    (program.playbackPosition / duration).toFloat()
-                                                        .coerceIn(0f, 1f)
-                                                } else null
+                                                if (duration > 0 && program.playbackPosition > 5.0) (program.playbackPosition / duration).toFloat()
+                                                    .coerceIn(0f, 1f) else null
 
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = program.title,
                                                 subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
-                                                description = "番組情報を取得中...", // ★一時的なテキスト
+                                                description = "番組情報を取得中...",
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
                                                     konomiIp,
                                                     konomiPort,
@@ -266,8 +300,6 @@ fun VideoTabContent(
                                                 progress = progress
                                             )
                                         },
-                                        // ★修正: Modifierを使って録画中は半透明にする
-                                        modifier = Modifier.alpha(if (isCurrentlyRecording) 0.5f else 1f),
                                         isCurrentlyRecording = isCurrentlyRecording
                                     )
                                 }
@@ -276,7 +308,6 @@ fun VideoTabContent(
                     }
                 }
 
-                // --- 続きから見る ---
                 if (watchHistory.isNotEmpty()) {
                     item {
                         Column {
@@ -286,6 +317,7 @@ fun VideoTabContent(
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
                             TvLazyRow(
+                                state = historyRowState, // 🌟 追加
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
@@ -295,10 +327,10 @@ fun VideoTabContent(
                                     val matchedProgram =
                                         recentRecordings.find { it.id.toString() == historyItem.program.id.toString() }
                                     VideoWatchHistoryCard(
-                                        historyItem = historyItem,
-                                        matchedProgram = matchedProgram,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
+                                        historyItem = historyItem, matchedProgram = matchedProgram,
+                                        konomiIp = konomiIp, konomiPort = konomiPort,
+                                        ticketManager = ticketManager, // 🌟 追加
+                                        onReturnFocusConsumed = onReturnFocusConsumed, // 🌟 追加
                                         onClick = {
                                             val programToPlay =
                                                 matchedProgram?.copy(playbackPosition = historyItem.playback_position)
@@ -311,25 +343,14 @@ fun VideoTabContent(
                                             } catch (e: Exception) {
                                                 0
                                             }
-
-                                            // ★修正: フォーカス時にAPIへ詳細データをリクエストする
                                             if (videoId != 0) {
                                                 focusedProgramId = videoId
                                                 recordViewModel.fetchProgramDetail(videoId)
-                                            } else {
-                                                focusedProgramId = null
                                             }
-
-                                            val duration = matchedProgram?.duration ?: 0.0
-                                            val progress =
-                                                if (duration > 0) (historyItem.playback_position / duration).toFloat()
-                                                    .coerceIn(0f, 1f) else null
-
                                             pendingHeroInfo = HomeHeroInfo(
                                                 title = historyItem.program.title.toString(),
                                                 subtitle = "続きから再生を再開",
-                                                description = if (videoId != 0) "番組情報を取得中..." else (historyItem.program.description
-                                                    ?: "番組概要がありません"), // ★一時的なテキスト
+                                                description = "番組情報を取得中...",
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
                                                     konomiIp,
                                                     konomiPort,
@@ -337,7 +358,10 @@ fun VideoTabContent(
                                                 ),
                                                 isThumbnail = true,
                                                 tag = "視聴履歴",
-                                                progress = progress
+                                                progress = if ((matchedProgram?.duration
+                                                        ?: 0.0) > 0
+                                                ) (historyItem.playback_position / matchedProgram!!.duration).toFloat()
+                                                    .coerceIn(0f, 1f) else null
                                             )
                                         }
                                     )
@@ -347,7 +371,6 @@ fun VideoTabContent(
                     }
                 }
 
-                // --- ジャンル別シリーズ ---
                 if (groupedSeries.isNotEmpty()) {
                     item {
                         Column {
@@ -356,8 +379,6 @@ fun VideoTabContent(
                                 icon = Icons.Default.VideoLibrary,
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
-
-                            // ジャンルタブ
                             TvLazyRow(
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -367,24 +388,21 @@ fun VideoTabContent(
                                     key = { it ?: "All" }) { genre ->
                                     val isSelected = genre == selectedGenre
                                     var isFocused by remember { mutableStateOf(false) }
-
                                     Surface(
                                         onClick = { recordViewModel.updateSeriesGenre(genre) },
                                         modifier = Modifier
                                             .height(40.dp)
-                                            .onFocusChanged {
-                                                isFocused = it.isFocused || it.hasFocus
-                                            },
+                                            .onFocusChanged { isFocused = it.hasFocus },
                                         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                                         colors = ClickableSurfaceDefaults.colors(
                                             containerColor = if (isSelected) colors.textPrimary else Color.Transparent,
-                                            contentColor = if (isSelected) colors.background else colors.textSecondary,
                                             focusedContainerColor = colors.textPrimary,
+                                            contentColor = if (isSelected) colors.background else colors.textSecondary,
                                             focusedContentColor = colors.background
                                         ),
                                         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(20.dp)),
                                         border = ClickableSurfaceDefaults.border(
-                                            border = Border(
+                                            Border(
                                                 BorderStroke(
                                                     1.dp,
                                                     if (isSelected) Color.Transparent else colors.textPrimary.copy(
@@ -400,27 +418,21 @@ fun VideoTabContent(
                                             )
                                         )
                                     ) {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = genre ?: "すべて",
-                                                color = if (isSelected || isFocused) colors.background else colors.textPrimary,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 20.dp)
+                                        Text(
+                                            text = genre ?: "すべて",
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(
+                                                horizontal = 20.dp,
+                                                vertical = 8.dp
                                             )
-                                        }
+                                        )
                                     }
                                 }
                             }
-
                             Spacer(Modifier.height(16.dp))
-
                             val filteredSeries =
                                 if (selectedGenre == null) groupedSeries.values.flatten() else groupedSeries[selectedGenre]
                                     ?: emptyList()
-
                             TvLazyRow(
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -430,10 +442,7 @@ fun VideoTabContent(
                                         series = series,
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
-                                        onClick = {
-                                            recordViewModel.searchRecordings(series.displayTitle)
-                                            onShowAllRecordings()
-                                        },
+                                        onClick = { recordViewModel.searchRecordings(series.displayTitle); onShowAllRecordings() },
                                         onFocus = {
                                             focusedProgramId = null
                                             pendingHeroInfo = HomeHeroInfo(
@@ -460,8 +469,6 @@ fun VideoTabContent(
     }
 }
 
-// --- プライベートカードコンポーネント ---
-
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 private fun VideoRecentRecordCard(
@@ -472,7 +479,10 @@ private fun VideoRecentRecordCard(
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
-    isCurrentlyRecording: Boolean = false // ★追加
+    isCurrentlyRecording: Boolean = false,
+    // 🌟 追加
+    ticketManager: FocusTicketManager,
+    onReturnFocusConsumed: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -482,12 +492,24 @@ private fun VideoRecentRecordCard(
         (history.playback_position / duration).toFloat().coerceIn(0f, 1f)
     } else null
 
+    // 🌟 追加: カードがチケットを受け取ってフォーカスを奪うロジック
+    val specificRequester = remember { FocusRequester() }
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
+            delay(100)
+            specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID_VideoTab")
+            ticketManager.consume(FocusTicket.TARGET_ID)
+            onReturnFocusConsumed() // フラグを下ろす
+        }
+    }
+
     Surface(
         onClick = onClick,
-        enabled = !isCurrentlyRecording, // ★修正: 録画中ならSurfaceごと無効化
-        modifier = modifier // ★修正: 引数のmodifierを適用
+        enabled = !isCurrentlyRecording,
+        modifier = modifier
             .width(280.dp)
             .height(160.dp)
+            .focusRequester(specificRequester) // 🌟 追加
             .onFocusChanged { isFocused = it.isFocused || it.hasFocus; if (isFocused) onFocus() },
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
         colors = ClickableSurfaceDefaults.colors(
@@ -498,7 +520,7 @@ private fun VideoRecentRecordCard(
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
-            border = Border(
+            Border(
                 BorderStroke(
                     1.dp,
                     colors.textPrimary.copy(alpha = 0.1f)
@@ -527,11 +549,9 @@ private fun VideoRecentRecordCard(
                         )
                     )
             )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp)
-            ) {
+            Column(modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(16.dp)) {
                 val startFormat = try {
                     OffsetDateTime.parse(program.startTime)
                         .format(DateTimeFormatter.ofPattern("M/d(E) HH:mm"))
@@ -539,7 +559,6 @@ private fun VideoRecentRecordCard(
                     program.startTime
                 }
 
-                // ★追加: 録画中バッジの表示
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isCurrentlyRecording) {
                         Box(
@@ -601,7 +620,11 @@ private fun VideoWatchHistoryCard(
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
-    onFocus: () -> Unit
+    onFocus: () -> Unit,
+    modifier: Modifier = Modifier,
+    // 🌟 追加
+    ticketManager: FocusTicketManager,
+    onReturnFocusConsumed: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -615,11 +638,23 @@ private fun VideoWatchHistoryCard(
         .coerceIn(0f, 1f) else null
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, videoId.toString())
 
+    // 🌟 追加: カードがチケットを受け取ってフォーカスを奪うロジック
+    val specificRequester = remember { FocusRequester() }
+    LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
+        if (ticketManager.currentTicket == FocusTicket.TARGET_ID && videoId == ticketManager.targetProgramId) {
+            delay(100)
+            specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID_History")
+            ticketManager.consume(FocusTicket.TARGET_ID)
+            onReturnFocusConsumed() // フラグを下ろす
+        }
+    }
+
     Surface(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .width(280.dp)
             .height(160.dp)
+            .focusRequester(specificRequester) // 🌟 追加
             .onFocusChanged { isFocused = it.isFocused || it.hasFocus; if (isFocused) onFocus() },
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
         colors = ClickableSurfaceDefaults.colors(
@@ -630,7 +665,7 @@ private fun VideoWatchHistoryCard(
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
-            border = Border(
+            Border(
                 BorderStroke(
                     1.dp,
                     colors.textPrimary.copy(alpha = 0.1f)
@@ -659,11 +694,9 @@ private fun VideoWatchHistoryCard(
                         )
                     )
             )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp)
-            ) {
+            Column(modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -736,7 +769,7 @@ private fun VideoSeriesCard(
         ),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         border = ClickableSurfaceDefaults.border(
-            border = Border(
+            Border(
                 BorderStroke(
                     1.dp,
                     colors.textPrimary.copy(alpha = 0.1f)
@@ -765,11 +798,9 @@ private fun VideoSeriesCard(
                         )
                     )
             )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(16.dp)
-            ) {
+            Column(modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(16.dp)) {
                 Text(
                     text = "${series.programCount}エピソード",
                     style = MaterialTheme.typography.labelSmall,
@@ -823,7 +854,7 @@ fun RecordListBannerButton(
             focusedContentColor = if (colors.isDark) Color.Black else Color.White
         ),
         border = ClickableSurfaceDefaults.border(
-            border = Border(
+            Border(
                 BorderStroke(
                     1.dp,
                     colors.textPrimary.copy(alpha = 0.1f)

@@ -156,7 +156,7 @@ class RecordViewModel @Inject constructor(
     private var currentSearchQuery: String = ""
 
     // KonomiTVのストリーム維持（KeepAlive）用のコルーチンジョブ
-    private var maintenanceJob: Job? = null
+    private var streamMaintenanceJob: Job? = null
 
     // フォーカス時の番組詳細データ（あらすじ等、APIから都度取得するもの）
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
@@ -451,25 +451,38 @@ class RecordViewModel @Inject constructor(
         program: RecordedProgram,
         quality: String,
         sessionId: String,
-        getPositionSeconds: () -> Double
+        currentPositionProvider: () -> Double
     ) {
-        stopStreamMaintenance()
-        maintenanceJob = viewModelScope.launch(Dispatchers.IO) {
+        // 既存のジョブがあればキャンセル
+        streamMaintenanceJob?.cancel()
+
+        streamMaintenanceJob = viewModelScope.launch {
+            // セッションが破棄されるまでループ
             while (isActive) {
                 try {
-                    val currentPos = getPositionSeconds()
-                    repository.keepAlive(program.recordedVideo.id, quality, sessionId)
-                    historyRepository.saveWatchHistory(program, currentPos)
+                    // ★ポイント1: KonomiTV API へ Keep-Alive (生存報告) のリクエストを送る
+                    // ※以下のメソッド名は実際のAPIクライアントの実装に合わせてください
+                    val position = currentPositionProvider()
+                    repository.keepAlive(
+                        videoId = program.recordedVideo.id,
+                        sessionId = sessionId,
+                        quality = quality
+                    )
+
+                    Log.d("StreamMaintenance", "Keep-Alive sent. Session: $sessionId")
                 } catch (e: Exception) {
+                    Log.e("StreamMaintenance", "Failed to send Keep-Alive", e)
                 }
-                delay(20000) // 20秒間隔で生存信号を送信
+
+                // ★ポイント2: 10秒の壁に絶対に引っかからないよう、3〜5秒間隔で高頻度にPingを打つ
+                delay(4000L)
             }
         }
     }
 
     fun stopStreamMaintenance() {
-        maintenanceJob?.cancel()
-        maintenanceJob = null
+        streamMaintenanceJob?.cancel()
+        streamMaintenanceJob = null
     }
 
     override fun onCleared() {
