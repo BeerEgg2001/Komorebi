@@ -2,8 +2,11 @@
 
 package com.beeregg2001.komorebi.ui.live
 
+import android.content.Context
 import android.os.Build
+import android.util.Base64
 import android.util.Log
+import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
 import android.webkit.*
 import androidx.annotation.OptIn
@@ -28,7 +31,21 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.*
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.util.EventLogger
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.ts.TsExtractor
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
@@ -42,6 +59,7 @@ import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -116,9 +134,7 @@ fun LivePlayerScreen(
     val commentMaxLines = commentMaxLinesStr.toIntOrNull() ?: 0
 
     var isCommentEnabled by rememberSaveable(commentDefaultDisplayStr) {
-        mutableStateOf(
-            commentDefaultDisplayStr == "ON"
-        )
+        mutableStateOf(commentDefaultDisplayStr == "ON")
     }
     val subtitleEnabledState =
         rememberSaveable(liveSubtitleDefaultStr) { mutableStateOf(liveSubtitleDefaultStr == "ON") }
@@ -150,7 +166,6 @@ fun LivePlayerScreen(
     val repository = remember { SettingsRepository(context) }
     val preferredStreamSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
 
-    // [解説: 起動時のソース決定]
     LaunchedEffect(isMirakurunAvailable, preferredStreamSource) {
         ps.currentStreamSource =
             if (isMirakurunAvailable && preferredStreamSource == "MIRAKURUN") StreamSource.MIRAKURUN else StreamSource.KONOMITV
@@ -163,7 +178,7 @@ fun LivePlayerScreen(
     val nativeLib = remember { NativeLib() }
 
     // ==========================================
-    // プレイヤーの構築
+    // メインプレイヤーの構築
     // ==========================================
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
@@ -171,91 +186,254 @@ fun LivePlayerScreen(
 
     val tsDataSourceFactory =
         remember(nativeLib) { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
-
-    // [解説: メインプレイヤーの生成]
-    val exoPlayer = rememberKomorebiPlayer(
-        context = context,
-        userAgent = "Komorebi/1.0 (Main)",
-        streamSource = ps.currentStreamSource,
-        quality = ps.currentQuality,
-        audioOutputMode = audioOutputMode,
-        retryKey = ps.retryKey,
-        subtitleEnabledState = subtitleEnabledState,
-        webViewRef = webViewRef,
-        tsDataSourceFactory = tsDataSourceFactory,
-        onVideoSizeChanged = {
-            videoWidth = it.width; videoHeight = it.height; pixelWidthHeightRatio =
-            it.pixelWidthHeightRatio
-        },
-        onIsPlayingChanged = { ps.isPlayerPlaying = it },
-        onPlayerError = {
-            if (!(ps.currentStreamSource == StreamSource.KONOMITV && (ps.sseStatus == "Standby" || ps.sseStatus == "Restart"))) {
-                ps.playerError = ps.analyzePlayerError(it)
-            }
+    val extractorsFactory = remember(subtitleEnabledState) {
+        ExtractorsFactory {
+            arrayOf(
+                TsExtractor(
+                    TsExtractor.MODE_SINGLE_PMT,
+                    TimestampAdjuster(C.TIME_UNSET),
+                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState),
+                    TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
+                )
+            )
         }
-    )
+    }
+    val audioProcessor = remember {
+        ChannelMixingAudioProcessor().apply {
+            putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
+            putChannelMixingMatrix(
+                ChannelMixingMatrix(
+                    6,
+                    2,
+                    floatArrayOf(1f, 0f, 0f, 1f, 0.707f, 0.707f, 0f, 0f, 0.707f, 0f, 0f, 0.707f)
+                )
+            )
+        }
+    }
 
+    val exoPlayer =
+        remember(ps.currentStreamSource, ps.retryKey, ps.currentQuality, audioOutputMode) {
+            val renderersFactory = object : DefaultRenderersFactory(context) {
+                override fun buildAudioSink(
+                    ctx: Context,
+                    enableFloat: Boolean,
+                    enableParams: Boolean
+                ): DefaultAudioSink? {
+                    val processors =
+                        if (audioOutputMode == "PASSTHROUGH") emptyArray<AudioProcessor>() else arrayOf<AudioProcessor>(
+                            audioProcessor
+                        )
+                    return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
+                }
+            }.apply {
+                if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                } else {
+                    setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                }
+                setEnableDecoderFallback(true)
+            }
+
+            ExoPlayer.Builder(context, renderersFactory)
+                .setLoadControl(
+                    DefaultLoadControl.Builder()
+                        .setBufferDurationsMs(2000, 10000, 1000, 1500)
+                        .setPrioritizeTimeOverSizeThresholds(true).build()
+                )
+                .setLivePlaybackSpeedControl(
+                    DefaultLivePlaybackSpeedControl.Builder()
+                        .setFallbackMaxPlaybackSpeed(1.04f)
+                        .setFallbackMinPlaybackSpeed(0.96f).build()
+                )
+                .apply {
+                    if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                        setMediaSourceFactory(
+                            DefaultMediaSourceFactory(
+                                tsDataSourceFactory,
+                                extractorsFactory
+                            )
+                        )
+                    }
+                }
+                .build().apply {
+                    setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+                    playWhenReady = true
+                    addAnalyticsListener(EventLogger(null, "ExoPlayerLog"))
+
+                    addListener(object : Player.Listener {
+                        override fun onVideoSizeChanged(videoSize: VideoSize) {
+                            videoWidth = videoSize.width
+                            videoHeight = videoSize.height
+                            pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
+                        }
+
+                        override fun onIsPlayingChanged(playing: Boolean) {
+                            ps.isPlayerPlaying = playing
+                        }
+
+                        override fun onPlayerError(error: PlaybackException) {
+                            if (ps.currentStreamSource == StreamSource.KONOMITV && ps.sseStatus == "Standby") return
+                            ps.playerError = ps.analyzePlayerError(error)
+                        }
+
+                        override fun onMetadata(metadata: Metadata) {
+                            if (ps.currentStreamSource == StreamSource.MIRAKURUN || !subtitleEnabledState.value) return
+                            for (i in 0 until metadata.length()) {
+                                val entry = metadata.get(i)
+                                if (entry is PrivFrame && (entry.owner.contains(
+                                        "aribb24",
+                                        true
+                                    ) || entry.owner.contains("B24", true))
+                                ) {
+                                    val base64Data =
+                                        Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                                    webViewRef.value?.post {
+                                        webViewRef.value?.evaluateJavascript(
+                                            "if(window.receiveSubtitleData){ window.receiveSubtitleData(${currentPosition + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS}, '$base64Data'); }",
+                                            null
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+        }
+
+    // ==========================================
+    // サブプレイヤーの構築 (二画面用・遅延生成)
+    // ==========================================
     var dualVideoWidth by remember { mutableIntStateOf(0) }
     var dualVideoHeight by remember { mutableIntStateOf(0) }
     var dualPixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
     val dualTsDataSourceFactory =
         remember(nativeLib) { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
+    val dualExtractorsFactory = remember(subtitleEnabledState) {
+        ExtractorsFactory {
+            arrayOf(
+                TsExtractor(
+                    TsExtractor.MODE_SINGLE_PMT,
+                    TimestampAdjuster(C.TIME_UNSET),
+                    DirectSubtitlePayloadReaderFactory(dualWebViewRef, subtitleEnabledState),
+                    TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
+                )
+            )
+        }
+    }
+    val dualAudioProcessor = remember {
+        ChannelMixingAudioProcessor().apply {
+            putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
+            putChannelMixingMatrix(
+                ChannelMixingMatrix(
+                    6,
+                    2,
+                    floatArrayOf(1f, 0f, 0f, 1f, 0.707f, 0.707f, 0f, 0f, 0.707f, 0f, 0f, 0.707f)
+                )
+            )
+        }
+    }
 
-    val dualExoPlayer = rememberKomorebiPlayer(
-        context = context,
-        userAgent = "Komorebi/1.0 (Dual)",
-        streamSource = ps.currentStreamSource,
-        quality = ps.currentQuality,
-        audioOutputMode = audioOutputMode,
-        retryKey = ps.retryKey,
-        subtitleEnabledState = subtitleEnabledState,
-        webViewRef = dualWebViewRef,
-        tsDataSourceFactory = dualTsDataSourceFactory,
-        onVideoSizeChanged = {
-            dualVideoWidth = it.width; dualVideoHeight = it.height; dualPixelWidthHeightRatio =
-            it.pixelWidthHeightRatio
-        },
-        onIsPlayingChanged = { /* サブ画面の再生状態はメインと同期するため監視しない */ },
-        onPlayerError = { /* サブ画面のエラーはメインのステータスに影響させない */ }
-    )
+    val dualExoPlayer = remember(
+        ps.isDualDisplayMode,
+        ps.currentStreamSource,
+        ps.retryKey,
+        ps.currentQuality,
+        audioOutputMode
+    ) {
+        if (!ps.isDualDisplayMode) return@remember null
+
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                ctx: Context,
+                enableFloat: Boolean,
+                enableParams: Boolean
+            ): DefaultAudioSink? {
+                val processors =
+                    if (audioOutputMode == "PASSTHROUGH") emptyArray<AudioProcessor>() else arrayOf<AudioProcessor>(
+                        dualAudioProcessor
+                    )
+                return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
+            }
+        }.apply {
+            if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            } else {
+                setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+            }
+            setEnableDecoderFallback(true)
+        }
+
+        ExoPlayer.Builder(context, renderersFactory)
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(2000, 10000, 1000, 1500)
+                    .setPrioritizeTimeOverSizeThresholds(true).build()
+            )
+            .setLivePlaybackSpeedControl(
+                DefaultLivePlaybackSpeedControl.Builder()
+                    .setFallbackMaxPlaybackSpeed(1.04f)
+                    .setFallbackMinPlaybackSpeed(0.96f).build()
+            )
+            .apply {
+                if (ps.currentStreamSource == StreamSource.MIRAKURUN) {
+                    setMediaSourceFactory(
+                        DefaultMediaSourceFactory(
+                            dualTsDataSourceFactory,
+                            dualExtractorsFactory
+                        )
+                    )
+                }
+            }
+            .build().apply {
+                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+                playWhenReady = true
+
+                addListener(object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        dualVideoWidth = videoSize.width
+                        dualVideoHeight = videoSize.height
+                        dualPixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
+                    }
+                })
+            }
+    }
+
+    DisposableEffect(dualExoPlayer) {
+        onDispose { dualExoPlayer?.release() }
+    }
 
     // ==========================================
     // バックグラウンド・非同期処理 (Side Effects)
     // ==========================================
 
-    // [解説: 音量制御]
     LaunchedEffect(ps.isDualDisplayMode, ps.activeDualPlayerIndex, exoPlayer, dualExoPlayer) {
         if (ps.isDualDisplayMode) {
             exoPlayer.volume = if (ps.activeDualPlayerIndex == 0) 1f else 0f
-            dualExoPlayer.volume = if (ps.activeDualPlayerIndex == 1) 1f else 0f
+            dualExoPlayer?.volume = if (ps.activeDualPlayerIndex == 1) 1f else 0f
         } else {
             exoPlayer.volume = 1f
-            dualExoPlayer.volume = 0f
+            dualExoPlayer?.volume = 0f
         }
     }
 
-    // [解説: ライフサイクル復帰フラグ]
     var hasStoppedByLifecycle by remember { mutableStateOf(false) }
-
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, exoPlayer, dualExoPlayer) {
+
+    // ★修正: メインとサブのライフサイクル管理を完全に分離し、
+    // サブ生成時に巻き添えでメインがrelease()されるバグを防止しました。
+    DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                // [解説: ライフサイクル管理 - バックグラウンド移行時]
                 hasStoppedByLifecycle = true
                 runCatching {
                     exoPlayer.stop()
                     exoPlayer.clearMediaItems()
-                    dualExoPlayer.stop()
-                    dualExoPlayer.clearMediaItems()
                 }
             } else if (event == Lifecycle.Event.ON_START) {
-                // [解説: ライフサイクル管理 - フォアグラウンド復帰時]
                 if (hasStoppedByLifecycle) {
                     hasStoppedByLifecycle = false
                     ps.retryKey++
-                    // ★追加: スリープ復帰時に即座に番組情報（チャンネルリスト）を更新する
                     channelViewModel.fetchChannels()
                 }
             }
@@ -266,9 +444,24 @@ fun LivePlayerScreen(
             runCatching {
                 exoPlayer.stop()
                 exoPlayer.release()
-                dualExoPlayer.stop()
-                dualExoPlayer.release()
             }
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, dualExoPlayer) {
+        if (dualExoPlayer == null) return@DisposableEffect onDispose {}
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                runCatching {
+                    dualExoPlayer.stop()
+                    dualExoPlayer.clearMediaItems()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            // サブのreleaseは別のDisposableEffectで担保
         }
     }
 
@@ -316,6 +509,8 @@ fun LivePlayerScreen(
         runCatching {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
+            // ★追加: 画質変更(720p)を伴う再リクエスト時、サーバー側のチューナー解放を少し待つための猶予
+            if (ps.isDualDisplayMode) delay(200)
             exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
             exoPlayer.prepare()
             exoPlayer.play()
@@ -333,10 +528,11 @@ fun LivePlayerScreen(
         ps.currentStreamSource,
         ps.isDualDisplayMode,
         ps.retryKey,
-        ps.currentQuality
+        ps.currentQuality,
+        dualExoPlayer
     ) {
         val rightChannel = ps.dualRightChannel
-        if (ps.isDualDisplayMode && rightChannel != null) {
+        if (ps.isDualDisplayMode && rightChannel != null && dualExoPlayer != null) {
             if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") {
                 return@LaunchedEffect
             }
@@ -366,14 +562,16 @@ fun LivePlayerScreen(
             runCatching {
                 dualExoPlayer.stop()
                 dualExoPlayer.clearMediaItems()
+                // ★追加: メイン画面のリクエストと完全に被らないようにタイミングをずらす
+                delay(300)
                 dualExoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
                 dualExoPlayer.prepare()
                 dualExoPlayer.play()
             }
         } else {
             runCatching {
-                dualExoPlayer.stop()
-                dualExoPlayer.clearMediaItems()
+                dualExoPlayer?.stop()
+                dualExoPlayer?.clearMediaItems()
             }
         }
     }
@@ -383,9 +581,10 @@ fun LivePlayerScreen(
         ps.currentStreamSource,
         ps.isDualDisplayMode,
         ps.retryKey,
-        ps.currentQuality
+        ps.currentQuality,
+        dualExoPlayer
     ) {
-        if (ps.currentStreamSource != StreamSource.KONOMITV || !ps.isDualDisplayMode || ps.dualRightChannel == null) return@DisposableEffect onDispose { }
+        if (ps.currentStreamSource != StreamSource.KONOMITV || !ps.isDualDisplayMode || ps.dualRightChannel == null || dualExoPlayer == null) return@DisposableEffect onDispose { }
 
         val rightChannel = ps.dualRightChannel!!
         if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") return@DisposableEffect onDispose { }
@@ -447,7 +646,7 @@ fun LivePlayerScreen(
                         )
                     }
                 }
-                if (ps.isDualDisplayMode && dualExoPlayer.isPlaying) {
+                if (ps.isDualDisplayMode && dualExoPlayer?.isPlaying == true) {
                     dualWebViewRef.value?.post {
                         dualWebViewRef.value?.evaluateJavascript(
                             "if(window.syncClock){ window.syncClock(${dualExoPlayer.currentPosition}); }",
@@ -637,9 +836,6 @@ fun LivePlayerScreen(
         )
     }
 
-    // [解説: 定期的な番組情報の更新]
-    // 00秒のタイミングで定期的に番組情報を更新するバックグラウンド処理。
-    // スリープ中は停止するため、上の `ON_START` でも手動更新を挟むことで常に最新を保ちます。
     LaunchedEffect(Unit) {
         while (true) {
             val now = System.currentTimeMillis()
@@ -670,7 +866,7 @@ fun LivePlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.background)
+            .background(Color.Black)
             .onKeyEvent { keyEvent ->
                 ps.handleKeyEvent(
                     keyEvent = keyEvent,
@@ -695,7 +891,7 @@ fun LivePlayerScreen(
     ) {
         val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
 
-        if (ps.isDualDisplayMode) {
+        if (ps.isDualDisplayMode && dualExoPlayer != null) {
             DualDisplayPlayer(
                 state = ps,
                 leftChannel = currentChannelItem,
@@ -721,7 +917,6 @@ fun LivePlayerScreen(
             AndroidView(
                 factory = {
                     PlayerView(it).apply {
-                        // [解説: 1画面モードのプレイヤー紐付け]
                         player = exoPlayer
                         useController = false
                         keepScreenOn = true
@@ -738,10 +933,13 @@ fun LivePlayerScreen(
                             (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
                         val is16by9 = ratio >= 1.7f
 
-                        if (isAnamorphic || is16by9) {
-                            view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        val targetMode = if (isAnamorphic || is16by9) {
+                            AspectRatioFrameLayout.RESIZE_MODE_FILL
                         } else {
-                            view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        }
+                        if (view.resizeMode != targetMode) {
+                            view.resizeMode = targetMode
                         }
                     }
                 },
@@ -749,8 +947,15 @@ fun LivePlayerScreen(
                     .fillMaxSize()
                     .focusRequester(mainFocusRequester)
                     .focusable(!isMiniListOpen && !isSubMenuOpen)
-                    .alpha(if (ps.currentStreamSource == StreamSource.MIRAKURUN || ps.sseStatus == "ONAir") 1f else 0f)
             )
+
+            val isVideoVisible =
+                ps.currentStreamSource == StreamSource.MIRAKURUN || ps.sseStatus == "ONAir"
+            if (!isVideoVisible) {
+                Box(modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black))
+            }
 
             if (isHeavyUiReady) {
                 AndroidView(
@@ -789,7 +994,7 @@ fun LivePlayerScreen(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(colors.background)
+                    .background(Color.Black)
             ) {
                 Row(
                     Modifier
@@ -798,14 +1003,14 @@ fun LivePlayerScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(
-                        color = colors.textPrimary,
+                        color = Color.White,
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 3.dp
                     )
                     Spacer(Modifier.width(16.dp))
                     Text(
                         text = ps.sseDetail,
-                        color = colors.textPrimary,
+                        color = Color.White,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Bold
                     )

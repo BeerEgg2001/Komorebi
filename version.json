@@ -1,6 +1,6 @@
 {
-  "versionCode": 6,
-  "versionName": "0.9.0-beta",
-  "releaseNotes": "・二画面機能に対応\n・番組表UIを刷新\n・設定画面に「起動時に再生するチャンネル」項目を追加。\n・その他細かいバグを修正\n",
-  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.9.0-beta/Komorebi-0.9.0-beta.apk"
+  "versionCode": 7,
+  "versionName": "0.9.0-beta2",
+  "releaseNotes": "・ライブ視聴再生時に音声のみ再生され、映像が再生されないバグに暫定対応\n・その他細かいバグを修正\n",
+  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/0.9.0-beta2/Komorebi-0.9.0-beta2.apk"
 }
