@@ -1,7 +1,7 @@
 package com.beeregg2001.komorebi.di
 
+import com.beeregg2001.komorebi.data.repository.DtvProviderProxy
 import com.beeregg2001.komorebi.data.repository.EpgProvider
-import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.repository.ReserveProvider
@@ -14,27 +14,17 @@ import dagger.hilt.components.SingletonComponent
 @InstallIn(SingletonComponent::class)
 abstract class DtvProviderModule {
 
-    // 「LiveProvider」として要求されたら「KonomiRepository」の実体を渡す
-    @Binds
-    abstract fun bindLiveProvider(
-        impl: KonomiRepository
-    ): LiveProvider
+    // ★ 修正: 全ての実体を Proxy (代理人) クラスに差し替えます
 
-    // 「RecordProvider」として要求されたら「KonomiRepository」の実体を渡す
     @Binds
-    abstract fun bindRecordProvider(
-        impl: KonomiRepository
-    ): RecordProvider
+    abstract fun bindLiveProvider(impl: DtvProviderProxy): LiveProvider
 
-    // 「ReserveProvider」として要求されたら「KonomiRepository」の実体を渡す
     @Binds
-    abstract fun bindReserveProvider(
-        impl: KonomiRepository
-    ): ReserveProvider
+    abstract fun bindRecordProvider(impl: DtvProviderProxy): RecordProvider
 
-    // 「EpgProvider」として要求されたら「KonomiRepository」の実体を渡す
     @Binds
-    abstract fun bindEpgProvider(
-        impl: KonomiRepository
-    ): EpgProvider
+    abstract fun bindReserveProvider(impl: DtvProviderProxy): ReserveProvider
+
+    @Binds
+    abstract fun bindEpgProvider(impl: DtvProviderProxy): EpgProvider
 }

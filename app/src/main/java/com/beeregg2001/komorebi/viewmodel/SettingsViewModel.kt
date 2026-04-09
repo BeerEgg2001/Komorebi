@@ -52,6 +52,20 @@ class SettingsViewModel @Inject constructor(
         .map { it?.lastSyncedAt ?: 0L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
+    // ★ 追加: バックエンド種別・新規IP/PortのStateFlow
+    val backendType: StateFlow<String> = settingsRepository.backendType
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "KONOMITV")
+
+    val edcbIp: StateFlow<String> = settingsRepository.edcbIp
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val edcbPort: StateFlow<String> = settingsRepository.edcbPort
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "5510")
+
+    val epgStationIp: StateFlow<String> = settingsRepository.epgStationIp
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val epgStationPort: StateFlow<String> = settingsRepository.epgStationPort
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "8888")
+
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val mirakurunPort: StateFlow<String> = settingsRepository.mirakurunPort
@@ -104,15 +118,34 @@ class SettingsViewModel @Inject constructor(
     val startupChannel: StateFlow<String> = settingsRepository.startupChannel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
 
-    // ★ 追加: 時間表記フォーマットのStateFlow
     val timeFormat: StateFlow<String> = settingsRepository.timeFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
+
+    // ★ 追加: 新規項目保存用のメソッド群
+    fun updateBackendType(type: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, type)
+    }
+
+    fun updateEdcbIp(ip: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_IP, ip)
+    }
+
+    fun updateEdcbPort(port: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
+    }
+
+    fun updateEpgStationIp(ip: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_IP, ip)
+    }
+
+    fun updateEpgStationPort(port: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_PORT, port)
+    }
 
     fun updateStartupChannel(value: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.STARTUP_CHANNEL, value)
     }
 
-    // ★ 追加: 時間フォーマットの保存
     fun updateTimeFormat(value: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.TIME_FORMAT, value)
     }
@@ -145,7 +178,6 @@ class SettingsViewModel @Inject constructor(
     val appTheme: StateFlow<String> = settingsRepository.appTheme
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MONOTONE")
 
-    // ★ 追加: ベータ版を受け取るかどうかの状態
     val receiveBetaUpdates: StateFlow<Boolean> = settingsRepository.receiveBetaUpdates
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -266,13 +298,17 @@ class SettingsViewModel @Inject constructor(
                         viewModelScope.launch {
                             settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, apiKey)
                         }
-                        val successHtml = "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'>" +
-                                "<h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2>" +
-                                "<p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p>" +
-                                "</body></html>"
+                        val successHtml =
+                            "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'>" +
+                                    "<h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2>" +
+                                    "<p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p>" +
+                                    "</body></html>"
                         call.respondText(successHtml, ContentType.Text.Html)
                     } else {
-                        call.respondText("APIキーが空です。戻ってやり直してください。", ContentType.Text.Plain)
+                        call.respondText(
+                            "APIキーが空です。戻ってやり直してください。",
+                            ContentType.Text.Plain
+                        )
                     }
                 }
             }
@@ -299,7 +335,9 @@ class SettingsViewModel @Inject constructor(
                     }
                 }
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         return "127.0.0.1"
     }
 

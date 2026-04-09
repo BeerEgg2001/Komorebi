@@ -19,7 +19,7 @@ import javax.inject.Inject
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
-    // ★ 修正: KonomiRepository を直接参照するのではなく、必要なインターフェースを Inject
+    // ★ 修正: KonomiRepository ではなく、抽象化された Provider を Inject
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
     private val watchHistoryRepository: WatchHistoryRepository
@@ -34,7 +34,6 @@ class ChannelViewModel @Inject constructor(
     private val _groupedChannels = MutableStateFlow<Map<String, List<Channel>>>(emptyMap())
     val groupedChannels: StateFlow<Map<String, List<Channel>>> = _groupedChannels
 
-    // ★ 修正: 野球判定ロジックの厳格化
     private val baseballKeywords = listOf(
         "阪神", "タイガース", "広島", "カープ", "DeNA", "ベイスターズ",
         "巨人", "ジャイアンツ", "ヤクルト", "スワローズ", "中日", "ドラゴンズ",
@@ -42,19 +41,16 @@ class ChannelViewModel @Inject constructor(
         "楽天", "イーグルス", "西武", "ライオンズ", "日本ハム", "ファイターズ", "プロ野球"
     )
 
-    // 中継を見たいユーザーのノイズになる番組を強力に弾く
     private val excludeKeywords = listOf(
         "プロ野球ニュース", "すぽると", "熱闘", "ダイジェスト", "ハイライト",
         "特集", "傑作選", "名勝負", "セレクション", "回顧", "伝説", "競馬"
     )
 
-    // 単なる「生放送」や「中継」ではなく、野球に特化したワードを中心に
     private val matchKeywords = listOf(
         "ナイター", "デーゲーム", "ベースボール", "プロ野球中継", "実況中継",
         "ガオトラ", "オープン戦", "公式戦", "クライマックスシリーズ", "日本シリーズ"
     )
 
-    // 対戦カードを表す記号
     private val versusSymbols = listOf("対", "×", "vs", "VS", "-", "ー")
 
     val baseballGroupedChannels: StateFlow<Map<String, List<Channel>>> =
@@ -66,30 +62,21 @@ class ChannelViewModel @Inject constructor(
                     val followingTitle = ch.programFollowing?.title ?: ""
                     val followingDesc = ch.programFollowing?.description ?: ""
 
-                    // ★ 修正: 現在の番組と次の番組を独立して判定するローカル関数
                     fun isBaseballGame(title: String, desc: String): Boolean {
                         if (title.isBlank()) return false
 
                         val fullText = "$title $desc"
 
-                        // 1. 球団名または「プロ野球」が含まれているか（大前提）
                         val hasKeyword = baseballKeywords.any { keyword ->
                             fullText.contains(keyword)
                         }
                         if (!hasKeyword) return false
 
-                        // 2. 過去の試合や関連番組ではないか（除外判定）
-                        // ※ タイトルのみで除外判定し、説明文の「昨日のハイライト」等での誤爆を防ぐ
                         val isExcluded = excludeKeywords.any { keyword ->
                             title.contains(keyword)
                         }
                         if (isExcluded) return false
 
-                        // 3. 実際の「試合中継」であるかどうかの精査
-
-                        // パターンA: 対戦カード表記（例: 「阪神×巨人」「DeNA 対 中日」）があるか
-                        // 球団名が含まれていることは前提(1)でクリアしているので、単に「対」「×」等が含まれ、
-                        // かつタイトルに「生」「中継」が含まれていれば、ほぼ確実に試合。
                         val hasVersusSymbol = versusSymbols.any { title.contains(it) }
                         val hasGenericLiveWord =
                             title.contains("中継") || title.contains("生") || title.contains(
@@ -99,7 +86,6 @@ class ChannelViewModel @Inject constructor(
 
                         if (hasVersusSymbol && hasGenericLiveWord) return true
 
-                        // パターンB: 野球特有の強いマッチキーワード（「ナイター」「プロ野球中継」など）が含まれているか
                         val isStrongMatch = matchKeywords.any { keyword ->
                             title.contains(keyword, ignoreCase = true) || desc.contains(
                                 keyword,
@@ -108,14 +94,11 @@ class ChannelViewModel @Inject constructor(
                         }
                         if (isStrongMatch) return true
 
-                        // パターンC: タイトルが非常に短い場合（EPGの省略表記など）の救済
-                        // 例: 「[生]プロ野球」などの場合
                         if (title.length <= 15 && title.contains("プロ野球") && hasGenericLiveWord) return true
 
                         return false
                     }
 
-                    // 現在放送中の番組、または次に放送される番組の「どちらか」が野球中継であれば表示する
                     isBaseballGame(presentTitle, presentDesc) || isBaseballGame(
                         followingTitle,
                         followingDesc
@@ -123,7 +106,6 @@ class ChannelViewModel @Inject constructor(
                 }
             }.filterValues { it.isNotEmpty() }
 
-            // 試合が全く無い時は、空のMapを返す
         }
             .flowOn(Dispatchers.Default)
             .stateIn(
@@ -200,7 +182,7 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
-            // ★ 修正: KonomiRepository ではなく LiveProvider のメソッドを呼ぶ
+            // ★ 修正: LiveProvider から取得
             val response = liveProvider.getChannels()
 
             val processed = withContext(Dispatchers.Default) {
@@ -241,7 +223,7 @@ class ChannelViewModel @Inject constructor(
         } catch (e: CancellationException) {
             Log.d("ChannelViewModel", "fetchChannelsInternal cancelled")
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) { // ★ 修正: Throwable でキャッチ
             Log.e("ChannelViewModel", "Error fetching channels", e)
             _connectionError.value = true
         } finally {
@@ -275,10 +257,10 @@ class ChannelViewModel @Inject constructor(
         _isRecordingLoading.value = true
         viewModelScope.launch {
             try {
-                // ★ 修正: KonomiRepository ではなく RecordProvider のメソッドを呼ぶ
+                // ★ 修正: RecordProvider から取得
                 val response = recordProvider.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms
-            } catch (e: Exception) {
+            } catch (e: Throwable) { // ★ 修正: Throwable でキャッチ
                 Log.e("ChannelViewModel", "Error recordings", e)
             } finally {
                 _isRecordingLoading.value = false
@@ -324,5 +306,11 @@ class ChannelViewModel @Inject constructor(
             val entity = KonomiDataMapper.toEntity(program)
             watchHistoryRepository.saveToLocalHistory(entity)
         }
+    }
+
+    // ★ 追加: UIから非同期でロゴURLを取得するためのメソッド
+    suspend fun getChannelLogoUrl(channelId: String): String {
+        // ※リポジトリの変数名は環境に合わせて変更してください (liveProvider, repository など)
+        return liveProvider.getChannelLogoUrl(channelId)
     }
 }

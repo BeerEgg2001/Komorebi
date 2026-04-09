@@ -21,6 +21,13 @@ class SettingsRepository @Inject constructor(
 ) {
 
     companion object {
+        // ★ 追加: バックエンドの選択と、各システムのIP/Port
+        val BACKEND_TYPE = stringPreferencesKey("backend_type")
+        val EDCB_IP = stringPreferencesKey("edcb_ip")
+        val EDCB_PORT = stringPreferencesKey("edcb_port")
+        val EPGSTATION_IP = stringPreferencesKey("epgstation_ip")
+        val EPGSTATION_PORT = stringPreferencesKey("epgstation_port")
+
         val KONOMI_IP = stringPreferencesKey("konomi_ip")
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
@@ -60,12 +67,19 @@ class SettingsRepository @Inject constructor(
         val APP_THEME = stringPreferencesKey("app_theme")
         val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
 
-        // ★ 追加: 時間表記フォーマット (12H or 24H)
+        // 時間表記フォーマット (12H or 24H)
         val TIME_FORMAT = stringPreferencesKey("time_format")
 
-        // ★ 追加: ベータ版アップデート受信設定のキー
+        // ベータ版アップデート受信設定のキー
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
     }
+
+    // ★ 追加: Flow定義
+    val backendType: Flow<String> = context.dataStore.data.map { it[BACKEND_TYPE] ?: "KONOMITV" }
+    val edcbIp: Flow<String> = context.dataStore.data.map { it[EDCB_IP] ?: "" }
+    val edcbPort: Flow<String> = context.dataStore.data.map { it[EDCB_PORT] ?: "5510" }
+    val epgStationIp: Flow<String> = context.dataStore.data.map { it[EPGSTATION_IP] ?: "" }
+    val epgStationPort: Flow<String> = context.dataStore.data.map { it[EPGSTATION_PORT] ?: "8888" }
 
     val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "" }
     val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
@@ -124,14 +138,15 @@ class SettingsRepository @Inject constructor(
     val defaultRecordListView: Flow<String> =
         context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
 
-    // ★ 追加: デフォルトは24時間表記(24H)
     val timeFormat: Flow<String> = context.dataStore.data.map { it[TIME_FORMAT] ?: "24H" }
+    val receiveBetaUpdates: Flow<Boolean> =
+        context.dataStore.data.map { it[RECEIVE_BETA_UPDATES] ?: false }
 
-    // ★ 追加: ベータ版を受け取るかどうかのFlow
-    val receiveBetaUpdates: Flow<Boolean> = context.dataStore.data.map { it[RECEIVE_BETA_UPDATES] ?: false }
-
+    // ★ 修正: KonomiTV以外にもEDCBやEPGStationが設定されていれば初期化済みと判定する
     val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP)
+        prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP) || prefs.contains(EDCB_IP) || prefs.contains(
+            EPGSTATION_IP
+        )
     }
 
     suspend fun saveString(
@@ -162,7 +177,6 @@ class SettingsRepository @Inject constructor(
         return prefs[STARTUP_TAB] ?: "ホーム"
     }
 
-    // ★ 追加: Boolean値(ON/OFF)をDataStoreに保存するメソッド
     suspend fun saveBoolean(
         key: androidx.datastore.preferences.core.Preferences.Key<Boolean>,
         value: Boolean

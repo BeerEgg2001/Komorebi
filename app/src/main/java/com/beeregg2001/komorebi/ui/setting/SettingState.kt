@@ -9,6 +9,13 @@ import com.google.gson.reflect.TypeToken
 
 @Stable
 class SettingPreferences(
+    // ★ 追加: バックエンドのプロパティ
+    val backendType: String,
+    val edcbIp: String,
+    val edcbPort: String,
+    val epgStationIp: String,
+    val epgStationPort: String,
+
     val konomiIp: String,
     val konomiPort: String,
     val mirakurunIp: String,
@@ -38,7 +45,7 @@ class SettingPreferences(
     val pickupTime: String,
     val startupTab: String,
     val startupChannel: String,
-    val timeFormat: String, // ★ 追加: 時間表記フォーマット
+    val timeFormat: String,
     val currentThemeName: String,
     val defaultRecordListView: String
 )
@@ -66,6 +73,13 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
     }
 
     return SettingPreferences(
+        // ★ 追加: 設定値の受け取り
+        backendType = repository.backendType.collectAsState(initial = "KONOMITV").value,
+        edcbIp = repository.edcbIp.collectAsState(initial = "").value,
+        edcbPort = repository.edcbPort.collectAsState(initial = "5510").value,
+        epgStationIp = repository.epgStationIp.collectAsState(initial = "").value,
+        epgStationPort = repository.epgStationPort.collectAsState(initial = "8888").value,
+
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "7000").value,
         mirakurunIp = repository.mirakurunIp.collectAsState(initial = "").value,
@@ -95,7 +109,7 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
         startupChannel = repository.startupChannel.collectAsState(initial = "OFF").value,
-        timeFormat = repository.timeFormat.collectAsState(initial = "24H").value, // ★ 追加
+        timeFormat = repository.timeFormat.collectAsState(initial = "24H").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
     )

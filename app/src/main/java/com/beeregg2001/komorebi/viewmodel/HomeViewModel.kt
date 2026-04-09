@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-// ★ 修正: UrlBuilder への直接依存がなくなったため import を削除
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
@@ -13,7 +13,7 @@ import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.EpgRepository
 import com.beeregg2001.komorebi.data.repository.LastChannelRepository
-import com.beeregg2001.komorebi.data.repository.LiveProvider // ★ 追加
+import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.util.AppUpdater
 import com.beeregg2001.komorebi.util.UpdateState
@@ -40,8 +40,8 @@ data class BaseballGameInfo(
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val liveProvider: LiveProvider, // ★ 追加: URL生成の抽象化のため
-    private val konomiRepository: KonomiRepository, // ※ ユーザー認証やクラウド履歴同期のために一時的に残す
+    private val liveProvider: LiveProvider,
+    private val konomiRepository: KonomiRepository,
     private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository,
     private val lastChannelRepository: LastChannelRepository,
@@ -52,13 +52,19 @@ class HomeViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // 🌟 追加: ホーム画面からの復帰用「2段階記憶」
     var lastClickedSection: String? = null
     var lastClickedItemId: String? = null
+
+    private val _isFallbackTriggered = MutableStateFlow(false)
+    val isFallbackTriggered: StateFlow<Boolean> = _isFallbackTriggered.asStateFlow()
 
     fun clearFocusMemory() {
         lastClickedSection = null
         lastClickedItemId = null
+    }
+
+    fun dismissFallbackWarning() {
+        _isFallbackTriggered.value = false
     }
 
     val watchHistory: StateFlow<List<KonomiHistoryProgram>> =
@@ -120,7 +126,6 @@ class HomeViewModel @Inject constructor(
     private val _baseballDateOffset = MutableStateFlow(0)
     val baseballDateOffset: StateFlow<Int> = _baseballDateOffset.asStateFlow()
 
-    // キャッシュを保持し、日付切り替えの負荷をゼロにする
     private var cachedBaseballPrograms: List<Pair<EpgProgram, EpgChannel>> = emptyList()
 
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
@@ -163,7 +168,6 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().flatten()
 
-            // ★最適化: 膨大なリストのループ処理をバックグラウンドスレッドに逃がしてUIのフリーズを防ぐ
             cachedBaseballPrograms = withContext(Dispatchers.Default) {
                 allPrograms.flatMap { wrapper ->
                     wrapper.programs.map { it to wrapper.channel }
@@ -232,8 +236,6 @@ class HomeViewModel @Inject constructor(
     ): List<Pair<String, List<BaseballGameInfo>>> = withContext(Dispatchers.Default) {
         if (favoriteTeams.isEmpty() || baseballPrograms.isEmpty()) return@withContext emptyList()
 
-        // ★ 修正: SettingsRepositoryからのIP/Port手動取得を削除し、完全にProviderへ委譲
-
         val now = OffsetDateTime.now()
         val targetDateStart = now.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
             if (now.hour < 4) it.minusDays(1) else it
@@ -249,7 +251,6 @@ class HomeViewModel @Inject constructor(
                 start.isAfter(targetDateStart) && start.isBefore(targetDateEnd)
             }.map { (prog, channel) ->
 
-                // ★ 修正: LiveProvider経由でロゴURLを取得 (UrlBuilderの複雑な分岐を1行に抽象化！)
                 val logoUrl = liveProvider.getChannelLogoUrl(channel.display_channel_id)
 
                 BaseballGameInfo(
@@ -307,6 +308,23 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.first.start_time }.take(15)
     }
 
+    private suspend fun performBackendHealthCheck() {
+        val currentBackend = settingsRepository.backendType.first()
+
+        if (currentBackend == "KONOMITV") return
+
+        try {
+            liveProvider.getChannels()
+            Log.i("Komorebi_Failsafe", "Health check passed for backend: $currentBackend")
+        } catch (e: Throwable) { // ★ 修正: Exception ではなく Throwable でキャッチ (TODOによるErrorも捕まえる)
+            Log.e("Komorebi_Failsafe", "Health check FAILED for backend: $currentBackend", e)
+
+            settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, "KONOMITV")
+            _isFallbackTriggered.value = true
+            Log.w("Komorebi_Failsafe", "Forced fallback to KONOMITV to prevent crash loop.")
+        }
+    }
+
     init {
         viewModelScope.launch {
             combine(
@@ -325,6 +343,10 @@ class HomeViewModel @Inject constructor(
             val receiveBeta = settingsRepository.receiveBetaUpdates.first()
             appUpdater.checkForUpdates(receiveBetaUpdates = receiveBeta)
         }
+
+        viewModelScope.launch {
+            performBackendHealthCheck()
+        }
     }
 
     fun startUpdateDownload(apkUrl: String) {
@@ -341,7 +363,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
 
-            // ★ 修正: 将来的にHistoryProviderなどに抽象化すべき処理（現時点ではKonomiRepositoryをそのまま使用）
+            performBackendHealthCheck()
+
             konomiRepository.getWatchHistory().onSuccess { apiHistoryList ->
                 val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
                 val existingEntitiesMap =

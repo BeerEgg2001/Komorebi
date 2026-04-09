@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.Channel
@@ -77,7 +76,6 @@ fun LiveContent(
     reserveViewModel: ReserveViewModel,
     timeFormat: String = "24H",
     isPiPMode: Boolean = false,
-    // ★ 追加: AI復帰シグナル
     aiFocusReturnTick: Int = 0,
     onAiReturnConsumed: () -> Unit = {}
 ) {
@@ -99,8 +97,6 @@ fun LiveContent(
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
 
-    // ★ 追加(Step4): AIコンシェルジュ復帰時のスクロール＆フォーカス処理
-    // 記憶している lastFocusedChannelId から「何行目の何番目か」を計算して戻ります。
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
             delay(150)
@@ -110,7 +106,6 @@ fun LiveContent(
                 var colIndex = -1
                 var genreId = ""
 
-                // 二次元配列（liveRows）の中から、対象のチャンネルIDを持つ要素のインデックスを探す
                 for (i in liveRows.indices) {
                     val idx = liveRows[i].channels.indexOfFirst { it.channel.id == targetId }
                     if (idx != -1) {
@@ -122,12 +117,9 @@ fun LiveContent(
                 }
 
                 if (rowIndex != -1 && colIndex != -1) {
-                    // 行方向（縦）のスクロール
                     listState.scrollToItem(maxOf(0, rowIndex))
-                    // 列方向（横）のスクロール
                     val rState = rowStates.getOrPut(genreId) { LazyListState() }
                     rState.scrollToItem(maxOf(0, colIndex - 1))
-
                     delay(200)
                     targetChannelFocusRequester.safeRequestFocusWithRetry("LiveChannelAiReturn")
                 } else {
@@ -172,14 +164,8 @@ fun LiveContent(
     LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
 
     LaunchedEffect(isReturningFromPlayer, liveRows.isNotEmpty()) {
-        Log.i(
-            "KomorebiFocus",
-            "[LiveContent] 復帰エフェクト起動 - isReturning: $isReturningFromPlayer, isLiveRowsReady: ${liveRows.isNotEmpty()}"
-        )
         if (isReturningFromPlayer && liveRows.isNotEmpty()) {
             val targetId = lastFocusedChannelId
-            Log.i("KomorebiFocus", "[LiveContent] 目標のチャンネルID: $targetId")
-
             if (targetId != null) {
                 var rowIndex = -1
                 var colIndex = -1
@@ -199,7 +185,6 @@ fun LiveContent(
                     listState.scrollToItem(maxOf(0, rowIndex))
                     val rState = rowStates.getOrPut(genreId) { LazyListState() }
                     rState.scrollToItem(maxOf(0, colIndex - 1))
-
                     delay(200)
                     targetChannelFocusRequester.safeRequestFocusWithRetry("LiveChannelTarget")
                     onReturnFocusConsumed()
@@ -239,10 +224,10 @@ fun LiveContent(
                         .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 24.dp)
                 ) {
                     if (focusedChannel != null) {
+                        // ★ 修正: channelViewModel を渡す
                         HeroDashboard(
                             uiState = focusedChannel!!,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            channelViewModel = channelViewModel,
                             timeFormat = timeFormat
                         )
                     }
@@ -284,10 +269,10 @@ fun LiveContent(
                                     val isTarget = uiState.channel.id == lastFocusedChannelId
                                     val isLastItem = index == row.channels.lastIndex
 
+                                    // ★ 修正: channelViewModel を渡す
                                     CompactChannelCard(
                                         uiState = uiState,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
+                                        channelViewModel = channelViewModel,
                                         onClick = { onChannelClick(uiState.channel) },
                                         modifier = Modifier
                                             .then(
@@ -348,15 +333,19 @@ fun LiveContent(
 @Composable
 fun HeroDashboard(
     uiState: UiChannelState,
-    konomiIp: String,
-    konomiPort: String,
+    channelViewModel: ChannelViewModel, // ★ 引数変更
     timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     val present = uiState.channel.programPresent
     val following = uiState.channel.programFollowing
     val isHot = (uiState.jikkyoForce ?: 0) > 500
-    val logoUrl = UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, uiState.displayChannelId)
+
+    // ★ 修正: ViewModel経由で非同期にロゴURLを取得
+    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    LaunchedEffect(uiState.channel.id) {
+        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.id)
+    }
 
     val formatTime = { timeStr: String? ->
         if (timeStr.isNullOrEmpty()) ""
@@ -574,8 +563,7 @@ fun HeroDashboard(
 @Composable
 fun CompactChannelCard(
     uiState: UiChannelState,
-    konomiIp: String,
-    konomiPort: String,
+    channelViewModel: ChannelViewModel, // ★ 引数変更
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -588,7 +576,11 @@ fun CompactChannelCard(
         label = "cardScale"
     )
 
-    val logoUrl = UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, uiState.displayChannelId)
+    // ★ 修正: ViewModel経由で非同期にロゴURLを取得
+    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    LaunchedEffect(uiState.channel.id) {
+        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.id)
+    }
 
     Surface(
         onClick = onClick,

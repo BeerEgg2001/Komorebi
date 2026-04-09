@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
@@ -21,16 +22,36 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 
+@Composable
+private fun ValidationErrorText(message: String) {
+    Row(
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = "Error",
+            tint = Color(0xFFE53935),
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFFE53935),
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun GeneralSettingsContent(
     totalRecordCount: Int,
     lastSyncedAt: Long,
-    // ★ 追加: ベータ版設定用の引数
     receiveBetaUpdates: Boolean,
     onToggleBetaUpdates: (Boolean) -> Unit,
     betaUpdateR: FocusRequester,
-    // ----------
     onForceSync: () -> Unit,
     onClearChannel: () -> Unit,
     onClearHistory: () -> Unit,
@@ -54,7 +75,6 @@ fun GeneralSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        // ★ 追加: ベータ版アップデート設定用のセクション
         SettingsSection("システム設定") {
             SettingToggleItem(
                 title = "ベータ版のアップデートを受け取る",
@@ -66,8 +86,8 @@ fun GeneralSettingsContent(
                     .focusRequester(betaUpdateR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel // 一番上の項目なので上はキャンセル
-                        down = dbInfoR // 下はDB情報へ
+                        up = FocusRequester.Cancel
+                        down = dbInfoR
                     }
             )
         }
@@ -81,7 +101,7 @@ fun GeneralSettingsContent(
                     .focusRequester(dbInfoR)
                     .focusProperties {
                         left = sidebarR
-                        up = betaUpdateR // ★ 修正: Cancel から betaUpdateR へ変更
+                        up = betaUpdateR
                         down = forceSyncR
                     },
                 onClick = { onClick(dbInfoR) }
@@ -191,18 +211,25 @@ fun RecordingSettingsContent(
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ConnectionSettingsContent(
+    backendType: String,
+    edcbIp: String,
+    edcbPort: String,
+    epgStationIp: String,
+    epgStationPort: String,
     kIp: String,
     kPort: String,
     mIp: String,
     mPort: String,
     prefSrc: String,
     onEdit: (String, String) -> Unit,
+    onSelectBackend: () -> Unit,
     onSelectSrc: () -> Unit,
-    kIpR: FocusRequester,
-    kPortR: FocusRequester,
-    mIpR: FocusRequester,
-    mPortR: FocusRequester,
+    backendTypeR: FocusRequester,
+    backendIpR: FocusRequester,
+    backendPortR: FocusRequester,
     prefSrcR: FocusRequester,
+    overrideIpR: FocusRequester,
+    overridePortR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
@@ -214,98 +241,166 @@ fun ConnectionSettingsContent(
             fontWeight = FontWeight.Bold
         )
 
-        SettingsSection(AppStrings.SETTINGS_SECTION_KONOMITV) {
+        SettingsSection("メインシステム設定") {
+            val backendLabel = when (backendType) {
+                "EDCB" -> "EDCB (EpgTimerSrv)"
+                "EPGSTATION" -> "EPGStation"
+                "MIRAKURUN_ONLY" -> "Mirakurun (録画なし)"
+                else -> "KonomiTV"
+            }
+
             SettingItem(
-                AppStrings.SETTINGS_ITEM_ADDRESS,
-                kIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
-                Icons.Default.Dns,
+                title = "利用するシステム",
+                value = backendLabel,
+                icon = Icons.Default.Dns,
                 modifier = Modifier
-                    .focusRequester(kIpR)
+                    .focusRequester(backendTypeR)
                     .focusProperties {
                         left = sidebarR
                         up = FocusRequester.Cancel
-                        down = kPortR
+                        down = backendIpR
                     },
-                onClick = {
-                    onClick(kIpR); onEdit(
-                    AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS,
-                    kIp
-                )
-                })
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_PORT,
-                kPort,
-                Icons.Default.Numbers,
-                modifier = Modifier
-                    .focusRequester(kPortR)
-                    .focusProperties {
-                        left = sidebarR
-                        up = kIpR
-                        down = mIpR
-                    },
-                onClick = {
-                    onClick(kPortR); onEdit(
-                    AppStrings.SETTINGS_INPUT_KONOMITV_PORT,
-                    kPort
-                )
-                })
-        }
+                onClick = { onClick(backendTypeR); onSelectBackend() }
+            )
 
-        SettingsSection(AppStrings.SETTINGS_SECTION_MIRAKURUN) {
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_ADDRESS,
-                mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
-                Icons.Default.Router,
-                modifier = Modifier
-                    .focusRequester(mIpR)
-                    .focusProperties {
-                        left = sidebarR
-                        up = kPortR
-                        down = mPortR
-                    },
-                onClick = {
-                    onClick(mIpR); onEdit(
-                    AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS,
-                    mIp
-                )
-                })
-            SettingItem(
-                AppStrings.SETTINGS_ITEM_PORT,
-                mPort,
-                Icons.Default.Numbers,
-                modifier = Modifier
-                    .focusRequester(mPortR)
-                    .focusProperties {
-                        left = sidebarR
-                        up = mIpR
-                        down = prefSrcR
-                    },
-                onClick = {
-                    onClick(mPortR); onEdit(
-                    AppStrings.SETTINGS_INPUT_MIRAKURUN_PORT,
-                    mPort
-                )
-                })
-        }
-
-        SettingsSection(AppStrings.SETTINGS_SECTION_STREAM_PRIORITY) {
-            val label = if (mIp.isBlank()) {
-                AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED
-            } else {
-                if (prefSrc == "KONOMITV") AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED
-                else AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED
+            // 選択されたバックエンドに応じて入力欄の表示を切り替え
+            val currentIp = when (backendType) {
+                "EDCB" -> edcbIp
+                "EPGSTATION" -> epgStationIp
+                "MIRAKURUN_ONLY" -> mIp
+                else -> kIp
             }
+            val currentPort = when (backendType) {
+                "EDCB" -> edcbPort
+                "EPGSTATION" -> epgStationPort
+                "MIRAKURUN_ONLY" -> mPort
+                else -> kPort
+            }
+            val ipTitle = when (backendType) {
+                "EDCB" -> "EDCB (IPアドレス)"
+                "EPGSTATION" -> "EPGStation (IPアドレス)"
+                "MIRAKURUN_ONLY" -> "Mirakurun (IPアドレス)"
+                else -> "KonomiTV (IPアドレス)"
+            }
+            val portTitle = when (backendType) {
+                "EDCB" -> "EDCB (ポート)"
+                "EPGSTATION" -> "EPGStation (ポート)"
+                "MIRAKURUN_ONLY" -> "Mirakurun (ポート)"
+                else -> "KonomiTV (ポート)"
+            }
+
             SettingItem(
-                AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                label,
-                Icons.Default.PriorityHigh,
+                title = ipTitle,
+                value = currentIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                icon = Icons.Default.Link,
                 modifier = Modifier
-                    .focusRequester(prefSrcR)
+                    .focusRequester(backendIpR)
+                    .focusProperties { left = sidebarR; up = backendTypeR; down = backendPortR },
+                onClick = { onClick(backendIpR); onEdit(ipTitle, currentIp) }
+            )
+            SettingItem(
+                title = portTitle,
+                value = currentPort,
+                icon = Icons.Default.Numbers,
+                modifier = Modifier
+                    .focusRequester(backendPortR)
                     .focusProperties {
-                        left = sidebarR
-                        up = mPortR
+                        left = sidebarR; up = backendIpR; down =
+                        if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Default
                     },
-                onClick = { onClick(prefSrcR); onSelectSrc() })
+                onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
+            )
+
+            if (currentIp.isBlank() || currentPort.isBlank()) {
+                ValidationErrorText("メインシステムのIPアドレスまたはポート番号が未設定です。\n番組情報の取得や録画機能が正常に動作しません。")
+            }
+        }
+
+        // Mirakurun単体モード以外では、ライブ視聴の優先ソース設定を表示
+        if (backendType != "MIRAKURUN_ONLY") {
+            SettingsSection("ライブ視聴ソースの優先設定") {
+                // ★ 修正: 優先ソースのラベル決定ロジックの修正
+                val srcLabel = when {
+                    prefSrc == "MIRAKURUN" -> "Mirakurun を優先"
+                    prefSrc == "EDCB" && backendType != "EDCB" -> "EDCB (TCP) を優先"
+                    else -> "メインシステムに従う"
+                }
+
+                // オーバーライド設定の入力欄を表示するかどうかの判定
+                val hasOverride =
+                    prefSrc == "MIRAKURUN" || (prefSrc == "EDCB" && backendType != "EDCB")
+
+                SettingItem(
+                    title = "優先ソース",
+                    value = srcLabel,
+                    icon = Icons.Default.PriorityHigh,
+                    modifier = Modifier
+                        .focusRequester(prefSrcR)
+                        .focusProperties {
+                            left = sidebarR
+                            up = backendPortR
+                            down = if (hasOverride) overrideIpR else FocusRequester.Default
+                        },
+                    onClick = { onClick(prefSrcR); onSelectSrc() }
+                )
+            }
+
+            // 優先ソースとしてMirakurunやEDCBが選ばれている場合のみ、その入力欄を表示する
+            if (prefSrc == "MIRAKURUN") {
+                SettingsSection("Mirakurun 接続設定") {
+                    SettingItem(
+                        title = "IPアドレス (Mirakurun)",
+                        value = mIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                        icon = Icons.Default.Router,
+                        modifier = Modifier
+                            .focusRequester(overrideIpR)
+                            .focusProperties {
+                                left = sidebarR; up = prefSrcR; down = overridePortR
+                            },
+                        onClick = { onClick(overrideIpR); onEdit("Mirakurun (IPアドレス)", mIp) }
+                    )
+                    SettingItem(
+                        title = "ポート番号 (Mirakurun)",
+                        value = mPort,
+                        icon = Icons.Default.Numbers,
+                        modifier = Modifier
+                            .focusRequester(overridePortR)
+                            .focusProperties { left = sidebarR; up = overrideIpR },
+                        onClick = { onClick(overridePortR); onEdit("Mirakurun (ポート)", mPort) }
+                    )
+
+                    if (mIp.isBlank() || mPort.isBlank()) {
+                        ValidationErrorText("優先ソース（Mirakurun）のIPアドレスまたはポート番号が未設定です。\nこのままではライブ視聴機能が正常に動作しません。")
+                    }
+                }
+            } else if (prefSrc == "EDCB" && backendType != "EDCB") {
+                SettingsSection("EDCB 接続設定") {
+                    SettingItem(
+                        title = "IPアドレス (EDCB)",
+                        value = edcbIp.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                        icon = Icons.Default.Router,
+                        modifier = Modifier
+                            .focusRequester(overrideIpR)
+                            .focusProperties {
+                                left = sidebarR; up = prefSrcR; down = overridePortR
+                            },
+                        onClick = { onClick(overrideIpR); onEdit("EDCB (IPアドレス)", edcbIp) }
+                    )
+                    SettingItem(
+                        title = "ポート番号 (EDCB)",
+                        value = edcbPort,
+                        icon = Icons.Default.Numbers,
+                        modifier = Modifier
+                            .focusRequester(overridePortR)
+                            .focusProperties { left = sidebarR; up = overrideIpR },
+                        onClick = { onClick(overridePortR); onEdit("EDCB (ポート)", edcbPort) }
+                    )
+
+                    if (edcbIp.isBlank() || edcbPort.isBlank()) {
+                        ValidationErrorText("優先ソース（EDCB）のIPアドレスまたはポート番号が未設定です。\nこのままではライブ視聴機能が正常に動作しません。")
+                    }
+                }
+            }
         }
     }
 }

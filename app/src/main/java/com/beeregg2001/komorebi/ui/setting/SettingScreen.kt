@@ -61,7 +61,6 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
 
-    // ★ 追加: ViewModelからベータ版受信設定の状態を購読
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
@@ -90,14 +89,13 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester() // ★ 修正: General用に FocusRequester を 4個 → 5個 に増強
+                FocusRequester()
             ), // 0: General
             listOf(
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester()
+                FocusRequester(), // BackendType
+                FocusRequester(), FocusRequester(), // Backend IP, Port
+                FocusRequester(), // Stream Priority
+                FocusRequester(), FocusRequester()  // Override IP, Port
             ), // 1: Connection
             listOf(
                 FocusRequester(),
@@ -117,10 +115,7 @@ fun SettingsScreen(
                 FocusRequester()
             ), // 4: Home
             listOf(
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester()
+                FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()
             ), // 5: Display
             listOf(
                 FocusRequester(),
@@ -258,7 +253,6 @@ fun SettingsScreen(
                     0 -> GeneralSettingsContent(
                         totalRecordCount = totalRecordCount,
                         lastSyncedAt = lastSyncedAt,
-                        // ★ 追加: ベータ設定の引数を渡す
                         receiveBetaUpdates = receiveBetaUpdates,
                         onToggleBetaUpdates = { newValue ->
                             scope.launch {
@@ -269,12 +263,10 @@ fun SettingsScreen(
                             }
                         },
                         betaUpdateR = itemFocusRequesters[0][0],
-                        // ★ 修正: 残りのインデックスを1つずつずらす
                         dbInfoR = itemFocusRequesters[0][1],
                         forceSyncR = itemFocusRequesters[0][2],
                         clearChannelR = itemFocusRequesters[0][3],
                         clearHistoryR = itemFocusRequesters[0][4],
-                        // ----------
                         onForceSync = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 "データベースの再構築",
@@ -300,35 +292,59 @@ fun SettingsScreen(
                     )
 
                     1 -> ConnectionSettingsContent(
+                        backendType = prefs.backendType,
+                        edcbIp = prefs.edcbIp,
+                        edcbPort = prefs.edcbPort,
+                        epgStationIp = prefs.epgStationIp,
+                        epgStationPort = prefs.epgStationPort,
                         kIp = prefs.konomiIp,
                         kPort = prefs.konomiPort,
                         mIp = prefs.mirakurunIp,
                         mPort = prefs.mirakurunPort,
                         prefSrc = prefs.preferredSource,
                         onEdit = { t, v ->
-                            uiState.activeDialog = SettingDialogState.Input(
-                                t,
-                                v
-                            ) {
-                                if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) viewModel.updateKonomiIp(
-                                    it
-                                ) else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) viewModel.updateKonomiPort(
-                                    it
-                                ) else scope.launch {
-                                    repository.saveString(
-                                        if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
-                                        it
-                                    )
+                            uiState.activeDialog = SettingDialogState.Input(t, v) {
+                                when (t) {
+                                    "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(it)
+                                    "KonomiTV (ポート)" -> viewModel.updateKonomiPort(it)
+                                    "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(it)
+                                    "EDCB (ポート)" -> viewModel.updateEdcbPort(it)
+                                    "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(it)
+                                    "EPGStation (ポート)" -> viewModel.updateEpgStationPort(it)
+                                    "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(it)
+                                    "Mirakurun (ポート)" -> scope.launch {
+                                        repository.saveString(SettingsRepository.MIRAKURUN_PORT, it)
+                                    }
                                 }
                             }
                         },
+                        onSelectBackend = {
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "バックエンドシステムの選択",
+                                listOf(
+                                    "KonomiTV" to "KONOMITV",
+                                    "EDCB (EpgTimerSrv)" to "EDCB",
+                                    "EPGStation" to "EPGSTATION",
+                                    "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
+                                ),
+                                prefs.backendType
+                            ) {
+                                viewModel.updateBackendType(it)
+                            }
+                        },
                         onSelectSrc = {
+                            // ★ 修正: メインシステムがEDCBの場合は選択肢からEDCBを隠す
+                            val options = mutableListOf(
+                                "メインシステムに従う" to "KONOMITV",
+                                "Mirakurun を優先" to "MIRAKURUN"
+                            )
+                            if (prefs.backendType != "EDCB") {
+                                options.add("EDCB (TCP) を優先" to "EDCB")
+                            }
+
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                                if (prefs.mirakurunIp.isBlank()) listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV") else listOf(
-                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED to "KONOMITV",
-                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
-                                ),
+                                options,
                                 prefs.preferredSource
                             ) {
                                 scope.launch {
@@ -339,11 +355,12 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        kIpR = itemFocusRequesters[1][0],
-                        kPortR = itemFocusRequesters[1][1],
-                        mIpR = itemFocusRequesters[1][2],
-                        mPortR = itemFocusRequesters[1][3],
-                        prefSrcR = itemFocusRequesters[1][4],
+                        backendTypeR = itemFocusRequesters[1][0],
+                        backendIpR = itemFocusRequesters[1][1],
+                        backendPortR = itemFocusRequesters[1][2],
+                        prefSrcR = itemFocusRequesters[1][3],
+                        overrideIpR = itemFocusRequesters[1][4],
+                        overridePortR = itemFocusRequesters[1][5],
                         sidebarR = categoryFocusRequesters[1],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1
