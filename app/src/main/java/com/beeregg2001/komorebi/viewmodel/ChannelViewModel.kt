@@ -7,7 +7,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.data.repository.KonomiRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -17,7 +19,10 @@ import javax.inject.Inject
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
-    private val repository: KonomiRepository
+    // ★ 修正: KonomiRepository を直接参照するのではなく、必要なインターフェースを Inject
+    private val liveProvider: LiveProvider,
+    private val recordProvider: RecordProvider,
+    private val watchHistoryRepository: WatchHistoryRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(true)
@@ -195,7 +200,8 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
-            val response = repository.getChannels()
+            // ★ 修正: KonomiRepository ではなく LiveProvider のメソッドを呼ぶ
+            val response = liveProvider.getChannels()
 
             val processed = withContext(Dispatchers.Default) {
                 val rawChannels = listOfNotNull(
@@ -269,7 +275,8 @@ class ChannelViewModel @Inject constructor(
         _isRecordingLoading.value = true
         viewModelScope.launch {
             try {
-                val response = repository.getRecordedPrograms(page = 1)
+                // ★ 修正: KonomiRepository ではなく RecordProvider のメソッドを呼ぶ
+                val response = recordProvider.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms
             } catch (e: Exception) {
                 Log.e("ChannelViewModel", "Error recordings", e)
@@ -315,7 +322,7 @@ class ChannelViewModel @Inject constructor(
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
             val entity = KonomiDataMapper.toEntity(program)
-            repository.saveToLocalHistory(entity)
+            watchHistoryRepository.saveToLocalHistory(entity)
         }
     }
 }

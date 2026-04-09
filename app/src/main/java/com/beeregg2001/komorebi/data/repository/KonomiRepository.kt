@@ -3,32 +3,30 @@ package com.beeregg2001.komorebi.data.repository
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
-import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
-import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
-import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
-import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.data.model.ChannelApiResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "Komorebi_Repo"
 
 /**
- * KonomiTVバックエンド（API）およびローカルデータベース（Room）との通信を抽象化するリポジトリ。
- * ViewModelに対して、データの取得元（ネットワークかローカルか）を意識させずに
- * 統合されたデータアクセス手段を提供します。
+ * KonomiTVバックエンド（API）との通信を抽象化するリポジトリ。
+ * ローカルDBに関する処理はそれぞれ WatchHistoryRepository, LastChannelRepository に分離しました。
  */
 @Singleton
 class KonomiRepository @Inject constructor(
     private val apiService: KonomiApi,
-    private val watchHistoryDao: WatchHistoryDao,
-    private val lastChannelDao: LastChannelDao
-) {
+    // ★ 追加: URL生成のためにIP/Portを取得する SettingsRepository を Inject
+    private val settingsRepository: SettingsRepository
+) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider { // ★ インターフェースを実装
+
     // ==========================================
     // ユーザー設定・セッション管理
     // ==========================================
@@ -48,39 +46,27 @@ class KonomiRepository @Inject constructor(
     // チャンネル・録画リスト取得
     // ==========================================
 
-    /**
-     * 放送中のチャンネル一覧（地デジ、BS、CSなど）をAPIから取得します。
-     */
-    suspend fun getChannels(): ChannelApiResponse = apiService.getChannels()
+    override suspend fun getChannels(): ChannelApiResponse = apiService.getChannels()
 
-    /**
-     * 録画済みの番組一覧をページネーション形式でAPIから取得します。
-     * （主にRecordSyncEngineでのバックグラウンド同期に使用されます）
-     */
-    suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
+    // ★ エラーが出る場合は RecordedProgramsResponse の部分を正しいクラス名に置き換えてください
+    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        apiService.getRecordedPrograms(page = page)
 
-    /**
-     * ★追加: 指定された録画番組の詳細情報（CMセクション、詳細なあらすじ等）を取得します。
-     * ローカルDBではなく、常に最新の情報をKonomiTV APIから直接取得します。
-     */
-    suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> = runCatching {
+    override suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> = runCatching {
         apiService.getRecordedProgram(videoId)
     }
 
-    /**
-     * KonomiTVのサーバーサイド検索を利用して録画番組を検索します。
-     */
-    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) = run {
+    // ★ エラーが出る場合は RecordedProgramsResponse の部分を正しいクラス名に置き換えてください
+    override suspend fun searchRecordedPrograms(
+        keyword: String,
+        page: Int
+    ): RecordedApiResponse = run {
         Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
         apiService.searchVideos(keyword = keyword, page = page)
     }
 
-    /**
-     * 動画のストリーミング再生中、サーバーに「まだ視聴している」ことを伝えるための生存信号（KeepAlive）を送信します。
-     * これを定期的に送らないと、サーバー側で不要な通信とみなされてストリーミングが強制切断されます。
-     */
-    @UnstableApi
-    suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
+    @OptIn(UnstableApi::class)
+    override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
         runCatching {
             val response = apiService.keepAlive(videoId, quality, sessionId)
             if (!response.isSuccessful) {
@@ -92,67 +78,14 @@ class KonomiRepository @Inject constructor(
     }
 
     // ==========================================
-    // マイリスト・視聴履歴の管理
+    // マイリスト・視聴履歴の管理 (API通信のみ)
     // ==========================================
 
     suspend fun getBookmarks(): Result<List<KonomiProgram>> =
         runCatching { apiService.getBookmarks() }
 
-    /**
-     * サーバー（KonomiTV）から全デバイスで共有されている視聴履歴を取得します。
-     */
     suspend fun getWatchHistory(): Result<List<KonomiHistoryProgram>> =
         runCatching { apiService.getWatchHistory() }
-
-    /**
-     * ローカルDBにキャッシュされている視聴履歴（レジュームポイント）をFlowとして取得します。
-     */
-    fun getLocalWatchHistory() = watchHistoryDao.getAllHistory()
-
-    suspend fun getHistoryEntityById(id: Int): WatchHistoryEntity? {
-        return watchHistoryDao.getById(id)
-    }
-
-    /**
-     * ★追加: 複数の録画番組の視聴履歴をローカルDBから一括で取得します。
-     * 同期時の差分チェックなどでパフォーマンスを向上させるために使用します。
-     */
-    suspend fun getHistoryEntitiesByIds(ids: List<Int>): List<WatchHistoryEntity> {
-        return watchHistoryDao.getByIds(ids)
-    }
-
-    suspend fun saveToLocalHistory(entity: WatchHistoryEntity) {
-        watchHistoryDao.insertOrUpdate(entity)
-    }
-
-    /**
-     * ★追加: サーバーから取得した最新の視聴履歴リストをローカルDBへ一括保存します。
-     */
-    suspend fun saveAllToLocalHistory(entities: List<WatchHistoryEntity>) {
-        watchHistoryDao.insertOrUpdateAll(entities)
-    }
-
-    // ==========================================
-    // チャンネル視聴履歴の管理 (ザッピング・レジューム用)
-    // ==========================================
-
-    /**
-     * アプリ内で最後に視聴したチャンネル（放送局）のリストをローカルDBから取得します。
-     */
-    fun getLastChannels() = lastChannelDao.getLastChannels()
-
-    @OptIn(UnstableApi::class)
-    suspend fun saveLastChannel(entity: LastChannelEntity) {
-        lastChannelDao.insertOrUpdate(entity)
-        Log.d(TAG, "Channel saved: ${entity.name}")
-    }
-
-    /**
-     * ★追加: チャンネルの視聴履歴をすべて消去します（設定画面からのリセット用）。
-     */
-    suspend fun clearLastChannels() {
-        lastChannelDao.clearAll()
-    }
 
     // ==========================================
     // ニコニコ実況 (コメント) 関連
@@ -166,10 +99,7 @@ class KonomiRepository @Inject constructor(
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }
     }
 
-    /**
-     * 録画番組に対応する、当時のニコニコ実況のコメント（過去ログ）を取得します。
-     */
-    suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> = runCatching {
+    override suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> = runCatching {
         val response = apiService.getArchivedJikkyo(videoId)
         if (response.is_success) response.comments else emptyList()
     }
@@ -178,17 +108,11 @@ class KonomiRepository @Inject constructor(
     // 録画予約（EDCB連携）の管理
     // ==========================================
 
-    /**
-     * 現在EDCB（バックエンド）に登録されている「すべての録画予約（単発・自動）」を取得します。
-     */
-    suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
+    override suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
         apiService.getReserves().reservations
     }
 
-    /**
-     * 特定の番組を「単発予約」として新規追加します。
-     */
-    suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
+    override suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
         val response = apiService.addReserve(request)
         if (!response.isSuccessful) {
             val errorBody = response.errorBody()?.string()
@@ -197,10 +121,7 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    /**
-     * 既に登録されている単発予約の設定（優先度や録画モードなど）を更新します。
-     */
-    suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> =
+    override suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> =
         runCatching {
             val response = apiService.updateReserve(reservationId, request)
             if (!response.isSuccessful) {
@@ -210,13 +131,9 @@ class KonomiRepository @Inject constructor(
             }
         }
 
-    /**
-     * 登録済みの単発予約を削除（キャンセル）します。
-     */
-    suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {
+    override suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {
         val response = apiService.deleteReservation(reservationId)
         if (!response.isSuccessful) {
-            // 既に削除されていた場合（404）は成功とみなして握りつぶす
             if (response.code() == 404) {
                 Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
                 return@runCatching
@@ -229,10 +146,7 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    /**
-     * 自動予約条件（キーワード、ジャンル、時間帯などのルールに基づく録画予約）の一覧を取得します。
-     */
-    suspend fun getReservationConditions(): Result<List<ReservationCondition>> {
+    override suspend fun getReservationConditions(): Result<List<ReservationCondition>> {
         return try {
             val response = apiService.getReservationConditions()
             Result.success(response.reservationConditions)
@@ -241,10 +155,7 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    /**
-     * 新しい自動予約条件（キーワード予約）をサーバーに登録します。
-     */
-    suspend fun addReservationCondition(request: ReservationConditionAddRequest): Result<Unit> {
+    override suspend fun addReservationCondition(request: ReservationConditionAddRequest): Result<Unit> {
         return try {
             val response = apiService.addReservationCondition(request)
             if (response.isSuccessful) {
@@ -257,10 +168,7 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    /**
-     * ★自動予約条件の更新（キーワードの変更や、条件の一時的なON/OFF切り替えなど）
-     */
-    suspend fun updateReservationCondition(
+    override suspend fun updateReservationCondition(
         conditionId: Int,
         request: ReservationConditionUpdateRequest
     ): Result<ReservationCondition> {
@@ -272,10 +180,7 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    /**
-     * ★自動予約条件（ルールそのもの）の削除
-     */
-    suspend fun deleteReservationCondition(conditionId: Int): Result<Unit> {
+    override suspend fun deleteReservationCondition(conditionId: Int): Result<Unit> {
         return try {
             val response = apiService.deleteReservationCondition(conditionId)
             if (response.isSuccessful) {
@@ -286,5 +191,45 @@ class KonomiRepository @Inject constructor(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    // ==========================================
+    // ★ 追加: UrlBuilderへの依存をリポジトリ内に隠蔽
+    // ==========================================
+
+    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        return UrlBuilder.getKonomiTvLiveStreamUrl(ip, port, channelId, quality)
+    }
+
+    override suspend fun getChannelLogoUrl(channelId: String): String {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        return UrlBuilder.getKonomiTvLogoUrl(ip, port, channelId)
+    }
+
+    override suspend fun getRecordStreamUrl(
+        videoId: Int,
+        quality: String,
+        sessionId: String
+    ): String {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        return UrlBuilder.getVideoPlaylistUrl(ip, port, videoId, sessionId, quality)
+    }
+
+    // ==========================================
+    // ★ 追加: EpgProvider の実装
+    // ※ 以前 EpgRepository 内にあった KonomiTvApiService の通信処理をここに移動
+    // ==========================================
+    override suspend fun getEpgPrograms(startTime: String?, endTime: String?, channelType: String?): List<EpgChannelWrapper> {
+        // apiService.getEpgPrograms() が未定義エラーになる場合は、KonomiApi.kt 内に
+        // EpgRepository にあった @GET("api/programs/timetable") の定義を移動してください！
+        return apiService.getEpgPrograms(startTime, endTime, channelType).channels
+    }
+
+    override suspend fun getPinnedEpgPrograms(pinnedChannelIds: String): List<EpgChannelWrapper> {
+        return apiService.getEpgPrograms(pinnedChannelIds = pinnedChannelIds).channels
     }
 }

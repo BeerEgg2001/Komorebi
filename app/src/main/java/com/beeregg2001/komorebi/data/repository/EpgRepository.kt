@@ -9,7 +9,6 @@ import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
 import com.beeregg2001.komorebi.data.local.entity.EpgCacheEntity
 import com.beeregg2001.komorebi.data.model.EpgChannel
-import com.beeregg2001.komorebi.data.model.EpgChannelResponse
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.google.gson.Gson
@@ -20,8 +19,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
-import retrofit2.http.GET
-import retrofit2.http.Query
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.text.Normalizer
@@ -37,18 +34,12 @@ data class EpgSearchResultItem(
     val channel: EpgChannel
 )
 
-interface KonomiTvApiService {
-    @GET("api/programs/timetable")
-    suspend fun getEpgPrograms(
-        @Query("start_time") startTime: String? = null,
-        @Query("end_time") endTime: String? = null,
-        @Query("channel_type") channelType: String? = null,
-        @Query("pinned_channel_ids") pinnedChannelIds: String? = null
-    ): EpgChannelResponse
-}
+// ★ 修正: KonomiTvApiService の定義を削除し、純粋なキャッシュ＆検索管理クラスに変更しました。
+// 実際のAPI通信は Inject された EpgProvider に委譲します。
 
 class EpgRepository @Inject constructor(
-    private val apiService: KonomiTvApiService,
+    // ★ 修正: KonomiTvApiService ではなく、抽象化された EpgProvider を Inject
+    private val epgProvider: EpgProvider,
     private val epgCacheDao: EpgCacheDao,
     private val gson: Gson
 ) {
@@ -85,7 +76,7 @@ class EpgRepository @Inject constructor(
         channelName: String? = null
     ): List<EpgSearchResultItem> {
 
-        // ★ 修正: カンマ区切りならOR検索、空白のみならAND検索とするハイブリッド解析
+        // カンマ区切りならOR検索、空白のみならAND検索とするハイブリッド解析
         val isOrSearch = query.contains(",") || query.contains("、")
         val delimiters = if (isOrSearch) Regex("[,、]+") else Regex("[\\s]+")
         val keywords =
@@ -160,7 +151,6 @@ class EpgRepository @Inject constructor(
                                 "${wrapper.channel.name} ${prog.title} ${prog.description} $detailText"
                             val normalizedDesc = normalizeForSearch(combinedDesc)
 
-                            // ★ 修正: フラグに応じて AND と OR を使い分ける
                             val isMatch = if (isOrSearch) {
                                 keywords.any { k -> normalizedDesc.contains(k) }
                             } else {
@@ -233,14 +223,15 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            // ★ 修正: EpgProvider を経由してデータを取得
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
-            memoryCache[channelType] = response.channels
+            memoryCache[channelType] = channels
 
-            val rawJson = gson.toJson(response.channels)
+            val rawJson = gson.toJson(channels)
             val compressedJson = compress(rawJson)
 
             epgCacheDao.insertOrUpdate(
@@ -287,17 +278,18 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            // ★ 修正: EpgProvider を経由してデータを取得
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
 
-            memoryCache[channelType] = response.channels
-            emit(Result.success(response.channels))
+            memoryCache[channelType] = channels
+            emit(Result.success(channels))
 
             CoroutineScope(Dispatchers.IO).launch {
-                val rawJson = gson.toJson(response.channels)
+                val rawJson = gson.toJson(channels)
                 val compressedJson = compress(rawJson)
                 epgCacheDao.insertOrUpdate(
                     EpgCacheEntity(
@@ -326,12 +318,13 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            // ★ 修正: EpgProvider を経由してデータを取得
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
-            Result.success(response.channels)
+            Result.success(channels)
         } catch (e: Exception) {
             Log.e("EPG", "Fetch Error: $startTime to $endTime", e)
             Result.failure(e)
@@ -340,8 +333,9 @@ class EpgRepository @Inject constructor(
 
     suspend fun fetchPinnedChannels(pinnedIds: List<String>): Result<List<EpgChannelWrapper>> {
         return try {
-            val response = apiService.getEpgPrograms(pinnedChannelIds = pinnedIds.joinToString(","))
-            Result.success(response.channels)
+            // ★ 修正: EpgProvider を経由してデータを取得
+            val channels = epgProvider.getPinnedEpgPrograms(pinnedIds.joinToString(","))
+            Result.success(channels)
         } catch (e: Exception) {
             Result.failure(e)
         }

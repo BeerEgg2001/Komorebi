@@ -242,10 +242,14 @@ fun rememberHomeLauncherState(
     state.genrePickup = homeViewModel.genrePickupPrograms.collectAsState().value
     state.pickupGenreLabel = homeViewModel.pickupGenreLabel.collectAsState().value
     state.genrePickupTimeSlot = homeViewModel.genrePickupTimeSlot.collectAsState().value
+
     state.epgUiState = epgViewModel.uiState
+
+    // ★ 修正: epgViewModel.getLogoUrl() (suspend) を呼ぶのではなく、
+    // 既に EpgUiState.Success に含まれている logoUrls リストをそのまま引き出す
     state.logoUrls = remember(state.epgUiState) {
         val eData = state.epgUiState
-        if (eData is EpgUiState.Success) eData.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList()
+        if (eData is EpgUiState.Success) eData.logoUrls else emptyList()
     }
 
     state.favoriteBaseballTeams = homeViewModel.favoriteBaseballTeams.collectAsState().value

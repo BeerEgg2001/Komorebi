@@ -1,7 +1,6 @@
 package com.beeregg2001.komorebi.di
 
 import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.data.repository.KonomiTvApiService
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.api.interceptor.MockRecordInterceptor
 import com.google.gson.Gson
@@ -90,7 +89,7 @@ object NetworkModule {
     @Singleton
     fun provideRetrofit(okHttpClient: OkHttpClient, gson: Gson): Retrofit {
         return Retrofit.Builder()
-            .baseUrl("https://192-168-11-10.local.konomi.tv:7000")
+            .baseUrl("https://192-168-11-100.local.konomi.tv:7000")
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
@@ -100,11 +99,5 @@ object NetworkModule {
     @Singleton
     fun provideKonomiApi(retrofit: Retrofit): KonomiApi {
         return retrofit.create(KonomiApi::class.java)
-    }
-
-    @Provides
-    @Singleton
-    fun provideKonomiTvApiService(retrofit: Retrofit): KonomiTvApiService {
-        return retrofit.create(KonomiTvApiService::class.java)
     }
 }

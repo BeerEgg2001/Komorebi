@@ -17,7 +17,9 @@ import com.beeregg2001.komorebi.data.local.dao.SeriesProjection
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.data.repository.KonomiRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.repository.ReserveProvider
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.sync.SyncProgress
@@ -73,7 +75,10 @@ data class SeriesInfo(
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class RecordViewModel @Inject constructor(
-    private val repository: KonomiRepository,
+    // ★ 修正: KonomiRepositoryへの直接依存を排除し、インターフェースをInject
+    private val liveProvider: LiveProvider,
+    private val recordProvider: RecordProvider,
+    private val reserveProvider: ReserveProvider,
     private val historyRepository: WatchHistoryRepository,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
@@ -173,14 +178,15 @@ class RecordViewModel @Inject constructor(
     }
 
     /**
-     * 指定された録画番組の詳細情報（CMセクションや詳細なあらすじなど）をKonomiTV APIから取得します。
+     * 指定された録画番組の詳細情報（CMセクションや詳細なあらすじなど）をAPIから取得します。
      * フォーカスが当たってから0.3秒間その場に留まった場合のみ実際にAPI通信を行います（連打防止）。
      */
     fun fetchProgramDetail(videoId: Int) {
         detailFetchJob?.cancel()
         detailFetchJob = viewModelScope.launch(Dispatchers.IO) {
             delay(300) // 0.3秒フォーカスが留まったらAPIを叩く
-            repository.getRecordedProgram(videoId).onSuccess {
+            // ★ 修正: RecordProviderのメソッドを呼び出す
+            recordProvider.getRecordedProgram(videoId).onSuccess {
                 _programDetail.value = it
             }.onFailure { Log.e(TAG, "Failed to fetch program detail", it) }
         }
@@ -220,7 +226,7 @@ class RecordViewModel @Inject constructor(
                 }
         }
 
-        // アプリ起動時にローカルDBとKonomiTVサーバーの録画データを同期（差分更新）
+        // アプリ起動時にローカルDBとバックエンドサーバーの録画データを同期（差分更新）
         syncEngine.launchSyncAllRecords()
     }
 
@@ -252,7 +258,7 @@ class RecordViewModel @Inject constructor(
         FilterState(category, channelId, genre, day, query)
     }.flatMapLatest { state ->
         flow {
-            // ★修正: 検索条件が変わった瞬間に空のPagingDataを流し、UI上の古いリスト（残像）を強制的に消去する
+            // 検索条件が変わった瞬間に空のPagingDataを流し、UI上の古いリスト（残像）を強制的に消去する
             // これにより、遷移時に一瞬全件リストが見えてフォーカスが飛ぶバグを完全に防ぎます。
             emit(PagingData.empty())
             delay(50) // UIが空リストを描画してフォーカスをリセットする隙を作る
@@ -439,10 +445,10 @@ class RecordViewModel @Inject constructor(
     }
 
     // ==========================================
-    // KonomiTV ストリーミング維持 (Keep Alive)
+    // バックエンドストリーミング維持 (Keep Alive)
     // ==========================================
     /**
-     * KonomiTVの動画ストリーミング（HLS）のセッションを維持するためのメソッドです。
+     * バックエンドの動画ストリーミング（HLSなど）のセッションを維持するためのメソッドです。
      * 定期的にAPIを叩かないと、サーバー側で視聴終了とみなされエンコードプロセスが破棄されてしまいます。
      * 同時に視聴履歴（どこまで見たか）も更新します。
      */
@@ -460,10 +466,9 @@ class RecordViewModel @Inject constructor(
             // セッションが破棄されるまでループ
             while (isActive) {
                 try {
-                    // ★ポイント1: KonomiTV API へ Keep-Alive (生存報告) のリクエストを送る
-                    // ※以下のメソッド名は実際のAPIクライアントの実装に合わせてください
+                    // ★ 修正: RecordProviderのメソッドを呼び出す
                     val position = currentPositionProvider()
-                    repository.keepAlive(
+                    recordProvider.keepAlive(
                         videoId = program.recordedVideo.id,
                         sessionId = sessionId,
                         quality = quality
@@ -474,7 +479,7 @@ class RecordViewModel @Inject constructor(
                     Log.e("StreamMaintenance", "Failed to send Keep-Alive", e)
                 }
 
-                // ★ポイント2: 10秒の壁に絶対に引っかからないよう、3〜5秒間隔で高頻度にPingを打つ
+                // 10秒の壁に絶対に引っかからないよう、3〜5秒間隔で高頻度にPingを打つ
                 delay(4000L)
             }
         }
@@ -495,7 +500,8 @@ class RecordViewModel @Inject constructor(
     // ==========================================
     suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {
         return withContext(Dispatchers.IO) {
-            repository.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
+            // ★ 修正: RecordProviderのメソッドを呼び出す
+            recordProvider.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
         }
     }
 
