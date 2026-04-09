@@ -21,6 +21,8 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +64,6 @@ import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
-import com.google.android.material.timepicker.TimeFormat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -78,7 +79,6 @@ import master.flame.danmaku.controller.IDanmakuView
 import master.flame.danmaku.danmaku.model.BaseDanmaku
 
 private const val TAG = "LivePlayerScreen"
-private const val LOG_TAG = "KomorebiPlayback"
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -115,8 +115,10 @@ fun LivePlayerScreen(
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
 
+    // プレイヤーの状態を一元管理するStateオブジェクト
     val ps = rememberLivePlayerState(context, initialQuality)
 
+    // チャンネルリストの取得と加工
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val baseballGroupedChannels by channelViewModel.baseballGroupedChannels.collectAsState()
 
@@ -131,6 +133,7 @@ fun LivePlayerScreen(
         derivedStateOf { displayFlatChannels.find { it.id == channel.id } ?: channel }
     }
 
+    // 各種設定の読み込み
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
     val commentOpacityStr by settingsViewModel.commentOpacity.collectAsState()
@@ -180,6 +183,7 @@ fun LivePlayerScreen(
     val repository = remember { SettingsRepository(context) }
     val preferredStreamSource by repository.preferredStreamSource.collectAsState(initial = "KONOMITV")
 
+    // 初期ストリームソースの決定
     LaunchedEffect(isMirakurunAvailable, preferredStreamSource) {
         if (ps.previousStreamSource == null) {
             ps.currentStreamSource =
@@ -187,7 +191,7 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★ 修正: PiP移行時、Mirakurunソースかつラボ設定がOFFなら強制的にKonomiTVにフォールバック（警告は出さずトーストのみ）
+    // PiPモード移行・復帰時のソース切り替え制御
     LaunchedEffect(isPiPMode) {
         if (isPiPMode) {
             if (ps.currentStreamSource == StreamSource.MIRAKURUN && allowMirakurunDual != "ON") {
@@ -214,6 +218,7 @@ fun LivePlayerScreen(
     var videoHeight by remember { mutableIntStateOf(0) }
     var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
 
+    // メインプレイヤー用 TSデータソースとエクストラクターの設定
     val tsDataSourceFactory =
         remember(nativeLib) { TsReadExDataSourceFactory(nativeLib, arrayOf()) }
     val extractorsFactory = remember(subtitleEnabledState) {
@@ -228,6 +233,8 @@ fun LivePlayerScreen(
             )
         }
     }
+
+    // オーディオ出力制御用（5.1chのダウンミックスなど）
     val audioProcessor = remember {
         ChannelMixingAudioProcessor().apply {
             putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
@@ -241,6 +248,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // メインプレイヤーの初期化
     val exoPlayer =
         remember(ps.currentStreamSource, ps.retryKey, ps.currentQuality, audioOutputMode) {
             val renderersFactory = object : DefaultRenderersFactory(context) {
@@ -330,6 +338,7 @@ fun LivePlayerScreen(
                 }
         }
 
+    // サブプレイヤー（二画面用）の各種設定
     var dualVideoWidth by remember { mutableIntStateOf(0) }
     var dualVideoHeight by remember { mutableIntStateOf(0) }
     var dualPixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
@@ -361,6 +370,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // サブプレイヤーの初期化
     val dualExoPlayer = remember(
         ps.isDualDisplayMode,
         ps.currentStreamSource,
@@ -430,6 +440,7 @@ fun LivePlayerScreen(
         onDispose { dualExoPlayer?.release() }
     }
 
+    // 二画面モード時の音声出力の切り替え（選択している側の音のみ出す）
     LaunchedEffect(ps.isDualDisplayMode, ps.activeDualPlayerIndex, exoPlayer, dualExoPlayer) {
         if (ps.isDualDisplayMode) {
             exoPlayer.volume = if (ps.activeDualPlayerIndex == 0) 1f else 0f
@@ -443,6 +454,7 @@ fun LivePlayerScreen(
     var hasStoppedByLifecycle by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // メインプレイヤーのライフサイクル管理
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
@@ -469,6 +481,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // サブプレイヤーのライフサイクル管理
     DisposableEffect(lifecycleOwner, dualExoPlayer) {
         if (dualExoPlayer == null) return@DisposableEffect onDispose {}
         val observer = LifecycleEventObserver { _, event ->
@@ -485,6 +498,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // 再生状態とニコニコ実況(Danmaku)の同期
     LaunchedEffect(ps.isPlayerPlaying) {
         danmakuViewRef.value?.let {
             if (it.isPrepared) {
@@ -493,6 +507,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // メインプレイヤーへのURLセットと再生開始処理
     LaunchedEffect(
         currentChannelItem.id,
         ps.currentStreamSource,
@@ -543,6 +558,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // サブプレイヤーへのURLセットと再生開始処理
     LaunchedEffect(
         ps.dualRightChannel,
         ps.currentStreamSource,
@@ -595,6 +611,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // サブプレイヤー用のKonomiTV SSE(Server-Sent Events)通信
     DisposableEffect(
         ps.dualRightChannel,
         ps.currentStreamSource,
@@ -654,6 +671,7 @@ fun LivePlayerScreen(
         onDispose { eventSource.cancel(); client.dispatcher.executorService.shutdown() }
     }
 
+    // 字幕(WebView)への時刻同期クロック
     LaunchedEffect(exoPlayer, dualExoPlayer, isSubtitleEnabled) {
         while (true) {
             if (isSubtitleEnabled) {
@@ -678,6 +696,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // メインプレイヤー用のKonomiTV SSE通信
     DisposableEffect(
         currentChannelItem.id,
         ps.currentStreamSource,
@@ -748,6 +767,7 @@ fun LivePlayerScreen(
         onDispose { eventSource.cancel(); client.dispatcher.executorService.shutdown() }
     }
 
+    // ニコニコ実況 (WebSocket) の購読
     DisposableEffect(
         currentChannelItem.id,
         isCommentEnabled,
@@ -802,6 +822,7 @@ fun LivePlayerScreen(
         onDispose { jikkyoClient.stop() }
     }
 
+    // 画質・信号情報の定期更新ループ
     LaunchedEffect(exoPlayer, ps.isSignalInfoVisible) {
         if (ps.isSignalInfoVisible) {
             while (true) {
@@ -848,6 +869,7 @@ fun LivePlayerScreen(
         }
     }
 
+    // チャンネル変更時のオーバーレイ自動非表示
     LaunchedEffect(currentChannelItem.id, ps.retryKey) {
         onManualOverlayChange(false)
         onPinnedOverlayChange(false)
@@ -859,6 +881,7 @@ fun LivePlayerScreen(
         )
     }
 
+    // 番組表データの定期フェッチ
     LaunchedEffect(Unit) {
         while (true) {
             val now = System.currentTimeMillis()
@@ -868,15 +891,17 @@ fun LivePlayerScreen(
         }
     }
 
+    // ミニリスト表示時のフォーカス制御
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
             channelViewModel.fetchChannels()
             delay(200); listFocusRequester.safeRequestFocus(TAG)
-        } else if (!currentIsManualOverlay && !currentIsSubMenuOpen && !isPiPMode) {
+        } else if (!currentIsManualOverlay && !currentIsSubMenuOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
             delay(100); mainFocusRequester.safeRequestFocus(TAG)
         }
     }
 
+    // サブメニュー表示時のフォーカス制御
     LaunchedEffect(isSubMenuOpen) {
         if (isSubMenuOpen && !isPiPMode) {
             delay(150); subMenuFocusRequester.safeRequestFocus(TAG)
@@ -916,9 +941,11 @@ fun LivePlayerScreen(
                 )
             }
     ) {
-        val isUiVisible = isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay
+        val isUiVisible =
+            isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay || ps.lCropMode != LCropMode.HIDDEN
 
         if (ps.isDualDisplayMode && dualExoPlayer != null) {
+            // 二画面モード時の描画
             DualDisplayPlayer(
                 state = ps,
                 leftChannel = currentChannelItem,
@@ -941,6 +968,7 @@ fun LivePlayerScreen(
                 isSubtitleEnabled = isSubtitleEnabled
             )
         } else {
+            // 単一画面(通常)モード時の描画
             AndroidView(
                 factory = {
                     PlayerView(it).apply {
@@ -972,10 +1000,35 @@ fun LivePlayerScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
+                    // L字クロップのための graphicsLayer 設定（GPUによる低負荷な変形処理）
+                    .graphicsLayer {
+                        if (ps.lCropEnabled) {
+                            // L字クロップ有効時：指定された倍率・座標・起点で映像レイヤーを拡大・移動する
+                            scaleX = ps.lCropZoom / 100f
+                            scaleY = ps.lCropZoom / 100f
+                            translationX = size.width * (ps.lCropX / 100f)
+                            translationY = size.height * (ps.lCropY / 100f)
+                            transformOrigin = when (ps.lCropOrigin) {
+                                ZoomOrigin.TopLeft -> TransformOrigin(0f, 0f)
+                                ZoomOrigin.TopRight -> TransformOrigin(1f, 0f)
+                                ZoomOrigin.BottomLeft -> TransformOrigin(0f, 1f)
+                                ZoomOrigin.BottomRight -> TransformOrigin(1f, 1f)
+                            }
+                        } else {
+                            // L字クロップ無効時：確実にデフォルト(100%・中央)に戻す
+                            scaleX = 1f
+                            scaleY = 1f
+                            translationX = 0f
+                            translationY = 0f
+                            transformOrigin = TransformOrigin.Center
+                        }
+                    }
                     .focusRequester(mainFocusRequester)
-                    .focusable(!isPiPMode && !isMiniListOpen && !isSubMenuOpen)
+                    // L字クロップの調整中などは、映像レイヤーからフォーカスを外してキー入力を安全に委譲する
+                    .focusable(!isPiPMode && !isMiniListOpen && !isSubMenuOpen && ps.lCropMode == LCropMode.HIDDEN)
             )
 
+            // 音声のみ(ロード中など)の場合は画面を黒くする
             val isVideoVisible =
                 ps.currentStreamSource == StreamSource.MIRAKURUN || ps.sseStatus == "ONAir"
             if (!isVideoVisible) {
@@ -987,6 +1040,7 @@ fun LivePlayerScreen(
             }
 
             if (!isPiPMode) {
+                // 字幕レンダリング用WebViewの重ね合わせ
                 if (isHeavyUiReady) {
                     AndroidView(
                         factory = { ctx ->
@@ -1008,6 +1062,7 @@ fun LivePlayerScreen(
                     )
                 }
 
+                // ニコニコ実況(Danmaku)の重ね合わせ
                 if (isHeavyUiReady && isCommentEnabled) {
                     LiveCommentOverlay(
                         Modifier.fillMaxSize(),
@@ -1023,6 +1078,22 @@ fun LivePlayerScreen(
             }
         }
 
+        // L字クロップのUIオーバーレイ（メニュー＆調整ガイド）
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !isPiPMode && ps.lCropMode != LCropMode.HIDDEN,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            LCropOverlay(
+                state = ps,
+                onClose = {
+                    ps.lCropMode = LCropMode.HIDDEN
+                    scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
+                }
+            )
+        }
+
+        // KonomiTVソースのローディング・待機画面
         androidx.compose.animation.AnimatedVisibility(visible = !isPiPMode && !ps.isDualDisplayMode && ps.currentStreamSource == StreamSource.KONOMITV && (ps.sseStatus == "Standby" || ps.sseStatus == "Offline") && ps.playerError == null && ps.sseDetail.isNotEmpty()) {
             Box(
                 Modifier
@@ -1051,6 +1122,7 @@ fun LivePlayerScreen(
             }
         }
 
+        // 信号情報オーバーレイ
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && !ps.isDualDisplayMode && ps.isSignalInfoVisible && ps.playerError == null && !isUiVisible,
             enter = fadeIn(),
@@ -1059,10 +1131,19 @@ fun LivePlayerScreen(
             SignalInfoOverlay(ps.signalInfo)
         }
 
+        // ピン留め時の簡易ステータスオーバーレイ
         androidx.compose.animation.AnimatedVisibility(visible = !isPiPMode && !ps.isDualDisplayMode && isPinnedOverlay && ps.playerError == null) {
-            StatusOverlay(currentChannelItem, mirakurunIp, mirakurunPort, konomiIp, konomiPort, timeFormat)
+            StatusOverlay(
+                currentChannelItem,
+                mirakurunIp,
+                mirakurunPort,
+                konomiIp,
+                konomiPort,
+                timeFormat
+            )
         }
 
+        // 番組詳細のフルオーバーレイ
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && !ps.isDualDisplayMode && showOverlay && ps.playerError == null && !isMiniListOpen,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -1082,6 +1163,7 @@ fun LivePlayerScreen(
             )
         }
 
+        // ミニチャンネルリスト（ザッピング用）
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && isMiniListOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -1110,6 +1192,7 @@ fun LivePlayerScreen(
             )
         }
 
+        // トップサブメニュー
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && isSubMenuOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -1126,8 +1209,22 @@ fun LivePlayerScreen(
                 isRecording = isRecording,
                 isSignalInfoVisible = ps.isSignalInfoVisible,
                 isDualDisplayMode = ps.isDualDisplayMode,
+                isLCropEnabled = ps.lCropEnabled,
+                onLCropToggle = {
+                    ps.lCropEnabled = !ps.lCropEnabled
+                    if (ps.lCropEnabled) {
+                        ps.lCropMode = LCropMode.MENU
+                        onSubMenuToggle(false)
+                    } else {
+                        // トグルがオフにされた瞬間にパラメータを初期状態にリセットしUIと同期させる
+                        ps.lCropMode = LCropMode.HIDDEN
+                        ps.lCropZoom = 100f
+                        ps.lCropX = 0f
+                        ps.lCropY = 0f
+                        ps.lCropOrigin = ZoomOrigin.TopRight
+                    }
+                },
                 onDualDisplayToggle = {
-                    // ★ 修正: サブメニューからの2画面切り替え時、設定がOFFなら警告を出す代わりに強制的にKonomiTVソースへ
                     if (!ps.isDualDisplayMode && ps.currentStreamSource == StreamSource.MIRAKURUN && allowMirakurunDual != "ON") {
                         ps.previousStreamSource = ps.currentStreamSource
                         ps.currentStreamSource = StreamSource.KONOMITV
@@ -1243,8 +1340,7 @@ fun LivePlayerScreen(
             )
         }
 
-        // ★ 削除: MirakurunDualWarningDialog は完全に削除しました
-
+        // プレイヤーエラー表示ダイアログ
         if (!isPiPMode && ps.playerError != null) {
             LiveErrorDialog(ps.playerError!!, { ps.retry() }, onBackPressed)
         }

@@ -28,6 +28,9 @@ data class SignalMetadata(
     val droppedFrames: String = "0"
 )
 
+enum class LCropMode { HIDDEN, MENU, DIRECT_ADJUST }
+enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
+
 @Stable
 class LivePlayerState(
     val context: Context,
@@ -60,12 +63,18 @@ class LivePlayerState(
     var isCenterLongPressHandled by mutableStateOf(false)
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
-    // ★ 追加: 戻るキー長押し判定用
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
 
     var showMirakurunDualWarningDialog by mutableStateOf(false)
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
+
+    var lCropEnabled by mutableStateOf(false)
+    var lCropMode by mutableStateOf(LCropMode.HIDDEN)
+    var lCropZoom by mutableFloatStateOf(100f)
+    var lCropX by mutableFloatStateOf(0f)
+    var lCropY by mutableFloatStateOf(0f)
+    var lCropOrigin by mutableStateOf(ZoomOrigin.TopRight)
 
     fun toggleDualScreenSize() {
         if (activeDualPlayerIndex == 0) {
@@ -140,10 +149,57 @@ class LivePlayerState(
         onSubMenuToggle: (Boolean) -> Unit,
         onMiniListToggle: (Boolean) -> Unit,
         onShowToast: (String) -> Unit,
-        // ★ 追加: コールバック
         onPiPRequested: () -> Unit,
         onBackPressed: () -> Unit
     ): Boolean {
+        // ★ 修正: L字クロップ ダイレクト調整モード時のキーイベントを安全に処理
+        if (lCropMode == LCropMode.DIRECT_ADJUST) {
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+
+            // 対象となるキーのみ判定 (ボリューム操作などは通す)
+            val isTargetKey = keyCode in listOf(
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_BACK,
+                android.view.KeyEvent.KEYCODE_ESCAPE
+            )
+
+            if (isTargetKey) {
+                val isActionDown = keyEvent.type == KeyEventType.KeyDown
+                if (!isActionDown) return true // UPイベントを消費して2重動作を防ぐ
+
+                when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> { lCropY -= 2f }
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> { lCropY += 2f }
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> { lCropX -= 2f }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> { lCropX += 2f }
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
+                        // 決定ボタンで倍率をループ切り替え
+                        lCropZoom = when {
+                            lCropZoom < 125f -> 125f
+                            lCropZoom < 150f -> 150f
+                            lCropZoom < 175f -> 175f
+                            lCropZoom < 200f -> 200f
+                            else -> 100f
+                        }
+                    }
+                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                        // 戻るボタンでメニューモードへ復帰
+                        lCropMode = LCropMode.MENU
+                    }
+                }
+                return true
+            }
+            return false // ボリュームキーなどはシステムに任せる
+        }
+
+        // L字クロップのメニューを開いている時は、メニュー内のフォーカス移動に任せるためここでは処理しない
+        if (lCropMode == LCropMode.MENU) return false
+
         if (this.playerError != null || isSubMenuOpen || isMiniListOpen) return false
 
         val keyCode = keyEvent.nativeKeyEvent.keyCode
@@ -187,18 +243,14 @@ class LivePlayerState(
             }
         }
 
-        // ★ 戻るキー長押しの実装
         if (keyCode == android.view.KeyEvent.KEYCODE_BACK || keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
             if (this.isDualDisplayMode) {
-                // 2画面時はPiPを許可せず、2画面の解除を行う
                 if (isActionDown) {
-                    // ★ 修正: サブメニュー等の他のレイヤーが開いていてDownイベントが消費された場合は記録しない
                     if (repeatCount == 0) {
                         backKeyDownTime = System.currentTimeMillis()
                     }
                     return true
                 } else if (isActionUp) {
-                    // ★ 修正: この画面で正常にDownイベントをキャッチしていた場合のみ、解除処理を行う
                     if (backKeyDownTime > 0) {
                         this.isDualDisplayMode = false
                         this.leftScreenWeight = 1f
@@ -208,7 +260,6 @@ class LivePlayerState(
                             this.previousStreamSource = null
                         }
                     }
-                    // リセットして次の入力に備える
                     backKeyDownTime = 0L
                     return true
                 }
