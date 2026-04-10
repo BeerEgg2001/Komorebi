@@ -31,6 +31,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 @Composable
 fun VideoTopSubMenuUI(
@@ -38,16 +39,19 @@ fun VideoTopSubMenuUI(
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
     currentQuality: StreamQuality,
-    // ★追加: コメント機能用パラメータ
     isCommentEnabled: Boolean,
+    // ★ 追加: L字クロップ状態のパラメータ
+    isLCropEnabled: Boolean,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
-    // ★追加: コメント切り替えコールバック
-    onCommentToggle: () -> Unit
+    onCommentToggle: () -> Unit,
+    // ★ 追加: L字クロップのトグル用コールバック
+    onLCropToggle: () -> Unit
 ) {
+    val colors = KomorebiTheme.colors
     // 展開中のカテゴリ管理
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
 
@@ -58,14 +62,20 @@ fun VideoTopSubMenuUI(
 
     LaunchedEffect(Unit) {
         delay(50)
-        focusRequester.requestFocus()
+        try {
+            focusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
     }
 
     // 画質選択モードが開いた時にリストへフォーカスを移す
     LaunchedEffect(selectedCategory) {
         if (selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
-            try { qualityListRequester.requestFocus() } catch (e: Exception) {}
+            try {
+                qualityListRequester.requestFocus()
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -75,7 +85,7 @@ fun VideoTopSubMenuUI(
             .wrapContentHeight() // コンテンツに合わせて高さを可変に
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent)
+                    colors = listOf(colors.background.copy(alpha = 0.9f), Color.Transparent)
                 )
             )
             .padding(top = 24.dp, bottom = 48.dp)
@@ -83,11 +93,15 @@ fun VideoTopSubMenuUI(
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK ||
-                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)) {
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)
+                ) {
                     if (selectedCategory != null) {
                         selectedCategory = null
                         // 閉じた時は画質ボタンにフォーカスを戻す
-                        try { qualityButtonRequester.requestFocus() } catch (e: Exception) {}
+                        try {
+                            qualityButtonRequester.requestFocus()
+                        } catch (e: Exception) {
+                        }
                         true
                     } else {
                         false
@@ -117,29 +131,43 @@ fun VideoTopSubMenuUI(
                     onClick = onAudioToggle,
                     modifier = Modifier
                         .focusRequester(focusRequester)
-                        .focusProperties { down = FocusRequester.Cancel } // 展開していない時は下に行かない
+                        .focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary
                 )
                 VideoMenuTileItem(
                     title = "再生速度",
                     icon = Icons.Default.Speed,
                     subtitle = "${currentSpeed}x",
                     onClick = onSpeedToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary
                 )
                 VideoMenuTileItem(
                     title = "字幕",
                     icon = Icons.Default.Subtitles,
                     subtitle = if (isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary
                 )
-                // ★追加: コメント切り替えボタン
+
+                // ★ 追加: L字クロップボタン
                 VideoMenuTileItem(
-                    title = "コメント",
+                    title = "L字クロップ",
+                    icon = Icons.Default.Crop,
+                    subtitle = if (isLCropEnabled) "有効" else "設定",
+                    onClick = onLCropToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary
+                )
+
+                VideoMenuTileItem(
+                    title = "実況",
                     icon = Icons.Default.Chat,
                     subtitle = if (isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary
                 )
                 // 画質ボタン（トグル動作）
                 VideoMenuTileItem(
@@ -147,19 +175,21 @@ fun VideoTopSubMenuUI(
                     icon = Icons.Default.HighQuality,
                     subtitle = currentQuality.label,
                     onClick = {
-                        selectedCategory = if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                        selectedCategory =
+                            if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
                     },
                     modifier = Modifier
                         .focusRequester(qualityButtonRequester)
                         .focusProperties {
                             // 展開中なら下キーでリストへ、そうでなければキャンセル
-                            if (selectedCategory != SubMenuCategory.QUALITY) down = FocusRequester.Cancel
-                        }
+                            if (selectedCategory != SubMenuCategory.QUALITY) down =
+                                FocusRequester.Cancel
+                        },
+                    contentColor = colors.textPrimary
                 )
             }
 
             // --- 第二階層 (画質選択) ---
-            // ライブ視聴と同じように下に展開
             AnimatedVisibility(
                 visible = selectedCategory == SubMenuCategory.QUALITY,
                 enter = expandVertically() + fadeIn(),
@@ -168,7 +198,12 @@ fun VideoTopSubMenuUI(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     // 区切り線
                     Spacer(Modifier.height(16.dp))
-                    Box(modifier = Modifier.width(400.dp).height(2.dp).background(Color.White.copy(0.2f)))
+                    Box(
+                        modifier = Modifier
+                            .width(400.dp)
+                            .height(2.dp)
+                            .background(colors.textPrimary.copy(alpha = 0.2f))
+                    )
                     Spacer(Modifier.height(16.dp))
 
                     Row(
@@ -188,16 +223,24 @@ fun VideoTopSubMenuUI(
                                 onClick = {
                                     onQualitySelect(quality)
                                     selectedCategory = null // 選択したら閉じる
-                                    try { qualityButtonRequester.requestFocus() } catch (e: Exception) {}
+                                    try {
+                                        qualityButtonRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
                                 modifier = Modifier
-                                    .then(if (isSelected) Modifier.focusRequester(qualityListRequester) else Modifier)
+                                    .then(
+                                        if (isSelected) Modifier.focusRequester(
+                                            qualityListRequester
+                                        ) else Modifier
+                                    )
                                     .focusProperties {
                                         up = qualityButtonRequester // 上キーで親に戻る
                                         down = FocusRequester.Cancel
-                                    }
+                                    },
+                                contentColor = colors.textPrimary
                             )
                         }
                     }
@@ -219,18 +262,20 @@ fun VideoMenuTileItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    width: Dp = 160.dp, // ライブ側に合わせてサイズ調整
-    height: Dp = 100.dp
+    width: Dp = 160.dp,
+    height: Dp = 100.dp,
+    contentColor: Color = Color.White
 ) {
+    val colors = KomorebiTheme.colors
     Surface(
         onClick = onClick,
         enabled = enabled,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(0.1f),
-            contentColor = if (enabled) Color.White else Color.White.copy(0.3f),
-            focusedContainerColor = Color.White,
-            focusedContentColor = Color.Black
+            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+            contentColor = if (enabled) contentColor else colors.textPrimary.copy(alpha = 0.3f),
+            focusedContainerColor = colors.textPrimary,
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
         ),
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
         modifier = modifier

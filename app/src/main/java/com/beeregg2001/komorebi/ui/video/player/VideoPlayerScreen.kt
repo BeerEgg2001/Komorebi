@@ -20,9 +20,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -73,7 +76,6 @@ fun VideoPlayerScreen(
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
     onShowToast: (String) -> Unit,
-    // ★ 追加: PiP状態の受け取りと、要求コールバック
     isPiPMode: Boolean = false,
     onPiPRequested: () -> Unit = {},
     recordViewModel: RecordViewModel = hiltViewModel(),
@@ -100,12 +102,6 @@ fun VideoPlayerScreen(
             )
             val merged = mergeCmSections(currentProgram.recordedVideo.cmSections)
             Log.i(DEBUG_TAG, "Merged cmSections count: ${merged.size}")
-            merged.forEachIndexed { index, cmSection ->
-                Log.i(
-                    DEBUG_TAG,
-                    "  Merged Section $index: start=${cmSection.startTime}, end=${cmSection.endTime}"
-                )
-            }
         }
     }
 
@@ -167,8 +163,7 @@ fun VideoPlayerScreen(
                 enableFloat: Boolean,
                 enableParams: Boolean
             ): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(ctx)
-                    .setEnableAudioTrackPlaybackParams(false)
+                return DefaultAudioSink.Builder(ctx).setEnableAudioTrackPlaybackParams(false)
                     .build()
             }
         }.apply {
@@ -177,94 +172,77 @@ fun VideoPlayerScreen(
         }
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory().apply {
-            setUserAgent("DTVClient/1.0")
-            setAllowCrossProtocolRedirects(true)
-            setConnectTimeoutMs(90000)
-            setReadTimeoutMs(90000)
+            setUserAgent("DTVClient/1.0"); setAllowCrossProtocolRedirects(true)
+            setConnectTimeoutMs(90000); setReadTimeoutMs(90000)
         }
 
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                30000,
-                30000,
-                1500,
-                3000
-            )
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
-
+        val loadControl =
+            DefaultLoadControl.Builder().setBufferDurationsMs(30000, 30000, 1500, 3000)
+                .setPrioritizeTimeOverSizeThresholds(true).build()
         val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
 
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(hlsMediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build().apply {
-                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-
-                val mediaItem = MediaItem.Builder().setUri(
-                    UrlBuilder.getVideoPlaylistUrl(
-                        konomiIp,
-                        konomiPort,
-                        program.recordedVideo.id,
-                        currentSessionId,
-                        vs.currentQuality.value
-                    )
-                ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-
-                setMediaItem(mediaItem)
-                setAudioAttributes(
-                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .setUsage(C.USAGE_MEDIA).build(), true
+        ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(hlsMediaSourceFactory)
+            .setLoadControl(loadControl).build().apply {
+            setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+            val mediaItem = MediaItem.Builder().setUri(
+                UrlBuilder.getVideoPlaylistUrl(
+                    konomiIp,
+                    konomiPort,
+                    program.recordedVideo.id,
+                    currentSessionId,
+                    vs.currentQuality.value
                 )
-                addListener(object : Player.Listener {
-                    override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        videoWidth = videoSize.width
-                        videoHeight = videoSize.height
-                        pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
-                    }
+            ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
+            setMediaItem(mediaItem)
+            setAudioAttributes(
+                AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .setUsage(C.USAGE_MEDIA).build(), true
+            )
+            addListener(object : Player.Listener {
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    videoWidth = videoSize.width; videoHeight =
+                        videoSize.height; pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
+                }
 
-                    override fun onIsPlayingChanged(playing: Boolean) {
-                        vs.isPlayerPlaying = playing
-                    }
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    vs.isPlayerPlaying = playing
+                }
 
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        isBuffering = (playbackState == Player.STATE_BUFFERING)
-                    }
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    isBuffering = (playbackState == Player.STATE_BUFFERING)
+                }
 
-                    override fun onPlayerError(error: PlaybackException) {
-                        Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
-                        scope.launch {
-                            isBuffering = true
-                            delay(3000L)
-                            prepare()
-                            playWhenReady = true
-                        }
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
+                    scope.launch {
+                        isBuffering = true; delay(3000L); prepare(); playWhenReady = true
                     }
+                }
 
-                    override fun onMetadata(metadata: Metadata) {
-                        if (!vs.isSubtitleEnabled) return
-                        for (i in 0 until metadata.length()) {
-                            val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains(
-                                    "aribb24",
-                                    true
-                                ) || entry.owner.contains("B24", true))
-                            ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                                webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript(
-                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                        null
-                                    )
-                                }
+                override fun onMetadata(metadata: Metadata) {
+                    if (!vs.isSubtitleEnabled) return
+                    for (i in 0 until metadata.length()) {
+                        val entry = metadata.get(i)
+                        if (entry is PrivFrame && (entry.owner.contains(
+                                "aribb24",
+                                true
+                            ) || entry.owner.contains("B24", true))
+                        ) {
+                            val base64Data =
+                                Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                            webViewRef.value?.post {
+                                webViewRef.value?.evaluateJavascript(
+                                    "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
+                                    null
+                                )
                             }
                         }
                     }
-                })
-                if (initialPositionMs > 0) seekTo(initialPositionMs)
-                prepare(); playWhenReady = true
-            }
+                }
+            })
+            if (initialPositionMs > 0) seekTo(initialPositionMs)
+            prepare(); playWhenReady = true
+        }
     }
 
     LaunchedEffect(isSceneSearchOpen, isChapterListOpen) {
@@ -278,8 +256,7 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(vs.indicatorState) {
         if (vs.indicatorState != null) {
-            delay(2000)
-            vs.indicatorState = null
+            delay(2000); vs.indicatorState = null
         }
     }
 
@@ -305,13 +282,11 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, isChapterListOpen, showControls) {
-        // ★ PiPモード中はフォーカスを奪わないようにする
         if (isPiPMode) return@LaunchedEffect
-
         delay(150)
         if (isSubMenuOpen) {
             subMenuFocusRequester.safeRequestFocus(TAG)
-        } else if (!isSceneSearchOpen && !isChapterListOpen && !showControls) {
+        } else if (!isSceneSearchOpen && !isChapterListOpen && !showControls && vs.lCropMode == LCropMode.HIDDEN) {
             mainFocusRequester.safeRequestFocus(TAG)
         }
     }
@@ -321,8 +296,62 @@ fun VideoPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onKeyEvent { keyEvent ->
-                // ★ PiPモード中はキーイベントを全てスルー（裏側のホーム画面に処理させる）
                 if (isPiPMode) return@onKeyEvent false
+
+                // ★ 追加: L字クロップ ダイレクト調整モード時のキーイベント捕捉
+                if (vs.lCropMode == LCropMode.DIRECT_ADJUST) {
+                    val keyCode = keyEvent.nativeKeyEvent.keyCode
+                    val isTargetKey = keyCode in listOf(
+                        android.view.KeyEvent.KEYCODE_DPAD_UP,
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent.KEYCODE_BACK,
+                        android.view.KeyEvent.KEYCODE_ESCAPE
+                    )
+                    if (isTargetKey) {
+                        val isActionDown = keyEvent.type == KeyEventType.KeyDown
+                        if (!isActionDown) return@onKeyEvent true
+                        when (keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                                vs.lCropY -= 2f
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                vs.lCropY += 2f
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                vs.lCropX -= 2f
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                vs.lCropX += 2f
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
+                                vs.lCropZoom = when {
+                                    vs.lCropZoom < 125f -> 125f
+                                    vs.lCropZoom < 150f -> 150f
+                                    vs.lCropZoom < 175f -> 175f
+                                    vs.lCropZoom < 200f -> 200f
+                                    else -> 100f
+                                }
+                            }
+
+                            android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                                vs.lCropMode = LCropMode.MENU
+                            }
+                        }
+                        return@onKeyEvent true
+                    }
+                    return@onKeyEvent false
+                }
+
+                // L字クロップメニュー表示中はメニュー内の操作に任せる
+                if (vs.lCropMode == LCropMode.MENU) return@onKeyEvent false
 
                 if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen) return@onKeyEvent false
 
@@ -336,17 +365,15 @@ fun VideoPlayerScreen(
                 }
 
                 when (keyCode) {
-                    // ★ 戻るキー長押しの実装
                     NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
                         if (isActionDown) {
                             if (repeatCount == 0) {
-                                vs.backKeyDownTime = System.currentTimeMillis()
-                                vs.isBackKeyLongPressed = false
+                                vs.backKeyDownTime =
+                                    System.currentTimeMillis(); vs.isBackKeyLongPressed = false
                             } else {
                                 val elapsed = System.currentTimeMillis() - vs.backKeyDownTime
                                 if (!vs.isBackKeyLongPressed && elapsed > 500) {
-                                    vs.isBackKeyLongPressed = true
-                                    onPiPRequested()
+                                    vs.isBackKeyLongPressed = true; onPiPRequested()
                                 }
                             }
                             return@onKeyEvent true
@@ -355,8 +382,7 @@ fun VideoPlayerScreen(
                             if (!vs.isBackKeyLongPressed && elapsed < 500) {
                                 onBackPressed()
                             }
-                            vs.backKeyDownTime = 0L
-                            vs.isBackKeyLongPressed = false
+                            vs.backKeyDownTime = 0L; vs.isBackKeyLongPressed = false
                             return@onKeyEvent true
                         }
                         false
@@ -364,9 +390,7 @@ fun VideoPlayerScreen(
 
                     NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
                         if (isActionDown) {
-                            onShowControlsChange(true)
-                            vs.togglePlayPause(exoPlayer.isPlaying)
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            onShowControlsChange(true); vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                         }
                         true
                     }
@@ -374,42 +398,42 @@ fun VideoPlayerScreen(
                     NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (isActionDown) {
                             if (repeatCount == 0) {
-                                rightKeyDownTime = System.currentTimeMillis()
-                                isRightKeyLongPressed = false
+                                rightKeyDownTime =
+                                    System.currentTimeMillis(); isRightKeyLongPressed = false
                             } else {
                                 val elapsed = System.currentTimeMillis() - rightKeyDownTime
                                 if (!isRightKeyLongPressed && elapsed > 500) {
-                                    isRightKeyLongPressed = true
-                                    onShowControlsChange(true)
+                                    isRightKeyLongPressed = true; onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
+                                    val boundaries = getChapterBoundaries(
+                                        duration,
                                         mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val boundaries = getChapterBoundaries(duration, mergedCms)
+                                    )
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition + 180_000).coerceAtMost(
                                                 duration
                                             )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastForward, "+3m")
+                                        ); vs.updateIndicator(Icons.Default.FastForward, "+3m")
                                     } else {
-                                        val currentPos = exoPlayer.currentPosition
-                                        val nextBoundary =
-                                            boundaries.firstOrNull { it > currentPos + 1000 }
-                                        exoPlayer.seekTo(nextBoundary ?: duration)
-                                        vs.updateIndicator(Icons.Default.SkipNext, "次チャプター")
+                                        val next =
+                                            boundaries.firstOrNull { it > exoPlayer.currentPosition + 1000 }; exoPlayer.seekTo(
+                                            next ?: duration
+                                        ); vs.updateIndicator(
+                                            Icons.Default.SkipNext,
+                                            "次チャプター"
+                                        )
                                     }
                                 }
                             }
                         } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - rightKeyDownTime
-                            if (!isRightKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                exoPlayer.seekTo(exoPlayer.currentPosition + 30000)
-                                vs.updateIndicator(Icons.Default.FastForward, "+30s")
+                            if (!isRightKeyLongPressed) {
+                                onShowControlsChange(true); exoPlayer.seekTo(exoPlayer.currentPosition + 30000); vs.updateIndicator(
+                                    Icons.Default.FastForward,
+                                    "+30s"
+                                )
                             }
-                            rightKeyDownTime = 0L
-                            isRightKeyLongPressed = false
+                            rightKeyDownTime = 0L; isRightKeyLongPressed = false
                         }
                         true
                     }
@@ -417,30 +441,28 @@ fun VideoPlayerScreen(
                     NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
                         if (isActionDown) {
                             if (repeatCount == 0) {
-                                leftKeyDownTime = System.currentTimeMillis()
-                                isLeftKeyLongPressed = false
+                                leftKeyDownTime = System.currentTimeMillis(); isLeftKeyLongPressed =
+                                    false
                             } else {
                                 val elapsed = System.currentTimeMillis() - leftKeyDownTime
                                 if (!isLeftKeyLongPressed && elapsed > 500) {
-                                    isLeftKeyLongPressed = true
-                                    onShowControlsChange(true)
+                                    isLeftKeyLongPressed = true; onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
+                                    val boundaries = getChapterBoundaries(
+                                        duration,
                                         mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val boundaries = getChapterBoundaries(duration, mergedCms)
+                                    )
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition - 60_000).coerceAtLeast(
                                                 0L
                                             )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastRewind, "-1m")
+                                        ); vs.updateIndicator(Icons.Default.FastRewind, "-1m")
                                     } else {
-                                        val currentPos = exoPlayer.currentPosition
-                                        val prevBoundary =
-                                            boundaries.lastOrNull { it < currentPos - 1000 }
-                                        exoPlayer.seekTo(prevBoundary ?: 0L)
-                                        vs.updateIndicator(
+                                        val prev =
+                                            boundaries.lastOrNull { it < exoPlayer.currentPosition - 1000 }; exoPlayer.seekTo(
+                                            prev ?: 0L
+                                        ); vs.updateIndicator(
                                             Icons.Default.SkipPrevious,
                                             "前チャプター"
                                         )
@@ -448,14 +470,13 @@ fun VideoPlayerScreen(
                                 }
                             }
                         } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - leftKeyDownTime
-                            if (!isLeftKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                exoPlayer.seekTo(exoPlayer.currentPosition - 10000)
-                                vs.updateIndicator(Icons.Default.FastRewind, "-10s")
+                            if (!isLeftKeyLongPressed) {
+                                onShowControlsChange(true); exoPlayer.seekTo(exoPlayer.currentPosition - 10000); vs.updateIndicator(
+                                    Icons.Default.FastRewind,
+                                    "-10s"
+                                )
                             }
-                            leftKeyDownTime = 0L
-                            isLeftKeyLongPressed = false
+                            leftKeyDownTime = 0L; isLeftKeyLongPressed = false
                         }
                         true
                     }
@@ -463,114 +484,114 @@ fun VideoPlayerScreen(
                     NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (isActionDown) {
                             if (repeatCount == 0) {
-                                downKeyDownTime = System.currentTimeMillis()
-                                isDownKeyLongPressed = false
+                                downKeyDownTime = System.currentTimeMillis(); isDownKeyLongPressed =
+                                    false
                             } else {
                                 val elapsed = System.currentTimeMillis() - downKeyDownTime
                                 if (!isDownKeyLongPressed && elapsed > 500) {
                                     isDownKeyLongPressed = true
-                                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val hasChapters =
-                                        getChapterBoundaries(duration, mergedCms).size > 2
-                                    if (hasChapters) {
-                                        isChapterListOpen = true
-                                        onShowControlsChange(true)
+                                    if (getChapterBoundaries(
+                                            exoPlayer.duration.coerceAtLeast(1L),
+                                            mergeCmSections(currentProgram.recordedVideo.cmSections)
+                                        ).size > 2
+                                    ) {
+                                        isChapterListOpen = true; onShowControlsChange(true)
                                     }
                                 }
                             }
                         } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - downKeyDownTime
-                            if (!isDownKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                onSceneSearchToggle(true)
+                            if (!isDownKeyLongPressed) {
+                                onShowControlsChange(true); onSceneSearchToggle(true)
                             }
-                            downKeyDownTime = 0L
-                            isDownKeyLongPressed = false
+                            downKeyDownTime = 0L; isDownKeyLongPressed = false
                         }
                         true
                     }
 
                     NativeKeyEvent.KEYCODE_DPAD_UP -> {
                         if (isActionDown) {
-                            onShowControlsChange(true)
-                            onSubMenuToggle(true)
-                        }
-                        true
+                            onShowControlsChange(true); onSubMenuToggle(true)
+                        }; true
                     }
 
                     else -> false
                 }
             }) {
+
         AndroidView(
             factory = { ctx ->
                 AspectRatioFrameLayout(ctx).apply {
                     keepScreenOn = true
-
-                    val textureView = TextureView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                    }
+                    val textureView =
+                        TextureView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1) }
                     addView(textureView)
                 }
             },
             update = { view ->
                 val textureView = view.getChildAt(0) as TextureView
                 exoPlayer.setVideoTextureView(textureView)
-
                 if (videoWidth > 0 && videoHeight > 0) {
                     val ratio =
                         (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
                     view.setAspectRatio(ratio)
-
-                    val isAnamorphic =
-                        (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
                     val is16by9 = ratio >= 1.7f
-                    val targetMode = if (isAnamorphic || is16by9) {
-                        AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    } else {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                    if (view.resizeMode != targetMode) {
-                        view.resizeMode = targetMode
-                    }
+                    val targetMode =
+                        if (is16by9) AspectRatioFrameLayout.RESIZE_MODE_FILL else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    if (view.resizeMode != targetMode) view.resizeMode = targetMode
                 }
             },
             modifier = Modifier
                 .fillMaxSize()
+                // ★ 追加: L字クロップ変形 (GPUによる低負荷処理)
+                .graphicsLayer {
+                    if (vs.lCropEnabled) {
+                        scaleX = vs.lCropZoom / 100f; scaleY = vs.lCropZoom / 100f
+                        translationX = size.width * (vs.lCropX / 100f); translationY =
+                            size.height * (vs.lCropY / 100f)
+                        transformOrigin = when (vs.lCropOrigin) {
+                            ZoomOrigin.TopLeft -> TransformOrigin(0f, 0f)
+                            ZoomOrigin.TopRight -> TransformOrigin(1f, 0f)
+                            ZoomOrigin.BottomLeft -> TransformOrigin(0f, 1f)
+                            ZoomOrigin.BottomRight -> TransformOrigin(1f, 1f)
+                        }
+                    } else {
+                        scaleX = 1f; scaleY = 1f; translationX = 0f; translationY =
+                            0f; transformOrigin = TransformOrigin.Center
+                    }
+                }
                 .focusRequester(mainFocusRequester)
-                // ★ PiPモード中はフォーカスを受け取らないようにする
-                // ★ VideoPlayerScreenにはisMiniListOpenが存在しないため削除
-                .focusable(!isPiPMode && !isSubMenuOpen)
+                .focusable(!isPiPMode && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen && vs.lCropMode == LCropMode.HIDDEN)
         )
 
-        // ★ PiPモード時は字幕や実況などのリソースを食うUIはすべて非表示にし、パフォーマンスを確保する
         if (!isPiPMode) {
             val commentLayer = @Composable {
                 if (isHeavyUiReady && vs.isCommentEnabled) {
                     ArchivedCommentOverlay(
-                        Modifier.fillMaxSize(), allComments, { exoPlayer.currentPosition },
-                        vs.isPlayerPlaying, vs.isCommentEnabled, commentSpeed,
-                        commentFontSizeScale, commentOpacity, commentMaxLines, isEmulator
+                        Modifier.fillMaxSize(),
+                        allComments,
+                        { exoPlayer.currentPosition },
+                        vs.isPlayerPlaying,
+                        vs.isCommentEnabled,
+                        commentSpeed,
+                        commentFontSizeScale,
+                        commentOpacity,
+                        commentMaxLines,
+                        isEmulator
                     )
                 }
             }
-
             val subtitleLayer = @Composable {
                 if (isHeavyUiReady) {
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
+                                layoutParams = ViewGroup.LayoutParams(
+                                    -1,
+                                    -1
+                                ); setBackgroundColor(android.graphics.Color.TRANSPARENT); settings.apply {
+                                javaScriptEnabled = true; domStorageEnabled = true
+                            }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value =
+                                this
                             }
                         },
                         update = {
@@ -587,13 +608,10 @@ fun VideoPlayerScreen(
             } else {
                 commentLayer(); subtitleLayer()
             }
-
-            if (isBuffering) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center),
-                    color = androidx.compose.ui.graphics.Color.White
-                )
-            }
+            if (isBuffering) CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.White
+            )
 
             PlayerControls(
                 exoPlayer,
@@ -601,6 +619,7 @@ fun VideoPlayerScreen(
                 showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen
             )
 
+            // シーン検索・チャプターリスト
             AnimatedVisibility(
                 isSceneSearchOpen,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -622,7 +641,6 @@ fun VideoPlayerScreen(
                     }
                     })
             }
-
             AnimatedVisibility(
                 isChapterListOpen,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
@@ -634,52 +652,88 @@ fun VideoPlayerScreen(
                     konomiIp,
                     konomiPort,
                     {
-                        exoPlayer.seekTo(it)
-                        isChapterListOpen = false
-                        scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
+                        exoPlayer.seekTo(it); isChapterListOpen =
+                        false; scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
                     },
                     {
-                        isChapterListOpen = false
+                        isChapterListOpen = false; scope.launch {
+                        delay(200); mainFocusRequester.safeRequestFocus(
+                        TAG
+                    )
+                    }
+                    })
+            }
+
+            // ★ 追加: L字クロップオーバーレイの表示
+            androidx.compose.animation.AnimatedVisibility(
+                visible = vs.lCropMode != LCropMode.HIDDEN,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                VideoLCropOverlay(
+                    state = vs,
+                    onClose = {
+                        vs.lCropMode = LCropMode.HIDDEN
                         scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
                     }
                 )
             }
 
+            // サブメニュー
             AnimatedVisibility(
                 isSubMenuOpen,
                 enter = slideInVertically { -it } + fadeIn(),
                 exit = slideOutVertically { -it } + fadeOut()) {
                 VideoTopSubMenuUI(
-                    vs.currentAudioMode, vs.currentSpeed, vs.isSubtitleEnabled,
-                    vs.currentQuality, vs.isCommentEnabled, subMenuFocusRequester,
-                    {
+                    currentAudioMode = vs.currentAudioMode,
+                    currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled,
+                    currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled,
+                    // ★ 追加: L字クロップパラメータ
+                    isLCropEnabled = vs.lCropEnabled,
+                    focusRequester = subMenuFocusRequester,
+                    onAudioToggle = {
                         vs.currentAudioMode =
                             if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
                         val tracks =
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
+                            TrackSelectionOverride(
+                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
                             )
+                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
-                    {
+                    onSpeedToggle = {
                         val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); vs.currentSpeed =
                         speeds[(speeds.indexOf(vs.currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(
                         vs.currentSpeed
                     ); onShowToast("速度: ${vs.currentSpeed}x")
                     },
-                    {
+                    onSubtitleToggle = {
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
-                    { vs.currentQuality = it; onShowToast("画質: ${it.label}") },
-                    {
+                    onQualitySelect = { vs.currentQuality = it; onShowToast("画質: ${it.label}") },
+                    onCommentToggle = {
                         vs.isCommentEnabled =
                             !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
+                    },
+                    // ★ 追加: L字クロップトグル処理
+                    onLCropToggle = {
+                        vs.lCropEnabled = !vs.lCropEnabled
+                        if (vs.lCropEnabled) {
+                            vs.lCropMode = LCropMode.MENU
+                            onSubMenuToggle(false)
+                        } else {
+                            vs.lCropMode = LCropMode.HIDDEN
+                            // 値の完全初期化
+                            vs.lCropZoom = 100f; vs.lCropX = 0f; vs.lCropY = 0f; vs.lCropOrigin =
+                                ZoomOrigin.TopRight
+                        }
                     }
                 )
             }
@@ -699,8 +753,10 @@ fun VideoPlayerScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            recordViewModel.updateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
-            lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()
+            recordViewModel.updateWatchHistory(
+                program,
+                exoPlayer.currentPosition / 1000.0
+            ); lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()
         }
     }
 }
