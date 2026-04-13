@@ -72,6 +72,9 @@ class SettingsRepository @Inject constructor(
 
         // ベータ版アップデート受信設定のキー
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
+
+        // ★ 追加: サブチャンネル非表示設定のキー
+        val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
     }
 
     // ★ 追加: Flow定義
@@ -139,6 +142,9 @@ class SettingsRepository @Inject constructor(
         context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
 
     val timeFormat: Flow<String> = context.dataStore.data.map { it[TIME_FORMAT] ?: "24H" }
+
+    // ★ 追加: サブチャンネル非表示設定のFlow (デフォルトは false)
+    val hideSubChannels: Flow<Boolean> = context.dataStore.data.map { it[HIDE_SUB_CHANNELS] ?: false }
     val receiveBetaUpdates: Flow<Boolean> =
         context.dataStore.data.map { it[RECEIVE_BETA_UPDATES] ?: false }
 

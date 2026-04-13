@@ -115,7 +115,12 @@ fun SettingsScreen(
                 FocusRequester()
             ), // 4: Home
             listOf(
-                FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()
+                // ★ 修正: サブチャンネル非表示用のFocusRequesterを追加し、要素数を5にする
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
             ), // 5: Display
             listOf(
                 FocusRequester(),
@@ -325,7 +330,6 @@ fun SettingsScreen(
                                 "EPGStation" to "EPGSTATION",
                                 "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
                             )
-                            // ★ 修正: 確実にリスト内に存在する値を初期値として渡す
                             val safeCurrent =
                                 if (options.any { it.second == prefs.backendType }) prefs.backendType else "KONOMITV"
 
@@ -346,8 +350,6 @@ fun SettingsScreen(
                                 options.add("EDCB (TCP) を優先" to "EDCB")
                             }
 
-                            // ★ 修正: 現在の preferredSource が options に存在しない場合（メインがEDCBで優先もEDCBになっていた場合など）
-                            // フォーカスが迷子にならないよう、安全な初期値を計算してダイアログに渡す
                             val safeCurrent =
                                 if (options.any { it.second == prefs.preferredSource }) {
                                     prefs.preferredSource
@@ -595,7 +597,6 @@ fun SettingsScreen(
                                     )
                                 }
 
-                                // ★ 修正: プロ野球タブなどをオフにした際、古い値が残ってエラーになるのを防ぐ
                                 val safeCurrent =
                                     if (options.any { it.second == prefs.startupTab }) prefs.startupTab else "ホーム"
 
@@ -774,7 +775,12 @@ fun SettingsScreen(
                                     viewModel.updateTimeFormat(it)
                                 }
                             },
-                            itemRs = itemFocusRequesters[5],
+                            // ★ 追加: サブチャンネル非表示トグルの処理
+                            onToggleHideSubChannels = {
+                                viewModel.toggleHideSubChannels()
+                            },
+                            itemRs = itemFocusRequesters[5].dropLast(1), // 最初の4つ
+                            hideSubChannelsR = itemFocusRequesters[5].last(), // 最後の1つ（5番目）
                             onClick = {
                                 uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
                             }

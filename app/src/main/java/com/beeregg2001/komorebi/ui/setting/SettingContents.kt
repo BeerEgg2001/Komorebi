@@ -76,19 +76,18 @@ fun GeneralSettingsContent(
         )
 
         SettingsSection("システム設定") {
-            SettingToggleItem(
+            SettingItem(
                 title = "ベータ版のアップデートを受け取る",
-                description = "次期バージョンの新機能をいち早く試すことができます。動作が不安定になる可能性があります。",
+                value = if (receiveBetaUpdates) "ON" else "OFF",
                 icon = Icons.Default.SystemUpdate,
-                checked = receiveBetaUpdates,
-                onCheckedChange = { onToggleBetaUpdates(it) },
                 modifier = Modifier
                     .focusRequester(betaUpdateR)
                     .focusProperties {
                         left = sidebarR
                         up = FocusRequester.Cancel
                         down = dbInfoR
-                    }
+                    },
+                onClick = { onClick(betaUpdateR); onToggleBetaUpdates(!receiveBetaUpdates) }
             )
         }
 
@@ -143,7 +142,6 @@ fun GeneralSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = clearChannelR
-                        // ★修正: リストの一番下からフォーカスが逃げないようにCancelを指定
                         down = FocusRequester.Cancel
                     },
                 onClick = { onClick(clearHistoryR); onClearHistory() })
@@ -181,7 +179,6 @@ fun RecordingSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = FocusRequester.Cancel
-                        // ★修正: リストが空の場合は下方向へのフォーカス移動をキャンセル
                         down =
                             if (batchList.isEmpty()) FocusRequester.Cancel else itemRs.firstOrNull()
                                 ?: FocusRequester.Cancel
@@ -209,7 +206,6 @@ fun RecordingSettingsContent(
                             .focusProperties {
                                 left = sidebarR
                                 up = if (index == 0) addR else itemRs[index - 1]
-                                // ★修正: リストの一番下からフォーカスが逃げないようにCancelを指定
                                 down = if (isLast) FocusRequester.Cancel else itemRs[index + 1]
                             },
                         onClick = { onClick(requester); onDelete(batch) }
@@ -318,7 +314,7 @@ fun ConnectionSettingsContent(
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
                         down =
-                            if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel // ★修正
+                            if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
@@ -346,7 +342,7 @@ fun ConnectionSettingsContent(
                         .focusProperties {
                             left = sidebarR
                             up = backendPortR
-                            down = if (hasOverride) overrideIpR else FocusRequester.Cancel // ★修正
+                            down = if (hasOverride) overrideIpR else FocusRequester.Cancel
                         },
                     onClick = { onClick(prefSrcR); onSelectSrc() }
                 )
@@ -373,7 +369,7 @@ fun ConnectionSettingsContent(
                             .focusRequester(overridePortR)
                             .focusProperties {
                                 left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
-                            }, // ★修正
+                            },
                         onClick = { onClick(overridePortR); onEdit("Mirakurun (ポート)", mPort) }
                     )
 
@@ -402,7 +398,7 @@ fun ConnectionSettingsContent(
                             .focusRequester(overridePortR)
                             .focusProperties {
                                 left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
-                            }, // ★修正
+                            },
                         onClick = { onClick(overridePortR); onEdit("EDCB (ポート)", edcbPort) }
                     )
 
@@ -519,7 +515,7 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = audioR
-                        down = FocusRequester.Cancel // ★修正
+                        down = FocusRequester.Cancel
                     },
                 onClick = { onClick(layerR); onLayer() })
         }
@@ -619,7 +615,7 @@ fun HomeDisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = timeR
-                        down = FocusRequester.Cancel // ★修正
+                        down = FocusRequester.Cancel
                     },
                 onClick = { onClick(exPaidR); onExPaid() })
         }
@@ -635,7 +631,9 @@ fun DisplaySettingsContent(
     onEditStartupChannel: () -> Unit,
     onEditDefaultView: () -> Unit,
     onEditTimeFormat: () -> Unit,
+    onToggleHideSubChannels: () -> Unit, // ★ 追加
     itemRs: List<FocusRequester>,
+    hideSubChannelsR: FocusRequester,    // ★ 追加
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -694,9 +692,24 @@ fun DisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = itemRs[2]
-                        down = FocusRequester.Cancel // ★修正
+                        down = hideSubChannelsR // ★ 修正
                     },
                 onClick = { onClick(itemRs[3]); onEditTimeFormat() })
+
+            // ★ 修正: SettingToggleItemの代わりにSettingItemを使用し、右側のテキストでON/OFFを表現
+            SettingItem(
+                title = "サブチャンネルを非表示にする",
+                value = if (preferences.hideSubChannels) "ON" else "OFF",
+                icon = Icons.Default.FilterListOff,
+                modifier = Modifier
+                    .focusRequester(hideSubChannelsR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = itemRs[3]
+                        down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(hideSubChannelsR); onToggleHideSubChannels() }
+            )
         }
     }
 }
@@ -788,7 +801,7 @@ fun CommentSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = opR
-                        down = FocusRequester.Cancel // ★修正
+                        down = FocusRequester.Cancel
                     },
                 onClick = {
                     onClick(mxR); onEdit(
@@ -866,7 +879,7 @@ fun LabSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = baseballR
-                        down = FocusRequester.Cancel // ★修正
+                        down = FocusRequester.Cancel
                     },
                 onClick = { onClick(apiKeyR); onEditApiKey() }
             )
@@ -908,7 +921,7 @@ fun AppInfoContent(
                 .focusProperties {
                     left = sidebarR
                     up = FocusRequester.Cancel
-                    down = FocusRequester.Cancel // ★修正
+                    down = FocusRequester.Cancel
                 },
             onClick = { onClick(licR); onShow() })
     }

@@ -13,10 +13,18 @@ data class EdcbServiceInfo(
     val remoteControlKeyId: Int
 )
 
+data class EdcbContentData(
+    val contentNibble: Int,
+    val userNibble: Int
+)
+
 data class EdcbEventInfo(
     val onid: Int, val tsid: Int, val sid: Int, val eid: Int,
     val startTime: String?, val durationSec: Int,
-    val eventName: String, val eventText: String, val freeCaFlag: Int
+    val eventName: String, val eventText: String, val freeCaFlag: Int,
+    val contentList: List<EdcbContentData>? = null,
+    val extendedText: String = "",
+    val detailMap: Map<String, String> = emptyMap()
 )
 
 class EdcbApi(private val ip: String, private val port: Int) {
@@ -27,6 +35,41 @@ class EdcbApi(private val ip: String, private val port: Int) {
         const val CMD_EPG_SRV_ENUM_PG_INFO_EX = 1029
         const val CMD_EPG_SRV_FILE_COPY2 = 2060
         const val CMD_VER = 5
+
+        fun parseProgramExtendedText(s: String): Map<String, String> {
+            val str = s.replace("\r", "")
+            val map = mutableMapOf<String, String>()
+            var head = ""
+            var i = 0
+            while (true) {
+                var j = str.indexOf("\n- ", i)
+                if (i == 0 && str.startsWith("- ")) {
+                    j = 2
+                } else if (j >= 0) {
+                    var uniqueHead = head
+                    while (map.containsKey(uniqueHead)) uniqueHead += "\t"
+                    map[uniqueHead] = str.substring(if (i == 0) 0 else i + 1, j + 1).trim()
+                    j += 3
+                } else {
+                    if (str.isNotEmpty()) {
+                        var uniqueHead = head
+                        while (map.containsKey(uniqueHead)) uniqueHead += "\t"
+                        map[uniqueHead] = str.substring(if (i == 0) 0 else i + 1).trim()
+                    }
+                    break
+                }
+                i = str.indexOf("\n", j)
+                if (i < 0) {
+                    head = str.substring(j).trim()
+                    var uniqueHead = head
+                    while (map.containsKey(uniqueHead)) uniqueHead += "\t"
+                    map[uniqueHead] = ""
+                    break
+                }
+                head = str.substring(j, i).trim()
+            }
+            return map
+        }
     }
 
     private val tcpClient = EdcbTcpClient(ip, port)
@@ -70,7 +113,6 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    // ★ お客様が提供してくださったパース成功コード（完全無変更）
     suspend fun getEventInfos(services: List<EdcbServiceInfo>): Result<List<EdcbEventInfo>> {
         if (services.isEmpty()) return Result.success(emptyList())
 
@@ -129,17 +171,94 @@ class EdcbApi(private val ip: String, private val port: Int) {
 
                     var eventName = ""
                     var eventText = ""
+                    var extendedText = ""
+                    var detailMap = emptyMap<String, String>()
+                    var contentList: List<EdcbContentData> = emptyList()
 
+                    // =========================================
+                    // 1. ShortEventInfo
+                    // =========================================
                     val startShortPos = eventBuf.position()
-                    val nextFieldSize = EdcbByteUtils.readInt(eventBuf)
-                    if (nextFieldSize > 4) {
-                        eventBuf.position(eventBuf.position() - 4)
-                        EdcbByteUtils.readStructIntro(eventBuf)
+                    val shortInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    if (shortInfoSize > 4) {
                         eventName = EdcbByteUtils.readString(eventBuf)
                         eventText = EdcbByteUtils.readString(eventBuf)
                     }
-                    val endShortPos = startShortPos + nextFieldSize
+                    val endShortPos = startShortPos + shortInfoSize
                     if (endShortPos <= eventBuf.limit()) eventBuf.position(endShortPos)
+
+                    // =========================================
+                    // 2. ExtendedEventInfo
+                    // =========================================
+                    val startExtPos = eventBuf.position()
+                    val extInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    if (extInfoSize > 4) {
+                        extendedText = EdcbByteUtils.readString(eventBuf)
+                        detailMap = parseProgramExtendedText(extendedText)
+                    }
+                    val endExtPos = startExtPos + extInfoSize
+                    if (endExtPos <= eventBuf.limit()) eventBuf.position(endExtPos)
+
+                    // =========================================
+                    // 3. ContentInfo (ジャンルのパース)
+                    // =========================================
+                    val startContentPos = eventBuf.position()
+                    val contentInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    if (contentInfoSize > 4) {
+                        val vectorStartPos = eventBuf.position()
+                        val vs = EdcbByteUtils.readInt(eventBuf)
+                        val vc = EdcbByteUtils.readInt(eventBuf)
+
+                        val list = mutableListOf<EdcbContentData>()
+                        for (i in 0 until vc) {
+                            val cStart = eventBuf.position()
+                            val cSize = EdcbByteUtils.readStructIntro(eventBuf)
+
+                            val cn = EdcbByteUtils.readUshort(eventBuf)
+                            val un = EdcbByteUtils.readUshort(eventBuf)
+
+                            val endC = cStart + cSize
+                            if (endC <= eventBuf.limit()) eventBuf.position(endC)
+
+                            // ★神修正: ByteBufferがLittleEndianで読んでしまった2バイトを
+                            // ビッグエンディアンの並びにひっくり返して（Python版の動作を完全再現）、正しいジャンルIDを復元する！
+                            val contentNibble = ((cn shr 8) or (cn shl 8)) and 0xFFFF
+                            val userNibble = ((un shr 8) or (un shl 8)) and 0xFFFF
+
+                            list.add(EdcbContentData(contentNibble, userNibble))
+                        }
+                        contentList = list
+
+                        val endVectorPos = vectorStartPos + vs
+                        if (endVectorPos <= eventBuf.limit()) eventBuf.position(endVectorPos)
+                    }
+                    val endContentPos = startContentPos + contentInfoSize
+                    if (endContentPos <= eventBuf.limit()) eventBuf.position(endContentPos)
+
+                    // =========================================
+                    // 4~7. 以降のブロックスキップ
+                    // =========================================
+                    val startCompPos = eventBuf.position()
+                    val compInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    val endCompPos = startCompPos + compInfoSize
+                    if (endCompPos <= eventBuf.limit()) eventBuf.position(endCompPos)
+
+                    val startAudioPos = eventBuf.position()
+                    val audioInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    val endAudioPos = startAudioPos + audioInfoSize
+                    if (endAudioPos <= eventBuf.limit()) eventBuf.position(endAudioPos)
+
+                    val startEgPos = eventBuf.position()
+                    val egInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    val endEgPos = startEgPos + egInfoSize
+                    if (endEgPos <= eventBuf.limit()) eventBuf.position(endEgPos)
+
+                    val startErPos = eventBuf.position()
+                    val erInfoSize = EdcbByteUtils.readInt(eventBuf)
+                    val endErPos = startErPos + erInfoSize
+                    if (endErPos <= eventBuf.limit()) eventBuf.position(endErPos)
+
+                    val freeCaFlag = EdcbByteUtils.readByte(eventBuf)
 
                     val endEventPos = startEventPos + eventStructSize
                     if (endEventPos <= eventBuf.limit()) eventBuf.position(endEventPos)
@@ -153,7 +272,10 @@ class EdcbApi(private val ip: String, private val port: Int) {
                         if (hasDuration) durationVal else 0,
                         eventName,
                         eventText,
-                        0
+                        freeCaFlag,
+                        contentList,
+                        extendedText,
+                        detailMap
                     )
                 }
                 events.addAll(eventList)
@@ -171,9 +293,6 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    // ==========================================
-    // ★ ロゴファイル取得(2060コマンド)用の追加メソッド
-    // ==========================================
     suspend fun fetchFiles(fileNames: List<String>): List<EdcbFileData>? =
         withContext(Dispatchers.IO) {
             try {

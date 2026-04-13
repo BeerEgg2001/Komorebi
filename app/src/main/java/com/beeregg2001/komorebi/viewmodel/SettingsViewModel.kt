@@ -184,6 +184,10 @@ class SettingsViewModel @Inject constructor(
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
+    // ★ 追加: サブチャンネル非表示設定
+    val hideSubChannels: StateFlow<Boolean> = settingsRepository.hideSubChannels
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     fun updateMirakurunIp(ip: String) {
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.MIRAKURUN_IP, ip) }
     }
@@ -321,6 +325,16 @@ class SettingsViewModel @Inject constructor(
             ktorServer?.stop(gracePeriodMillis = 500, timeoutMillis = 1000)
             ktorServer = null
             Log.i("SettingsViewModel", "Stopped Local Server")
+        }
+    }
+
+    // ★ 追加: サブチャンネル表示/非表示を切り替える
+    fun toggleHideSubChannels() {
+        viewModelScope.launch {
+            settingsRepository.saveBoolean(
+                SettingsRepository.HIDE_SUB_CHANNELS,
+                !hideSubChannels.value
+            )
         }
     }
 

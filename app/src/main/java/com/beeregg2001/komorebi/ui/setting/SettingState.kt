@@ -47,7 +47,9 @@ class SettingPreferences(
     val startupChannel: String,
     val timeFormat: String,
     val currentThemeName: String,
-    val defaultRecordListView: String
+    val defaultRecordListView: String,
+    // ★ 追加: サブチャンネル非表示設定
+    val hideSubChannels: Boolean
 )
 
 @Composable
@@ -111,7 +113,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         startupChannel = repository.startupChannel.collectAsState(initial = "OFF").value,
         timeFormat = repository.timeFormat.collectAsState(initial = "24H").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
-        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
+        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
+        // ★ 追加: サブチャンネル非表示設定
+        hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value
     )
 }
 

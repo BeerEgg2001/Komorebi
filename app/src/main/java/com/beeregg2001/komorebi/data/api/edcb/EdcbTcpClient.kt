@@ -2,6 +2,8 @@ package com.beeregg2001.komorebi.data.api.edcb
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -9,92 +11,86 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * EDCB (EpgTimerSrv) の TCPバイナリプロトコル (CtrlCmd) クライアント。
- */
-class EdcbTcpClient(
-    private val ip: String,
-    private val port: Int,
-    private val connectTimeoutMs: Int = 3000,
-    private val readTimeoutMs: Int = 10000
-) {
+class EdcbTcpClient(private val ip: String, private val port: Int) {
     companion object {
         private const val TAG = "EdcbTcpClient"
 
-        // ★ 修正: EDCBの正常完了コードは 1
-        const val CMD_SUCCESS = 1
+        // ★ 修正: アプリ全体からEDCBへのTCP通信を順番に処理し、Socketの競合によるConnection Errorを防ぐ
+        private val tcpMutex = Mutex()
     }
 
-    suspend fun sendCommand(commandId: Int, sendData: ByteArray = ByteArray(0)): ByteBuffer? =
+    suspend fun sendCommand(cmd: Int, data: ByteArray = ByteArray(0)): ByteBuffer? =
         withContext(Dispatchers.IO) {
-            var socket: Socket? = null
-            try {
-                socket = Socket()
-                socket.soTimeout = readTimeoutMs
-                socket.connect(InetSocketAddress(ip, port), connectTimeoutMs)
-
-                val outStream = socket.getOutputStream()
-                val inStream = socket.getInputStream()
-
-                // 1. ヘッダーの作成 (コマンドID(4byte) + データサイズ(4byte) = 8byte)
-                val headerBuffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
-                headerBuffer.putInt(commandId)
-                headerBuffer.putInt(sendData.size)
-
-                // 2. ヘッダーとデータを送信
-                outStream.write(headerBuffer.array())
-                if (sendData.isNotEmpty()) {
-                    outStream.write(sendData)
-                }
-                outStream.flush()
-
-                // 3. レスポンスヘッダーを受信 (8byte)
-                val resHeaderBytes = readExactBytes(inStream, 8) ?: return@withContext null
-                val resHeader = ByteBuffer.wrap(resHeaderBytes).order(ByteOrder.LITTLE_ENDIAN)
-
-                val retCode = resHeader.int
-                val resSize = resHeader.int
-
-                Log.d(TAG, "Response Header - Ret: $retCode, Size: $resSize")
-
-                if (retCode != CMD_SUCCESS) {
-                    Log.e(TAG, "EDCB returned error or unknown command: $retCode")
-                    return@withContext null
-                }
-
-                if (resSize < 0 || resSize > 100_000_000) {
-                    Log.e(
-                        TAG,
-                        "Abnormal response size detected: $resSize bytes. Aborting to prevent OOM."
-                    )
-                    return@withContext null
-                }
-
-                // 4. レスポンスデータを受信
-                if (resSize > 0) {
-                    val resDataBytes = readExactBytes(inStream, resSize) ?: return@withContext null
-                    return@withContext ByteBuffer.wrap(resDataBytes).order(ByteOrder.LITTLE_ENDIAN)
-                }
-
-                return@withContext ByteBuffer.allocate(0).order(ByteOrder.LITTLE_ENDIAN)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "TCP Communication Error to $ip:$port", e)
-                return@withContext null
-            } finally {
+            // ★ 修正: EDCBへの通信全体をロック
+            tcpMutex.withLock {
+                var socket: Socket? = null
                 try {
-                    socket?.close()
-                } catch (e: Exception) { /* ignore */
+                    socket = Socket()
+                    // タイムアウトを少し長めに設定して安全性を高める
+                    socket.soTimeout = 10000
+                    socket.connect(InetSocketAddress(ip, port), 4000)
+
+                    val outputStream = socket.getOutputStream()
+                    val inputStream = socket.getInputStream()
+
+                    // ヘッダー作成 (8 bytes)
+                    val header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+                    header.putInt(cmd)
+                    header.putInt(data.size)
+
+                    // データ送信
+                    outputStream.write(header.array())
+                    if (data.isNotEmpty()) {
+                        outputStream.write(data)
+                    }
+                    outputStream.flush()
+
+                    // レスポンスヘッダー受信
+                    val resHeaderBytes = readExactBytes(inputStream, 8)
+                        ?: throw Exception("Failed to read response header")
+
+                    val resHeaderBuf =
+                        ByteBuffer.wrap(resHeaderBytes).order(ByteOrder.LITTLE_ENDIAN)
+                    val ret = resHeaderBuf.getInt()
+                    val size = resHeaderBuf.getInt()
+
+                    Log.d(TAG, "Response Header - Ret: $ret, Size: $size")
+
+                    if (ret != 1) {
+                        Log.e(TAG, "Command failed. Return code: $ret")
+                        return@withContext null
+                    }
+
+                    if (size == 0) {
+                        return@withContext ByteBuffer.allocate(0)
+                    }
+
+                    // ペイロード受信
+                    val payloadBytes = readExactBytes(inputStream, size)
+                        ?: throw Exception("Connection closed prematurely by EDCB. Expected $size bytes.")
+
+                    return@withContext ByteBuffer.wrap(payloadBytes).order(ByteOrder.LITTLE_ENDIAN)
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "TCP Communication Error to $ip:$port", e)
+                    return@withContext null
+                } finally {
+                    try {
+                        socket?.close()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to close socket", e)
+                    }
                 }
             }
         }
 
-    private fun readExactBytes(inStream: InputStream, length: Int): ByteArray? {
+    private fun readExactBytes(inputStream: InputStream, length: Int): ByteArray? {
         val buffer = ByteArray(length)
         var totalRead = 0
         while (totalRead < length) {
-            val read = inStream.read(buffer, totalRead, length - totalRead)
+            val read = inputStream.read(buffer, totalRead, length - totalRead)
             if (read == -1) {
+                // EOF（予期せぬ切断）
                 Log.e(
                     TAG,
                     "Connection closed prematurely by EDCB. Expected $length, got $totalRead"
