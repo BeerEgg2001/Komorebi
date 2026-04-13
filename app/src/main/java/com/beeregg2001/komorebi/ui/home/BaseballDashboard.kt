@@ -208,7 +208,8 @@ fun BaseballDashboardScreen(
                                                 isDisplay = true,
                                                 programPresent = null,
                                                 programFollowing = null,
-                                                remocon_Id = 0
+                                                remocon_Id = 0,
+                                                is_subchannel = game.channel.is_subchannel
                                             )
                                             onChannelClick(channel)
                                         } else {

@@ -23,6 +23,7 @@ data class Channel(
     @SerializedName("transport_stream_id") val transportStreamId: Long = 0L,
     val type: String,
     @SerializedName("is_watchable") val isWatchable: Boolean,
+    @SerializedName("is_subchannel") val is_subchannel: Boolean = false,
     @SerializedName("is_display") val isDisplay: Boolean,
     @SerializedName("program_present") val programPresent: Program?,
     @SerializedName("program_following") val programFollowing: Program?,

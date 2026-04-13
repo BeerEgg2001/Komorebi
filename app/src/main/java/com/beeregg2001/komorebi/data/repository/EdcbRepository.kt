@@ -44,6 +44,9 @@ class EdcbRepository @Inject constructor(
 
     private var tsidToSidsMap: Map<Int, List<Int>> = emptyMap()
 
+    // ★ 修正: BSのグループ化をリモコン番号からSIDプレフィックス(上2桁)に変更
+    private var bsPrefixToSidsMap: Map<Int, List<Int>> = emptyMap()
+
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchEpgDataIfNeeded() = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
@@ -65,9 +68,16 @@ class EdcbRepository @Inject constructor(
                     cachedEvents = events
                     lastEpgFetchTime = System.currentTimeMillis()
 
+                    // 地デジ用のTS内SIDマップ
                     tsidToSidsMap = targetServices
                         .filter { getChannelType(it.onid) == "GR" }
                         .groupBy { it.tsid }
+                        .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+
+                    // ★ 修正: BSはリモコン番号ではなくSIDの上2桁(sid / 10)でグループ化する
+                    bsPrefixToSidsMap = targetServices
+                        .filter { getChannelType(it.onid) == "BS" }
+                        .groupBy { it.sid / 10 }
                         .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
 
                     Log.i(
@@ -127,6 +137,8 @@ class EdcbRepository @Inject constructor(
             val key = "${svc.onid}_${svc.tsid}_${svc.sid}"
             val (presentEvent, followingEvent) = presentAndFollowingMap[key] ?: Pair(null, null)
 
+            val isSub = isSubChannelInternal(type, svc.sid, svc.tsid)
+
             val channel = Channel(
                 id = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
                 displayChannelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
@@ -143,6 +155,7 @@ class EdcbRepository @Inject constructor(
                 type = type,
                 isWatchable = true,
                 isDisplay = true,
+                is_subchannel = isSub,
                 programPresent = presentEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 programFollowing = followingEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 remocon_Id = svc.remoteControlKeyId,
@@ -188,12 +201,7 @@ class EdcbRepository @Inject constructor(
             val type = getChannelType(svc.onid)
             val channelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}"
 
-            val isSubChannel = if (type == "GR") {
-                val sidsInTs = tsidToSidsMap[svc.tsid]
-                sidsInTs != null && sidsInTs.isNotEmpty() && sidsInTs[0] != svc.sid
-            } else {
-                false
-            }
+            val isSubChannel = isSubChannelInternal(type, svc.sid, svc.tsid)
 
             val epgChannel = EpgChannel(
                 id = channelId,
@@ -230,13 +238,32 @@ class EdcbRepository @Inject constructor(
         return@withContext wrappers.sortedBy { it.channel.channel_number.toIntOrNull() ?: 9999 }
     }
 
+    // ★ 修正: リモコン番号に依存せず、SIDプレフィックス(上2桁)を利用して判定する
+    private fun isSubChannelInternal(type: String, sid: Int, tsid: Int): Boolean {
+        return when (type) {
+            "GR" -> {
+                val sidsInTs = tsidToSidsMap[tsid]
+                sidsInTs != null && sidsInTs.isNotEmpty() && sidsInTs[0] != sid
+            }
+
+            "BS" -> {
+                // BS主要局(101-189)のみサブチャンネルを隠す
+                if (sid in 101..189) {
+                    val prefix = sid / 10 // 141, 142 -> 14
+                    val sidsForPrefix = bsPrefixToSidsMap[prefix]
+                    sidsForPrefix != null && sidsForPrefix.isNotEmpty() && sidsForPrefix[0] != sid
+                } else {
+                    false
+                }
+            }
+
+            else -> false
+        }
+    }
+
     override suspend fun getPinnedEpgPrograms(pinnedChannelIds: String): List<EpgChannelWrapper> {
         return emptyList()
     }
-
-    // ==========================================
-    // ヘルパーメソッド・拡張関数
-    // ==========================================
 
     private fun getChannelType(onid: Int): String {
         return when {
@@ -268,7 +295,6 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    // ★ EdcbConstants を参照するように変更
     private fun mapEdcbGenre(contentList: List<EdcbContentData>?): List<EpgGenre> {
         if (contentList.isNullOrEmpty()) return emptyList()
         return contentList.mapNotNull { content ->
@@ -280,14 +306,13 @@ class EdcbRepository @Inject constructor(
                 var major = genreTuple.first
                 var middle = genreTuple.second[middleNibble] ?: "未定義"
 
-                // 拡張情報の処理
                 if (major == "拡張") {
                     if (middle == "BS/地上デジタル放送用番組付属情報") {
                         val userNibble =
                             (content.userNibble shr 8 shl 4) or (content.userNibble and 0x0F)
                         middle = EdcbConstants.USER_TYPE[userNibble] ?: "未定義"
                     } else {
-                        return@mapNotNull null // 拡張はあるが不明なものはスキップ
+                        return@mapNotNull null
                     }
                 }
 
@@ -384,10 +409,6 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-
-    // ==========================================
-    // ロゴ取得 (変更なし)
-    // ==========================================
     override suspend fun getChannelLogoUrl(channelId: String): String =
         withContext(Dispatchers.IO) {
             if (failedLogoIds.contains(channelId)) return@withContext ""
@@ -454,7 +475,6 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    // --- 未実装メソッドのスタブ ---
     override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
         RecordedApiResponse(0, emptyList())

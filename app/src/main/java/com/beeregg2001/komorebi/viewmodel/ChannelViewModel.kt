@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.LiveProvider
@@ -21,7 +22,8 @@ import javax.inject.Inject
 class ChannelViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
-    private val watchHistoryRepository: WatchHistoryRepository
+    private val watchHistoryRepository: WatchHistoryRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(true)
@@ -129,7 +131,6 @@ class ChannelViewModel @Inject constructor(
 
     private var isPollingPaused = false
 
-    // ★ 追加: ロゴURLをメモリに保持し、タブ移動などの再フェッチを高速化するキャッシュ
     private val logoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
@@ -196,6 +197,9 @@ class ChannelViewModel @Inject constructor(
             _connectionError.value = false
             val response = liveProvider.getChannels()
 
+            // サブチャンネル非表示設定を取得
+            val hideSubChannels = settingsRepository.hideSubChannels.first()
+
             val processed = withContext(Dispatchers.Default) {
                 val rawChannels = listOfNotNull(
                     response.terrestrial, response.bs, response.cs, response.sky, response.bs4k
@@ -215,17 +219,24 @@ class ChannelViewModel @Inject constructor(
                         programPresent = apiChannel.programPresent,
                         programFollowing = apiChannel.programFollowing,
                         remocon_Id = apiChannel.remocon_Id,
-                        jikkyoForce = apiChannel.jikkyoForce
+                        jikkyoForce = apiChannel.jikkyoForce,
+                        is_subchannel = apiChannel.is_subchannel
                     )
                 }
 
-                val hotCount = allChannels.count { (it.jikkyoForce ?: 0) > 0 }
+                val filteredChannels = if (hideSubChannels) {
+                    allChannels.filter { !it.is_subchannel }
+                } else {
+                    allChannels
+                }
+
+                val hotCount = filteredChannels.count { (it.jikkyoForce ?: 0) > 0 }
                 Log.i(
                     "ChannelViewModel",
-                    "Fetched channels. Total: ${allChannels.size}, Hot(force > 0): $hotCount"
+                    "Fetched channels. Total: ${filteredChannels.size}, Hot(force > 0): $hotCount"
                 )
 
-                allChannels.filter { it.isDisplay }.groupBy { it.type }
+                filteredChannels.filter { it.isDisplay }.groupBy { it.type }
             }
             _groupedChannels.value = processed
             _liveRows.value = transformToUiState(processed)
@@ -320,7 +331,6 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: キャッシュを利用し、既に取得済みの場合は即座にURLを返すように高速化
     suspend fun getChannelLogoUrl(channelId: String): String {
         logoCache[channelId]?.let { return it }
         return liveProvider.getChannelLogoUrl(channelId).also {
