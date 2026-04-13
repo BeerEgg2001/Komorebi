@@ -43,9 +43,12 @@ class EdcbRepository @Inject constructor(
     private var lastEpgFetchTime = 0L
 
     private var tsidToSidsMap: Map<Int, List<Int>> = emptyMap()
-
-    // ★ 修正: BSのグループ化をリモコン番号からSIDプレフィックス(上2桁)に変更
     private var bsPrefixToSidsMap: Map<Int, List<Int>> = emptyMap()
+
+    // ★追加: 録画リスト機能用のキャッシュとMutex
+    private val recordMutex = Mutex()
+    private var cachedRecInfos: List<EdcbRecFileInfo>? = null
+    private var lastRecFetchTime = 0L
 
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchEpgDataIfNeeded() = withContext(Dispatchers.IO) {
@@ -68,13 +71,11 @@ class EdcbRepository @Inject constructor(
                     cachedEvents = events
                     lastEpgFetchTime = System.currentTimeMillis()
 
-                    // 地デジ用のTS内SIDマップ
                     tsidToSidsMap = targetServices
                         .filter { getChannelType(it.onid) == "GR" }
                         .groupBy { it.tsid }
                         .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
 
-                    // ★ 修正: BSはリモコン番号ではなくSIDの上2桁(sid / 10)でグループ化する
                     bsPrefixToSidsMap = targetServices
                         .filter { getChannelType(it.onid) == "BS" }
                         .groupBy { it.sid / 10 }
@@ -238,7 +239,6 @@ class EdcbRepository @Inject constructor(
         return@withContext wrappers.sortedBy { it.channel.channel_number.toIntOrNull() ?: 9999 }
     }
 
-    // ★ 修正: リモコン番号に依存せず、SIDプレフィックス(上2桁)を利用して判定する
     private fun isSubChannelInternal(type: String, sid: Int, tsid: Int): Boolean {
         return when (type) {
             "GR" -> {
@@ -247,9 +247,8 @@ class EdcbRepository @Inject constructor(
             }
 
             "BS" -> {
-                // BS主要局(101-189)のみサブチャンネルを隠す
                 if (sid in 101..189) {
-                    val prefix = sid / 10 // 141, 142 -> 14
+                    val prefix = sid / 10
                     val sidsForPrefix = bsPrefixToSidsMap[prefix]
                     sidsForPrefix != null && sidsForPrefix.isNotEmpty() && sidsForPrefix[0] != sid
                 } else {
@@ -315,7 +314,6 @@ class EdcbRepository @Inject constructor(
                         return@mapNotNull null
                     }
                 }
-
                 EpgGenre(major = major, middle = middle)
             } else {
                 null
@@ -476,16 +474,164 @@ class EdcbRepository @Inject constructor(
     }
 
     override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
-    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
-        RecordedApiResponse(0, emptyList())
 
+    // =========================================================================
+    // ★ 追加: 録画リスト関連機能 (他メソッドには一切干渉しない)
+    // =========================================================================
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        withContext(Dispatchers.IO) {
+            recordMutex.withLock {
+                try {
+                    if (page == 1) Log.i(TAG, "[getRecordedPrograms] 録画同期を開始します")
+                    val ip = settingsRepository.edcbIp.first()
+                    val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                    if (ip.isBlank()) return@withContext RecordedApiResponse(0, emptyList())
+
+                    if (cachedRecInfos == null || (System.currentTimeMillis() - lastRecFetchTime) > 30_000L) {
+                        val result = EdcbApi(ip, port).getRecInfosBasic()
+                        if (result.isSuccess) {
+                            cachedRecInfos = result.getOrNull()?.sortedByDescending { it.startTime }
+                            lastRecFetchTime = System.currentTimeMillis()
+                        } else {
+                            return@withContext RecordedApiResponse(0, emptyList())
+                        }
+                    }
+
+                    val all = cachedRecInfos ?: emptyList()
+                    val total = all.size
+                    val from = (page - 1) * 50
+                    if (from >= total) return@withContext RecordedApiResponse(total, emptyList())
+
+                    val to = (from + 50).coerceAtMost(total)
+
+                    // サスペンドによるキャンセルを防ぐため、キャッシュがない場合は安全に取得
+                    var safeHttpPort = httpPortCache ?: 5510
+                    if (httpPortCache == null && !logoDataIniAttempted) {
+                        try {
+                            val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
+                                ?.firstOrNull { it.data.isNotEmpty() }
+                            if (srvIni != null) {
+                                val iniText = decodeEdcbString(srvIni.data)
+                                Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
+                                    ?.let { safeHttpPort = it.groupValues[1].toInt() }
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
+
+                    val programs =
+                        all.subList(from, to).map { mapToRecordedProgram(it, ip, safeHttpPort) }
+                    Log.i(TAG, "[getRecordedPrograms] Page $page 返却完了 (件数: ${programs.size})")
+                    RecordedApiResponse(total, programs)
+                } catch (e: Exception) {
+                    Log.e(TAG, "同期エラー", e); RecordedApiResponse(0, emptyList())
+                }
+            }
+        }
+
+    @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> =
-        Result.failure(Exception("Not implemented"))
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+
+                val info =
+                    cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
+                        videoId
+                    ).getOrNull()
+
+                var safeHttpPort = httpPortCache ?: 5510
+                if (httpPortCache == null && !logoDataIniAttempted) {
+                    try {
+                        val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
+                            ?.firstOrNull { it.data.isNotEmpty() }
+                        if (srvIni != null) {
+                            val iniText = decodeEdcbString(srvIni.data)
+                            Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
+                                ?.let { safeHttpPort = it.groupValues[1].toInt() }
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+
+                if (info != null) Result.success(
+                    mapToRecordedProgram(
+                        info,
+                        ip,
+                        safeHttpPort
+                    )
+                ) else Result.failure(Exception("Not found"))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    override suspend fun getRecordStreamUrl(
+        videoId: Int,
+        quality: String,
+        sessionId: String
+    ): String {
+        return "http://${settingsRepository.edcbIp.first()}:${httpPortCache ?: 5510}/legacy/view.lua?id=$videoId"
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun mapToRecordedProgram(
+        info: EdcbRecFileInfo,
+        ip: String,
+        httpPort: Int
+    ): RecordedProgram {
+        var isoStart = ""
+        var isoEnd = ""
+        if (!info.startTime.isNullOrBlank()) {
+            try {
+                val startDt = LocalDateTime.parse(
+                    info.startTime,
+                    DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+                )
+                isoStart = startDt.atZone(ZoneId.of("Asia/Tokyo"))
+                    .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                isoEnd =
+                    startDt.plusSeconds(info.durationSec.toLong()).atZone(ZoneId.of("Asia/Tokyo"))
+                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+            } catch (e: Exception) {
+            }
+        }
+        val isRecording = info.durationSec == 0 || info.recStatus == 0
+        val channelId = "edcb_${info.onid}_${info.tsid}_${info.sid}"
+
+        return RecordedProgram(
+            info.id, info.title, null, false, info.comment.ifBlank { info.programInfo.take(150) },
+            mapOf("Error" to "${info.drops}", "Path" to info.recFilePath),
+            isoStart, isoEnd, info.durationSec.toDouble(), info.drops > 0,
+            RecordedChannel(
+                channelId,
+                info.onid,
+                channelId,
+                getChannelType(info.onid),
+                info.serviceName,
+                String.format("%03d", info.sid % 1000)
+            ),
+            RecordedVideo(
+                info.id,
+                if (isRecording) "Recording" else "Recorded",
+                "http://$ip:$httpPort/legacy/view.lua?id=${info.id}",
+                isoStart,
+                isoEnd,
+                info.durationSec.toDouble(),
+                "mpegts",
+                "mpeg2",
+                "aac"
+            ),
+            emptyList(), isRecording, 0.0
+        )
+    }
 
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse =
         RecordedApiResponse(0, emptyList())
 
-    override suspend fun getRecordStreamUrl(v: Int, q: String, s: String): String = ""
     override suspend fun getArchivedJikkyo(v: Int): Result<List<ArchivedComment>> =
         Result.success(emptyList())
 

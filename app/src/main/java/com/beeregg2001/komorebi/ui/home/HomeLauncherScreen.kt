@@ -137,7 +137,7 @@ fun HomeLauncherScreen(
 
     val tabs = remember(favoriteBaseballTeams, backendType) {
         val base = if (backendType == "EDCB") {
-            listOf("ホーム", "ライブ", "番組表")
+            listOf("ホーム", "ライブ", "ビデオ", "番組表")
         } else {
             listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
         }
