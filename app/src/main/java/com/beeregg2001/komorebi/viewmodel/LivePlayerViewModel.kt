@@ -40,7 +40,7 @@ import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +52,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -67,7 +69,6 @@ import javax.inject.Inject
 @HiltViewModel
 class LivePlayerViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
-    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
@@ -75,14 +76,15 @@ class LivePlayerViewModel @Inject constructor(
         private const val TAG = "LivePlayerViewModel"
     }
 
-    var mainPlayer: ExoPlayer? = null
-        private set
-    var dualPlayer: ExoPlayer? = null
-        private set
+    // ★ 修正: ExoPlayerを動的に再生成してUIに伝えるため、StateFlowに変更
+    private val _mainPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val mainPlayer: StateFlow<ExoPlayer?> = _mainPlayer.asStateFlow()
 
-    private val nativeLib = NativeLib()
-    private val mainTsDataSourceFactory = TsReadExDataSourceFactory(nativeLib, emptyArray())
-    private val dualTsDataSourceFactory = TsReadExDataSourceFactory(nativeLib, emptyArray())
+    private val _dualPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val dualPlayer: StateFlow<ExoPlayer?> = _dualPlayer.asStateFlow()
+
+    private val mainTsDataSourceFactory = TsReadExDataSourceFactory(NativeLib(), emptyArray())
+    private val dualTsDataSourceFactory = TsReadExDataSourceFactory(NativeLib(), emptyArray())
 
     private val _mainPlayerError = MutableStateFlow<String?>(null)
     val mainPlayerError: StateFlow<String?> = _mainPlayerError.asStateFlow()
@@ -120,6 +122,9 @@ class LivePlayerViewModel @Inject constructor(
     private var mainPlaybackJob: Job? = null
     private var dualPlaybackJob: Job? = null
 
+    private val mainPlaybackMutex = Mutex()
+    private val dualPlaybackMutex = Mutex()
+
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -136,21 +141,6 @@ class LivePlayerViewModel @Inject constructor(
             val backendType = settingsRepository.backendType.first()
             _shouldCropLogo.value = backendType == "KONOMITV"
         }
-    }
-
-    fun initPlayersIfNeeded(audioOutputMode: String) {
-        Log.d(TAG, "initPlayersIfNeeded() called. audioOutputMode=$audioOutputMode")
-        if (mainPlayer != null) return
-
-        mainPlayer = createExoPlayer(
-            audioOutputMode,
-            { mainCurrentSource == StreamSource.KONOMITV }) { error ->
-            Log.e(TAG, "ExoPlayer (Main) Error: ${error.message}", error)
-            _mainPlayerError.value = analyzePlayerError(error)
-        }
-        dualPlayer =
-            createExoPlayer(audioOutputMode, { dualCurrentSource == StreamSource.KONOMITV }) { }
-
         startSignalPolling()
     }
 
@@ -191,124 +181,186 @@ class LivePlayerViewModel @Inject constructor(
         return sources.first()
     }
 
+    // ★ 修正: ストリーム停止時にExoPlayerインスタンスを完全に破棄(release)して null にする
     private fun stopMainPlaybackSafely() {
+        Log.d(TAG, "stopMainPlaybackSafely() called. Destroying ExoPlayer instance...")
         mainEventSource?.cancel()
         mainEventSource = null
-        mainPlayer?.stop()
-        mainPlayer?.clearMediaItems()
+
+        _mainPlayer.value?.stop()
+        _mainPlayer.value?.release()
+        _mainPlayer.value = null
+
         _mainSseStatus.value = "Standby"
         _mainSseDetail.value = AppStrings.SSE_CONNECTING
         _mainPlayerError.value = null
     }
 
-    fun playMainChannel(channel: Channel, source: StreamSource, quality: StreamQuality) {
-        Log.d(
-            TAG,
-            "playMainChannel() called: channel=${channel.name}(${channel.displayChannelId}), source=$source, quality=${quality.value}"
-        )
-        if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") {
-            Log.w(TAG, "playMainChannel: Cancelled because channel ID is invalid.")
-            return
-        }
+    private fun stopDualPlaybackSafely() {
+        Log.d(TAG, "stopDualPlaybackSafely() called. Destroying ExoPlayer instance...")
+        dualEventSource?.cancel()
+        dualEventSource = null
+
+        _dualPlayer.value?.stop()
+        _dualPlayer.value?.release()
+        _dualPlayer.value = null
+
+        _dualSseStatus.value = "Standby"
+        _dualSseDetail.value = AppStrings.SSE_CONNECTING
+    }
+
+    fun releasePlayers() {
+        Log.d(TAG, "releasePlayers() called. Completely freeing hardware decoders.")
+        mainPlaybackJob?.cancel()
+        dualPlaybackJob?.cancel()
+        mainEventSource?.cancel()
+        dualEventSource?.cancel()
+
+        _mainPlayer.value?.release()
+        _mainPlayer.value = null
+        _dualPlayer.value?.release()
+        _dualPlayer.value = null
+
+        _mainSseStatus.value = "Standby"
+        _dualSseStatus.value = "Standby"
+    }
+
+    fun playMainChannel(
+        uiContext: Context,
+        channel: Channel,
+        source: StreamSource,
+        quality: StreamQuality
+    ) {
+        Log.d(TAG, "playMainChannel() called: channel=${channel.name}")
+        if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
 
         viewModelScope.launch {
             _currentLogoUrl.value = liveProvider.getChannelLogoUrl(channel.id)
         }
 
-        // ★ 修正: デバウンス処理（連打対策）を追加
-        // 前のJobをキャンセルし、すぐに新しいチューナーを掴みに行かず少し待つ
         mainPlaybackJob?.cancel()
         mainPlaybackJob = viewModelScope.launch {
-            // 一旦UIをスタンバイ状態にする
-            stopMainPlaybackSafely()
-            mainCurrentSource = source
+            try {
+                mainPlaybackMutex.withLock {
+                    stopMainPlaybackSafely()
+                    mainCurrentSource = source
 
-            // ★ ここで300ms待機。ユーザーが連打中はこのdelay中にキャンセルされるため、
-            // 余計な通信やEDCBチューナーの奪い合いが発生しない。
-            delay(300)
+                    delay(400) // デコーダとEDCBチューナーの完全解放を待つ
 
-            val config = settingsRepository.getBackendConfig(source)
-            val streamUrl =
-                buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
-            Log.d(TAG, "playMainChannel: Generated Stream URL = $streamUrl")
+                    // ★ 修正: ここで全く新しい ExoPlayer インスタンスを生成する！
+                    val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    val newPlayer = createExoPlayer(
+                        uiContext,
+                        audioOutputMode,
+                        { mainCurrentSource == StreamSource.KONOMITV }) { error ->
+                        Log.e(TAG, "ExoPlayer (Main) Error: ${error.message}", error)
+                        _mainPlayerError.value = analyzePlayerError(error)
+                    }
+                    _mainPlayer.value = newPlayer
 
-            if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
-                Log.d(TAG, "playMainChannel: Direct playback (No SSE required) for $source")
-                _mainSseStatus.value = "ONAir"
-                _mainSseDetail.value = ""
-            } else {
-                if (config is BackendConfig.KonomiTv) {
-                    Log.d(TAG, "playMainChannel: Starting SSE for KonomiTV...")
-                    startMainSse(
-                        channel.displayChannelId,
-                        quality.value,
-                        config,
-                        streamUrl,
-                        source,
-                        mainTsDataSourceFactory
-                    )
+                    val config = settingsRepository.getBackendConfig(source)
+                    val streamUrl =
+                        buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
+
+                    if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
+                        _mainSseStatus.value = "ONAir"
+                        _mainSseDetail.value = ""
+                    } else {
+                        if (config is BackendConfig.KonomiTv) {
+                            startMainSse(
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                streamUrl,
+                                source,
+                                mainTsDataSourceFactory
+                            )
+                        }
+                    }
+
+                    startPlayback(uiContext, newPlayer, streamUrl, source, mainTsDataSourceFactory)
                 }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "playMainChannel: Job cancelled.")
             }
-
-            Log.d(TAG, "playMainChannel: Initiating playback immediately for source: $source")
-            startPlayback(mainPlayer, streamUrl, source, mainTsDataSourceFactory)
         }
     }
 
-    fun playDualChannel(channel: Channel, source: StreamSource, quality: StreamQuality) {
+    fun playDualChannel(
+        uiContext: Context,
+        channel: Channel,
+        source: StreamSource,
+        quality: StreamQuality
+    ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
 
-        // ★ 修正: デュアル側にも同様にデバウンス処理を追加
         dualPlaybackJob?.cancel()
         dualPlaybackJob = viewModelScope.launch {
-            dualEventSource?.cancel()
-            dualEventSource = null
-            dualPlayer?.stop()
-            dualPlayer?.clearMediaItems()
-            _dualSseStatus.value = "Standby"
-            _dualSseDetail.value = AppStrings.SSE_CONNECTING
-            dualCurrentSource = source
+            try {
+                dualPlaybackMutex.withLock {
+                    stopDualPlaybackSafely()
+                    dualCurrentSource = source
 
-            // ★ 連打防止
-            delay(300)
+                    delay(400)
 
-            val config = settingsRepository.getBackendConfig(source)
-            val streamUrl =
-                buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
+                    // ★ 修正: デュアル側も毎回新しい ExoPlayer を生成する
+                    val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    val newDualPlayer = createExoPlayer(
+                        uiContext,
+                        audioOutputMode,
+                        { dualCurrentSource == StreamSource.KONOMITV }) { }
+                    _dualPlayer.value = newDualPlayer
 
-            if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
-                _dualSseStatus.value = "ONAir"
-                _dualSseDetail.value = ""
-            } else {
-                if (config is BackendConfig.KonomiTv) {
-                    startDualSse(
-                        channel.displayChannelId,
-                        quality.value,
-                        config,
+                    val config = settingsRepository.getBackendConfig(source)
+                    val streamUrl =
+                        buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
+
+                    if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
+                        _dualSseStatus.value = "ONAir"
+                        _dualSseDetail.value = ""
+                    } else {
+                        if (config is BackendConfig.KonomiTv) {
+                            startDualSse(
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                streamUrl,
+                                source,
+                                dualTsDataSourceFactory
+                            )
+                        }
+                    }
+
+                    startPlayback(
+                        uiContext,
+                        newDualPlayer,
                         streamUrl,
                         source,
                         dualTsDataSourceFactory
                     )
                 }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "playDualChannel: Job cancelled.")
             }
-
-            startPlayback(dualPlayer, streamUrl, source, dualTsDataSourceFactory)
         }
     }
 
     fun stopAllPlayers() {
         Log.d(TAG, "stopAllPlayers() invoked. Releasing tuners...")
         mainPlaybackJob?.cancel()
-        stopMainPlaybackSafely()
-        stopDualPlayer()
+        dualPlaybackJob?.cancel()
+
+        viewModelScope.launch {
+            mainPlaybackMutex.withLock { stopMainPlaybackSafely() }
+            dualPlaybackMutex.withLock { stopDualPlaybackSafely() }
+        }
     }
 
     fun stopDualPlayer() {
         dualPlaybackJob?.cancel()
-        dualEventSource?.cancel()
-        dualEventSource = null
-        dualPlayer?.stop()
-        dualPlayer?.clearMediaItems()
+        viewModelScope.launch {
+            dualPlaybackMutex.withLock { stopDualPlaybackSafely() }
+        }
     }
 
     fun setSubtitlesEnabled(enabled: Boolean) {
@@ -316,8 +368,8 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun setVolumes(mainVolume: Float, dualVolume: Float) {
-        mainPlayer?.volume = mainVolume
-        dualPlayer?.volume = dualVolume
+        _mainPlayer.value?.volume = mainVolume
+        _dualPlayer.value?.volume = dualVolume
     }
 
     fun retry() {
@@ -380,6 +432,7 @@ class LivePlayerViewModel @Inject constructor(
 
     @androidx.annotation.OptIn(UnstableApi::class)
     private fun startPlayback(
+        uiContext: Context,
         player: ExoPlayer?,
         streamUrl: String,
         source: StreamSource,
@@ -410,7 +463,7 @@ class LivePlayerViewModel @Inject constructor(
                 ProgressiveMediaSource.Factory(factory, extractorsFactory)
                     .createMediaSource(mediaItem)
             } else {
-                DefaultMediaSourceFactory(context).createMediaSource(mediaItem)
+                DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
             }
 
             player?.setMediaSource(mediaSource)
@@ -433,36 +486,23 @@ class LivePlayerViewModel @Inject constructor(
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
-        Log.d(TAG, "startMainSse: Target Event URL = $eventUrl")
-
         val request =
             Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)").build()
         mainEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
-
-                override fun onOpen(eventSource: EventSource, response: Response) {
-                    Log.d(TAG, "SSE onOpen: Successfully connected to $eventUrl")
-                }
-
+                override fun onOpen(eventSource: EventSource, response: Response) {}
                 override fun onFailure(
                     eventSource: EventSource,
                     t: Throwable?,
                     response: Response?
                 ) {
-                    if (t is java.io.IOException && t.message == "Canceled") {
-                        Log.d(TAG, "SSE onFailure: Connection was canceled intentionally.")
-                        return
-                    }
-
+                    if (t is java.io.IOException && t.message == "Canceled") return
                     response?.close()
-                    val errMsg = t?.message ?: "HTTP Code: ${response?.code}"
-                    Log.e(TAG, "SSE onFailure: Connection Failed! Reason: $errMsg", t)
-
                     viewModelScope.launch(Dispatchers.Main) {
                         if (response != null && response.code !in 200..299) {
                             _mainPlayerError.value =
                                 "KonomiTVサーバーエラー (HTTP ${response.code})"
-                            mainPlayer?.stop()
+                            _mainPlayer.value?.stop()
                         }
                     }
                 }
@@ -473,7 +513,6 @@ class LivePlayerViewModel @Inject constructor(
                     type: String?,
                     data: String
                 ) {
-                    Log.d(TAG, "SSE onEvent payload: $data")
                     viewModelScope.launch(Dispatchers.Main) {
                         try {
                             val json = JSONObject(data)
@@ -489,24 +528,23 @@ class LivePlayerViewModel @Inject constructor(
                             ) {
                                 _mainPlayerError.value =
                                     _mainSseDetail.value.ifEmpty { AppStrings.ERR_TUNER_START_FAILED }
-                                mainPlayer?.stop()
+                                _mainPlayer.value?.stop()
                                 return@launch
                             }
 
                             when (status) {
-                                "Standby", "Restart" -> mainPlayer?.pause()
+                                "Standby", "Restart" -> _mainPlayer.value?.pause()
                                 "ONAir" -> {
-                                    if (mainPlayer?.playerError != null || _mainPlayerError.value != null) {
+                                    if (_mainPlayer.value?.playerError != null || _mainPlayerError.value != null) {
                                         _mainPlayerError.value = null
-                                        mainPlayer?.prepare()
+                                        _mainPlayer.value?.prepare()
                                     }
-                                    mainPlayer?.play()
+                                    _mainPlayer.value?.play()
                                 }
 
-                                "Offline" -> mainPlayer?.pause()
+                                "Offline" -> _mainPlayer.value?.pause()
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "SSE onEvent Parse Error", e)
                         }
                     }
                 }
@@ -538,7 +576,7 @@ class LivePlayerViewModel @Inject constructor(
                         if (response != null && response.code !in 200..299) {
                             _dualSseStatus.value = "Error"
                             _dualSseDetail.value = "接続失敗: HTTP ${response.code}"
-                            dualPlayer?.stop()
+                            _dualPlayer.value?.stop()
                         }
                     }
                 }
@@ -557,13 +595,13 @@ class LivePlayerViewModel @Inject constructor(
                             _dualSseDetail.value =
                                 json.optString("detail", AppStrings.STATUS_LOADING)
                             when (status) {
-                                "Standby", "Restart" -> dualPlayer?.pause()
+                                "Standby", "Restart" -> _dualPlayer.value?.pause()
                                 "ONAir" -> {
-                                    if (dualPlayer?.playerError != null) dualPlayer?.prepare()
-                                    dualPlayer?.play()
+                                    if (_dualPlayer.value?.playerError != null) _dualPlayer.value?.prepare()
+                                    _dualPlayer.value?.play()
                                 }
 
-                                "Offline", "Error" -> dualPlayer?.pause()
+                                "Offline", "Error" -> _dualPlayer.value?.pause()
                             }
                         } catch (e: Exception) {
                         }
@@ -574,6 +612,7 @@ class LivePlayerViewModel @Inject constructor(
 
     @androidx.annotation.OptIn(UnstableApi::class)
     private fun createExoPlayer(
+        uiContext: Context,
         audioOutputMode: String,
         isKonomiTvSource: () -> Boolean,
         onError: (PlaybackException) -> Unit
@@ -588,7 +627,8 @@ class LivePlayerViewModel @Inject constructor(
                 )
             )
         }
-        val renderersFactory = object : DefaultRenderersFactory(context) {
+
+        val renderersFactory = object : DefaultRenderersFactory(uiContext) {
             override fun buildAudioSink(
                 ctx: Context,
                 enableFloat: Boolean,
@@ -601,17 +641,15 @@ class LivePlayerViewModel @Inject constructor(
                 return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
             }
         }.apply {
-            setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER); setEnableDecoderFallback(
-            true
-        )
+            setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
+            setEnableDecoderFallback(true)
         }
 
-        // ★ 修正: バッファ制御の最適化。EDCB等の不安定なストリームにも耐えられるようにバッファ量を調整
-        return ExoPlayer.Builder(context, renderersFactory)
+        return ExoPlayer.Builder(uiContext, renderersFactory)
             .setReleaseTimeoutMs(10000).setDetachSurfaceTimeoutMs(10000)
             .setLoadControl(
                 DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(3000, 15000, 1500, 2000) // より安定した再生のためにバッファ量を増加
+                    .setBufferDurationsMs(2000, 10000, 1000, 1500)
                     .setPrioritizeTimeOverSizeThresholds(true)
                     .build()
             )
@@ -642,12 +680,7 @@ class LivePlayerViewModel @Inject constructor(
                                 val pts =
                                     currentPosition + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
                                 viewModelScope.launch(Dispatchers.Main) {
-                                    _subtitleEvents.emit(
-                                        Pair(
-                                            pts,
-                                            base64Data
-                                        )
-                                    )
+                                    _subtitleEvents.emit(Pair(pts, base64Data))
                                 }
                             }
                         }
@@ -660,7 +693,8 @@ class LivePlayerViewModel @Inject constructor(
         signalPollJob?.cancel()
         signalPollJob = viewModelScope.launch(Dispatchers.Main) {
             while (true) {
-                mainPlayer?.let { player ->
+                // ★ 修正: _mainPlayer.value から情報を取る
+                _mainPlayer.value?.let { player ->
                     val vFormat = player.videoFormat
                     val aFormat = player.audioFormat
                     val vCounters = player.videoDecoderCounters
@@ -726,12 +760,7 @@ class LivePlayerViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        mainPlaybackJob?.cancel()
-        dualPlaybackJob?.cancel()
-        mainEventSource?.cancel()
-        dualEventSource?.cancel()
+        releasePlayers()
         okHttpClient.dispatcher.executorService.shutdown()
-        mainPlayer?.release()
-        dualPlayer?.release()
     }
 }

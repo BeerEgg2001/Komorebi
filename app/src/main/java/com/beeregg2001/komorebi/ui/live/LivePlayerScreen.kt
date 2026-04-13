@@ -81,11 +81,11 @@ fun LivePlayerScreen(
     livePlayerViewModel: LivePlayerViewModel = hiltViewModel(),
     timeFormat: String = "24H"
 ) {
-    val context = LocalContext.current
+    val uiContext = LocalContext.current
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
 
-    val ps = rememberLivePlayerState(context, initialQuality)
+    val ps = rememberLivePlayerState(uiContext, initialQuality)
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val baseballGroupedChannels by channelViewModel.baseballGroupedChannels.collectAsState()
@@ -155,12 +155,8 @@ fun LivePlayerScreen(
     val subMenuFocusRequester = remember { FocusRequester() }
     val scrollState = rememberScrollState()
 
-    LaunchedEffect(audioOutputMode) {
-        livePlayerViewModel.initPlayersIfNeeded(audioOutputMode)
-    }
-
-    val mainPlayer = livePlayerViewModel.mainPlayer
-    val dualPlayer = livePlayerViewModel.dualPlayer
+    val mainPlayer by livePlayerViewModel.mainPlayer.collectAsState()
+    val dualPlayer by livePlayerViewModel.dualPlayer.collectAsState()
 
     val mainError by livePlayerViewModel.mainPlayerError.collectAsState()
     val mainStatus by livePlayerViewModel.mainSseStatus.collectAsState()
@@ -181,7 +177,7 @@ fun LivePlayerScreen(
         ps.dualSseDetail = dualDetail
     }
 
-    var isSourceInitialized by rememberSaveable { mutableStateOf(false) }
+    var isSourceInitialized by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!isSourceInitialized) {
@@ -257,10 +253,13 @@ fun LivePlayerScreen(
     }
 
     DisposableEffect(Unit) {
-        // ★ 修正: 画面を離れる際は、念のため必ずポーリングを再開しておく
+        channelViewModel.setPollingPaused(true)
         onDispose {
-            Log.d(TAG, "LivePlayerScreen disposed. Stopping players to release tuner.")
-            livePlayerViewModel.stopAllPlayers()
+            Log.d(
+                TAG,
+                "LivePlayerScreen disposed. Completely releasing players to free hardware decoders."
+            )
+            livePlayerViewModel.releasePlayers()
             channelViewModel.setPollingPaused(false)
         }
     }
@@ -279,6 +278,7 @@ fun LivePlayerScreen(
         if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") return@LaunchedEffect
 
         livePlayerViewModel.playMainChannel(
+            uiContext = uiContext,
             channel = currentChannelItem,
             source = ps.currentStreamSource,
             quality = ps.currentQuality
@@ -300,6 +300,7 @@ fun LivePlayerScreen(
         if (ps.isDualDisplayMode && rightChannel != null) {
             if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") return@LaunchedEffect
             livePlayerViewModel.playDualChannel(
+                uiContext = uiContext,
                 channel = rightChannel,
                 source = ps.currentStreamSource,
                 quality = ps.currentQuality
@@ -309,7 +310,7 @@ fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(ps.isDualDisplayMode, ps.activeDualPlayerIndex) {
+    LaunchedEffect(ps.isDualDisplayMode, ps.activeDualPlayerIndex, mainPlayer, dualPlayer) {
         val mainVol = if (ps.isDualDisplayMode && ps.activeDualPlayerIndex != 0) 0f else 1f
         val dualVol = if (ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1) 1f else 0f
         livePlayerViewModel.setVolumes(mainVol, dualVol)
@@ -411,7 +412,8 @@ fun LivePlayerScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 hasStoppedByLifecycle = true
-                livePlayerViewModel.stopAllPlayers()
+                // ★ 修正1: ホームボタン押下時等にデコーダを完全にOSへ返却し、他アプリの邪魔をしないようにする
+                livePlayerViewModel.releasePlayers()
             } else if (event == Lifecycle.Event.ON_START) {
                 if (hasStoppedByLifecycle) {
                     hasStoppedByLifecycle = false
@@ -434,7 +436,6 @@ fun LivePlayerScreen(
         )
     }
 
-    // ★ 修正: 冗長なフェッチループを削除し、純粋なUI準備遅延のみにする
     LaunchedEffect(Unit) {
         delay(800); isHeavyUiReady = true
     }
@@ -442,15 +443,12 @@ fun LivePlayerScreen(
     val isUiVisible =
         isSubMenuOpen || isMiniListOpen || showOverlay || isPinnedOverlay || ps.lCropMode != LCropMode.HIDDEN
 
-    // ★ 追加: UIの表示状態に連動してViewModel側のポーリングを動的に制御する
     LaunchedEffect(isUiVisible) {
-        // UIが表示されていない（純粋な動画視聴中）はポーリングを停止してGCを防ぐ
         channelViewModel.setPollingPaused(!isUiVisible)
     }
 
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
-            // ★ 動的ポーリング制御により、このフェッチ要求は即座に反映される
             channelViewModel.fetchChannels(); delay(200); listFocusRequester.safeRequestFocus(TAG)
         } else if (!currentIsManualOverlay && !currentIsSubMenuOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
             delay(100); mainFocusRequester.safeRequestFocus(TAG)
@@ -461,15 +459,6 @@ fun LivePlayerScreen(
         if (isSubMenuOpen && !isPiPMode) {
             delay(150); subMenuFocusRequester.safeRequestFocus(TAG)
         }
-    }
-
-    if (mainPlayer == null || dualPlayer == null) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        )
-        return
     }
 
     Box(
@@ -532,6 +521,7 @@ fun LivePlayerScreen(
                 },
                 update = { view ->
                     if (view.player != mainPlayer) view.player = mainPlayer
+
                     if (videoWidth > 0 && videoHeight > 0) {
                         val ratio = videoWidth.toFloat() / videoHeight.toFloat()
                         val isAnamorphic =
@@ -541,6 +531,8 @@ fun LivePlayerScreen(
                         if (view.resizeMode != targetMode) view.resizeMode = targetMode
                     }
                 },
+                // ★ 修正2: OOM(メモリリーク)を防ぐため、PlayerViewの参照を解放
+                onRelease = { view -> view.player = null },
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
@@ -588,6 +580,11 @@ fun LivePlayerScreen(
                         update = { view ->
                             view.visibility =
                                 if (isSubtitleEnabled && !isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                        },
+                        // ★ 修正2: OOM(メモリリーク)を防ぐため、WebViewを明示的に破棄する
+                        onRelease = { view ->
+                            view.destroy()
+                            webViewRef.value = null
                         },
                         modifier = Modifier.fillMaxSize()
                     )

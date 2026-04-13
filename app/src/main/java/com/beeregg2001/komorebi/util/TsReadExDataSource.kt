@@ -14,9 +14,10 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 @UnstableApi
 class TsReadExDataSource(
@@ -36,13 +37,31 @@ class TsReadExDataSource(
     private val tempArray = ByteArray(188 * 20000)
     private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 30000)
 
+    // ★ 修正: インスタンス（ストリーム）ごとに一意のIDと、個別のCloseタイムスタンプを持たせる
+    private val nwtvId: Int
+    private var lastCloseRequestTime = 0L
+
     companion object {
         private const val CMD_EPG_SRV_RELAY_VIEW_STREAM = 301
         private const val CMD_EPG_SRV_NWTV_ID_SET_CH = 1073
         private const val CMD_EPG_SRV_NWTV_ID_CLOSE = 1074
         private const val CMD_SUCCESS = 1
         private const val TAG = "TsReadExDataSource"
-        private const val NWTV_ID = 500
+
+        // EDCBチューナーへの要求（Open / Close）が絶対に交差しないようにするためのグローバルロック
+        private val edcbTunerLock = ReentrantLock()
+
+        // IDが被らないようにするためのグローバルカウンター（500〜）
+        private var nwtvIdCounter = 500
+    }
+
+    init {
+        // インスタンス生成時に、他のストリームと絶対に被らない固有のIDを割り当てる
+        edcbTunerLock.withLock {
+            nwtvId = nwtvIdCounter++
+            // 万が一長期間起動してIDが大きくなりすぎた場合はリセット
+            if (nwtvIdCounter > 10000) nwtvIdCounter = 500
+        }
     }
 
     override fun getUri(): Uri? = uri
@@ -58,7 +77,10 @@ class TsReadExDataSource(
         }
 
         if (dataSpec.uri.scheme == "edcb") {
-            openEdcbStream(dataSpec.uri)
+            // EDCBを開く処理全体をロックし、他ストリームのOpen/Closeと被らないようにする
+            edcbTunerLock.withLock {
+                openEdcbStream(dataSpec.uri)
+            }
         } else {
             openHttpStream(dataSpec.uri)
         }
@@ -69,7 +91,7 @@ class TsReadExDataSource(
     }
 
     private fun openHttpStream(uri: Uri) {
-        val url = URL(uri.toString())
+        val url = java.net.URL(uri.toString())
         connection = (url.openConnection() as HttpURLConnection).apply {
             connectTimeout = 8000; readTimeout = 8000; doInput = true
         }
@@ -88,7 +110,8 @@ class TsReadExDataSource(
         var targetProcessId = 0
         val startTime = System.currentTimeMillis()
 
-        cleanupEdcbSession(ip, port)
+        // 接続を開始する前に、確実に前のセッション（自身のID）をクリーンアップする
+        cleanupEdcbSessionSynchronous(ip, port)
 
         while (System.currentTimeMillis() - startTime < 10000) {
             try {
@@ -103,7 +126,8 @@ class TsReadExDataSource(
                     body.putShort(tsid.toShort())
                     body.putShort(sid.toShort())
                     body.putInt(1)
-                    body.putInt(NWTV_ID)
+                    // ★ 修正: インスタンス固有の nwtvId を使用する
+                    body.putInt(nwtvId)
                     body.putInt(2)
 
                     sendEdcbCommand(
@@ -137,7 +161,7 @@ class TsReadExDataSource(
         while (System.currentTimeMillis() - relayStartTime < 10000) {
             try {
                 val s = Socket()
-                s.soTimeout = 15000
+                s.soTimeout = 15000 // EDCBはバッファが溜まるまで応答が遅いため、タイムアウトを長めに確保
                 s.connect(InetSocketAddress(ip, port), 3000)
 
                 val relayReq =
@@ -160,31 +184,54 @@ class TsReadExDataSource(
         }
 
         if (!relayConnected || relaySocket == null) {
-            cleanupEdcbSession(ip, port)
+            cleanupEdcbSessionSynchronous(ip, port)
             throw IOException("EDCB Relay failed.")
         }
 
         this.edcbSocket = relaySocket
-        Log.i(TAG, "EDCB Stream Success! ProcessID: $targetProcessId")
+        Log.i(TAG, "EDCB Stream Success! ProcessID: $targetProcessId (NWTV_ID: $nwtvId)")
         this.inputStream = BufferedInputStream(edcbSocket!!.getInputStream(), 188 * 30000)
     }
 
-    // ★ 修正: メインスレッドでNetworkアクセスしてクラッシュするのを防ぐため、Threadに分離
-    private fun cleanupEdcbSession(ip: String, port: Int) {
+    // オープン処理中にも確実かつ順番に呼ばれる同期的なクリーンアップ
+    private fun cleanupEdcbSessionSynchronous(ip: String, port: Int) {
+        val now = System.currentTimeMillis()
+        // ★ 修正: このインスタンス（ストリーム）固有のタイマーで判定するため、二画面同時のCloseが誤爆しない
+        if (now - lastCloseRequestTime < 1000) {
+            Log.d(
+                TAG,
+                "cleanupEdcbSession: Skipped for NWTV_ID $nwtvId because a close request was just sent."
+            )
+            return
+        }
+
+        try {
+            Socket().use { s ->
+                s.soTimeout = 2000
+                s.connect(InetSocketAddress(ip, port), 1500)
+                val closeReq =
+                    // ★ 修正: 自分の nwtvId だけをクローズする
+                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(nwtvId)
+                        .array()
+                sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_NWTV_ID_CLOSE, closeReq)
+                readEdcbResponseHeader(s.getInputStream())
+                lastCloseRequestTime = System.currentTimeMillis()
+                Log.d(
+                    TAG,
+                    "EDCB Tuner released successfully (NWTV_ID_CLOSE sent to $ip:$port for ID $nwtvId)"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release EDCB Tuner (ID $nwtvId): ${e.message}")
+        }
+    }
+
+    // DataSourceのクローズ時（ExoPlayerからの解放命令）に呼ばれる
+    private fun cleanupEdcbSessionAsynchronous(ip: String, port: Int) {
         Thread {
-            try {
-                Socket().use { s ->
-                    s.soTimeout = 2000
-                    s.connect(InetSocketAddress(ip, port), 1500)
-                    val closeReq =
-                        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(NWTV_ID)
-                            .array()
-                    sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_NWTV_ID_CLOSE, closeReq)
-                    readEdcbResponseHeader(s.getInputStream())
-                    Log.d(TAG, "EDCB Tuner released successfully (NWTV_ID_CLOSE sent to $ip:$port)")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to release EDCB Tuner: ${e.message}")
+            // 非同期で呼ばれるCloseも、他のインスタンスのOpen処理を邪魔しないようにグローバルロックを取る
+            edcbTunerLock.withLock {
+                cleanupEdcbSessionSynchronous(ip, port)
             }
         }.start()
     }
@@ -246,7 +293,7 @@ class TsReadExDataSource(
                     val ip = it.host
                     val port = if (it.port != -1) it.port else 4510
                     if (ip != null) {
-                        cleanupEdcbSession(ip, port)
+                        cleanupEdcbSessionAsynchronous(ip, port)
                     }
                 }
             }
