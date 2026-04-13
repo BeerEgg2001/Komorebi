@@ -185,4 +185,23 @@ class SettingsRepository @Inject constructor(
             settings[key] = value
         }
     }
+
+    // ★ 追加: 指定されたStreamSourceに対応するBackendConfigを直接生成して返す
+    suspend fun getBackendConfig(source: com.beeregg2001.komorebi.data.model.StreamSource): com.beeregg2001.komorebi.data.model.BackendConfig {
+        val prefs = context.dataStore.data.first()
+        return when (source) {
+            com.beeregg2001.komorebi.data.model.StreamSource.KONOMITV -> com.beeregg2001.komorebi.data.model.BackendConfig.KonomiTv(
+                ip = prefs[KONOMI_IP] ?: "",
+                port = prefs[KONOMI_PORT] ?: "7000"
+            )
+            com.beeregg2001.komorebi.data.model.StreamSource.MIRAKURUN -> com.beeregg2001.komorebi.data.model.BackendConfig.Mirakurun(
+                ip = prefs[MIRAKURUN_IP] ?: "",
+                port = prefs[MIRAKURUN_PORT] ?: "40772"
+            )
+            com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
+                ip = prefs[EDCB_IP] ?: "",
+                port = prefs[EDCB_PORT] ?: "4510"
+            )
+        }
+    }
 }

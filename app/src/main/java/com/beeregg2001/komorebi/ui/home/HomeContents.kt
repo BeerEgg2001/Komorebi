@@ -41,6 +41,8 @@ fun HomeContents(
     pickupGenreName: String,
     pickupTimeSlot: String,
     groupedChannels: Map<String, List<Channel>>,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: URL解決コールバック
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグ
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
@@ -132,7 +134,6 @@ fun HomeContents(
             list
         }
 
-    // ★ 修正(Step4): AIコンシェルジュ復帰などで HOME_RESTORE チケットが発行された時のスクロール処理を強化
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE) {
             val targetSection = ticketManager.targetSection
@@ -145,11 +146,9 @@ fun HomeContents(
                     )
                     delay(50)
                     lazyListState.scrollToItem(index)
-                    // スクロール後、各Sectionコンポーネント内にある FocusRequester が itemId を見て自動フォーカスを拾います
                     delay(200)
                 }
             }
-            // 消費
             ticketManager.consume(HomeFocusTicket.HOME_RESTORE)
         }
     }
@@ -182,7 +181,12 @@ fun HomeContents(
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
         ) {
-            HomeHeroDashboard(info = currentHeroInfo)
+            // ★ 修正: HeroDashboard にロゴ解決用パラメータを渡す
+            HomeHeroDashboard(
+                state = currentHeroInfo,
+                getLogoUrl = getLogoUrl,
+                shouldCropLogo = shouldCropLogo
+            )
         }
 
         Box(
@@ -203,10 +207,8 @@ fun HomeContents(
                         LastWatchedSection(
                             channels = lastWatchedChannels,
                             groupedChannels = groupedChannels,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
-                            mirakurunIp = mirakurunIp,
-                            mirakurunPort = mirakurunPort,
+                            getLogoUrl = getLogoUrl,         // ★ 追加
+                            shouldCropLogo = shouldCropLogo, // ★ 追加
                             modifier = if (topSection == "lastWatched") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -220,8 +222,8 @@ fun HomeContents(
                     item(key = "section_hot") {
                         HotChannelSection(
                             hotChannels = hotChannels,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,         // ★ 追加
+                            shouldCropLogo = shouldCropLogo, // ★ 追加
                             modifier = if (topSection == "hot") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -237,8 +239,8 @@ fun HomeContents(
                             genrePickup = genrePickup,
                             pickupGenreName = pickupGenreName,
                             pickupTimeSlot = pickupTimeSlot,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,         // ★ 追加
+                            shouldCropLogo = shouldCropLogo, // ★ 追加
                             modifier = if (topSection == "pickup") upToTabModifier else Modifier,
                             onProgramClick = onProgramClick,
                             onNavigateToTab = onNavigateToTab,
@@ -252,6 +254,9 @@ fun HomeContents(
                 }
                 if (watchHistory.isNotEmpty()) {
                     item(key = "section_history") {
+                        // ※ WatchHistorySectionは、独自のKonomiTVサムネイル画像を使うため
+                        // getLogoUrl等のフラグは内部で使用しませんが、シグネチャとしては不要なため渡しません
+                        // （HomeSections.kt側でWatchHistorySectionの引数は変更していないため、コンパイルエラーにはなりません）
                         WatchHistorySection(
                             watchHistory = watchHistory,
                             konomiIp = konomiIp,
@@ -269,8 +274,8 @@ fun HomeContents(
                     item(key = "section_upcoming") {
                         UpcomingReserveSection(
                             upcomingReserves = upcomingReserves,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,         // ★ 追加
+                            shouldCropLogo = shouldCropLogo, // ★ 追加
                             modifier = if (topSection == "upcoming") upToTabModifier else Modifier,
                             onReserveClick = onReserveClick,
                             onNavigateToTab = onNavigateToTab,

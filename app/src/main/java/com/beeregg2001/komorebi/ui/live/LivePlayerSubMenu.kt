@@ -106,10 +106,7 @@ fun TopSubMenuUI(
             .wrapContentHeight()
             .background(
                 Brush.verticalGradient(
-                    listOf(
-                        colors.background.copy(0.9f),
-                        Color.Transparent
-                    )
+                    listOf(colors.background.copy(0.9f), Color.Transparent)
                 )
             )
             .padding(top = 24.dp, bottom = 60.dp)
@@ -271,11 +268,16 @@ fun TopSubMenuUI(
                     )
                     Spacer(Modifier.width(16.dp))
 
+                    // ★ 修正: 常にトグル可能にする
                     MenuTileItem(
                         title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
-                        subtitle = if (currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
+                        subtitle = when (currentSource) {
+                            StreamSource.MIRAKURUN -> "Mirakurun"
+                            StreamSource.EDCB -> "EDCB"
+                            else -> "KonomiTV"
+                        },
                         onClick = { onSourceToggle(); onCloseMenu() },
-                        enabled = isMirakurunAvailable,
+                        enabled = true,
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
                     )

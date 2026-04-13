@@ -84,8 +84,8 @@ fun NavigationLinkButton(label: String, icon: ImageVector, onClick: () -> Unit) 
 fun LastWatchedSection(
     channels: List<Channel>,
     groupedChannels: Map<String, List<Channel>>,
-    konomiIp: String, konomiPort: String,
-    mirakurunIp: String, mirakurunPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -94,9 +94,6 @@ fun LastWatchedSection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val isKonomiTvMode =
-        mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
-
     val rowState = rememberTvLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
@@ -119,18 +116,6 @@ fun LastWatchedSection(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             itemsIndexed(channels, key = { _, it -> "ch_${it.id}" }) { index, channel ->
-                val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(
-                    konomiIp,
-                    konomiPort,
-                    channel.displayChannelId
-                )
-                else UrlBuilder.getMirakurunLogoUrl(
-                    mirakurunIp,
-                    mirakurunPort,
-                    channel.networkId,
-                    channel.serviceId
-                )
-
                 val liveChannel = remember(groupedChannels, channel.id) {
                     groupedChannels.values.flatten().find { it.id == channel.id }
                 }
@@ -151,7 +136,8 @@ fun LastWatchedSection(
                 LastWatchedChannelCard(
                     channel = channel,
                     liveChannel = liveChannel,
-                    logoUrl = logoUrl,
+                    getLogoUrl = getLogoUrl,     // ★ 修正: 子へ渡す
+                    shouldCropLogo = shouldCropLogo, // ★ 修正: 子へ渡す
                     onClick = { onChannelClick(channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -160,7 +146,7 @@ fun LastWatchedSection(
                                 subtitle = channel.name,
                                 description = liveChannel?.programPresent?.description
                                     ?: "前回視聴していたチャンネルです。",
-                                imageUrl = logoUrl,
+                                channelId = channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
                                 isThumbnail = false,
                                 tag = "前回視聴"
                             )
@@ -193,7 +179,8 @@ fun LastWatchedSection(
 @Composable
 fun HotChannelSection(
     hotChannels: List<UiChannelState>,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -224,12 +211,6 @@ fun HotChannelSection(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             itemsIndexed(hotChannels, key = { _, it -> "hot_${it.channel.id}" }) { index, uiState ->
-                val logoUrl = UrlBuilder.getKonomiTvLogoUrl(
-                    konomiIp,
-                    konomiPort,
-                    uiState.channel.displayChannelId
-                )
-
                 val specificRequester = remember { FocusRequester() }
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE &&
@@ -245,7 +226,8 @@ fun HotChannelSection(
 
                 HotChannelCard(
                     uiState = uiState,
-                    logoUrl = logoUrl,
+                    getLogoUrl = getLogoUrl,     // ★ 修正: 子へ渡す
+                    shouldCropLogo = shouldCropLogo, // ★ 修正: 子へ渡す
                     onClick = { onChannelClick(uiState.channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -253,7 +235,7 @@ fun HotChannelSection(
                                 title = uiState.programTitle,
                                 subtitle = uiState.name,
                                 description = uiState.channel.programPresent?.description ?: "",
-                                imageUrl = logoUrl,
+                                channelId = uiState.channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
                                 isThumbnail = false,
                                 tag = "盛り上がり"
                             )
@@ -333,6 +315,8 @@ fun WatchHistorySection(
                     }
                 }
 
+                // ※ WatchHistoryCard は KonomiTV API の録画サムネイル画像を使用するため、
+                // URLの組み立てロジック（UrlBuilder）への依存をそのまま保護します。
                 WatchHistoryCard(
                     history = history,
                     konomiIp = konomiIp,
@@ -344,7 +328,7 @@ fun WatchHistorySection(
                                 title = history.program.title,
                                 subtitle = "視聴履歴から再開",
                                 description = history.program.description,
-                                imageUrl = thumbnailUrl,
+                                imageUrl = thumbnailUrl, // サムネイル画像をそのままHeroへ
                                 isThumbnail = true,
                                 tag = "視聴履歴",
                                 progress = progressVal
@@ -378,7 +362,8 @@ fun WatchHistorySection(
 @Composable
 fun UpcomingReserveSection(
     upcomingReserves: List<ReserveItem>,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onReserveClick: (ReserveItem) -> Unit,
@@ -434,11 +419,7 @@ fun UpcomingReserveSection(
                                 title = reserve.program.title,
                                 subtitle = "$startFormat - ${reserve.channel.name}",
                                 description = reserve.program.description ?: "",
-                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                    konomiIp,
-                                    konomiPort,
-                                    reserve.channel.displayChannelId ?: ""
-                                ),
+                                channelId = reserve.channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
                                 isThumbnail = false,
                                 tag = "録画予約"
                             )
@@ -478,7 +459,8 @@ fun GenrePickupSection(
     genrePickup: List<Pair<EpgProgram, String>>,
     pickupGenreName: String,
     pickupTimeSlot: String,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onProgramClick: (EpgProgram) -> Unit,
@@ -540,11 +522,7 @@ fun GenrePickupSection(
                                 title = program.title,
                                 subtitle = "$startFormat - $channelName",
                                 description = program.description,
-                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                    konomiIp,
-                                    konomiPort,
-                                    program.channel_id
-                                ),
+                                channelId = program.channel_id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
                                 isThumbnail = false,
                                 tag = "ピックアップ"
                             )

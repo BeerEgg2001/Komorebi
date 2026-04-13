@@ -33,6 +33,7 @@ import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 
 /**
  * ExoPlayer の初期化処理を共通化した Composable 関数
+ * (※現在は主に LivePlayerViewModel で管理されていますが、互換性のために残しています)
  */
 @UnstableApi
 @Composable
@@ -65,7 +66,18 @@ fun rememberKomorebiPlayer(
                 TsExtractor(
                     TsExtractor.MODE_SINGLE_PMT,
                     TimestampAdjuster(C.TIME_UNSET),
-                    DirectSubtitlePayloadReaderFactory(webViewRef, subtitleEnabledState),
+                    // ★ 修正: 新しいコールバック形式に合わせて渡し方を変更
+                    DirectSubtitlePayloadReaderFactory(
+                        onSubtitleDataReceived = { pts, base64 ->
+                            webViewRef.value?.post {
+                                webViewRef.value?.evaluateJavascript(
+                                    "if(window.receiveSubtitleData){ window.receiveSubtitleData($pts, '$base64'); }",
+                                    null
+                                )
+                            }
+                        },
+                        isSubtitleEnabled = { subtitleEnabledState.value }
+                    ),
                     TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
                 )
             )
@@ -99,7 +111,7 @@ fun rememberKomorebiPlayer(
                 return DefaultAudioSink.Builder(ctx).setAudioProcessors(processors).build()
             }
         }.apply {
-            if (streamSource == StreamSource.MIRAKURUN) {
+            if (streamSource == StreamSource.MIRAKURUN || streamSource == StreamSource.EDCB) {
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             } else {
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
@@ -109,9 +121,6 @@ fun rememberKomorebiPlayer(
 
         ExoPlayer.Builder(context, renderersFactory)
             // [解説: ハードウェアリソース解放猶予]
-            // ExoPlayerが破棄されたり、画面からデタッチされたりする際に、
-            // 古いデバイス等でOSがリソースをロックしてタイムアウト（ANR）するのを防ぐため、
-            // デフォルトの2000msから10000msに猶予を延長しています。
             .setReleaseTimeoutMs(10000)
             .setDetachSurfaceTimeoutMs(10000)
             .setLoadControl(
@@ -123,7 +132,7 @@ fun rememberKomorebiPlayer(
                     .setFallbackMinPlaybackSpeed(0.96f).build()
             )
             .apply {
-                if (streamSource == StreamSource.MIRAKURUN) {
+                if (streamSource == StreamSource.MIRAKURUN || streamSource == StreamSource.EDCB) {
                     setMediaSourceFactory(
                         DefaultMediaSourceFactory(
                             tsDataSourceFactory,
@@ -158,7 +167,7 @@ fun rememberKomorebiPlayer(
                     }
 
                     override fun onMetadata(metadata: Metadata) {
-                        if (streamSource == StreamSource.MIRAKURUN || !subtitleEnabledState.value) return
+                        if (streamSource == StreamSource.MIRAKURUN || streamSource == StreamSource.EDCB || !subtitleEnabledState.value) return
                         for (i in 0 until metadata.length()) {
                             val entry = metadata.get(i)
                             if (entry is PrivFrame && (entry.owner.contains(

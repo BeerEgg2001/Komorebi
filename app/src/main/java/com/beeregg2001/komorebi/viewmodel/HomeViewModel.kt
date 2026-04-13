@@ -52,6 +52,10 @@ class HomeViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    // ★ 追加: 現在のバックエンドタイプを公開 (RootUIでのタブ制御やロゴクロップ判定用)
+    val backendType: StateFlow<String> = settingsRepository.backendType
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "KONOMITV")
+
     var lastClickedSection: String? = null
     var lastClickedItemId: String? = null
 
@@ -316,12 +320,13 @@ class HomeViewModel @Inject constructor(
         try {
             liveProvider.getChannels()
             Log.i("Komorebi_Failsafe", "Health check passed for backend: $currentBackend")
-        } catch (e: Throwable) { // ★ 修正: Exception ではなく Throwable でキャッチ (TODOによるErrorも捕まえる)
+        } catch (e: Throwable) {
             Log.e("Komorebi_Failsafe", "Health check FAILED for backend: $currentBackend", e)
-
-            settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, "KONOMITV")
             _isFallbackTriggered.value = true
-            Log.w("Komorebi_Failsafe", "Forced fallback to KONOMITV to prevent crash loop.")
+            Log.w(
+                "Komorebi_Failsafe",
+                "Backend health check failed. Showing warning without overwriting settings."
+            )
         }
     }
 
@@ -359,39 +364,55 @@ class HomeViewModel @Inject constructor(
         appUpdater.resetState()
     }
 
+    // ★ 修正: KonomiTVへのアクセスを try-catch で囲み、最後に必ずローディングを解除してフリーズを防ぐ
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
+            try {
+                performBackendHealthCheck()
 
-            performBackendHealthCheck()
-
-            konomiRepository.getWatchHistory().onSuccess { apiHistoryList ->
-                val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
-                val existingEntitiesMap =
-                    watchHistoryRepository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
-                val entitiesToSave = apiHistoryList.mapNotNull { history ->
-                    val programId = history.program.id.toIntOrNull() ?: return@mapNotNull null
-                    val existingEntity = existingEntitiesMap[programId]
-                    var newEntity = KonomiDataMapper.toEntity(history)
-                    if (existingEntity != null) {
-                        newEntity = newEntity.copy(
-                            videoId = existingEntity.videoId,
-                            tileColumns = existingEntity.tileColumns,
-                            tileRows = existingEntity.tileRows,
-                            tileInterval = existingEntity.tileInterval,
-                            tileWidth = existingEntity.tileWidth,
-                            tileHeight = existingEntity.tileHeight
-                        )
+                try {
+                    val backend = settingsRepository.backendType.first()
+                    if (backend == "KONOMITV" || backend == "MIRAKURUN_ONLY") {
+                        konomiRepository.getWatchHistory().onSuccess { apiHistoryList ->
+                            val programIds =
+                                apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
+                            val existingEntitiesMap =
+                                watchHistoryRepository.getHistoryEntitiesByIds(programIds)
+                                    .associateBy { it.id }
+                            val entitiesToSave = apiHistoryList.mapNotNull { history ->
+                                val programId =
+                                    history.program.id.toIntOrNull() ?: return@mapNotNull null
+                                val existingEntity = existingEntitiesMap[programId]
+                                var newEntity = KonomiDataMapper.toEntity(history)
+                                if (existingEntity != null) {
+                                    newEntity = newEntity.copy(
+                                        videoId = existingEntity.videoId,
+                                        tileColumns = existingEntity.tileColumns,
+                                        tileRows = existingEntity.tileRows,
+                                        tileInterval = existingEntity.tileInterval,
+                                        tileWidth = existingEntity.tileWidth,
+                                        tileHeight = existingEntity.tileHeight
+                                    )
+                                }
+                                newEntity
+                            }
+                            if (entitiesToSave.isNotEmpty()) watchHistoryRepository.saveAllToLocalHistory(
+                                entitiesToSave
+                            )
+                        }
+                        konomiRepository.refreshUser()
                     }
-                    newEntity
+                } catch (e: Exception) {
+                    Log.w("HomeViewModel", "Failed to sync KonomiTV data. Skipping.", e)
                 }
-                if (entitiesToSave.isNotEmpty()) watchHistoryRepository.saveAllToLocalHistory(
-                    entitiesToSave
-                )
+
+                fetchAllTypeGenrePickup()
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Error refreshing home data", e)
+            } finally {
+                _isLoading.value = false
             }
-            konomiRepository.refreshUser()
-            fetchAllTypeGenrePickup()
-            _isLoading.value = false
         }
     }
 

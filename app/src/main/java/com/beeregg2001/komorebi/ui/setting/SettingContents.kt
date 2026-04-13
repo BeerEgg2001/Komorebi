@@ -143,6 +143,8 @@ fun GeneralSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = clearChannelR
+                        // ★修正: リストの一番下からフォーカスが逃げないようにCancelを指定
+                        down = FocusRequester.Cancel
                     },
                 onClick = { onClick(clearHistoryR); onClearHistory() })
         }
@@ -179,6 +181,10 @@ fun RecordingSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = FocusRequester.Cancel
+                        // ★修正: リストが空の場合は下方向へのフォーカス移動をキャンセル
+                        down =
+                            if (batchList.isEmpty()) FocusRequester.Cancel else itemRs.firstOrNull()
+                                ?: FocusRequester.Cancel
                     },
                 onClick = { onClick(addR); onAdd() }
             )
@@ -193,13 +199,19 @@ fun RecordingSettingsContent(
             } else {
                 batchList.forEachIndexed { index, batch ->
                     val requester = itemRs.getOrNull(index) ?: remember { FocusRequester() }
+                    val isLast = index == batchList.lastIndex
                     SettingItem(
                         title = batch.name,
                         value = "削除",
                         icon = Icons.Default.Terminal,
                         modifier = Modifier
                             .focusRequester(requester)
-                            .focusProperties { left = sidebarR },
+                            .focusProperties {
+                                left = sidebarR
+                                up = if (index == 0) addR else itemRs[index - 1]
+                                // ★修正: リストの一番下からフォーカスが逃げないようにCancelを指定
+                                down = if (isLast) FocusRequester.Cancel else itemRs[index + 1]
+                            },
                         onClick = { onClick(requester); onDelete(batch) }
                     )
                 }
@@ -263,7 +275,6 @@ fun ConnectionSettingsContent(
                 onClick = { onClick(backendTypeR); onSelectBackend() }
             )
 
-            // 選択されたバックエンドに応じて入力欄の表示を切り替え
             val currentIp = when (backendType) {
                 "EDCB" -> edcbIp
                 "EPGSTATION" -> epgStationIp
@@ -305,8 +316,9 @@ fun ConnectionSettingsContent(
                 modifier = Modifier
                     .focusRequester(backendPortR)
                     .focusProperties {
-                        left = sidebarR; up = backendIpR; down =
-                        if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Default
+                        left = sidebarR; up = backendIpR;
+                        down =
+                            if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel // ★修正
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
@@ -316,19 +328,14 @@ fun ConnectionSettingsContent(
             }
         }
 
-        // Mirakurun単体モード以外では、ライブ視聴の優先ソース設定を表示
         if (backendType != "MIRAKURUN_ONLY") {
+            val hasOverride = prefSrc == "MIRAKURUN" || (prefSrc == "EDCB" && backendType != "EDCB")
             SettingsSection("ライブ視聴ソースの優先設定") {
-                // ★ 修正: 優先ソースのラベル決定ロジックの修正
                 val srcLabel = when {
                     prefSrc == "MIRAKURUN" -> "Mirakurun を優先"
                     prefSrc == "EDCB" && backendType != "EDCB" -> "EDCB (TCP) を優先"
                     else -> "メインシステムに従う"
                 }
-
-                // オーバーライド設定の入力欄を表示するかどうかの判定
-                val hasOverride =
-                    prefSrc == "MIRAKURUN" || (prefSrc == "EDCB" && backendType != "EDCB")
 
                 SettingItem(
                     title = "優先ソース",
@@ -339,13 +346,12 @@ fun ConnectionSettingsContent(
                         .focusProperties {
                             left = sidebarR
                             up = backendPortR
-                            down = if (hasOverride) overrideIpR else FocusRequester.Default
+                            down = if (hasOverride) overrideIpR else FocusRequester.Cancel // ★修正
                         },
                     onClick = { onClick(prefSrcR); onSelectSrc() }
                 )
             }
 
-            // 優先ソースとしてMirakurunやEDCBが選ばれている場合のみ、その入力欄を表示する
             if (prefSrc == "MIRAKURUN") {
                 SettingsSection("Mirakurun 接続設定") {
                     SettingItem(
@@ -365,7 +371,9 @@ fun ConnectionSettingsContent(
                         icon = Icons.Default.Numbers,
                         modifier = Modifier
                             .focusRequester(overridePortR)
-                            .focusProperties { left = sidebarR; up = overrideIpR },
+                            .focusProperties {
+                                left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
+                            }, // ★修正
                         onClick = { onClick(overridePortR); onEdit("Mirakurun (ポート)", mPort) }
                     )
 
@@ -392,7 +400,9 @@ fun ConnectionSettingsContent(
                         icon = Icons.Default.Numbers,
                         modifier = Modifier
                             .focusRequester(overridePortR)
-                            .focusProperties { left = sidebarR; up = overrideIpR },
+                            .focusProperties {
+                                left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
+                            }, // ★修正
                         onClick = { onClick(overridePortR); onEdit("EDCB (ポート)", edcbPort) }
                     )
 
@@ -509,6 +519,7 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = audioR
+                        down = FocusRequester.Cancel // ★修正
                     },
                 onClick = { onClick(layerR); onLayer() })
         }
@@ -608,6 +619,7 @@ fun HomeDisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = timeR
+                        down = FocusRequester.Cancel // ★修正
                     },
                 onClick = { onClick(exPaidR); onExPaid() })
         }
@@ -682,6 +694,7 @@ fun DisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = itemRs[2]
+                        down = FocusRequester.Cancel // ★修正
                     },
                 onClick = { onClick(itemRs[3]); onEditTimeFormat() })
         }
@@ -775,6 +788,7 @@ fun CommentSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = opR
+                        down = FocusRequester.Cancel // ★修正
                     },
                 onClick = {
                     onClick(mxR); onEdit(
@@ -852,6 +866,7 @@ fun LabSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = baseballR
+                        down = FocusRequester.Cancel // ★修正
                     },
                 onClick = { onClick(apiKeyR); onEditApiKey() }
             )
@@ -893,6 +908,7 @@ fun AppInfoContent(
                 .focusProperties {
                     left = sidebarR
                     up = FocusRequester.Cancel
+                    down = FocusRequester.Cancel // ★修正
                 },
             onClick = { onClick(licR); onShow() })
     }

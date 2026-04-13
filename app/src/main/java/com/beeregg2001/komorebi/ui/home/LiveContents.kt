@@ -52,6 +52,7 @@ import com.beeregg2001.komorebi.data.model.UiChannelState
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.*
+import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -77,7 +78,8 @@ fun LiveContent(
     timeFormat: String = "24H",
     isPiPMode: Boolean = false,
     aiFocusReturnTick: Int = 0,
-    onAiReturnConsumed: () -> Unit = {}
+    onAiReturnConsumed: () -> Unit = {},
+    settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
     val liveRows by channelViewModel.liveRows.collectAsState()
     val listState = rememberLazyListState()
@@ -96,6 +98,9 @@ fun LiveContent(
 
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
+
+    // ★ 追加: EDCBメイン判定（勢い表記の非表示制御用）
+    val backendType by settingsViewModel.backendType.collectAsState(initial = "KONOMITV")
 
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
@@ -224,10 +229,10 @@ fun LiveContent(
                         .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 24.dp)
                 ) {
                     if (focusedChannel != null) {
-                        // ★ 修正: channelViewModel を渡す
                         HeroDashboard(
                             uiState = focusedChannel!!,
                             channelViewModel = channelViewModel,
+                            backendType = backendType, // ★ バックエンドタイプを渡す
                             timeFormat = timeFormat
                         )
                     }
@@ -269,7 +274,6 @@ fun LiveContent(
                                     val isTarget = uiState.channel.id == lastFocusedChannelId
                                     val isLastItem = index == row.channels.lastIndex
 
-                                    // ★ 修正: channelViewModel を渡す
                                     CompactChannelCard(
                                         uiState = uiState,
                                         channelViewModel = channelViewModel,
@@ -305,10 +309,6 @@ fun LiveContent(
         if (selectedChannel != null && !isPiPMode) {
             LivePlayerScreen(
                 channel = selectedChannel,
-                mirakurunIp = mirakurunIp,
-                mirakurunPort = mirakurunPort,
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
                 onChannelSelect = { onChannelClick(it) },
                 onBackPressed = { onChannelClick(null) },
                 isMiniListOpen = isMiniListOpen,
@@ -322,7 +322,6 @@ fun LiveContent(
                 isSubMenuOpen = isSubMenuOpen,
                 onSubMenuToggle = { isSubMenuOpen = it },
                 reserveViewModel = reserveViewModel,
-                epgViewModel = epgViewModel,
                 onShowToast = { }
             )
         }
@@ -333,7 +332,8 @@ fun LiveContent(
 @Composable
 fun HeroDashboard(
     uiState: UiChannelState,
-    channelViewModel: ChannelViewModel, // ★ 引数変更
+    channelViewModel: ChannelViewModel,
+    backendType: String,
     timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
@@ -341,10 +341,10 @@ fun HeroDashboard(
     val following = uiState.channel.programFollowing
     val isHot = (uiState.jikkyoForce ?: 0) > 500
 
-    // ★ 修正: ViewModel経由で非同期にロゴURLを取得
+    // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
     var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
     LaunchedEffect(uiState.channel.id) {
-        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.id)
+        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
     }
 
     val formatTime = { timeStr: String? ->
@@ -463,21 +463,24 @@ fun HeroDashboard(
 
                             Spacer(modifier = Modifier.width(28.dp))
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Whatshot,
-                                    contentDescription = "Hot",
-                                    tint = if (isHot) Color(0xFFE53935) else colors.textSecondary.copy(
-                                        alpha = 0.7f
-                                    ),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "勢い: ${state.jikkyoForce ?: 0}コメ/分",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = if (isHot) Color(0xFFE53935) else colors.textSecondary
-                                )
+                            // ★ 修正: EDCBメインの時は実況の勢い表記を非表示にする
+                            if (backendType != "EDCB") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Whatshot,
+                                        contentDescription = "Hot",
+                                        tint = if (isHot) Color(0xFFE53935) else colors.textSecondary.copy(
+                                            alpha = 0.7f
+                                        ),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "勢い: ${state.jikkyoForce ?: 0}コメ/分",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isHot) Color(0xFFE53935) else colors.textSecondary
+                                    )
+                                }
                             }
                         }
 
@@ -563,7 +566,7 @@ fun HeroDashboard(
 @Composable
 fun CompactChannelCard(
     uiState: UiChannelState,
-    channelViewModel: ChannelViewModel, // ★ 引数変更
+    channelViewModel: ChannelViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -576,10 +579,10 @@ fun CompactChannelCard(
         label = "cardScale"
     )
 
-    // ★ 修正: ViewModel経由で非同期にロゴURLを取得
+    // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
     var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
     LaunchedEffect(uiState.channel.id) {
-        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.id)
+        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
     }
 
     Surface(

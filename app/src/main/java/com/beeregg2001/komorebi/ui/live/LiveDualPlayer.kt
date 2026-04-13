@@ -21,6 +21,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
@@ -43,7 +44,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -57,10 +57,8 @@ import kotlinx.coroutines.delay
 fun DualDisplayPlayer(
     state: LivePlayerState,
     leftChannel: Channel,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 修正: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     isMiniListOpen: Boolean,
     isUiVisible: Boolean,
     mainPlayer: ExoPlayer,
@@ -150,9 +148,33 @@ fun DualDisplayPlayer(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
+            // ★ 追加: メインプレイヤーのバッファリング状態を監視
+            var isMainBuffering by remember { mutableStateOf(false) }
+            DisposableEffect(mainPlayer) {
+                val listener = object : androidx.media3.common.Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        isMainBuffering =
+                            (playbackState == androidx.media3.common.Player.STATE_BUFFERING)
+                    }
+                }
+                mainPlayer.addListener(listener)
+                isMainBuffering =
+                    mainPlayer.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+                onDispose { mainPlayer.removeListener(listener) }
+            }
+
+            // ★ 修正: KonomiTVの場合はSSE状態、EDCB/Mirakurunの場合はバッファリング状態でインジケータを表示
+            val showMainLoading = if (state.currentStreamSource == StreamSource.KONOMITV) {
+                state.sseStatus == "Standby" || state.sseStatus == "Offline"
+            } else {
+                isMainBuffering
+            }
+            val mainLoadingText =
+                if (state.currentStreamSource == StreamSource.KONOMITV) state.sseDetail else AppStrings.STATUS_LOADING
+
+            // パッケージ名を明記してコンパイラの混乱を防ぐ
             androidx.compose.animation.AnimatedVisibility(
-                visible = state.currentStreamSource == StreamSource.KONOMITV && (state.sseStatus == "Standby" || state.sseStatus == "Offline"),
+                visible = showMainLoading,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.Center)
@@ -167,7 +189,7 @@ fun DualDisplayPlayer(
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        text = state.sseDetail,
+                        text = mainLoadingText,
                         color = colors.textPrimary,
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Bold
@@ -194,7 +216,7 @@ fun DualDisplayPlayer(
                 )
             }
 
-            // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
+            // パッケージ名を明記してコンパイラの混乱を防ぐ
             androidx.compose.animation.AnimatedVisibility(
                 visible = showInfo,
                 enter = fadeIn(tween(500)),
@@ -203,11 +225,9 @@ fun DualDisplayPlayer(
             ) {
                 DualChannelInfoOverlay(
                     channel = leftChannel,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    isFocused = state.activeDualPlayerIndex == 0
+                    isFocused = state.activeDualPlayerIndex == 0,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo // ★ 追加
                 )
             }
         }
@@ -243,9 +263,33 @@ fun DualDisplayPlayer(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
+                // ★ 追加: サブプレイヤーのバッファリング状態を監視
+                var isDualBuffering by remember { mutableStateOf(false) }
+                DisposableEffect(dualPlayer) {
+                    val listener = object : androidx.media3.common.Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            isDualBuffering =
+                                (playbackState == androidx.media3.common.Player.STATE_BUFFERING)
+                        }
+                    }
+                    dualPlayer.addListener(listener)
+                    isDualBuffering =
+                        dualPlayer.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+                    onDispose { dualPlayer.removeListener(listener) }
+                }
+
+                // ★ 修正: KonomiTVの場合はSSE状態、EDCB/Mirakurunの場合はバッファリング状態でインジケータを表示
+                val showDualLoading = if (state.currentStreamSource == StreamSource.KONOMITV) {
+                    state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"
+                } else {
+                    isDualBuffering
+                }
+                val dualLoadingText =
+                    if (state.currentStreamSource == StreamSource.KONOMITV) state.dualSseDetail else AppStrings.STATUS_LOADING
+
+                // パッケージ名を明記してコンパイラの混乱を防ぐ
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = state.currentStreamSource == StreamSource.KONOMITV && (state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"),
+                    visible = showDualLoading,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier.align(Alignment.Center)
@@ -260,7 +304,7 @@ fun DualDisplayPlayer(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            text = state.dualSseDetail,
+                            text = dualLoadingText,
                             color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Bold
@@ -289,7 +333,7 @@ fun DualDisplayPlayer(
                     )
                 }
 
-                // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
+                // パッケージ名を明記してコンパイラの混乱を防ぐ
                 androidx.compose.animation.AnimatedVisibility(
                     visible = showInfo,
                     enter = fadeIn(tween(500)),
@@ -298,11 +342,9 @@ fun DualDisplayPlayer(
                 ) {
                     DualChannelInfoOverlay(
                         channel = state.dualRightChannel!!,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        isFocused = state.activeDualPlayerIndex == 1
+                        isFocused = state.activeDualPlayerIndex == 1,
+                        getLogoUrl = getLogoUrl,
+                        shouldCropLogo = shouldCropLogo // ★ 追加
                     )
                 }
             } else {
@@ -322,10 +364,8 @@ fun DualDisplayPlayer(
 fun DualDisplayMock(
     state: LivePlayerState,
     leftChannel: Channel,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    getLogoUrl: suspend (String) -> String, // ★ 修正: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
     isMiniListOpen: Boolean
 ) {
     val colors = KomorebiTheme.colors
@@ -390,7 +430,6 @@ fun DualDisplayMock(
                 )
             }
 
-            // ★修正: パッケージ名を明記
             androidx.compose.animation.AnimatedVisibility(
                 visible = state.currentStreamSource == StreamSource.KONOMITV && (state.sseStatus == "Standby" || state.sseStatus == "Offline"),
                 enter = fadeIn(),
@@ -415,7 +454,6 @@ fun DualDisplayMock(
                 }
             }
 
-            // ★修正: パッケージ名を明記
             androidx.compose.animation.AnimatedVisibility(
                 visible = showInfo,
                 enter = fadeIn(tween(500)),
@@ -424,11 +462,9 @@ fun DualDisplayMock(
             ) {
                 DualChannelInfoOverlay(
                     channel = leftChannel,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    isFocused = state.activeDualPlayerIndex == 0
+                    isFocused = state.activeDualPlayerIndex == 0,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo // ★ 追加
                 )
             }
         }
@@ -455,7 +491,6 @@ fun DualDisplayMock(
                 )
             }
 
-            // ★修正: パッケージ名を明記
             androidx.compose.animation.AnimatedVisibility(
                 visible = state.currentStreamSource == StreamSource.KONOMITV && (state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"),
                 enter = fadeIn(),
@@ -481,7 +516,6 @@ fun DualDisplayMock(
             }
 
             if (state.dualRightChannel != null) {
-                // ★修正: パッケージ名を明記
                 androidx.compose.animation.AnimatedVisibility(
                     visible = showInfo,
                     enter = fadeIn(tween(500)),
@@ -490,11 +524,9 @@ fun DualDisplayMock(
                 ) {
                     DualChannelInfoOverlay(
                         channel = state.dualRightChannel!!,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        isFocused = state.activeDualPlayerIndex == 1
+                        isFocused = state.activeDualPlayerIndex == 1,
+                        getLogoUrl = getLogoUrl,
+                        shouldCropLogo = shouldCropLogo // ★ 追加
                     )
                 }
             }
@@ -505,19 +537,15 @@ fun DualDisplayMock(
 @Composable
 fun DualChannelInfoOverlay(
     channel: Channel,
-    mirakurunIp: String, mirakurunPort: String, konomiIp: String, konomiPort: String,
     isFocused: Boolean,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     modifier: Modifier = Modifier
 ) {
-    val logoUrl = if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp,
-            mirakurunPort,
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
+    var logoUrl by remember(channel.id) { mutableStateOf<String>("") }
+
+    LaunchedEffect(channel.id) {
+        logoUrl = getLogoUrl(channel.id)
     }
 
     val displayType =
@@ -543,7 +571,8 @@ fun DualChannelInfoOverlay(
             modifier = Modifier
                 .width(56.dp)
                 .height(31.5.dp),
-            contentScale = ContentScale.Crop
+            // ★ 修正: shouldCropLogo フラグに基づいてスケールを変更
+            contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
         )
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {

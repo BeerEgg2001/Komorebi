@@ -132,20 +132,38 @@ fun HomeLauncherScreen(
     val favoriteBaseballGames by homeViewModel.favoriteBaseballGames.collectAsState()
     val baseballDateOffset by homeViewModel.baseballDateOffset.collectAsState()
 
-    val baseTabs = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
-    val tabs = remember(favoriteBaseballTeams) {
-        if (favoriteBaseballTeams.isNotEmpty()) baseTabs + "プロ野球" else baseTabs
+    // ★ 追加: ViewModel から設定を取得
+    val backendType by homeViewModel.backendType.collectAsState()
+    val shouldCropLogo = remember(backendType) { backendType == "KONOMITV" }
+
+    // ★ 修正: バックエンドタイプに応じて表示するタブを動的に変更
+    val tabs = remember(favoriteBaseballTeams, backendType) {
+        val base = if (backendType == "EDCB") {
+            listOf("ホーム", "ライブ")
+        } else {
+            listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
+        }
+        if (favoriteBaseballTeams.isNotEmpty()) base + "プロ野球" else base
     }
 
     val safeTabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
 
-    // PiP（ミニプレイヤー）モード中は「フルスクリーンではない」と判定させ、トップナビを確実に描画する
     val isFullScreenMode = ui.isFullScreen(
         selectedChannel, selectedProgram, epgSelectedProgram,
         isSettingsOpen, isRecordListOpen, isReserveOverlayOpen
     ) && !hasActivePlayer
 
     val returnPlayerFocusRequester = remember { FocusRequester() }
+
+    val displayFlatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
+
+    val translatedLastChannels = remember(ui.lastChannels, displayFlatChannels) {
+        ui.lastChannels.map { savedChannel ->
+            displayFlatChannels.find {
+                it.networkId == savedChannel.networkId && it.serviceId == savedChannel.serviceId
+            } ?: savedChannel
+        }
+    }
 
     LaunchedEffect(tabs.size) {
         if (ui.selectedTabIndex >= tabs.size) {
@@ -171,13 +189,11 @@ fun HomeLauncherScreen(
         }
     }
 
-    // AIコンシェルジュ復帰シグナルの交通整理
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
             delay(150)
             when (safeTabIndex) {
                 0 -> {
-                    // ホームタブ
                     val section = homeViewModel.lastClickedSection
                     val itemId = homeViewModel.lastClickedItemId
                     if (section != null && itemId != null) {
@@ -185,24 +201,13 @@ fun HomeLauncherScreen(
                     } else {
                         ticketManager.issue(HomeFocusTicket.CONTENT_TOP)
                     }
-                    // ★ HomeContents側でシグナルを消費しない設計にしたため、ここで消費する
                     onAiReturnConsumed()
                 }
 
-                1 -> {
-                    // ライブタブ: LiveContent 内部のロジックにシグナルを委譲するため、ここでは消費しない
-                }
-
-                2 -> {
-                    // ビデオタブ: VideoTabContent 内部のロジックにシグナルを委譲するため、ここでは消費しない
-                }
-
-                4 -> {
-                    // 録画予約タブ: ReserveListScreen 内部のロジックにシグナルを委譲するため、ここでは消費しない
-                }
-
+                1 -> {}
+                2 -> {}
+                4 -> {}
                 5 -> {
-                    // プロ野球タブ:
                     ui.contentFirstItemRequesters[5].safeRequestFocusWithRetry("BaseballAiReturn")
                     onAiReturnConsumed()
                 }
@@ -255,7 +260,6 @@ fun HomeLauncherScreen(
         if (!isFullScreenMode && !isReturningFromPlayer) {
             delay(300)
             if (safeTabIndex == 4) {
-                // 録画予約からの復帰はReserveListScreen内部のチケットに任せる
             } else if (safeTabIndex == 0) {
                 val section = homeViewModel.lastClickedSection
                 val itemId = homeViewModel.lastClickedItemId
@@ -466,7 +470,6 @@ fun HomeLauncherScreen(
                                 left =
                                     if (hasActivePlayer) returnPlayerFocusRequester else ui.tabFocusRequesters[tabs.lastIndex]
                                 canFocus = !(safeTabIndex == 3 && ui.isEpgJumping)
-
                                 up = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
                             },
@@ -489,7 +492,7 @@ fun HomeLauncherScreen(
 
                     when (currentTabLabel) {
                         "ホーム" -> HomeContents(
-                            lastWatchedChannels = ui.lastChannels,
+                            lastWatchedChannels = translatedLastChannels,
                             watchHistory = ui.watchHistory,
                             hotChannels = ui.hotChannels,
                             upcomingReserves = ui.upcomingReserves,
@@ -497,6 +500,8 @@ fun HomeLauncherScreen(
                             pickupGenreName = ui.pickupGenreLabel,
                             pickupTimeSlot = ui.genrePickupTimeSlot,
                             groupedChannels = groupedChannels,
+                            getLogoUrl = { channelId -> channelViewModel.getChannelLogoUrl(channelId) }, // ★ 追加: コールバックを渡す
+                            shouldCropLogo = shouldCropLogo, // ★ 追加: クロップフラグを渡す
                             onChannelClick = {
                                 if (it != null) onChannelClick(it, false)
                             },
@@ -559,7 +564,6 @@ fun HomeLauncherScreen(
                                 reserveViewModel = reserveViewModel,
                                 timeFormat = timeFormat,
                                 isPiPMode = hasActivePlayer,
-                                // ★ シグナルを委譲
                                 aiFocusReturnTick = if (safeTabIndex == 1) aiFocusReturnTick else 0,
                                 onAiReturnConsumed = onAiReturnConsumed
                             )
@@ -586,7 +590,6 @@ fun HomeLauncherScreen(
                                 konomiPort = konomiPort,
                                 timeFormat = timeFormat,
                                 watchHistory = ui.watchHistory,
-                                // ★ シグナルを委譲
                                 aiFocusReturnTick = if (safeTabIndex == 2) aiFocusReturnTick else 0,
                                 onAiReturnConsumed = onAiReturnConsumed
                             )
@@ -657,9 +660,10 @@ fun HomeLauncherScreen(
                                 dateOffset = baseballDateOffset,
                                 onDateOffsetChange = { homeViewModel.updateBaseballDateOffset(it) },
                                 onChannelClick = { channel ->
-                                    val matchedChannel = groupedChannels.values.flatten()
-                                        .find { it.id == channel.id }
-                                    if (matchedChannel != null) onChannelClick(matchedChannel, true)
+                                    val matchedChannel = displayFlatChannels.find {
+                                        it.networkId == channel.networkId && it.serviceId == channel.serviceId
+                                    } ?: channel
+                                    onChannelClick(matchedChannel, true)
                                 },
                                 onProgramClick = { onEpgProgramSelected(it) },
                                 topNavFocusRequester = ui.tabFocusRequesters[5],

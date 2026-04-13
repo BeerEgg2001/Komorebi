@@ -32,24 +32,44 @@ data class HomeHeroInfo(
     val subtitle: String,
     val description: String = "",
     val imageUrl: String? = null,
+    val channelId: String? = null, // ★ 追加: チャンネルロゴを非同期で解決するためのID
     val isThumbnail: Boolean = false,
     val tag: String = "",
     val progress: Float? = null
 )
 
 @Composable
-fun HomeHeroDashboard(info: HomeHeroInfo) {
+fun HomeHeroDashboard(
+    state: HomeHeroInfo, // ★ 修正: 呼び出し元の引数名に合わせて info -> state に変更
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
+    modifier: Modifier = Modifier           // ★ 追加: 呼び出し元からの modifier を受け取る
+) {
     val colors = KomorebiTheme.colors
 
     AnimatedContent(
-        targetState = info,
+        targetState = state,
         transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(300)) },
         label = "HomeHeroTransition",
-        modifier = Modifier.fillMaxSize()
-    ) { state ->
+        modifier = modifier.fillMaxSize() // ★ 修正: modifier を適用
+    ) { targetState -> // ★ アニメーション中の状態 (targetState) に対して処理を行う
+
+        // ★ 追加: アニメーション状態の targetState に対して非同期でURLを解決する
+        var resolvedImageUrl by remember(targetState.imageUrl, targetState.channelId, targetState.isThumbnail) {
+            mutableStateOf(targetState.imageUrl)
+        }
+
+        LaunchedEffect(targetState.channelId, targetState.imageUrl, targetState.isThumbnail) {
+            if (!targetState.isThumbnail && targetState.channelId != null) {
+                resolvedImageUrl = getLogoUrl(targetState.channelId)
+            } else {
+                resolvedImageUrl = targetState.imageUrl
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
 
-            if (state.tag == "Welcome") {
+            if (targetState.tag == "Welcome") {
                 val welcomeImageRes =
                     if (colors.isDark) R.drawable.dark_image else R.drawable.light_image
 
@@ -73,9 +93,9 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                             )
                         )
                 )
-            } else if (state.isThumbnail && state.imageUrl != null) {
+            } else if (targetState.isThumbnail && resolvedImageUrl != null) {
                 AsyncImage(
-                    model = state.imageUrl,
+                    model = resolvedImageUrl, // ★ 修正: 解決済みのURLを使用
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -95,11 +115,12 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                             )
                         )
                 )
-            } else if (!state.isThumbnail && state.imageUrl != null) {
+            } else if (!targetState.isThumbnail && resolvedImageUrl != null) {
                 AsyncImage(
-                    model = state.imageUrl,
+                    model = resolvedImageUrl, // ★ 修正: 解決済みのURLを使用
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                    // ★ 修正: 背景の透かしロゴもフラグに従ってスケールを調整
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .fillMaxWidth(0.35f)
@@ -115,7 +136,7 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                 verticalArrangement = Arrangement.Bottom
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (state.tag != "Welcome" && !state.isThumbnail && state.imageUrl != null) {
+                    if (targetState.tag != "Welcome" && !targetState.isThumbnail && resolvedImageUrl != null) {
                         Box(
                             modifier = Modifier
                                 .size(64.dp, 36.dp)
@@ -124,10 +145,11 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                             contentAlignment = Alignment.Center
                         ) {
                             AsyncImage(
-                                model = state.imageUrl,
+                                model = resolvedImageUrl, // ★ 修正: 解決済みのURLを使用
                                 contentDescription = "Logo",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                // ★ 修正: 前景のロゴをフラグに従ってスケール調整
+                                contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
                             )
                         }
                         Spacer(modifier = Modifier.width(16.dp))
@@ -139,7 +161,7 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = state.tag,
+                            text = targetState.tag,
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                             color = colors.accent
                         )
@@ -149,7 +171,7 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = state.title,
+                    text = targetState.title,
                     style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
                     color = colors.textPrimary,
                     maxLines = 1,
@@ -164,7 +186,7 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = state.subtitle,
+                    text = targetState.subtitle,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = colors.textPrimary.copy(alpha = 0.8f)
                 )
@@ -175,19 +197,19 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                     modifier = Modifier.heightIn(min = 72.dp),
                     verticalArrangement = Arrangement.Bottom
                 ) {
-                    if (state.description.isNotEmpty()) {
+                    if (targetState.description.isNotEmpty()) {
                         Text(
-                            text = state.description,
+                            text = targetState.description,
                             style = MaterialTheme.typography.bodyLarge,
                             color = colors.textSecondary,
-                            maxLines = if (state.progress != null) 2 else 3,
+                            maxLines = if (targetState.progress != null) 2 else 3,
                             overflow = TextOverflow.Ellipsis,
                             lineHeight = 24.sp
                         )
-                        if (state.progress != null) Spacer(modifier = Modifier.height(12.dp))
+                        if (targetState.progress != null) Spacer(modifier = Modifier.height(12.dp))
                     }
 
-                    if (state.progress != null) {
+                    if (targetState.progress != null) {
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.Center
@@ -201,7 +223,7 @@ fun HomeHeroDashboard(info: HomeHeroInfo) {
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth(state.progress)
+                                        .fillMaxWidth(targetState.progress)
                                         .fillMaxHeight()
                                         .background(colors.accent)
                                 )

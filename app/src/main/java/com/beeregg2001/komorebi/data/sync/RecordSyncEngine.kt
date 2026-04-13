@@ -5,7 +5,8 @@ import android.content.Context
 import android.util.Log
 import androidx.room.withTransaction
 import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.data.api.KonomiApi
+// ★ 修正: KonomiApi の直接利用をやめ、抽象化された RecordProvider (DtvProviderProxy) を使う
+import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
@@ -55,7 +56,8 @@ data class SyncProgress(
 
 @Singleton
 class RecordSyncEngine @Inject constructor(
-    private val apiService: KonomiApi,
+    // ★ 修正: KonomiApi ではなく RecordProvider (実体は DtvProviderProxy) を注入
+    private val recordProvider: RecordProvider,
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
     private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
@@ -174,7 +176,10 @@ class RecordSyncEngine @Inject constructor(
                         currentCoroutineContext().ensureActive()
 
                         Log.i(TAG, "Fetching page: $currentPage")
-                        val response = apiService.getRecordedPrograms(page = currentPage)
+                        // ★ 修正: KonomiApiではなくRecordProviderを使用する。
+                        // EDCB等の未実装バックエンドの場合、プロキシから CancellationException が投げられ、
+                        // 下の catch (e: CancellationException) で無音スキップされる。
+                        val response = recordProvider.getRecordedPrograms(page = currentPage)
                         val programs = response.recordedPrograms
 
                         if (programs.isEmpty()) {
@@ -186,7 +191,6 @@ class RecordSyncEngine @Inject constructor(
                             val entities = programs.map { RecordDataMapper.toEntity(it) }
                             allFetchedIds?.addAll(entities.map { it.id })
 
-                            // ★ 修正: フル同期・レジューム時も録画ステータスの変化を検知して更新を継続させる
                             if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
                                 val pageIds = entities.map { it.id }
                                 val localEntitiesMap =
@@ -200,7 +204,6 @@ class RecordSyncEngine @Inject constructor(
                                                 local.isRecording == entity.isRecording
                                     }
 
-                                // ローカルに「録画中」の番組が残っていないかも確認するフェイルセーフ
                                 val hasLocalRecording =
                                     localEntitiesMap.values.any { it.isRecording }
 
@@ -303,6 +306,10 @@ class RecordSyncEngine @Inject constructor(
                     isSyncSuccessful = true
 
                 } catch (e: CancellationException) {
+                    // ★ 魔法: プロキシからの無音スキップ指示をここでキャッチし、
+                    // エラーダイアログを出さずに静かにプログレスを閉じる。
+                    Log.i(TAG, "Sync gracefully cancelled: ${e.message}")
+                    _syncProgress.value = SyncProgress(isSyncing = false)
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
@@ -374,7 +381,8 @@ class RecordSyncEngine @Inject constructor(
                         val programDao = db.recordedProgramDao()
                         currentCoroutineContext().ensureActive()
 
-                        val response = apiService.getRecordedPrograms(page = 1)
+                        // ★ 修正: ここも KonomiApi ではなく RecordProvider に変更
+                        val response = recordProvider.getRecordedPrograms(page = 1)
                         val apiPrograms = response.recordedPrograms
                         if (apiPrograms.isEmpty()) return@withContext
 
@@ -382,7 +390,6 @@ class RecordSyncEngine @Inject constructor(
                         val pageIds = entities.map { it.id }
                         val localEntitiesMap = programDao.getByIds(pageIds).associateBy { it.id }
 
-                        // ★ 修正: タイトルだけでなく、録画ステータス（isRecording）と録画時間（duration）も比較する
                         val allPageItemsMatch =
                             entities.size == localEntitiesMap.size && entities.all { entity ->
                                 val local = localEntitiesMap[entity.id]
@@ -391,10 +398,8 @@ class RecordSyncEngine @Inject constructor(
                                         local.isRecording == entity.isRecording
                             }
 
-                        // ★ 追加: ローカルDBに「録画中」のまま残っている古い番組がないかをフェイルセーフでチェック
                         val hasLocalRecording = localEntitiesMap.values.any { it.isRecording }
 
-                        // 完全に一致しており、かつローカルに録画中の番組も残っていなければ、更新不要とみなす
                         if (!allPageItemsMatch || hasLocalRecording) {
                             val dictionary = aiSeriesDictionaryDao.getAllDictionary()
                                 .associate { it.originalTitle to it.normalizedSeriesName }
@@ -417,6 +422,7 @@ class RecordSyncEngine @Inject constructor(
                         isSyncSuccessful = true
 
                     } catch (e: CancellationException) {
+                        Log.i(TAG, "Smart sync gracefully cancelled: ${e.message}")
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Smart sync error: ${e.message}", e)

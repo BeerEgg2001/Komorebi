@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -103,10 +102,8 @@ private fun SignalRow(label: String, value: String) {
 @Composable
 fun StatusOverlay(
     channel: Channel,
-    mirakurunIp: String?,
-    mirakurunPort: String?,
-    konomiIp: String,
-    konomiPort: String,
+    logoUrl: String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     timeFormatSetting: String = "24H"
 ) {
     var currentTime by remember { mutableStateOf("") }
@@ -121,18 +118,6 @@ fun StatusOverlay(
             currentTime = displaySdf.format(Date())
             delay(1000)
         }
-    }
-
-    val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp ?: "",
-            mirakurunPort ?: "",
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
     Box(
@@ -155,7 +140,8 @@ fun StatusOverlay(
                     .size(56.dp, 32.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(Color.White),
-                contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
+                // ★ 修正: フラグに基づいてスケールを変更
+                contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
             )
             Spacer(Modifier.width(16.dp))
             Text(
@@ -178,10 +164,8 @@ fun StatusOverlay(
 fun LiveOverlayUI(
     channel: Channel,
     programTitle: String,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    logoUrl: String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     showDesc: Boolean,
     isRecording: Boolean,
     scrollState: ScrollState,
@@ -194,17 +178,6 @@ fun LiveOverlayUI(
         else SimpleDateFormat("HH:mm", Locale.getDefault())
     }
     var progress by remember { mutableFloatStateOf(-1f) }
-    val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp,
-            mirakurunPort,
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
-    }
 
     LaunchedEffect(program) {
         if (program != null && !program.startTime.isNullOrEmpty() && !program.endTime.isNullOrEmpty()) {
@@ -249,7 +222,8 @@ fun LiveOverlayUI(
                         .size(80.dp, 45.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.White),
-                    contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
+                    // ★ 修正: フラグに基づいてスケールを変更
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
                 )
                 Spacer(Modifier.width(24.dp))
                 Text(
@@ -464,10 +438,8 @@ fun LCropOverlay(
     val menuFocusRequester = remember { FocusRequester() }
     val directAdjustFocusRequester = remember { FocusRequester() }
 
-    // フォーカス時のコンテンツカラー（背景が textPrimary になるため、その反対色を指定）
     val focusedContentColor = if (colors.isDark) Color.Black else Color.White
 
-    // モード切り替え時の初期フォーカス制御
     LaunchedEffect(state.lCropMode) {
         if (state.lCropMode == LCropMode.MENU) {
             delay(150)
@@ -485,7 +457,6 @@ fun LCropOverlay(
     }
 
     if (state.lCropMode == LCropMode.DIRECT_ADJUST) {
-        // --- ダイレクト調整モード (透明なBoxで全キーを捕捉) ---
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -521,7 +492,6 @@ fun LCropOverlay(
             }
         }
     } else if (state.lCropMode == LCropMode.MENU) {
-        // --- メニューモード (ボトムパネル形式) ---
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -550,7 +520,6 @@ fun LCropOverlay(
                     )
                     .padding(start = 64.dp, end = 64.dp, top = 64.dp, bottom = 48.dp)
             ) {
-                // ヘッダー領域
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -577,7 +546,6 @@ fun LCropOverlay(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // --- 左側：メイン操作ボタン ---
                     Column(modifier = Modifier.weight(1.2f)) {
                         Button(
                             onClick = { state.lCropMode = LCropMode.DIRECT_ADJUST },
@@ -610,12 +578,10 @@ fun LCropOverlay(
                         }
                     }
 
-                    // --- 右側：拡大率の微調整と起点の変更 ---
                     Column(modifier = Modifier.weight(1f)) {
                         Text("微調整", color = colors.accent, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // ★ 修正: 拡大率の微調整 (＋/－ボタン形式)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "拡大率:",
@@ -652,7 +618,6 @@ fun LCropOverlay(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // 拡大起点のトグル
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "拡大起点:",

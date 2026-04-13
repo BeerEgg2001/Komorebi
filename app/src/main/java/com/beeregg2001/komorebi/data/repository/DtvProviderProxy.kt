@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.data.repository
 
+import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.*
@@ -10,7 +11,6 @@ import javax.inject.Singleton
 /**
  * ユーザーの設定（SettingsRepository）に応じて、リクエストを適切なバックエンド（Repository）に
  * 動的にルーティングする「代理人（Proxy）」クラスです。
- * これにより、アプリを再起動することなくバックエンドをシームレスに切り替えることができます。
  */
 @Singleton
 class DtvProviderProxy @Inject constructor(
@@ -25,19 +25,52 @@ class DtvProviderProxy @Inject constructor(
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbRepository
             "EPGSTATION" -> epgStationRepository
-            else -> konomiRepository // "KONOMITV" や "MIRAKURUN_ONLY" のフォールバック
+            else -> konomiRepository
         }
     }
 
-    // --- LiveProvider ---
-    override suspend fun getChannels() = (getActiveProvider() as LiveProvider).getChannels()
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String) =
-        (getActiveProvider() as LiveProvider).getLiveStreamUrl(channelId, quality)
+    // ========================================================================
+    // LiveProvider (ライブ視聴関連)
+    // EDCB構築中につき、未実装(NotImplementedError)や通信エラー時は
+    // 他のバックエンドに頼らず、空のデータを返してスキップする。
+    // ========================================================================
 
-    override suspend fun getChannelLogoUrl(channelId: String) =
-        (getActiveProvider() as LiveProvider).getChannelLogoUrl(channelId)
+    override suspend fun getChannels(): ChannelApiResponse {
+        return try {
+            (getActiveProvider() as LiveProvider).getChannels()
+        } catch (e: NotImplementedError) {
+            Log.w("DtvProviderProxy", "getChannels is not implemented in active backend. Skipping.")
+            ChannelApiResponse() // 空のリストを返してスキップ
+        } catch (e: Exception) {
+            Log.e("DtvProviderProxy", "Error fetching channels. Skipping.", e)
+            ChannelApiResponse() // 空のリストを返してスキップ
+        }
+    }
 
-    // --- RecordProvider ---
+    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String {
+        return try {
+            (getActiveProvider() as LiveProvider).getLiveStreamUrl(channelId, quality)
+        } catch (e: Exception) {
+            Log.w("DtvProviderProxy", "getLiveStreamUrl failed or not implemented. Skipping.")
+            "" // 空文字を返してスキップ
+        }
+    }
+
+    override suspend fun getChannelLogoUrl(channelId: String): String {
+        return try {
+            (getActiveProvider() as LiveProvider).getChannelLogoUrl(channelId)
+        } catch (e: Exception) {
+            Log.w("DtvProviderProxy", "getChannelLogoUrl failed or not implemented. Skipping.")
+            "" // 空文字を返してスキップ（ロゴなしで表示）
+        }
+    }
+
+    // ========================================================================
+    // RecordProvider, ReserveProvider, EpgProvider
+    // ※以下は現在開発対象外のため、呼び出されたらそのままエラーを投げる
+    // （アプリ開発時に実装漏れに気づけるようにするため）
+    // ========================================================================
+
     override suspend fun getRecordedPrograms(page: Int) =
         (getActiveProvider() as RecordProvider).getRecordedPrograms(page)
 
@@ -53,12 +86,14 @@ class DtvProviderProxy @Inject constructor(
     override suspend fun getArchivedJikkyo(videoId: Int) =
         (getActiveProvider() as RecordProvider).getArchivedJikkyo(videoId)
 
-    @OptIn(UnstableApi::class)
-    override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) =
+    @UnstableApi
+    override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
         (getActiveProvider() as RecordProvider).keepAlive(videoId, quality, sessionId)
+    }
 
-    // --- ReserveProvider ---
-    override suspend fun getReserves() = (getActiveProvider() as ReserveProvider).getReserves()
+    override suspend fun getReserves() =
+        (getActiveProvider() as ReserveProvider).getReserves()
+
     override suspend fun addReserve(request: ReserveRequest) =
         (getActiveProvider() as ReserveProvider).addReserve(request)
 
@@ -77,17 +112,18 @@ class DtvProviderProxy @Inject constructor(
     override suspend fun updateReservationCondition(
         conditionId: Int,
         request: ReservationConditionUpdateRequest
-    ) = (getActiveProvider() as ReserveProvider).updateReservationCondition(conditionId, request)
+    ) =
+        (getActiveProvider() as ReserveProvider).updateReservationCondition(conditionId, request)
 
     override suspend fun deleteReservationCondition(conditionId: Int) =
         (getActiveProvider() as ReserveProvider).deleteReservationCondition(conditionId)
 
-    // --- EpgProvider ---
     override suspend fun getEpgPrograms(
         startTime: String?,
         endTime: String?,
         channelType: String?
-    ) = (getActiveProvider() as EpgProvider).getEpgPrograms(startTime, endTime, channelType)
+    ) =
+        (getActiveProvider() as EpgProvider).getEpgPrograms(startTime, endTime, channelType)
 
     override suspend fun getPinnedEpgPrograms(pinnedChannelIds: String) =
         (getActiveProvider() as EpgProvider).getPinnedEpgPrograms(pinnedChannelIds)

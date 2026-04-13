@@ -204,9 +204,23 @@ class KonomiRepository @Inject constructor(
     }
 
     override suspend fun getChannelLogoUrl(channelId: String): String {
-        val ip = settingsRepository.konomiIp.first()
-        val port = settingsRepository.konomiPort.first()
-        return UrlBuilder.getKonomiTvLogoUrl(ip, port, channelId)
+        val backend = settingsRepository.backendType.first()
+
+        return if (backend == "MIRAKURUN_ONLY") {
+            val ip = settingsRepository.mirakurunIp.first()
+            val port = settingsRepository.mirakurunPort.first()
+
+            // "mirakurun_32736_1024" のようなIDからネットワークIDとサービスIDを抽出
+            val parts = channelId.split("_")
+            val nid = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+            val sid = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+
+            UrlBuilder.getMirakurunLogoUrl(ip, port, nid, sid)
+        } else {
+            val ip = settingsRepository.konomiIp.first()
+            val port = settingsRepository.konomiPort.first()
+            UrlBuilder.getKonomiTvLogoUrl(ip, port, channelId)
+        }
     }
 
     override suspend fun getRecordStreamUrl(

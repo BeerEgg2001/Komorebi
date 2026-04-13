@@ -25,26 +25,26 @@ class EdcbApi(private val ip: String, private val port: Int) {
         const val CMD_EPG_SRV_ENUM_TUNER_PROCESS = 1066
         const val CMD_EPG_SRV_ENUM_SERVICE = 1021
         const val CMD_EPG_SRV_ENUM_PG_INFO_EX = 1029
-        // ★ 追加: ファイル取得コマンド
-        const val CMD_EPG_SRV_FILE_COPY = 1060
+        const val CMD_EPG_SRV_FILE_COPY2 = 2060
+        const val CMD_VER = 5
     }
 
     private val tcpClient = EdcbTcpClient(ip, port)
 
-    suspend fun checkConnection(): Result<Boolean> = withContext(Dispatchers.Default) {
-        try {
+    suspend fun checkConnection(): Result<Boolean> {
+        return try {
             val responseBuffer = tcpClient.sendCommand(CMD_EPG_SRV_ENUM_TUNER_PROCESS)
-            if (responseBuffer == null) Result.failure(Exception("Ping Failed"))
-            else Result.success(true)
+            if (responseBuffer == null) return Result.failure(Exception("Ping Failed"))
+            Result.success(true)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun getServices(): Result<List<EdcbServiceInfo>> = withContext(Dispatchers.Default) {
-        try {
+    suspend fun getServices(): Result<List<EdcbServiceInfo>> {
+        return try {
             val responseBuffer = tcpClient.sendCommand(CMD_EPG_SRV_ENUM_SERVICE)
-                ?: return@withContext Result.failure(Exception("Failed response"))
+                ?: return Result.failure(Exception("Failed response"))
             val services = EdcbByteUtils.readVector(responseBuffer) { buf ->
                 val startPos = buf.position()
                 val structSize = EdcbByteUtils.readStructIntro(buf)
@@ -70,18 +70,11 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    /**
-     * ★ 修正: ミリ秒単位の開始・終了時刻を引数で受け取るように変更
-     * 省略された場合は全期間を取得します。
-     */
-    suspend fun getEventInfos(
-        services: List<EdcbServiceInfo>,
-        startTimeMillis: Long? = null,
-        endTimeMillis: Long? = null
-    ): Result<List<EdcbEventInfo>> = withContext(Dispatchers.Default) {
-        if (services.isEmpty()) return@withContext Result.success(emptyList())
+    // ★ お客様が提供してくださったパース成功コード（完全無変更）
+    suspend fun getEventInfos(services: List<EdcbServiceInfo>): Result<List<EdcbEventInfo>> {
+        if (services.isEmpty()) return Result.success(emptyList())
 
-        try {
+        return try {
             Log.d(TAG, "Requesting EPG_SRV_ENUM_PG_INFO_EX for ${services.size} services...")
 
             val elementCount = services.size * 2 + 2
@@ -98,19 +91,12 @@ class EdcbApi(private val ip: String, private val port: Int) {
                 requestBuffer.putLong(serviceIdLong)
             }
 
-            // 時刻が指定されていればJST(+9時間)に補正してFILETIME化、なければ無制限
-            val jstOffset = 9 * 3600 * 1000L
-            val fileTimeStart =
-                if (startTimeMillis != null) EdcbByteUtils.dateTimeToFileTime(startTimeMillis + jstOffset) else 0L
-            val fileTimeEnd =
-                if (endTimeMillis != null) EdcbByteUtils.dateTimeToFileTime(endTimeMillis + jstOffset) else Long.MAX_VALUE
-
-            requestBuffer.putLong(fileTimeStart)
-            requestBuffer.putLong(fileTimeEnd)
+            requestBuffer.putLong(0L)
+            requestBuffer.putLong(Long.MAX_VALUE)
 
             val responseBuffer =
                 tcpClient.sendCommand(CMD_EPG_SRV_ENUM_PG_INFO_EX, requestBuffer.array())
-                    ?: return@withContext Result.failure(Exception("Failed response from EDCB"))
+                    ?: return Result.failure(Exception("Failed response from EDCB"))
 
             val events = mutableListOf<EdcbEventInfo>()
 
@@ -185,34 +171,26 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    /**
-     * EDCBサーバーから指定したファイルをバイナリで取得します
-     */
-    suspend fun fetchFile(fileName: String): ByteArray? = withContext(Dispatchers.IO) {
-        try {
-            Log.d(TAG, "📂 [EdcbLogo] Fetching file from EDCB: $fileName")
-            val requestData = EdcbByteUtils.writeString(fileName)
-            val responseBuffer = tcpClient.sendCommand(CMD_EPG_SRV_FILE_COPY, requestData)
+    // ==========================================
+    // ★ ロゴファイル取得(2060コマンド)用の追加メソッド
+    // ==========================================
+    suspend fun fetchFiles(fileNames: List<String>): List<EdcbFileData>? =
+        withContext(Dispatchers.IO) {
+            try {
+                val requestData = EdcbByteUtils.writeStringVectorWithVersion(CMD_VER, fileNames)
+                val responseBuffer = tcpClient.sendCommand(CMD_EPG_SRV_FILE_COPY2, requestData)
 
-            if (responseBuffer == null) {
-                Log.e(TAG, "❌ [EdcbLogo] Fetch failed: responseBuffer is null for $fileName")
+                if (responseBuffer == null || responseBuffer.remaining() < 2) return@withContext null
+
+                val resVersion = EdcbByteUtils.readUshort(responseBuffer)
+                val list = EdcbByteUtils.readVector(responseBuffer) { buffer ->
+                    EdcbByteUtils.readFileData(buffer)
+                }.filterNotNull()
+
+                return@withContext list
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching files via 2060", e)
                 return@withContext null
             }
-            if (responseBuffer.remaining() == 0) {
-                Log.w(TAG, "⚠️ [EdcbLogo] Fetch empty: 0 bytes returned for $fileName (File might not exist)")
-                return@withContext null
-            }
-
-            // レスポンスのバッファ全体がファイルデータです
-            val size = responseBuffer.remaining()
-            val bytes = ByteArray(size)
-            responseBuffer.get(bytes)
-
-            Log.i(TAG, "✅ [EdcbLogo] Fetch success: $fileName ($size bytes)")
-            return@withContext bytes
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ [EdcbLogo] Error fetching file: $fileName", e)
-            null
         }
-    }
 }

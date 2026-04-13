@@ -37,7 +37,8 @@ import java.util.Locale
 fun LastWatchedChannelCard(
     channel: Channel,
     liveChannel: Channel?,
-    logoUrl: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
+    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグ
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
@@ -46,6 +47,12 @@ fun LastWatchedChannelCard(
     val colors = KomorebiTheme.colors
     val typeLabels =
         mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+
+    // ★ 追加: 非同期でロゴを取得
+    var logoUrl by remember(channel.id) { mutableStateOf("") }
+    LaunchedEffect(channel.id) {
+        logoUrl = getLogoUrl(channel.id)
+    }
 
     Surface(
         onClick = onClick,
@@ -83,10 +90,10 @@ fun LastWatchedChannelCard(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = logoUrl,
+                    model = logoUrl, // ★ 修正
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit // ★ 修正
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -132,13 +139,20 @@ fun LastWatchedChannelCard(
 @Composable
 fun HotChannelCard(
     uiState: UiChannelState,
-    logoUrl: String,
+    getLogoUrl: suspend (String) -> String, // ★ 追加
+    shouldCropLogo: Boolean,                // ★ 追加
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
+
+    // ★ 追加: 非同期でロゴを取得
+    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    LaunchedEffect(uiState.channel.id) {
+        logoUrl = getLogoUrl(uiState.channel.id)
+    }
 
     Surface(
         onClick = onClick,
@@ -176,10 +190,10 @@ fun HotChannelCard(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = logoUrl,
+                    model = logoUrl, // ★ 修正
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit // ★ 修正
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -232,6 +246,9 @@ fun WatchHistoryCard(
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
     val program = history.program
+
+    // ※視聴履歴のカードは背景がサムネイル画像（番組のキャプチャ）のため、ロゴURLは不要。
+    // サムネイル画像はKonomiTVのAPIから取得し続ける必要があるため、このメソッドはUrlBuilderのまま保護します。
     val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
 
     val progress = remember(history) {

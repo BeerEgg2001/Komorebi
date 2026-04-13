@@ -3,6 +3,8 @@ package com.beeregg2001.komorebi.data.api.edcb
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+data class EdcbFileData(val name: String, val data: ByteArray)
+
 object EdcbByteUtils {
 
     fun dateTimeToFileTime(millis: Long): Long {
@@ -90,7 +92,7 @@ object EdcbByteUtils {
         val count = readInt(buffer)
 
         val list = mutableListOf<T>()
-        if (count in 1..200000) { // 万が一の大規模データにも対応
+        if (count in 1..200000) {
             for (i in 0 until count) {
                 list.add(reader(buffer))
             }
@@ -123,5 +125,47 @@ object EdcbByteUtils {
             minute,
             second
         )
+    }
+
+    // ==========================================
+    // ★ ロゴファイル取得(2060コマンド)用の追加メソッド
+    // ==========================================
+    fun writeStringVectorWithVersion(version: Int, strings: List<String>): ByteArray {
+        val stringBytesList = strings.map { writeString(it) }
+        val vectorTotalSize = 4 + 4 + stringBytesList.sumOf { it.size }
+        val buffer = ByteBuffer.allocate(2 + vectorTotalSize).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putShort(version.toShort())
+        buffer.putInt(vectorTotalSize)
+        buffer.putInt(strings.size)
+        for (strBytes in stringBytesList) {
+            buffer.put(strBytes)
+        }
+        return buffer.array()
+    }
+
+    fun readFileData(buffer: ByteBuffer): EdcbFileData? {
+        try {
+            val structSize = readStructIntro(buffer)
+            val startPos = buffer.position()
+
+            val name = readString(buffer)
+            if (buffer.remaining() < 8) return null
+
+            val vectorTotalSize = readInt(buffer)
+            val count = readInt(buffer)
+
+            val dataBytes = ByteArray(count)
+            if (count > 0 && count <= buffer.remaining()) {
+                buffer.get(dataBytes)
+            }
+
+            val expectedEnd = startPos + structSize - 4
+            if (expectedEnd > startPos && expectedEnd <= buffer.limit() && expectedEnd > buffer.position()) {
+                buffer.position(expectedEnd)
+            }
+            return EdcbFileData(name, dataBytes)
+        } catch (e: Exception) {
+            return null
+        }
     }
 }

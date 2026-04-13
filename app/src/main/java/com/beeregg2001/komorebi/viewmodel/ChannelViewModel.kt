@@ -19,7 +19,6 @@ import javax.inject.Inject
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
-    // ★ 修正: KonomiRepository ではなく、抽象化された Provider を Inject
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
     private val watchHistoryRepository: WatchHistoryRepository
@@ -125,14 +124,27 @@ class ChannelViewModel @Inject constructor(
 
     private var pollingJob: Job? = null
     private var progressUpdateJob: Job? = null
-
     private var fetchJob: Job? = null
-
     private var lastFetchedTimeMillis = 0L
+
+    private var isPollingPaused = false
+
+    // ★ 追加: ロゴURLをメモリに保持し、タブ移動などの再フェッチを高速化するキャッシュ
+    private val logoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
         startPolling()
         startProgressUpdater()
+    }
+
+    fun setPollingPaused(paused: Boolean) {
+        if (isPollingPaused != paused) {
+            isPollingPaused = paused
+            Log.d("ChannelViewModel", "Polling paused state changed to: $paused")
+            if (!paused) {
+                fetchChannels()
+            }
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -182,7 +194,6 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
-            // ★ 修正: LiveProvider から取得
             val response = liveProvider.getChannels()
 
             val processed = withContext(Dispatchers.Default) {
@@ -223,7 +234,7 @@ class ChannelViewModel @Inject constructor(
         } catch (e: CancellationException) {
             Log.d("ChannelViewModel", "fetchChannelsInternal cancelled")
             throw e
-        } catch (e: Throwable) { // ★ 修正: Throwable でキャッチ
+        } catch (e: Throwable) {
             Log.e("ChannelViewModel", "Error fetching channels", e)
             _connectionError.value = true
         } finally {
@@ -237,7 +248,7 @@ class ChannelViewModel @Inject constructor(
         progressUpdateJob = viewModelScope.launch {
             while (isActive) {
                 delay(15_000L)
-                if (_groupedChannels.value.isNotEmpty()) {
+                if (_groupedChannels.value.isNotEmpty() && !isPollingPaused) {
                     _liveRows.value = transformToUiState(_groupedChannels.value)
                 }
             }
@@ -257,10 +268,9 @@ class ChannelViewModel @Inject constructor(
         _isRecordingLoading.value = true
         viewModelScope.launch {
             try {
-                // ★ 修正: RecordProvider から取得
                 val response = recordProvider.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms
-            } catch (e: Throwable) { // ★ 修正: Throwable でキャッチ
+            } catch (e: Throwable) {
                 Log.e("ChannelViewModel", "Error recordings", e)
             } finally {
                 _isRecordingLoading.value = false
@@ -272,7 +282,7 @@ class ChannelViewModel @Inject constructor(
     fun startPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
-            if (System.currentTimeMillis() - lastFetchedTimeMillis > 60_000L) {
+            if (System.currentTimeMillis() - lastFetchedTimeMillis > 60_000L && !isPollingPaused) {
                 Log.i("ChannelViewModel", "Data is stale. Fetching immediately.")
                 fetchChannelsInternal()
             }
@@ -283,8 +293,10 @@ class ChannelViewModel @Inject constructor(
 
                 delay(delayToNextMinute + 1500L)
 
-                if (isActive) {
+                if (isActive && !isPollingPaused) {
                     fetchChannelsInternal()
+                } else if (isPollingPaused) {
+                    Log.d("ChannelViewModel", "Polling skipped due to pause (Player active)")
                 }
             }
         }
@@ -308,9 +320,11 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
-    // ★ 追加: UIから非同期でロゴURLを取得するためのメソッド
+    // ★ 修正: キャッシュを利用し、既に取得済みの場合は即座にURLを返すように高速化
     suspend fun getChannelLogoUrl(channelId: String): String {
-        // ※リポジトリの変数名は環境に合わせて変更してください (liveProvider, repository など)
-        return liveProvider.getChannelLogoUrl(channelId)
+        logoCache[channelId]?.let { return it }
+        return liveProvider.getChannelLogoUrl(channelId).also {
+            logoCache[channelId] = it
+        }
     }
 }

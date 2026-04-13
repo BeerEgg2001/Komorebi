@@ -73,6 +73,9 @@ fun VideoTabContent(
     konomiPort: String,
     tabFocusRequester: FocusRequester,
     contentFirstItemRequester: FocusRequester,
+    // ★ 修正(Step1): HomeLauncherScreen からの呼び出しに合わせるためパラメータを追加
+    getLogoUrl: suspend (String) -> String = { "" },
+    shouldCropLogo: Boolean = false,
     onProgramClick: (RecordedProgram) -> Unit,
     onShowAllRecordings: () -> Unit,
     onShowSeriesList: () -> Unit,
@@ -85,7 +88,6 @@ fun VideoTabContent(
     lastPlayedProgramId: String? = null,
     onReturnFocusConsumed: () -> Unit = {},
     timeFormat: String = "24H",
-    // ★ 追加(Step4): AIコンシェルジュ復帰シグナルを受け取る
     aiFocusReturnTick: Int = 0,
     onAiReturnConsumed: () -> Unit = {}
 ) {
@@ -146,7 +148,6 @@ fun VideoTabContent(
         }
     }
 
-    // ★ 追加(Step4): AIコンシェルジュから戻ってきた時のフォーカス復元（記憶しているIDからチケットを発行）
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
             delay(150)
@@ -221,7 +222,12 @@ fun VideoTabContent(
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
         ) {
-            HomeHeroDashboard(info = currentHeroInfo ?: initialHeroInfo)
+            // ★ 修正(Step2): HeroDashboard にコールバックとフラグを渡す
+            HomeHeroDashboard(
+                state = currentHeroInfo ?: initialHeroInfo,
+                getLogoUrl = getLogoUrl,
+                shouldCropLogo = shouldCropLogo
+            )
         }
 
         Box(
@@ -317,6 +323,7 @@ fun VideoTabContent(
                                                 title = program.title,
                                                 subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
                                                 description = "番組情報を取得中...",
+                                                // ※ ビデオタブのサムネイルはKonomiTV固有のものなので UrlBuilder.getThumbnailUrl をそのまま使用
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
                                                     konomiIp,
                                                     konomiPort,

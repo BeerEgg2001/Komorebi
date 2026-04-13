@@ -123,29 +123,52 @@ fun MainRootScreen(
         }
     }
 
-    // ★ 修正: AIコンシェルジュを閉じる際の共通ロジック
-    // restoreFocus: 閉じた後に元の画面のフォーカスを復元するかどうか（別画面へ遷移する場合はfalse）
     val closeAiConcierge = { restoreFocus: Boolean ->
         state.isAiConciergeOpen = false
         aiConciergeViewModel.resetState()
 
         if (restoreFocus) {
-            // 番組表タブにいる場合は、EPG固有のリストアを使用（無駄な自動ジャンプを回避）
             if (state.currentTabIndex == 3) {
                 epgViewModel.triggerRestore()
             } else {
-                // それ以外のタブではシグナルを発火させ、呼び出し先の画面（HomeLauncherScreen等）にフォーカス復元を委譲する
                 state.aiFocusReturnTick++
             }
         }
         epgViewModel.clearSearch()
     }
 
+    // ★ 追加: HomeViewModel から現在のバックエンドタイプを監視
+    val backendType by homeViewModel.backendType.collectAsState()
+
+    // バックエンドタイプが変更されたら、MainRootStateにも反映する
+    LaunchedEffect(backendType) {
+        state.backendType = backendType
+    }
+
+    // ★ 修正: バックエンドに応じた動的なタブリストの取得
+    val baseTabs = state.getVisibleTabs()
+    val favoriteBaseballTeams by homeViewModel.favoriteBaseballTeams.collectAsState()
+    val tabs = remember(favoriteBaseballTeams, baseTabs) {
+        if (favoriteBaseballTeams.isNotEmpty() && !baseTabs.contains("プロ野球")) {
+            baseTabs + "プロ野球"
+        } else {
+            baseTabs
+        }
+    }
+
+    // タブの数よりも大きなインデックスが選択されていた場合の安全装置
+    val safeTabIndex = state.currentTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+
+    LaunchedEffect(tabs.size) {
+        if (state.currentTabIndex >= tabs.size) {
+            state.currentTabIndex = 0
+        }
+    }
+
     LaunchedEffect(Unit) {
         aiConciergeViewModel.pendingAction.collect { action ->
             when (action) {
                 is AiConciergeAction.PlayLive -> {
-                    // ★ 修正: プレイヤーへ遷移するためフォーカス復元は不要（false）
                     closeAiConcierge(false)
                     val target = channelViewModel.groupedChannels.value.values.flatten()
                         .find { it.id == action.channelId }
@@ -165,7 +188,6 @@ fun MainRootScreen(
                 }
 
                 is AiConciergeAction.PlayRecorded -> {
-                    // ★ 修正: プレイヤーへ遷移するためフォーカス復元は不要（false）
                     closeAiConcierge(false)
                     val target =
                         recordViewModel.recentRecordings.value.find { it.id == action.videoId }
@@ -186,7 +208,6 @@ fun MainRootScreen(
                 }
 
                 is AiConciergeAction.SearchEpg -> {
-                    // ★ 修正: EPGタブへ遷移するため元の画面のフォーカス復元は不要（false）
                     closeAiConcierge(false)
 
                     val isOnlyDate =
@@ -203,7 +224,9 @@ fun MainRootScreen(
                                 .withHour(4).withMinute(0).withSecond(0).withNano(0)
 
                             epgViewModel.updateTargetTime(jumpTime)
-                            state.currentTabIndex = 3
+                            // ★ 修正: タブが存在する場合のみ移動
+                            val tabIndex = tabs.indexOf("番組表")
+                            if (tabIndex != -1) state.currentTabIndex = tabIndex
                             state.toastMessage = "${action.date} の番組表に移動しました"
                         } catch (e: Exception) {
                             state.toastMessage = "日付の指定が正しくありません"
@@ -216,31 +239,39 @@ fun MainRootScreen(
                             action.isLiveOnly,
                             action.channelName
                         )
-                        state.currentTabIndex = 3
+                        // ★ 修正: タブが存在する場合のみ移動
+                        val tabIndex = tabs.indexOf("番組表")
+                        if (tabIndex != -1) state.currentTabIndex = tabIndex
                         state.toastMessage =
                             if (action.keyword.isNotBlank()) "「${action.keyword}」の検索結果を表示します" else "検索結果を表示します"
                     }
                 }
 
                 is AiConciergeAction.SearchRecord -> {
-                    // ★ 修正: ビデオタブへ遷移するためフォーカス復元は不要（false）
                     closeAiConcierge(false)
 
-                    state.currentTabIndex = 2 // ビデオタブ
-                    state.isRecordListOpen = true
+                    // ★ 修正: タブが存在する場合のみ移動
+                    val tabIndex = tabs.indexOf("ビデオ")
+                    if (tabIndex != -1) {
+                        state.currentTabIndex = tabIndex
+                        state.isRecordListOpen = true
 
-                    if (action.keyword.isNotBlank()) {
-                        val firstKeyword = action.keyword.split(",").firstOrNull()?.trim() ?: ""
-                        recordViewModel.searchRecordings(firstKeyword)
-                    }
-                    if (action.genre.isNotBlank()) {
-                        recordViewModel.updateGenre(action.genre)
-                    }
+                        if (action.keyword.isNotBlank()) {
+                            val firstKeyword = action.keyword.split(",").firstOrNull()?.trim() ?: ""
+                            recordViewModel.searchRecordings(firstKeyword)
+                        }
+                        if (action.genre.isNotBlank()) {
+                            recordViewModel.updateGenre(action.genre)
+                        }
 
-                    state.toastMessage =
-                        if (action.keyword.isNotBlank()) "「${
-                            action.keyword.split(",").firstOrNull()
-                        }」の録画を検索します" else "録画リストを表示します"
+                        state.toastMessage =
+                            if (action.keyword.isNotBlank()) "「${
+                                action.keyword.split(",").firstOrNull()
+                            }」の録画を検索します" else "録画リストを表示します"
+                    } else {
+                        state.toastMessage =
+                            "現在設定されているシステムでは録画検索は利用できません"
+                    }
                 }
 
                 is AiConciergeAction.ReqEpgSearch -> {
@@ -259,7 +290,6 @@ fun MainRootScreen(
                 is AiConciergeAction.ReqRecSearch -> {
                     scope.launch {
                         val allRecs = recordViewModel.recentRecordings.value
-
                         val keywords =
                             action.keyword.split(",").map { it.trim() }.filter { it.isNotBlank() }
 
@@ -278,7 +308,6 @@ fun MainRootScreen(
                 }
 
                 is AiConciergeAction.ReserveSingle -> {
-                    // ★ 修正: 予約処理のみで画面遷移しないため、元の画面にフォーカス復元（true）
                     closeAiConcierge(true)
                     reserveViewModel.addReserve(action.programId) {
                         state.toastMessage = "番組の録画予約を完了しました"
@@ -286,14 +315,7 @@ fun MainRootScreen(
                 }
 
                 is AiConciergeAction.ReserveAuto -> {
-                    // ★ 修正: 予約処理のみで画面遷移しないため、元の画面にフォーカス復元（true）
                     closeAiConcierge(true)
-
-                    Log.i(TAG, "=== 自動予約登録（AIコンシェルジュから） ===")
-                    Log.i(TAG, "キーワード: ${action.keyword}")
-                    Log.i(TAG, "送信パラメーター -> NID: 0, TSID: 0, SID: 0 (全チャンネル対象)")
-                    Log.i(TAG, "=========================================")
-
                     reserveViewModel.addEpgReserve(
                         keyword = action.keyword,
                         networkId = 0,
@@ -374,10 +396,14 @@ fun MainRootScreen(
 
     val isEpgReady by epgViewModel.isInitialLoadComplete.collectAsState()
 
+    // --- 各種IP/Port設定値の取得 ---
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
     val mirakurunPort by settingsViewModel.mirakurunPort.collectAsState(initial = "")
     val konomiIp by settingsViewModel.konomiIp.collectAsState(initial = "")
     val konomiPort by settingsViewModel.konomiPort.collectAsState(initial = "")
+    val edcbIp by settingsViewModel.edcbIp.collectAsState(initial = "")
+    val edcbPort by settingsViewModel.edcbPort.collectAsState(initial = "")
+
     val defaultLiveQuality by settingsViewModel.liveQuality.collectAsState(initial = "1080p-60fps")
     val defaultVideoQuality by settingsViewModel.videoQuality.collectAsState(initial = "1080p-60fps")
 
@@ -389,9 +415,8 @@ fun MainRootScreen(
     LaunchedEffect(Unit) {
         if (!state.hasAppliedStartupTab) {
             val tab = settingsViewModel.getStartupTabOnce()
-            state.currentTabIndex = when (tab) {
-                "ホーム" -> 0; "ライブ" -> 1; "ビデオ" -> 2; "番組表" -> 3; "録画予約" -> 4; "プロ野球" -> 5; else -> 0
-            }
+            val index = tabs.indexOf(tab)
+            state.currentTabIndex = if (index != -1) index else 0
             channelViewModel.fetchChannels()
             state.hasAppliedStartupTab = true
         }
@@ -421,7 +446,10 @@ fun MainRootScreen(
                     state.lastSelectedProgramId = null
                     homeViewModel.saveLastChannel(targetChannel)
                     state.isReturningFromPlayer = false
-                    state.currentTabIndex = 1
+
+                    // ★ 修正: ライブタブが存在すればそこに移動
+                    val liveIndex = tabs.indexOf("ライブ")
+                    if (liveIndex != -1) state.currentTabIndex = liveIndex
                     state.isUiReady = true
                 }
             }
@@ -457,11 +485,7 @@ fun MainRootScreen(
         if (!state.canProcessBackPress()) return@BackHandler
 
         when {
-            state.isAiConciergeOpen -> {
-                // ★ 修正: 無条件にプレイヤー復帰フラグを立てるのをやめ、共通の閉じる処理（シグナル発火）を呼び出す
-                closeAiConcierge(true)
-            }
-
+            state.isAiConciergeOpen -> closeAiConcierge(true)
             state.selectedConditionReserveItem != null -> state.selectedConditionReserveItem = null
             state.editingNewProgram != null -> state.editingNewProgram = null
             state.editingReserveItem != null -> state.editingReserveItem = null
@@ -470,7 +494,6 @@ fun MainRootScreen(
                 null
 
             state.showDeleteConfirmDialog -> state.showDeleteConfirmDialog = false
-
             state.isMiniPlayerMode -> {
                 state.isMiniPlayerMode = false
                 state.toastMessage = "フルスクリーンに戻りました"
@@ -498,7 +521,6 @@ fun MainRootScreen(
             state.epgSelectedProgram != null -> state.epgSelectedProgram = null
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
-
             state.isRecordListOpen -> {
                 state.isRecordListOpen = false
                 if (state.openedSeriesTitle != null) {
@@ -513,7 +535,6 @@ fun MainRootScreen(
 
             state.showConnectionErrorDialog -> onExitApp()
             !(state.isDataReady && state.isUiReady) -> {}
-
             else -> state.triggerHomeBack = true
         }
     }
@@ -532,7 +553,7 @@ fun MainRootScreen(
     LaunchedEffect(isEpgReady, state.isDataReady, isSettingsInitialized, state.currentTabIndex) {
         if (!isSettingsInitialized) {
             delay(500); state.isSplashFinished = true
-        } else if (state.currentTabIndex == 3) {
+        } else if (state.currentTabIndex == tabs.indexOf("番組表")) {
             if (isEpgReady && state.isDataReady) {
                 delay(300); state.isSplashFinished = true
             }
@@ -598,7 +619,7 @@ fun MainRootScreen(
                 Box(modifier = Modifier.fillMaxSize()) {
 
                     // ★ Z-index: 0 ========================================================
-                    // 背面のホーム画面（通常時は非表示だが、PiPモード時、またはプレイヤー非表示時に描画する）
+                    // 背面のホーム画面
                     val showHomeLayer =
                         (state.selectedChannel == null && state.selectedProgram == null) || state.isMiniPlayerMode
                     if (showHomeLayer) {
@@ -652,7 +673,6 @@ fun MainRootScreen(
                                         onAutoReserveClick = { program ->
                                             state.selectedProgramForAutoReserve = program
                                         },
-                                        // ★ 追加: AIコンシェルジュ復帰シグナルを渡す
                                         aiFocusReturnTick = state.aiFocusReturnTick,
                                         onAiReturnConsumed = { state.aiFocusReturnTick = 0 }
                                     )
@@ -736,7 +756,7 @@ fun MainRootScreen(
                                         mirakurunPort = mirakurunPort,
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
-                                        initialTabIndex = state.currentTabIndex,
+                                        initialTabIndex = safeTabIndex, // ★ 修正: 安全なインデックスを渡す
                                         onTabChange = { state.currentTabIndex = it },
                                         selectedChannel = state.selectedChannel,
                                         onChannelClick = { channel, isBaseballMode ->
@@ -820,7 +840,6 @@ fun MainRootScreen(
                                         onReturnToPlayerClick = {
                                             state.isMiniPlayerMode = false
                                         },
-                                        // ★ 追加: AIコンシェルジュ復帰シグナルの伝達
                                         aiFocusReturnTick = state.aiFocusReturnTick,
                                         onAiReturnConsumed = { state.aiFocusReturnTick = 0 }
                                     )
@@ -861,7 +880,7 @@ fun MainRootScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .zIndex(1f) // 手前に配置
+                                .zIndex(1f)
                                 .let {
                                     if (state.isMiniPlayerMode) it
                                         .padding(
@@ -876,8 +895,6 @@ fun MainRootScreen(
                             if (state.selectedChannel != null) {
                                 LivePlayerScreen(
                                     channel = state.selectedChannel!!,
-                                    mirakurunIp = mirakurunIp, mirakurunPort = mirakurunPort,
-                                    konomiIp = konomiIp, konomiPort = konomiPort,
                                     initialQuality = defaultLiveQuality,
                                     isBaseballMode = state.isBaseballMode,
                                     isMiniListOpen = state.isPlayerMiniListOpen,
@@ -938,7 +955,6 @@ fun MainRootScreen(
                         }
                     }
 
-                    // エラーハンドリング関連（既存のまま）
                     if (hasSyncError) {
                         val errorMessage =
                             recordViewModel.syncProgress.value.error ?: "不明なエラー"
@@ -972,7 +988,6 @@ fun MainRootScreen(
                 }
             }
 
-            // ★ 自動予約ダイアログ等（既存のまま）
             if (state.selectedProgramForAutoReserve != null) {
                 val program = state.selectedProgramForAutoReserve!!
                 val initialKeyword = TitleNormalizer.extractDisplayTitle(program.title)
@@ -1320,7 +1335,6 @@ fun MainRootScreen(
                 isRecording = isRecordingVoice,
                 ticketManager = aiTicketManager,
                 onClose = {
-                    // ★ 修正: 無条件にプレイヤー復帰フラグを立てるのをやめ、共通の閉じる処理（シグナル発火）を呼び出す
                     closeAiConcierge(true)
                 },
                 onMicLongPressStart = {
