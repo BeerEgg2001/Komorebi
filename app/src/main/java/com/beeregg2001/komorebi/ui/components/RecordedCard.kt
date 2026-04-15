@@ -40,7 +40,7 @@ private fun formatTime(seconds: Long): String {
 @Composable
 fun RecordedCard(
     program: RecordedProgram,
-    backendType: String, // ★ 追加
+    backendType: String,
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
@@ -54,9 +54,12 @@ fun RecordedCard(
 
     val scrolling = isScrolling()
 
-    // ★ 修正: backendTypeを渡す
-    val thumbnailUrl =
-        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
+    // 変更後：KonomiTV、EDCBともに、Repositoryが用意してくれたURLをそのまま使う！
+    val fallbackUrl = program.apiThumbnailUrl
+    val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
+
+    // 現在表示を試みているURL（失敗したらfallbackUrlに切り替わる）
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
         "GR" -> "地デジ" to Color(0xFF1E88E5)
@@ -111,14 +114,13 @@ fun RecordedCard(
 
             if (!scrolling) {
                 val context = LocalContext.current
-                val imageRequest = remember(thumbnailUrl) {
+                val imageRequest = remember(currentThumbnailUrl) {
                     ImageRequest.Builder(context)
-                        .data(thumbnailUrl)
+                        .data(currentThumbnailUrl)
                         .size(coil.size.Size(300, 168))
                         .crossfade(true)
-                        // ★ 修正: キャッシュのキーを明示し、使い回しバグを防止する
-                        .memoryCacheKey(thumbnailUrl)
-                        .diskCacheKey(thumbnailUrl)
+                        .memoryCacheKey(currentThumbnailUrl)
+                        .diskCacheKey(currentThumbnailUrl)
                         .memoryCachePolicy(CachePolicy.ENABLED)
                         .build()
                 }
@@ -127,7 +129,13 @@ fun RecordedCard(
                     model = imageRequest,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    // DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
+                    onError = {
+                        if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                            currentThumbnailUrl = fallbackUrl
+                        }
+                    }
                 )
             } else {
                 Box(

@@ -19,7 +19,7 @@ data class EdcbRecFileInfo(
     val recStatus: Int,
     val startTimeEpg: String?,
     val comment: String,
-    val programInfo: String,
+    val programInfo: String, // ★ここに .program.txt の中身が入ります
     val errInfo: String,
     val protectFlag: Boolean
 )
@@ -52,6 +52,9 @@ class EdcbApi(private val ip: String, private val port: Int) {
         const val CMD_EPG_SRV_ENUM_SERVICE = 1021
         const val CMD_EPG_SRV_ENUM_PG_INFO_EX = 1029
         const val CMD_EPG_SRV_FILE_COPY2 = 2060
+
+        // ★ 修正: 2018ではなく、正しいコマンドID 2017 に変更
+        const val CMD_EPG_SRV_ENUM_RECINFO2 = 2017
         const val CMD_EPG_SRV_ENUM_RECINFO_BASIC2 = 2020
         const val CMD_EPG_SRV_GET_RECINFO2 = 2024
         const val CMD_VER = 5
@@ -267,13 +270,14 @@ class EdcbApi(private val ip: String, private val port: Int) {
             }
         }
 
-    // ★ 新規追加: 録画リスト取得 (軽量版)
-    suspend fun getRecInfosBasic(): Result<List<EdcbRecFileInfo>> {
+    // ★ 新規追加: 録画リスト取得 (詳細版)
+    suspend fun getRecInfosFull(): Result<List<EdcbRecFileInfo>> {
         return try {
             val payload =
                 ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
                     .array()
-            val res = tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO_BASIC2, payload)
+            // ★ 正しいコマンドID 2017 でリクエストを送信
+            val res = tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload)
                 ?: return Result.success(emptyList())
             EdcbByteUtils.readUshort(res)
 
@@ -294,11 +298,11 @@ class EdcbApi(private val ip: String, private val port: Int) {
                     drops = EdcbByteUtils.readLong(buf),
                     scrambles = EdcbByteUtils.readLong(buf),
                     recStatus = EdcbByteUtils.readInt(buf),
-                    startTimeEpg = null,
-                    comment = "",
-                    programInfo = "",
-                    errInfo = "",
-                    protectFlag = false
+                    startTimeEpg = EdcbByteUtils.readSystemTime(buf),
+                    comment = EdcbByteUtils.readString(buf),
+                    programInfo = EdcbByteUtils.readString(buf), // ここで詳細情報が取得されます
+                    errInfo = EdcbByteUtils.readString(buf),
+                    protectFlag = EdcbByteUtils.readByte(buf) != 0
                 )
                 val expectedEndPos = startPos + structSize
                 if (expectedEndPos <= buf.limit()) buf.position(expectedEndPos)
@@ -306,11 +310,12 @@ class EdcbApi(private val ip: String, private val port: Int) {
             }
             Result.success(list)
         } catch (e: Exception) {
+            Log.e(TAG, "Error fetching full rec info", e)
             Result.failure(e)
         }
     }
 
-    // ★ 新規追加: 録画詳細取得
+    // 録画詳細取得（個別用）
     suspend fun getRecInfo(infoId: Int): Result<EdcbRecFileInfo> {
         return try {
             val payload =

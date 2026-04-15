@@ -50,9 +50,29 @@ class KonomiRepository @Inject constructor(
 
     // ★ エラーが出る場合は RecordedProgramsResponse の部分を正しいクラス名に置き換えてください
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
-        apiService.getRecordedPrograms(page = page)
+        try {
+            val response = apiService.getRecordedPrograms(page = page, order = "desc")
+
+            // ★ 追加: KonomiTV用のサムネイルURLを生成してモデルにセットする
+            val ip = settingsRepository.konomiIp.first()
+            val port = settingsRepository.konomiPort.first()
+            val updatedPrograms = response.recordedPrograms.map { program ->
+                val fallbackUrl = UrlBuilder.getThumbnailUrl("KONOMITV", ip, port, program.id.toString())
+                program.copy(apiThumbnailUrl = fallbackUrl)
+            }
+
+            response.copy(recordedPrograms = updatedPrograms)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get recorded programs", e)
+            RecordedApiResponse(0, emptyList())
+        }
 
     override suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> = runCatching {
+        val program = apiService.getRecordedProgram(videoId)
+        // ★ 追加: KonomiTV用のサムネイルURLをセットする
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        val fallbackUrl = UrlBuilder.getThumbnailUrl("KONOMITV", ip, port, program.id.toString())
         apiService.getRecordedProgram(videoId)
     }
 

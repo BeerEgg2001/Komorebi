@@ -36,5 +36,8 @@ data class RecordedProgramEntity(
     @ColumnInfo(name = "tile_rows") val tileRows: Int? = null,
     @ColumnInfo(name = "tile_interval") val tileInterval: Double? = null,
     @ColumnInfo(name = "tile_width") val tileWidth: Int? = null,
-    @ColumnInfo(name = "tile_height") val tileHeight: Int? = null
+    @ColumnInfo(name = "tile_height") val tileHeight: Int? = null,
+    // ★ 追加: データベースのカラムとしてサムネイルURLを永続化
+    @ColumnInfo(name = "direct_thumbnail_url") val directThumbnailUrl: String? = null,
+    @ColumnInfo(name = "api_thumbnail_url") val apiThumbnailUrl: String? = null
 )

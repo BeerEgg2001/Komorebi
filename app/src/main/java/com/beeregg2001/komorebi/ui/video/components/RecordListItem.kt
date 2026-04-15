@@ -43,7 +43,7 @@ private val COLOR_DEFAULT = Color.Gray
 @Composable
 fun RecordListItem(
     program: RecordedProgram,
-    backendType: String, // ★ 追加: どのシステムで動いているかを受け取る
+    backendType: String,
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
@@ -58,9 +58,12 @@ fun RecordListItem(
     val isAnalyzed = program.recordedVideo.hasKeyFrames && !isCurrentlyRecording
     val isVisualFocused = isFocused || isPersistentFocused
 
-    // ★ 修正: backendTypeを渡してシステムに合ったURLを生成する
-    val thumbnailUrl =
-        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
+    // 変更後：KonomiTV、EDCBともに、Repositoryが用意してくれたURLをそのまま使う！
+    val fallbackUrl = program.apiThumbnailUrl
+    val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
+
+    // 現在表示を試みているURL（失敗したらfallbackUrlに切り替わる）
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
         "GR" -> "地デジ" to COLOR_GR
@@ -73,13 +76,12 @@ fun RecordListItem(
     val inverseColor = if (colors.isDark) Color.Black else Color.White
     val context = LocalContext.current
 
-    val imageRequest = remember(thumbnailUrl) {
+    val imageRequest = remember(currentThumbnailUrl) {
         ImageRequest.Builder(context)
-            .data(thumbnailUrl)
+            .data(currentThumbnailUrl)
             .size(180, 100)
-            // ★ 修正: キャッシュのキーを明示し、リストのリサイクル時に他番組の画像が残るバグを防止する
-            .memoryCacheKey(thumbnailUrl)
-            .diskCacheKey(thumbnailUrl)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .build()
     }
@@ -150,7 +152,13 @@ fun RecordListItem(
                     model = imageRequest,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    // DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
+                    onError = {
+                        if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                            currentThumbnailUrl = fallbackUrl
+                        }
+                    }
                 )
                 if (channelLabel.isNotEmpty()) {
                     Box(

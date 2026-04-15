@@ -43,7 +43,10 @@ object RecordDataMapper {
             tileRows = tile?.rowCount,
             tileInterval = tile?.intervalSec,
             tileWidth = tile?.tileWidth,
-            tileHeight = tile?.tileHeight
+            tileHeight = tile?.tileHeight,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = program.directThumbnailUrl,
+            apiThumbnailUrl = program.apiThumbnailUrl
         )
     }
 
@@ -96,7 +99,10 @@ object RecordDataMapper {
             ),
             genres = entity.genres,
             isRecording = entity.isRecording,
-            playbackPosition = entity.playbackPosition
+            playbackPosition = entity.playbackPosition,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = entity.directThumbnailUrl,
+            apiThumbnailUrl = entity.apiThumbnailUrl
         )
     }
 }

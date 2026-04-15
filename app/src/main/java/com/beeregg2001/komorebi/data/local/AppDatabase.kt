@@ -18,7 +18,7 @@ import com.beeregg2001.komorebi.data.local.entity.*
         EpgChannelEntity::class,
         EpgProgramEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

@@ -45,7 +45,6 @@ class EdcbRepository @Inject constructor(
     private var tsidToSidsMap: Map<Int, List<Int>> = emptyMap()
     private var bsPrefixToSidsMap: Map<Int, List<Int>> = emptyMap()
 
-    // ★追加: 録画リスト機能用のキャッシュとMutex
     private val recordMutex = Mutex()
     private var cachedRecInfos: List<EdcbRecFileInfo>? = null
     private var lastRecFetchTime = 0L
@@ -475,9 +474,65 @@ class EdcbRepository @Inject constructor(
 
     override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
 
+
     // =========================================================================
-    // ★ 追加: 録画リスト関連機能 (他メソッドには一切干渉しない)
+    // ★ 録画リスト・番組詳細 関連機能
     // =========================================================================
+
+    /**
+     * EDCBの programInfo (.program.txtの内容) からジャンルを抽出します。
+     * ★修正: 全角スペースやタブで区切られた複数ジャンルに対応し、大分類と中分類を正確に抽出します。
+     */
+    private fun extractGenresFromProgramInfo(programInfo: String): List<EpgGenre> {
+        if (programInfo.isBlank()) return emptyList()
+        val lines = programInfo.lines()
+
+        val genreIndex = lines.indexOfFirst { it.trim().startsWith("ジャンル") && it.contains(":") }
+        if (genreIndex != -1 && genreIndex + 1 < lines.size) {
+            val genreList = mutableListOf<EpgGenre>()
+
+            // 次の行から空行になるまでジャンルを読み取る
+            for (i in genreIndex + 1 until lines.size) {
+                val line = lines[i].trim()
+                if (line.isEmpty()) break // 空行でジャンル表記終了とみなす
+
+                // EDCB(rplsinfo)は1行の中に全角スペースやタブで複数ジャンルを並べるため分割
+                val parts = line.split("　", "\t")
+
+                for (part in parts) {
+                    val p = part.trim()
+                    if (p.isEmpty()) continue
+
+                    var major = ""
+                    var middle = ""
+
+                    // 1. 〔 〕 や [ ] などの括弧で中分類が書かれているパターン
+                    if (p.contains("〔") && p.contains("〕")) {
+                        major = p.substringBefore("〔").trim()
+                        middle = p.substringAfter("〔").substringBefore("〕").trim()
+                    }
+                    // 2. " - " で分割されているパターン
+                    else if (p.contains(" - ")) {
+                        major = p.substringBefore(" - ").trim()
+                        middle = p.substringAfter(" - ").trim()
+                    }
+                    // 3. 大分類のみ
+                    else {
+                        major = p
+                    }
+
+                    // KonomiTV互換性のため「／」を「・」に統一 (例: アニメ／特撮 -> アニメ・特撮)
+                    major = major.replace("／", "・")
+
+                    if (major.isNotEmpty()) {
+                        genreList.add(EpgGenre(major = major, middle = middle))
+                    }
+                }
+            }
+            return genreList
+        }
+        return emptyList()
+    }
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
@@ -490,7 +545,7 @@ class EdcbRepository @Inject constructor(
                     if (ip.isBlank()) return@withContext RecordedApiResponse(0, emptyList())
 
                     if (cachedRecInfos == null || (System.currentTimeMillis() - lastRecFetchTime) > 30_000L) {
-                        val result = EdcbApi(ip, port).getRecInfosBasic()
+                        val result = EdcbApi(ip, port).getRecInfosFull()
                         if (result.isSuccess) {
                             cachedRecInfos = result.getOrNull()?.sortedByDescending { it.startTime }
                             lastRecFetchTime = System.currentTimeMillis()
@@ -506,7 +561,6 @@ class EdcbRepository @Inject constructor(
 
                     val to = (from + 50).coerceAtMost(total)
 
-                    // サスペンドによるキャンセルを防ぐため、キャッシュがない場合は安全に取得
                     var safeHttpPort = httpPortCache ?: 5510
                     if (httpPortCache == null && !logoDataIniAttempted) {
                         try {
@@ -597,13 +651,9 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-        // ==========================================
-        // ★ 追加: 設定から再生方式を取得 ("API" または "DIRECT")
-        // ==========================================
         val playMethod = settingsRepository.edcbRecordPlayMethod.first()
 
         if (playMethod == "DIRECT") {
-            // --- 直接アクセス方式（高速シーク・公開フォルダ） ---
             val filePath = info?.recFilePath ?: return ""
             val relativePath = filePath
                 .replace(Regex("^[a-zA-Z]:\\\\"), "")
@@ -619,7 +669,6 @@ class EdcbRepository @Inject constructor(
             Log.i(TAG, "Generated HTTP Stream URL (DIRECT): $videoUri")
             return videoUri.toString()
         } else {
-            // --- API経由方式（万人向け・ポン付け） ---
             val videoUri = android.net.Uri.Builder()
                 .scheme("http")
                 .encodedAuthority("$ip:$safeHttpPort")
@@ -658,9 +707,48 @@ class EdcbRepository @Inject constructor(
         val isRecording = info.durationSec == 0 || info.recStatus == 0
         val channelId = "edcb_${info.onid}_${info.tsid}_${info.sid}"
 
+        val extractedGenres = extractGenresFromProgramInfo(info.programInfo)
+
+        val detailStartIdx = info.programInfo.indexOf("詳細情報")
+        val genreStartIdx = info.programInfo.indexOf("ジャンル").takeIf { it != -1 } ?: info.programInfo.length
+
+        val cleanDescription = if (info.programInfo.isNotBlank()) {
+            val endIdx = if (detailStartIdx != -1) detailStartIdx else genreStartIdx
+            info.programInfo.substring(0, endIdx).trim().ifBlank { info.comment }
+        } else {
+            info.comment
+        }
+
+        // ★ 修正: ハックを削除し、純粋な詳細情報のみを持つように変更
+        val detailMap = mutableMapOf<String, String>(
+            "Error" to "${info.drops}",
+            "Path" to info.recFilePath
+        )
+
+        // ★ 追加: 正しいプロパティに設定するためのURL構築
+        val relativePath = info.recFilePath
+            .replace(Regex("^[a-zA-Z]:\\\\"), "")
+            .replace("\\", "/")
+        val encodedPath = android.net.Uri.encode(relativePath, "/")
+
+        val primaryUrl = "http://$ip:$httpPort/rec/$encodedPath.jpg"
+        val fallbackUrl = "http://$ip:$httpPort/api/Thumbnail?id=${info.id}"
+
+        if (detailStartIdx != -1 && genreStartIdx > detailStartIdx) {
+            val extText = info.programInfo.substring(detailStartIdx + 4, genreStartIdx).trim()
+
+            val parsedDetails = EdcbApi.parseProgramExtendedText(extText)
+            if (parsedDetails.isNotEmpty() && parsedDetails.keys.any { it.isNotBlank() }) {
+                detailMap.putAll(parsedDetails)
+            } else if (extText.isNotBlank()) {
+                detailMap["番組詳細"] = extText
+            }
+        }
+
         return RecordedProgram(
-            info.id, info.title, null, false, info.comment.ifBlank { info.programInfo.take(150) },
-            mapOf("Error" to "${info.drops}", "Path" to info.recFilePath),
+            info.id, info.title, null, false,
+            cleanDescription,
+            detailMap,
             isoStart, isoEnd, info.durationSec.toDouble(), info.drops > 0,
             RecordedChannel(
                 channelId,
@@ -681,7 +769,11 @@ class EdcbRepository @Inject constructor(
                 "mpeg2",
                 "aac"
             ),
-            emptyList(), isRecording, 0.0
+            extractedGenres,
+            isRecording, 0.0,
+            // ★ 追加: プロパティに直接URLを設定
+            directThumbnailUrl = primaryUrl,
+            apiThumbnailUrl = fallbackUrl
         )
     }
 

@@ -45,7 +45,8 @@ object UrlBuilder {
     fun getThumbnailUrl(backendType: String, ip: String, port: String, videoId: String): String {
         val baseUrl = formatBaseUrl(ip, port, "http") // サムネイルは基本的にhttpフォールバックで安全に組む
         return when (backendType) {
-            "EDCB" -> "*TODO" // EMWUIの標準サムネイルAPI
+            // ★修正: TODOを削除し、EMWUIの標準サムネイルAPIパスを設定
+            "EDCB" -> "$baseUrl/api/Thumbnail?id=$videoId"
             "EPGSTATION" -> "$baseUrl/api/thumbnails/$videoId" // EPGStationの標準サムネイルAPI
             else -> { // KonomiTV (デフォルト)
                 val secureBaseUrl = formatBaseUrl(ip, port, "https")
@@ -107,5 +108,19 @@ object UrlBuilder {
     fun getArchivedJikkyoUrl(ip: String, port: String, videoId: Int): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/videos/$videoId/jikkyo"
+    }
+
+    /**
+     * EDCBの録画フォルダにある静的サムネイル (録画ファイル名.ts.jpg) を直接取得するURL
+     */
+    fun getEdcbDirectThumbnailUrl(ip: String, port: String, recFilePath: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "http")
+        val relativePath = recFilePath
+            .replace(Regex("^[a-zA-Z]:\\\\"), "")
+            .replace("\\", "/")
+
+        // 録画ファイルの末尾に .jpg を足すことで "hoge.ts.jpg" を指定
+        val encodedPath = android.net.Uri.encode(relativePath, "/")
+        return "$baseUrl/rec/$encodedPath.jpg"
     }
 }

@@ -22,7 +22,10 @@ data class RecordedProgram(
     @SerializedName("recorded_video") val recordedVideo: RecordedVideo,
     val genres: List<EpgGenre>? = null,
     val isRecording: Boolean = false,
-    val playbackPosition: Double = 0.0
+    val playbackPosition: Double = 0.0,
+    // ★ ここから下の2行を追加するだけです ★
+    val directThumbnailUrl: String? = null,
+    val apiThumbnailUrl: String? = null
 )
 
 // CM区間（チャプター）のデータモデル
