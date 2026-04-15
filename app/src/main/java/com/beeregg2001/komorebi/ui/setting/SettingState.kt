@@ -9,7 +9,6 @@ import com.google.gson.reflect.TypeToken
 
 @Stable
 class SettingPreferences(
-    // ★ 追加: バックエンドのプロパティ
     val backendType: String,
     val edcbIp: String,
     val edcbPort: String,
@@ -48,8 +47,9 @@ class SettingPreferences(
     val timeFormat: String,
     val currentThemeName: String,
     val defaultRecordListView: String,
-    // ★ 追加: サブチャンネル非表示設定
-    val hideSubChannels: Boolean
+    val hideSubChannels: Boolean,
+    // ★ 追加: EDCB録画再生方式の設定値 ("API" または "DIRECT")
+    val edcbRecordPlayMethod: String
 )
 
 @Composable
@@ -75,7 +75,6 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
     }
 
     return SettingPreferences(
-        // ★ 追加: 設定値の受け取り
         backendType = repository.backendType.collectAsState(initial = "KONOMITV").value,
         edcbIp = repository.edcbIp.collectAsState(initial = "").value,
         edcbPort = repository.edcbPort.collectAsState(initial = "5510").value,
@@ -114,8 +113,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         timeFormat = repository.timeFormat.collectAsState(initial = "24H").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
-        // ★ 追加: サブチャンネル非表示設定
-        hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value
+        hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value,
+        // ★ 追加: Flowから収集
+        edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value
     )
 }
 

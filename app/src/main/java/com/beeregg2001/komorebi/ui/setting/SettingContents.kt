@@ -229,6 +229,11 @@ fun ConnectionSettingsContent(
     mIp: String,
     mPort: String,
     prefSrc: String,
+    // ★ 追加: EDCBの録画再生方式の設定項目
+    edcbPlayMethod: String,
+    onSelectEdcbPlayMethod: () -> Unit,
+    edcbPlayMethodR: FocusRequester,
+    // -----------
     onEdit: (String, String) -> Unit,
     onSelectBackend: () -> Unit,
     onSelectSrc: () -> Unit,
@@ -313,14 +318,34 @@ fun ConnectionSettingsContent(
                     .focusRequester(backendPortR)
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
+                        // ★ 修正: EDCBの場合は次に再生方式フォーカスへ
                         down =
-                            if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                            if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
 
             if (currentIp.isBlank() || currentPort.isBlank()) {
                 ValidationErrorText("メインシステムのIPアドレスまたはポート番号が未設定です。\n番組情報の取得や録画機能が正常に動作しません。")
+            }
+        }
+
+        // ★ 追加: メインシステムがEDCBの場合のみ、録画ファイルの再生方式設定を表示
+        if (backendType == "EDCB") {
+            SettingsSection("EDCB 録画再生設定") {
+                SettingItem(
+                    title = "録画ファイルの再生方式",
+                    value = if (edcbPlayMethod == "DIRECT") "直接アクセス (高速シーク可)" else "API経由 (api/Movie)",
+                    icon = Icons.Default.PlayCircleOutline,
+                    modifier = Modifier
+                        .focusRequester(edcbPlayMethodR)
+                        .focusProperties {
+                            left = sidebarR
+                            up = backendPortR
+                            down = prefSrcR
+                        },
+                    onClick = { onClick(edcbPlayMethodR); onSelectEdcbPlayMethod() }
+                )
             }
         }
 
@@ -341,7 +366,8 @@ fun ConnectionSettingsContent(
                         .focusRequester(prefSrcR)
                         .focusProperties {
                             left = sidebarR
-                            up = backendPortR
+                            // ★ 修正: EDCBの場合は上を再生方式フォーカスへ
+                            up = if (backendType == "EDCB") edcbPlayMethodR else backendPortR
                             down = if (hasOverride) overrideIpR else FocusRequester.Cancel
                         },
                     onClick = { onClick(prefSrcR); onSelectSrc() }
@@ -631,9 +657,9 @@ fun DisplaySettingsContent(
     onEditStartupChannel: () -> Unit,
     onEditDefaultView: () -> Unit,
     onEditTimeFormat: () -> Unit,
-    onToggleHideSubChannels: () -> Unit, // ★ 追加
+    onToggleHideSubChannels: () -> Unit,
     itemRs: List<FocusRequester>,
-    hideSubChannelsR: FocusRequester,    // ★ 追加
+    hideSubChannelsR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -692,11 +718,10 @@ fun DisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = itemRs[2]
-                        down = hideSubChannelsR // ★ 修正
+                        down = hideSubChannelsR
                     },
                 onClick = { onClick(itemRs[3]); onEditTimeFormat() })
 
-            // ★ 修正: SettingToggleItemの代わりにSettingItemを使用し、右側のテキストでON/OFFを表現
             SettingItem(
                 title = "サブチャンネルを非表示にする",
                 value = if (preferences.hideSubChannels) "ON" else "OFF",

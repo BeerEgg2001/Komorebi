@@ -1,9 +1,11 @@
 package com.beeregg2001.komorebi.viewmodel
 
+import android.content.Context
 import android.util.Log
 import androidx.annotation.Keep
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coil.imageLoader
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
@@ -17,7 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.cio.CIO
@@ -38,6 +40,7 @@ data class PostRecordingBatch(
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
     private val db: AppDatabase
@@ -52,7 +55,6 @@ class SettingsViewModel @Inject constructor(
         .map { it?.lastSyncedAt ?: 0L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
-    // ★ 追加: バックエンド種別・新規IP/PortのStateFlow
     val backendType: StateFlow<String> = settingsRepository.backendType
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "KONOMITV")
 
@@ -60,6 +62,10 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val edcbPort: StateFlow<String> = settingsRepository.edcbPort
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "5510")
+
+    // ★ 追加: EDCBの録画再生方式の設定 ("API" または "DIRECT")
+    val edcbRecordPlayMethod: StateFlow<String> = settingsRepository.edcbRecordPlayMethod
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "API")
 
     val epgStationIp: StateFlow<String> = settingsRepository.epgStationIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -121,9 +127,29 @@ class SettingsViewModel @Inject constructor(
     val timeFormat: StateFlow<String> = settingsRepository.timeFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
 
-    // ★ 追加: 新規項目保存用のメソッド群
-    fun updateBackendType(type: String) = viewModelScope.launch {
-        settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, type)
+    fun updateBackendType(newType: String) = viewModelScope.launch {
+        val oldType = backendType.value
+
+        if (oldType == newType) return@launch
+
+        settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, newType)
+
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                // 1. Roomデータベースの初期化
+                db.clearAllTables()
+
+                // 2. ★ 追加: Coilの画像キャッシュ（メモリ＆ディスク）を完全に消去する
+                context.imageLoader.memoryCache?.clear()
+                context.imageLoader.diskCache?.clear()
+
+                android.util.Log.i("SettingsViewModel", "Backend changed to $newType. Cleared AppDatabase and Image Caches.")
+            } catch (e: Exception) {
+                android.util.Log.e("SettingsViewModel", "Failed to clear DB/Caches on backend change", e)
+            }
+        }
+
+        syncEngine.launchSyncAllRecords(forceFullSync = true)
     }
 
     fun updateEdcbIp(ip: String) = viewModelScope.launch {
@@ -132,6 +158,11 @@ class SettingsViewModel @Inject constructor(
 
     fun updateEdcbPort(port: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
+    }
+
+    // ★ 追加: EDCB録画再生方式の更新メソッド
+    fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
     }
 
     fun updateEpgStationIp(ip: String) = viewModelScope.launch {
@@ -184,7 +215,6 @@ class SettingsViewModel @Inject constructor(
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    // ★ 追加: サブチャンネル非表示設定
     val hideSubChannels: StateFlow<Boolean> = settingsRepository.hideSubChannels
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -328,7 +358,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★ 追加: サブチャンネル表示/非表示を切り替える
     fun toggleHideSubChannels() {
         viewModelScope.launch {
             settingsRepository.saveBoolean(

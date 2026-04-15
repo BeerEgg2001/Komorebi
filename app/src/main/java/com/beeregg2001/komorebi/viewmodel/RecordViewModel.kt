@@ -587,4 +587,16 @@ class RecordViewModel @Inject constructor(
             _isSeriesLoading.value = false
         }
     }
+
+//    // ==========================================
+//    // 動画プレイヤー連携用メソッド
+//    // ==========================================
+//    suspend fun resolveStreamUrl(videoId: Int, quality: String, sessionId: String): String {
+//        return try {
+//            recordProvider.getRecordStreamUrl(videoId, quality, sessionId)
+//        } catch (e: Exception) {
+//            Log.e(TAG, "Failed to resolve stream URL", e)
+//            ""
+//        }
+//    }
 }

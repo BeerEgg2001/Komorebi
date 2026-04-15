@@ -43,24 +43,24 @@ private val COLOR_DEFAULT = Color.Gray
 @Composable
 fun RecordListItem(
     program: RecordedProgram,
+    backendType: String, // ★ 追加: どのシステムで動いているかを受け取る
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isPersistentFocused: Boolean = false,
-    timeFormat: String = "24H" // ★ 追加: 12H/24H フォーマットを受け取る
+    timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
     val isCurrentlyRecording = program.isRecording || program.recordedVideo.status == "Recording"
-
-    // 録画中は選択不可（非アクティブ）にするため、条件を「かつ録画中でないか」に変更
     val isAnalyzed = program.recordedVideo.hasKeyFrames && !isCurrentlyRecording
-
     val isVisualFocused = isFocused || isPersistentFocused
 
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    // ★ 修正: backendTypeを渡してシステムに合ったURLを生成する
+    val thumbnailUrl =
+        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
         "GR" -> "地デジ" to COLOR_GR
@@ -77,6 +77,9 @@ fun RecordListItem(
         ImageRequest.Builder(context)
             .data(thumbnailUrl)
             .size(180, 100)
+            // ★ 修正: キャッシュのキーを明示し、リストのリサイクル時に他番組の画像が残るバグを防止する
+            .memoryCacheKey(thumbnailUrl)
+            .diskCacheKey(thumbnailUrl)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .build()
     }
@@ -85,7 +88,6 @@ fun RecordListItem(
     val secondaryTextColor =
         if (isVisualFocused) inverseColor.copy(alpha = 0.8f) else colors.textSecondary
 
-    // ★ 修正: timeFormat に応じて日付+時刻のフォーマットを動的に切り替える
     val displayDate = remember(program.startTime, timeFormat) {
         try {
             val zdt = ZonedDateTime.parse(program.startTime)

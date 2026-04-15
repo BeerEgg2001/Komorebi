@@ -28,7 +28,6 @@ import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
-// ★ GC対策: Composableの中にあった関数を外に出し、毎回の関数オブジェクト生成を防ぐ
 private fun formatTime(seconds: Long): String {
     val h = seconds / 3600
     val m = (seconds % 3600) / 60
@@ -41,21 +40,23 @@ private fun formatTime(seconds: Long): String {
 @Composable
 fun RecordedCard(
     program: RecordedProgram,
+    backendType: String, // ★ 追加
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     showResumeLabel: Boolean = false,
-    isScrolling: () -> Boolean = { false } // ★追加：親からスクロール状態を受け取るラムダ
+    isScrolling: () -> Boolean = { false }
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
     val isAnalyzed = program.recordedVideo.hasKeyFrames
 
-    // スクロール状態の読み取り（スクロールが開始・停止した時だけ再評価される）
     val scrolling = isScrolling()
 
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    // ★ 修正: backendTypeを渡す
+    val thumbnailUrl =
+        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
         "GR" -> "地デジ" to Color(0xFF1E88E5)
@@ -108,15 +109,16 @@ fun RecordedCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
 
-            // ★ GC対策: スクロール中は画像を描画せず、Coilの無駄な起動を物理的に遮断する
             if (!scrolling) {
                 val context = LocalContext.current
-                // ★ GC対策: ImageRequestをrememberでキャッシュし、毎フレームのオブジェクト生成を防ぐ
                 val imageRequest = remember(thumbnailUrl) {
                     ImageRequest.Builder(context)
                         .data(thumbnailUrl)
                         .size(coil.size.Size(300, 168))
                         .crossfade(true)
+                        // ★ 修正: キャッシュのキーを明示し、使い回しバグを防止する
+                        .memoryCacheKey(thumbnailUrl)
+                        .diskCacheKey(thumbnailUrl)
                         .memoryCachePolicy(CachePolicy.ENABLED)
                         .build()
                 }
@@ -128,7 +130,6 @@ fun RecordedCard(
                     contentScale = ContentScale.Crop
                 )
             } else {
-                // スクロール中用の軽量プレースホルダー
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -204,7 +205,6 @@ fun RecordedCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.then(
-                        // ★ GC対策: マーキーは「フォーカスされていて、かつスクロールが止まっている時」だけ起動
                         if (isFocused && !scrolling) Modifier.basicMarquee(
                             iterations = Int.MAX_VALUE,
                             repeatDelayMillis = 1000

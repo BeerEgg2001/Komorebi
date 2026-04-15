@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyRow
 import androidx.tv.foundation.lazy.list.items
@@ -59,6 +60,7 @@ import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.ui.video.rememberFocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -81,7 +83,8 @@ fun VideoTabContent(
     onShowSeriesList: () -> Unit,
     openedSeriesTitle: String?,
     onOpenedSeriesTitleChange: (String?) -> Unit,
-    recordViewModel: RecordViewModel,
+    recordViewModel: RecordViewModel = hiltViewModel(),
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     watchHistory: List<KonomiHistoryProgram> = emptyList(),
     isTopNavFocused: Boolean = false,
     isReturningFromPlayer: Boolean = false,
@@ -104,6 +107,7 @@ fun VideoTabContent(
     val selectedGenre by recordViewModel.selectedSeriesGenre.collectAsState()
 
     val programDetail by recordViewModel.programDetail.collectAsState()
+    val backendType by settingViewModel.backendType.collectAsState()
     var focusedProgramId by remember { mutableStateOf<Int?>(null) }
 
     val initialHeroInfo = remember {
@@ -325,6 +329,7 @@ fun VideoTabContent(
                                                 description = "番組情報を取得中...",
                                                 // ※ ビデオタブのサムネイルはKonomiTV固有のものなので UrlBuilder.getThumbnailUrl をそのまま使用
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
+                                                    backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     program.id.toString()
@@ -393,6 +398,7 @@ fun VideoTabContent(
                                                 subtitle = "続きから再生を再開",
                                                 description = "番組情報を取得中...",
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
+                                                    backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     videoId.toString()
@@ -508,6 +514,7 @@ fun VideoTabContent(
                                                 subtitle = "録画エピソード: ${series.programCount}件",
                                                 description = "「${series.displayTitle}」の録画一覧を表示します。",
                                                 imageUrl = UrlBuilder.getThumbnailUrl(
+                                                    backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     series.representativeVideoId.toString()
@@ -541,6 +548,7 @@ private fun VideoRecentRecordCard(
     history: KonomiHistoryProgram?,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
@@ -551,7 +559,8 @@ private fun VideoRecentRecordCard(
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    val backendType by settingViewModel.backendType.collectAsState()
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
     val duration = if (program.duration > 0) program.duration else program.recordedVideo.duration
     val progress = if (history != null && duration > 0 && history.playback_position > 5.0) {
         (history.playback_position / duration).toFloat().coerceIn(0f, 1f)
@@ -686,6 +695,7 @@ private fun VideoWatchHistoryCard(
     matchedProgram: RecordedProgram?,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
@@ -693,6 +703,7 @@ private fun VideoWatchHistoryCard(
     onReturnFocusConsumed: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
+    val backendType by settingViewModel.backendType.collectAsState()
     var isFocused by remember { mutableStateOf(false) }
     val videoId = matchedProgram?.id ?: try {
         historyItem.program.id.toString().toInt()
@@ -702,7 +713,7 @@ private fun VideoWatchHistoryCard(
     val duration = matchedProgram?.duration ?: 0.0
     val progress = if (duration > 0) (historyItem.playback_position / duration).toFloat()
         .coerceIn(0f, 1f) else null
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, videoId.toString())
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, videoId.toString())
 
     val specificRequester = remember { FocusRequester() }
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
@@ -813,14 +824,16 @@ private fun VideoSeriesCard(
     series: SeriesInfo,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
+    val backendType by settingViewModel.backendType.collectAsState()
     val thumbnailUrl =
-        UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, series.representativeVideoId.toString())
+        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, series.representativeVideoId.toString())
 
     Surface(
         onClick = onClick,

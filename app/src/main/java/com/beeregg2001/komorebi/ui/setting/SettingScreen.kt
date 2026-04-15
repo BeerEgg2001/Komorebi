@@ -82,6 +82,8 @@ fun SettingsScreen(
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
 
+    val edcbPlayMethodR = remember { FocusRequester() }
+
     val itemFocusRequesters = remember {
         listOf(
             listOf(
@@ -115,7 +117,6 @@ fun SettingsScreen(
                 FocusRequester()
             ), // 4: Home
             listOf(
-                // ★ 修正: サブチャンネル非表示用のFocusRequesterを追加し、要素数を5にする
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
@@ -307,6 +308,22 @@ fun SettingsScreen(
                         mIp = prefs.mirakurunIp,
                         mPort = prefs.mirakurunPort,
                         prefSrc = prefs.preferredSource,
+                        edcbPlayMethod = prefs.edcbRecordPlayMethod,
+                        onSelectEdcbPlayMethod = {
+                            // ★ 修正箇所: 表示名と保存する値の順序を逆にしました
+                            val options = listOf(
+                                "API経由 (api/Movie)" to "API",
+                                "直接アクセス (高速シーク可)" to "DIRECT"
+                            )
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "録画ファイルの再生方式",
+                                options,
+                                prefs.edcbRecordPlayMethod
+                            ) { newValue ->
+                                viewModel.updateEdcbRecordPlayMethod(newValue)
+                            }
+                        },
+                        edcbPlayMethodR = edcbPlayMethodR,
                         onEdit = { t, v ->
                             uiState.activeDialog = SettingDialogState.Input(t, v) {
                                 when (t) {
@@ -775,12 +792,11 @@ fun SettingsScreen(
                                     viewModel.updateTimeFormat(it)
                                 }
                             },
-                            // ★ 追加: サブチャンネル非表示トグルの処理
                             onToggleHideSubChannels = {
                                 viewModel.toggleHideSubChannels()
                             },
-                            itemRs = itemFocusRequesters[5].dropLast(1), // 最初の4つ
-                            hideSubChannelsR = itemFocusRequesters[5].last(), // 最後の1つ（5番目）
+                            itemRs = itemFocusRequesters[5].dropLast(1),
+                            hideSubChannelsR = itemFocusRequesters[5].last(),
                             onClick = {
                                 uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
                             }
@@ -849,7 +865,8 @@ fun SettingsScreen(
                                 "福岡ソフトバンクホークス" to "ソフトバンク",
                                 "東北楽天ゴールデンイーグルス" to "楽天",
                                 "埼玉西武ライオンズ" to "西武",
-                                "北海道日本ハムファイターズ" to "日本ハム"
+                                "北海道日本ハムファイターズ" to "日本ハム",
+                                "侍ジャパン" to "侍ジャパン"
                             )
                             uiState.activeDialog = SettingDialogState.MultiSelection(
                                 "フォロー球団の選択",

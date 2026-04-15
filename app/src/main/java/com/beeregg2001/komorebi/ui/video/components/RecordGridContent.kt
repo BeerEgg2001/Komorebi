@@ -12,6 +12,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
@@ -24,6 +25,7 @@ import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -32,6 +34,7 @@ fun RecordGridContent(
     pagedRecordings: LazyPagingItems<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     gridState: TvLazyGridState,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
@@ -46,6 +49,7 @@ fun RecordGridContent(
     onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
 ) {
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val backendType by settingViewModel.backendType.collectAsState()
 
     LaunchedEffect(isListReady, pagedRecordings.itemCount) {
         onFirstItemBound(isListReady && pagedRecordings.itemCount > 0)
@@ -146,6 +150,7 @@ fun RecordGridContent(
                     program = program,
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
+                    backendType = backendType,
                     isScrolling = isScrollingLambda,
                     onClick = { onProgramClick(program, null) },
                     modifier = itemModifier

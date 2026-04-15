@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.grid.TvGridCells
 import androidx.tv.foundation.lazy.grid.TvLazyGridState
 import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
@@ -38,6 +39,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -46,6 +48,7 @@ fun RecordSeriesGridContent(
     seriesList: List<SeriesInfo>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
@@ -61,6 +64,7 @@ fun RecordSeriesGridContent(
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val backendType by settingViewModel.backendType.collectAsState()
     val isScrollInProgress = gridState.isScrollInProgress
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -161,9 +165,10 @@ fun RecordSeriesGridContent(
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current).data(
                             UrlBuilder.getThumbnailUrl(
+                                backendType,
                                 konomiIp,
                                 konomiPort,
-                                series.representativeVideoId.toString()
+                                series.representativeVideoId.toString(),
                             )
                         ).crossfade(true).build(),
                         contentDescription = null,

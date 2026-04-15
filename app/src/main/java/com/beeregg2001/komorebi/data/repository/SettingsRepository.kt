@@ -25,6 +25,9 @@ class SettingsRepository @Inject constructor(
         val BACKEND_TYPE = stringPreferencesKey("backend_type")
         val EDCB_IP = stringPreferencesKey("edcb_ip")
         val EDCB_PORT = stringPreferencesKey("edcb_port")
+
+        // ★ 追加: EDCB録画ファイルの再生方式（API経由か直接参照か）
+        val EDCB_RECORD_PLAY_METHOD = stringPreferencesKey("edcb_record_play_method")
         val EPGSTATION_IP = stringPreferencesKey("epgstation_ip")
         val EPGSTATION_PORT = stringPreferencesKey("epgstation_port")
 
@@ -33,27 +36,22 @@ class SettingsRepository @Inject constructor(
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
         val PREFERRED_STREAM_SOURCE = stringPreferencesKey("preferred_stream_source")
-
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
         val COMMENT_OPACITY = stringPreferencesKey("comment_opacity")
         val COMMENT_MAX_LINES = stringPreferencesKey("comment_max_lines")
         val COMMENT_DEFAULT_DISPLAY = stringPreferencesKey("comment_default_display")
-
         val LIVE_QUALITY = stringPreferencesKey("live_quality")
         val VIDEO_QUALITY = stringPreferencesKey("video_quality")
         val LIVE_SUBTITLE_DEFAULT = stringPreferencesKey("live_subtitle_default")
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
         val AUDIO_OUTPUT_MODE = stringPreferencesKey("audio_output_mode")
-
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val LAB_ALLOW_MIRAKURUN_DUAL = stringPreferencesKey("lab_allow_mirakurun_dual")
-
         val DEFAULT_POST_COMMAND = stringPreferencesKey("default_post_command")
         val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
-
         val FAVORITE_BASEBALL_TEAMS = stringPreferencesKey("favorite_baseball_teams")
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
@@ -61,117 +59,173 @@ class SettingsRepository @Inject constructor(
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
         val EXCLUDE_PAID_BROADCASTS = stringPreferencesKey("exclude_paid_broadcasts")
         val HOME_PICKUP_TIME = stringPreferencesKey("home_pickup_time")
-
         val STARTUP_TAB = stringPreferencesKey("startup_tab")
         val STARTUP_CHANNEL = stringPreferencesKey("startup_channel")
+        val TIME_FORMAT = stringPreferencesKey("time_format")
         val APP_THEME = stringPreferencesKey("app_theme")
         val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
 
-        // 時間表記フォーマット (12H or 24H)
-        val TIME_FORMAT = stringPreferencesKey("time_format")
-
-        // ベータ版アップデート受信設定のキー
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
 
-        // ★ 追加: サブチャンネル非表示設定のキー
+        // ★ 追加: サブチャンネル非表示設定
         val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
     }
 
-    // ★ 追加: Flow定義
-    val backendType: Flow<String> = context.dataStore.data.map { it[BACKEND_TYPE] ?: "KONOMITV" }
-    val edcbIp: Flow<String> = context.dataStore.data.map { it[EDCB_IP] ?: "" }
-    val edcbPort: Flow<String> = context.dataStore.data.map { it[EDCB_PORT] ?: "5510" }
-    val epgStationIp: Flow<String> = context.dataStore.data.map { it[EPGSTATION_IP] ?: "" }
-    val epgStationPort: Flow<String> = context.dataStore.data.map { it[EPGSTATION_PORT] ?: "8888" }
+    val isInitialized: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[BACKEND_TYPE] != null
+        }
 
-    val konomiIp: Flow<String> = context.dataStore.data.map { it[KONOMI_IP] ?: "" }
-    val konomiPort: Flow<String> = context.dataStore.data.map { it[KONOMI_PORT] ?: "7000" }
-    val mirakurunIp: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_IP] ?: "" }
-    val mirakurunPort: Flow<String> = context.dataStore.data.map { it[MIRAKURUN_PORT] ?: "40772" }
-    val preferredStreamSource: Flow<String> =
-        context.dataStore.data.map { it[PREFERRED_STREAM_SOURCE] ?: "KONOMITV" }
+    val backendType: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[BACKEND_TYPE] ?: "KONOMITV" }
 
-    val commentSpeed: Flow<String> = context.dataStore.data.map { it[COMMENT_SPEED] ?: "1.0" }
-    val commentFontSize: Flow<String> =
-        context.dataStore.data.map { it[COMMENT_FONT_SIZE] ?: "1.0" }
-    val commentOpacity: Flow<String> = context.dataStore.data.map { it[COMMENT_OPACITY] ?: "1.0" }
-    val commentMaxLines: Flow<String> = context.dataStore.data.map { it[COMMENT_MAX_LINES] ?: "0" }
-    val commentDefaultDisplay: Flow<String> =
-        context.dataStore.data.map { it[COMMENT_DEFAULT_DISPLAY] ?: "ON" }
+    val edcbIp: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EDCB_IP] ?: "" }
 
-    val liveQuality: Flow<String> = context.dataStore.data.map { it[LIVE_QUALITY] ?: "1080p-60fps" }
-    val videoQuality: Flow<String> =
-        context.dataStore.data.map { it[VIDEO_QUALITY] ?: "1080p-60fps" }
-    val liveSubtitleDefault: Flow<String> =
-        context.dataStore.data.map { it[LIVE_SUBTITLE_DEFAULT] ?: "ON" }
-    val videoSubtitleDefault: Flow<String> =
-        context.dataStore.data.map { it[VIDEO_SUBTITLE_DEFAULT] ?: "ON" }
-    val subtitleCommentLayer: Flow<String> =
-        context.dataStore.data.map { it[SUBTITLE_COMMENT_LAYER] ?: "COMMENT_TOP" }
-    val audioOutputMode: Flow<String> =
-        context.dataStore.data.map { it[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
+    val edcbPort: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EDCB_PORT] ?: "5510" }
 
-    val labAnnictIntegration: Flow<String> =
-        context.dataStore.data.map { it[LAB_ANNICT_INTEGRATION] ?: "OFF" }
-    val labShobocalIntegration: Flow<String> =
-        context.dataStore.data.map { it[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
-    val labAllowMirakurunDual: Flow<String> =
-        context.dataStore.data.map { it[LAB_ALLOW_MIRAKURUN_DUAL] ?: "OFF" }
+    // ★ 追加: EDCB録画再生方式の設定 (API または DIRECT)
+    val edcbRecordPlayMethod: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EDCB_RECORD_PLAY_METHOD] ?: "API" }
 
-    val defaultPostCommand: Flow<String> =
-        context.dataStore.data.map { it[DEFAULT_POST_COMMAND] ?: "" }
-    val postRecordingBatchList: Flow<String> =
-        context.dataStore.data.map { it[POST_RECORDING_BATCH_LIST] ?: "[]" }
+    val epgStationIp: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EPGSTATION_IP] ?: "" }
 
-    val favoriteBaseballTeams: Flow<String> =
-        context.dataStore.data.map { it[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
-    val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
-    val enableAiNormalization: Flow<String> =
-        context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
+    val epgStationPort: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EPGSTATION_PORT] ?: "8888" }
 
-    val homePickupGenre: Flow<String> =
-        context.dataStore.data.map { it[HOME_PICKUP_GENRE] ?: "アニメ" }
-    val excludePaidBroadcasts: Flow<String> =
-        context.dataStore.data.map { it[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
-    val homePickupTime: Flow<String> = context.dataStore.data.map { it[HOME_PICKUP_TIME] ?: "自動" }
+    val konomiIp: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv" }
 
-    val startupTab: Flow<String> = context.dataStore.data.map { it[STARTUP_TAB] ?: "ホーム" }
-    val startupChannel: Flow<String> = context.dataStore.data.map { it[STARTUP_CHANNEL] ?: "OFF" }
-    val appTheme: Flow<String> = context.dataStore.data.map { it[APP_THEME] ?: "MONOTONE" }
-    val defaultRecordListView: Flow<String> =
-        context.dataStore.data.map { it[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
+    val konomiPort: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[KONOMI_PORT] ?: "7000" }
 
-    val timeFormat: Flow<String> = context.dataStore.data.map { it[TIME_FORMAT] ?: "24H" }
+    val mirakurunIp: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[MIRAKURUN_IP] ?: "" }
 
-    // ★ 追加: サブチャンネル非表示設定のFlow (デフォルトは false)
-    val hideSubChannels: Flow<Boolean> = context.dataStore.data.map { it[HIDE_SUB_CHANNELS] ?: false }
-    val receiveBetaUpdates: Flow<Boolean> =
-        context.dataStore.data.map { it[RECEIVE_BETA_UPDATES] ?: false }
+    val mirakurunPort: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[MIRAKURUN_PORT] ?: "40772" }
 
-    // ★ 修正: KonomiTV以外にもEDCBやEPGStationが設定されていれば初期化済みと判定する
-    val isInitialized: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs.contains(KONOMI_IP) || prefs.contains(MIRAKURUN_IP) || prefs.contains(EDCB_IP) || prefs.contains(
-            EPGSTATION_IP
-        )
-    }
+    val preferredStreamSource: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[PREFERRED_STREAM_SOURCE] ?: "KONOMITV" }
+
+    val commentSpeed: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[COMMENT_SPEED] ?: "1.0" }
+
+    val commentFontSize: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[COMMENT_FONT_SIZE] ?: "1.0" }
+
+    val commentOpacity: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[COMMENT_OPACITY] ?: "1.0" }
+
+    val commentMaxLines: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[COMMENT_MAX_LINES] ?: "0" }
+
+    val commentDefaultDisplay: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[COMMENT_DEFAULT_DISPLAY] ?: "ON" }
+
+    val liveQuality: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[LIVE_QUALITY] ?: "1080p-60fps" }
+
+    val videoQuality: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[VIDEO_QUALITY] ?: "1080p-60fps" }
+
+    val liveSubtitleDefault: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[LIVE_SUBTITLE_DEFAULT] ?: "OFF" }
+
+    val videoSubtitleDefault: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[VIDEO_SUBTITLE_DEFAULT] ?: "OFF" }
+
+    val subtitleCommentLayer: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[SUBTITLE_COMMENT_LAYER] ?: "CommentOnTop" }
+
+    val audioOutputMode: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
+
+    val labAnnictIntegration: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[LAB_ANNICT_INTEGRATION] ?: "OFF" }
+
+    val labShobocalIntegration: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[LAB_SHOBOCAL_INTEGRATION] ?: "OFF" }
+
+    val labAllowMirakurunDual: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[LAB_ALLOW_MIRAKURUN_DUAL] ?: "OFF" }
+
+    val defaultPostCommand: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[DEFAULT_POST_COMMAND] ?: "" }
+
+    val postRecordingBatchList: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[POST_RECORDING_BATCH_LIST] ?: "[]" }
+
+    val favoriteBaseballTeams: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
+
+    val geminiApiKey: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[GEMINI_API_KEY] ?: "" }
+
+    val enableAiNormalization: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[ENABLE_AI_NORMALIZATION] ?: "OFF" }
+
+    val homePickupGenre: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[HOME_PICKUP_GENRE] ?: "アニメ" }
+
+    val excludePaidBroadcasts: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[EXCLUDE_PAID_BROADCASTS] ?: "ON" }
+
+    val homePickupTime: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[HOME_PICKUP_TIME] ?: "自動" }
+
+    val startupTab: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[STARTUP_TAB] ?: "ホーム" }
+
+    val startupChannel: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[STARTUP_CHANNEL] ?: "OFF" }
+
+    val timeFormat: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[TIME_FORMAT] ?: "24H" }
+
+    val appTheme: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[APP_THEME] ?: "MONOTONE" }
+
+    val defaultRecordListView: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[DEFAULT_RECORD_LIST_VIEW] ?: "LIST" }
+
+    val receiveBetaUpdates: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[RECEIVE_BETA_UPDATES] ?: false }
+
+    val hideSubChannels: Flow<Boolean> = context.dataStore.data
+        .map { preferences -> preferences[HIDE_SUB_CHANNELS] ?: false }
 
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,
         value: String
     ) {
-        Log.i(
-            "BaseballDebug",
-            "[SettingsRepository] Saving to DataStore - Key: ${key.name}, Value: $value"
-        )
         context.dataStore.edit { settings ->
             settings[key] = value
         }
     }
 
-    suspend fun getBaseUrl(): String {
+    suspend fun getStreamSourceUrl(source: com.beeregg2001.komorebi.data.model.StreamSource): String {
         val prefs = context.dataStore.data.first()
-        var ip = prefs[KONOMI_IP] ?: "https://192-168-xxx-xxx.local.konomi.tv"
-        val port = prefs[KONOMI_PORT] ?: "7000"
+        var ip = ""
+        var port = ""
+        when (source) {
+            com.beeregg2001.komorebi.data.model.StreamSource.KONOMITV -> {
+                ip = prefs[KONOMI_IP] ?: ""
+                port = prefs[KONOMI_PORT] ?: "7000"
+            }
+
+            com.beeregg2001.komorebi.data.model.StreamSource.MIRAKURUN -> {
+                ip = prefs[MIRAKURUN_IP] ?: ""
+                port = prefs[MIRAKURUN_PORT] ?: "40772"
+            }
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> {
+                ip = prefs[EDCB_IP] ?: ""
+                port = prefs[EDCB_PORT] ?: "5510"
+            }
+        }
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
             ip = "http://$ip"
         }
@@ -200,13 +254,15 @@ class SettingsRepository @Inject constructor(
                 ip = prefs[KONOMI_IP] ?: "",
                 port = prefs[KONOMI_PORT] ?: "7000"
             )
+
             com.beeregg2001.komorebi.data.model.StreamSource.MIRAKURUN -> com.beeregg2001.komorebi.data.model.BackendConfig.Mirakurun(
                 ip = prefs[MIRAKURUN_IP] ?: "",
                 port = prefs[MIRAKURUN_PORT] ?: "40772"
             )
+
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
                 ip = prefs[EDCB_IP] ?: "",
-                port = prefs[EDCB_PORT] ?: "4510"
+                port = prefs[EDCB_PORT] ?: "5510"
             )
         }
     }

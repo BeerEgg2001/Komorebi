@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -38,6 +39,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -45,6 +47,7 @@ fun RecordSeriesContent(
     seriesList: List<SeriesInfo>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     isListView: Boolean,
@@ -62,6 +65,7 @@ fun RecordSeriesContent(
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
     val isScrollInProgress = listState.isScrollInProgress
+    val backendType by settingViewModel.backendType.collectAsState()
 
     LaunchedEffect(isListReady, seriesList) {
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
@@ -170,9 +174,10 @@ fun RecordSeriesContent(
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current).data(
                                     UrlBuilder.getThumbnailUrl(
+                                        backendType,
                                         konomiIp,
                                         konomiPort,
-                                        series.representativeVideoId.toString()
+                                        series.representativeVideoId.toString(),
                                     )
                                 ).crossfade(true).build(),
                                 contentDescription = null,

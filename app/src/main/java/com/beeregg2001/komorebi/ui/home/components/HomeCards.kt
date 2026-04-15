@@ -23,11 +23,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -239,6 +241,7 @@ fun WatchHistoryCard(
     history: KonomiHistoryProgram,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onClick: () -> Unit,
     onFocus: (progress: Float, thumbnailUrl: String) -> Unit,
     modifier: Modifier = Modifier
@@ -246,10 +249,11 @@ fun WatchHistoryCard(
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
     val program = history.program
+    val backendType by settingViewModel.backendType.collectAsState()
 
     // ※視聴履歴のカードは背景がサムネイル画像（番組のキャプチャ）のため、ロゴURLは不要。
     // サムネイル画像はKonomiTVのAPIから取得し続ける必要があるため、このメソッドはUrlBuilderのまま保護します。
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
 
     val progress = remember(history) {
         runCatching {

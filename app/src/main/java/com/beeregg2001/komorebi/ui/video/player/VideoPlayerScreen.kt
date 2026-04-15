@@ -6,7 +6,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Base64
 import android.util.Log
-import android.view.TextureView
+import android.view.SurfaceView // ★ TextureViewからSurfaceViewに変更
 import android.view.View
 import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
@@ -20,7 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
@@ -39,19 +38,18 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.viewmodel.RecordViewModel
+import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.AudioMode
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -78,30 +76,24 @@ fun VideoPlayerScreen(
     onShowToast: (String) -> Unit,
     isPiPMode: Boolean = false,
     onPiPRequested: () -> Unit = {},
-    recordViewModel: RecordViewModel = hiltViewModel(),
+    videoPlayerViewModel: VideoPlayerViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var currentProgram by remember { mutableStateOf(program) }
-    val fetchedDetail by recordViewModel.programDetail.collectAsState()
+    val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
 
-    var isBuffering by remember { mutableStateOf(false) }
+    var isBuffering by remember { mutableStateOf(true) }
 
     LaunchedEffect(program.id) {
-        recordViewModel.fetchProgramDetail(program.id)
+        videoPlayerViewModel.fetchProgramDetail(program.id)
     }
 
     LaunchedEffect(fetchedDetail) {
         if (fetchedDetail != null && fetchedDetail?.id == program.id) {
             currentProgram = fetchedDetail!!
-            Log.i(
-                DEBUG_TAG,
-                "Fetched Detail received. Raw cmSections count: ${currentProgram.recordedVideo.cmSections?.size ?: 0}"
-            )
-            val merged = mergeCmSections(currentProgram.recordedVideo.cmSections)
-            Log.i(DEBUG_TAG, "Merged cmSections count: ${merged.size}")
         }
     }
 
@@ -153,10 +145,10 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(program.recordedVideo.id) {
         allComments.clear()
-        allComments.addAll(recordViewModel.getArchivedComments(program.recordedVideo.id))
+        allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
     }
 
-    val exoPlayer = remember(vs.currentQuality) {
+    val exoPlayer = remember {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 ctx: Context,
@@ -167,7 +159,7 @@ fun VideoPlayerScreen(
                     .build()
             }
         }.apply {
-            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+            setExtensionRendererMode(EXTENSION_RENDERER_MODE_OFF)
             setEnableDecoderFallback(true)
         }
 
@@ -176,72 +168,93 @@ fun VideoPlayerScreen(
             setConnectTimeoutMs(90000); setReadTimeoutMs(90000)
         }
 
+        val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
         val loadControl =
             DefaultLoadControl.Builder().setBufferDurationsMs(30000, 30000, 1500, 3000)
                 .setPrioritizeTimeOverSizeThresholds(true).build()
-        val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
 
-        ExoPlayer.Builder(context, renderersFactory).setMediaSourceFactory(hlsMediaSourceFactory)
-            .setLoadControl(loadControl).build().apply {
-            setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-            val mediaItem = MediaItem.Builder().setUri(
-                UrlBuilder.getVideoPlaylistUrl(
-                    konomiIp,
-                    konomiPort,
-                    program.recordedVideo.id,
-                    currentSessionId,
-                    vs.currentQuality.value
+        ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
+            .build().apply {
+                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+                setAudioAttributes(
+                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .setUsage(C.USAGE_MEDIA).build(), true
                 )
-            ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-            setMediaItem(mediaItem)
-            setAudioAttributes(
-                AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .setUsage(C.USAGE_MEDIA).build(), true
-            )
-            addListener(object : Player.Listener {
-                override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    videoWidth = videoSize.width; videoHeight =
-                        videoSize.height; pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
-                }
-
-                override fun onIsPlayingChanged(playing: Boolean) {
-                    vs.isPlayerPlaying = playing
-                }
-
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    isBuffering = (playbackState == Player.STATE_BUFFERING)
-                }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
-                    scope.launch {
-                        isBuffering = true; delay(3000L); prepare(); playWhenReady = true
+                addListener(object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        videoWidth = videoSize.width; videoHeight =
+                            videoSize.height; pixelWidthHeightRatio =
+                            videoSize.pixelWidthHeightRatio
                     }
-                }
 
-                override fun onMetadata(metadata: Metadata) {
-                    if (!vs.isSubtitleEnabled) return
-                    for (i in 0 until metadata.length()) {
-                        val entry = metadata.get(i)
-                        if (entry is PrivFrame && (entry.owner.contains(
-                                "aribb24",
-                                true
-                            ) || entry.owner.contains("B24", true))
-                        ) {
-                            val base64Data =
-                                Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                            webViewRef.value?.post {
-                                webViewRef.value?.evaluateJavascript(
-                                    "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                    null
-                                )
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        vs.isPlayerPlaying = playing
+                    }
+
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        isBuffering = (playbackState == Player.STATE_BUFFERING)
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
+                        scope.launch {
+                            isBuffering = true; delay(3000L); prepare(); playWhenReady = true
+                        }
+                    }
+
+                    override fun onMetadata(metadata: Metadata) {
+                        if (!vs.isSubtitleEnabled) return
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is PrivFrame && (entry.owner.contains(
+                                    "aribb24",
+                                    true
+                                ) || entry.owner.contains("B24", true))
+                            ) {
+                                val base64Data =
+                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                                webViewRef.value?.post {
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
+                                        null
+                                    )
+                                }
                             }
                         }
                     }
-                }
-            })
-            if (initialPositionMs > 0) seekTo(initialPositionMs)
-            prepare(); playWhenReady = true
+                })
+            }
+    }
+
+    LaunchedEffect(program.recordedVideo.id, vs.currentQuality) {
+        isBuffering = true
+        val url = videoPlayerViewModel.resolveStreamUrl(
+            program.recordedVideo.id,
+            vs.currentQuality.value,
+            currentSessionId
+        )
+        if (url.isNotEmpty()) {
+            val mediaItemBuilder = MediaItem.Builder().setUri(url)
+
+            if (url.contains("/api/streams/video/")) {
+                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                Log.i(TAG, "Playing as HLS (KonomiTV): $url")
+            } else if (url.endsWith(".ts", ignoreCase = true)) {
+                Log.i(TAG, "Playing as Raw TS (EDCB): $url")
+            }
+
+            val mediaItem = mediaItemBuilder.build()
+
+            exoPlayer.setMediaItem(mediaItem)
+            if (initialPositionMs > 0 && exoPlayer.currentPosition == 0L) {
+                exoPlayer.seekTo(initialPositionMs)
+            }
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        } else {
+            onShowToast("ストリームURLの取得に失敗しました")
         }
     }
 
@@ -261,12 +274,12 @@ fun VideoPlayerScreen(
     }
 
     DisposableEffect(vs.currentQuality, currentSessionId) {
-        recordViewModel.startStreamMaintenance(
+        videoPlayerViewModel.startStreamMaintenance(
             program,
             vs.currentQuality.value,
             currentSessionId
         ) { exoPlayer.currentPosition / 1000.0 }
-        onDispose { recordViewModel.stopStreamMaintenance() }
+        onDispose { videoPlayerViewModel.stopStreamMaintenance() }
     }
 
     LaunchedEffect(
@@ -298,7 +311,6 @@ fun VideoPlayerScreen(
             .onKeyEvent { keyEvent ->
                 if (isPiPMode) return@onKeyEvent false
 
-                // ★ 追加: L字クロップ ダイレクト調整モード時のキーイベント捕捉
                 if (vs.lCropMode == LCropMode.DIRECT_ADJUST) {
                     val keyCode = keyEvent.nativeKeyEvent.keyCode
                     val isTargetKey = keyCode in listOf(
@@ -315,22 +327,10 @@ fun VideoPlayerScreen(
                         val isActionDown = keyEvent.type == KeyEventType.KeyDown
                         if (!isActionDown) return@onKeyEvent true
                         when (keyCode) {
-                            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                                vs.lCropY -= 2f
-                            }
-
-                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                                vs.lCropY += 2f
-                            }
-
-                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                vs.lCropX -= 2f
-                            }
-
-                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                vs.lCropX += 2f
-                            }
-
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> vs.lCropY -= 2f
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> vs.lCropY += 2f
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> vs.lCropX -= 2f
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> vs.lCropX += 2f
                             android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
                                 vs.lCropZoom = when {
                                     vs.lCropZoom < 125f -> 125f
@@ -350,9 +350,7 @@ fun VideoPlayerScreen(
                     return@onKeyEvent false
                 }
 
-                // L字クロップメニュー表示中はメニュー内の操作に任せる
                 if (vs.lCropMode == LCropMode.MENU) return@onKeyEvent false
-
                 if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen) return@onKeyEvent false
 
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
@@ -522,27 +520,28 @@ fun VideoPlayerScreen(
             factory = { ctx ->
                 AspectRatioFrameLayout(ctx).apply {
                     keepScreenOn = true
-                    val textureView =
-                        TextureView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1) }
-                    addView(textureView)
+                    // ★ 変更: TextureView を SurfaceView に変更し、低レイヤーエラーを根絶
+                    val surfaceView =
+                        SurfaceView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1) }
+                    addView(surfaceView)
                 }
             },
             update = { view ->
-                val textureView = view.getChildAt(0) as TextureView
-                exoPlayer.setVideoTextureView(textureView)
+                // ★ 変更: TextureView を SurfaceView として扱う
+                val surfaceView = view.getChildAt(0) as SurfaceView
+                exoPlayer.setVideoSurfaceView(surfaceView)
+
                 if (videoWidth > 0 && videoHeight > 0) {
                     val ratio =
                         (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
                     view.setAspectRatio(ratio)
-                    val is16by9 = ratio >= 1.7f
                     val targetMode =
-                        if (is16by9) AspectRatioFrameLayout.RESIZE_MODE_FILL else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        if (ratio >= 1.7f) AspectRatioFrameLayout.RESIZE_MODE_FILL else AspectRatioFrameLayout.RESIZE_MODE_FIT
                     if (view.resizeMode != targetMode) view.resizeMode = targetMode
                 }
             },
             modifier = Modifier
                 .fillMaxSize()
-                // ★ 追加: L字クロップ変形 (GPUによる低負荷処理)
                 .graphicsLayer {
                     if (vs.lCropEnabled) {
                         scaleX = vs.lCropZoom / 100f; scaleY = vs.lCropZoom / 100f
@@ -567,16 +566,9 @@ fun VideoPlayerScreen(
             val commentLayer = @Composable {
                 if (isHeavyUiReady && vs.isCommentEnabled) {
                     ArchivedCommentOverlay(
-                        Modifier.fillMaxSize(),
-                        allComments,
-                        { exoPlayer.currentPosition },
-                        vs.isPlayerPlaying,
-                        vs.isCommentEnabled,
-                        commentSpeed,
-                        commentFontSizeScale,
-                        commentOpacity,
-                        commentMaxLines,
-                        isEmulator
+                        Modifier.fillMaxSize(), allComments, { exoPlayer.currentPosition },
+                        vs.isPlayerPlaying, vs.isCommentEnabled, commentSpeed,
+                        commentFontSizeScale, commentOpacity, commentMaxLines, isEmulator
                     )
                 }
             }
@@ -585,10 +577,9 @@ fun VideoPlayerScreen(
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(
-                                    -1,
-                                    -1
-                                ); setBackgroundColor(android.graphics.Color.TRANSPARENT); settings.apply {
+                                layoutParams = ViewGroup.LayoutParams(-1, -1); setBackgroundColor(
+                                android.graphics.Color.TRANSPARENT
+                            ); settings.apply {
                                 javaScriptEnabled = true; domStorageEnabled = true
                             }; loadUrl("file:///android_asset/subtitle_renderer.html"); webViewRef.value =
                                 this
@@ -609,8 +600,7 @@ fun VideoPlayerScreen(
                 commentLayer(); subtitleLayer()
             }
             if (isBuffering) CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.Center),
-                color = Color.White
+                modifier = Modifier.align(Alignment.Center), color = Color.White
             )
 
             PlayerControls(
@@ -619,27 +609,28 @@ fun VideoPlayerScreen(
                 showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen
             )
 
-            // シーン検索・チャプターリスト
             AnimatedVisibility(
                 isSceneSearchOpen,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
                 SceneSearchOverlay(
-                    currentProgram,
-                    exoPlayer.currentPosition,
-                    konomiIp,
-                    konomiPort,
+                    currentProgram, exoPlayer.currentPosition, konomiIp, konomiPort,
                     {
                         exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                        delay(200); mainFocusRequester.safeRequestFocus(
+                        TAG
+                    )
                     }
                     },
                     {
                         onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                        delay(200); mainFocusRequester.safeRequestFocus(
+                        TAG
+                    )
                     }
-                    })
+                    }
+                )
             }
             AnimatedVisibility(
                 isChapterListOpen,
@@ -647,10 +638,7 @@ fun VideoPlayerScreen(
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
                 ChapterListOverlay(
-                    currentProgram,
-                    exoPlayer.currentPosition,
-                    konomiIp,
-                    konomiPort,
+                    currentProgram, exoPlayer.currentPosition, konomiIp, konomiPort,
                     {
                         exoPlayer.seekTo(it); isChapterListOpen =
                         false; scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
@@ -661,37 +649,34 @@ fun VideoPlayerScreen(
                         TAG
                     )
                     }
-                    })
-            }
-
-            // ★ 追加: L字クロップオーバーレイの表示
-            androidx.compose.animation.AnimatedVisibility(
-                visible = vs.lCropMode != LCropMode.HIDDEN,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                VideoLCropOverlay(
-                    state = vs,
-                    onClose = {
-                        vs.lCropMode = LCropMode.HIDDEN
-                        scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
                     }
                 )
             }
 
-            // サブメニュー
+            androidx.compose.animation.AnimatedVisibility(
+                visible = vs.lCropMode != LCropMode.HIDDEN, enter = fadeIn(), exit = fadeOut()
+            ) {
+                VideoLCropOverlay(
+                    state = vs,
+                    onClose = {
+                        vs.lCropMode = LCropMode.HIDDEN; scope.launch {
+                        delay(200); mainFocusRequester.safeRequestFocus(
+                        TAG
+                    )
+                    }
+                    }
+                )
+            }
+
             AnimatedVisibility(
                 isSubMenuOpen,
                 enter = slideInVertically { -it } + fadeIn(),
-                exit = slideOutVertically { -it } + fadeOut()) {
+                exit = slideOutVertically { -it } + fadeOut()
+            ) {
                 VideoTopSubMenuUI(
-                    currentAudioMode = vs.currentAudioMode,
-                    currentSpeed = vs.currentSpeed,
-                    isSubtitleEnabled = vs.isSubtitleEnabled,
-                    currentQuality = vs.currentQuality,
-                    isCommentEnabled = vs.isCommentEnabled,
-                    // ★ 追加: L字クロップパラメータ
-                    isLCropEnabled = vs.lCropEnabled,
+                    currentAudioMode = vs.currentAudioMode, currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled, currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled, isLCropEnabled = vs.lCropEnabled,
                     focusRequester = subMenuFocusRequester,
                     onAudioToggle = {
                         vs.currentAudioMode =
@@ -722,17 +707,13 @@ fun VideoPlayerScreen(
                         vs.isCommentEnabled =
                             !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
                     },
-                    // ★ 追加: L字クロップトグル処理
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
-                            vs.lCropMode = LCropMode.MENU
-                            onSubMenuToggle(false)
+                            vs.lCropMode = LCropMode.MENU; onSubMenuToggle(false)
                         } else {
-                            vs.lCropMode = LCropMode.HIDDEN
-                            // 値の完全初期化
-                            vs.lCropZoom = 100f; vs.lCropX = 0f; vs.lCropY = 0f; vs.lCropOrigin =
-                                ZoomOrigin.TopRight
+                            vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
+                                0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
                         }
                     }
                 )
@@ -745,7 +726,7 @@ fun VideoPlayerScreen(
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                exoPlayer.pause(); recordViewModel.updateWatchHistory(
+                exoPlayer.pause(); videoPlayerViewModel.updateWatchHistory(
                     program,
                     exoPlayer.currentPosition / 1000.0
                 )
@@ -753,7 +734,7 @@ fun VideoPlayerScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            recordViewModel.updateWatchHistory(
+            videoPlayerViewModel.updateWatchHistory(
                 program,
                 exoPlayer.currentPosition / 1000.0
             ); lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()

@@ -574,7 +574,63 @@ class EdcbRepository @Inject constructor(
         quality: String,
         sessionId: String
     ): String {
-        return "http://${settingsRepository.edcbIp.first()}:${httpPortCache ?: 5510}/legacy/view.lua?id=$videoId"
+        val ip = settingsRepository.edcbIp.first()
+        val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+
+        val info = cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(
+            ip,
+            port
+        ).getRecInfo(videoId).getOrNull()
+
+        var safeHttpPort = httpPortCache ?: 5510
+        if (httpPortCache == null && !logoDataIniAttempted) {
+            try {
+                val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
+                    ?.firstOrNull { it.data.isNotEmpty() }
+                if (srvIni != null) {
+                    val iniText = decodeEdcbString(srvIni.data)
+                    Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
+                        ?.let { safeHttpPort = it.groupValues[1].toInt() }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get HttpPort from EpgTimerSrv.ini", e)
+            }
+        }
+
+        // ==========================================
+        // ★ 追加: 設定から再生方式を取得 ("API" または "DIRECT")
+        // ==========================================
+        val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+
+        if (playMethod == "DIRECT") {
+            // --- 直接アクセス方式（高速シーク・公開フォルダ） ---
+            val filePath = info?.recFilePath ?: return ""
+            val relativePath = filePath
+                .replace(Regex("^[a-zA-Z]:\\\\"), "")
+                .replace("\\", "/")
+
+            val videoUri = android.net.Uri.Builder()
+                .scheme("http")
+                .encodedAuthority("$ip:$safeHttpPort")
+                .appendPath("rec")
+                .appendEncodedPath(android.net.Uri.encode(relativePath, "/"))
+                .build()
+
+            Log.i(TAG, "Generated HTTP Stream URL (DIRECT): $videoUri")
+            return videoUri.toString()
+        } else {
+            // --- API経由方式（万人向け・ポン付け） ---
+            val videoUri = android.net.Uri.Builder()
+                .scheme("http")
+                .encodedAuthority("$ip:$safeHttpPort")
+                .appendPath("api")
+                .appendPath("Movie")
+                .appendQueryParameter("id", videoId.toString())
+                .build()
+
+            Log.i(TAG, "Generated HTTP Stream URL (API): $videoUri")
+            return videoUri.toString()
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)

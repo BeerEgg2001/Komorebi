@@ -22,12 +22,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.launch
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -40,6 +42,7 @@ fun RecordDetailPanel(
     program: RecordedProgram?,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     focusRequester: FocusRequester,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -48,10 +51,11 @@ fun RecordDetailPanel(
     val colors = KomorebiTheme.colors
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
+    val backendType by settingViewModel.backendType.collectAsState()
 
     if (program == null) return
 
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString(),backendType)
 
     // ★ 修正: timeFormat に応じて日付+時刻のフォーマットを動的に切り替える
     val displayDate = remember(program.startTime, timeFormat) {
