@@ -137,12 +137,7 @@ class MainRootState {
 
     // ★ 追加: 現在のバックエンドで有効なタブ名のリストを取得するヘルパー関数
     fun getVisibleTabs(): List<String> {
-        return if (backendType == "EDCB") {
-            // EDCBの場合は未実装の機能を非表示にする
-            listOf("ホーム", "ライブ")
-        } else {
-            listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
-        }
+        return listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
     }
 }
 

@@ -1,6 +1,8 @@
 package com.beeregg2001.komorebi.data.api.edcb
 
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -438,4 +440,119 @@ class EdcbApi(private val ip: String, private val port: Int) {
                 Result.failure(e)
             }
         }
+
+    // ★追加: 単発予約の削除
+    suspend fun sendDelReserve(reserveIds: List<Int>): Result<Boolean> {
+        return try {
+            val req = EdcbByteUtils.writeIntVector(reserveIds)
+            val res = tcpClient.sendCommand(1014, req) // CMD_EPG_SRV_DEL_RESERVE
+            if (res != null) {
+                // 成功時は 1 が返る
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★追加: 自動予約条件の削除
+    suspend fun sendDelAutoAdd(dataIds: List<Int>): Result<Boolean> {
+        return try {
+            val req = EdcbByteUtils.writeIntVector(dataIds)
+            val res = tcpClient.sendCommand(1033, req) // CMD_EPG_SRV_DEL_AUTO_ADD
+            if (res != null) {
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★ 修正: 単発予約の追加 (2013: CMD_EPG_SRV_ADD_RESERVE2) - 先頭にCMD_VERを付与
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun sendAddReserve(reserveList: List<EdcbReserveData>): Result<Boolean> {
+        return try {
+            val vecBytes = EdcbByteUtils.writeReserveDataVector(reserveList)
+            val req = ByteBuffer.allocate(2 + vecBytes.size).order(ByteOrder.LITTLE_ENDIAN)
+            req.putShort(CMD_VER.toShort())
+            req.put(vecBytes)
+
+            val res = tcpClient.sendCommand(2013, req.array())
+            if (res != null) {
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★ 修正: 単発予約の変更 (2015: CMD_EPG_SRV_CHG_RESERVE2) - 先頭にCMD_VERを付与
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun sendChgReserve(reserveList: List<EdcbReserveData>): Result<Boolean> {
+        return try {
+            val vecBytes = EdcbByteUtils.writeReserveDataVector(reserveList)
+            val req = ByteBuffer.allocate(2 + vecBytes.size).order(ByteOrder.LITTLE_ENDIAN)
+            req.putShort(CMD_VER.toShort())
+            req.put(vecBytes)
+
+            val res = tcpClient.sendCommand(2015, req.array())
+            if (res != null) {
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★ 修正: 自動予約の追加 (2132: CMD_EPG_SRV_ADD_AUTO_ADD2) - 先頭にCMD_VERを付与
+    suspend fun sendAddAutoAdd(dataList: List<EdcbAutoAddData>): Result<Boolean> {
+        return try {
+            val vecBytes = EdcbByteUtils.writeAutoAddDataVector(dataList)
+            val req = ByteBuffer.allocate(2 + vecBytes.size).order(ByteOrder.LITTLE_ENDIAN)
+            req.putShort(CMD_VER.toShort())
+            req.put(vecBytes)
+
+            val res = tcpClient.sendCommand(2132, req.array())
+            if (res != null) {
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ★ 修正: 自動予約の変更 (2134: CMD_EPG_SRV_CHG_AUTO_ADD2) - 先頭にCMD_VERを付与
+    suspend fun sendChgAutoAdd(dataList: List<EdcbAutoAddData>): Result<Boolean> {
+        return try {
+            val vecBytes = EdcbByteUtils.writeAutoAddDataVector(dataList)
+            val req = ByteBuffer.allocate(2 + vecBytes.size).order(ByteOrder.LITTLE_ENDIAN)
+            req.putShort(CMD_VER.toShort())
+            req.put(vecBytes)
+
+            val res = tcpClient.sendCommand(2134, req.array())
+            if (res != null) {
+                val status = EdcbByteUtils.readInt(res)
+                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
+            } else {
+                Result.failure(Exception("Failed response from EDCB"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }

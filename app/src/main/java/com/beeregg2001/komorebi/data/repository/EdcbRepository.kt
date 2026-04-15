@@ -1066,23 +1066,514 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    override suspend fun addReserve(r: ReserveRequest): Result<Unit> =
-        Result.failure(Exception("Not implemented"))
+    // ★修正: 単発予約の削除
+    override suspend fun deleteReservation(i: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val edcbApi = EdcbApi(ip, port)
 
-    override suspend fun updateReserve(i: Int, r: ReserveRequest): Result<Unit> =
-        Result.failure(Exception("Not implemented"))
+            // 1回目の送信リクエスト
+            val result = edcbApi.sendDelReserve(listOf(i))
+            if (result.isSuccess) {
+                return@withContext Result.success(Unit)
+            }
 
-    override suspend fun deleteReservation(i: Int): Result<Unit> =
-        Result.failure(Exception("Not implemented"))
+            // ★ 削除時のフェイルセーフ
+            // EDCBがエラー(0)を返しても、実際には消えているケースが多発するため再確認する
+            val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
+            val isDeleted = checkReserves.none { it.reserveID == i } // リストにもう存在しなければ削除成功
 
-    override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> =
-        Result.failure(Exception("Not implemented"))
+            if (isDeleted) {
+                Log.w(TAG, "EDCB returned error on delete, but reservation was actually deleted.")
+                return@withContext Result.success(Unit)
+            }
 
-    override suspend fun updateReservationCondition(
-        i: Int,
-        r: ReservationConditionUpdateRequest
-    ): Result<ReservationCondition> = Result.failure(Exception("Not implemented"))
+            Result.failure(Exception("Failed to delete reservation"))
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteReservation failed", e)
+            Result.failure(e)
+        }
+    }
 
+    // ★修正: 自動予約条件の削除
     override suspend fun deleteReservationCondition(i: Int): Result<Unit> =
-        Result.failure(Exception("Not implemented"))
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val edcbApi = EdcbApi(ip, port)
+
+                // 1回目の送信リクエスト
+                val result = edcbApi.sendDelAutoAdd(listOf(i))
+                if (result.isSuccess) {
+                    return@withContext Result.success(Unit)
+                }
+
+                // ★ 削除時のフェイルセーフ
+                val checkConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+                val isDeleted = checkConditions.none { it.dataID == i }
+
+                if (isDeleted) {
+                    Log.w(
+                        TAG,
+                        "EDCB returned error on delete, but auto add condition was actually deleted."
+                    )
+                    return@withContext Result.success(Unit)
+                }
+
+                Result.failure(Exception("Failed to delete reservation condition"))
+            } catch (e: Exception) {
+                Log.e(TAG, "deleteReservationCondition failed", e)
+                Result.failure(e)
+            }
+        }
+
+    // ==========================================
+    // ★ 単発予約のエンコード（Kotlin -> EDCBバイナリ）処理
+    // ==========================================
+
+    private fun encodeReserveRecordSettings(s: ReserveRecordSettings): EdcbRecSettingData {
+        // 録画モード (有効: 0~4, 無効: 5~9)
+        val recMode = if (s.isEnabled) {
+            when (s.recordingMode) {
+                "AllServices" -> 0
+                "AllServicesWithoutDecoding" -> 2
+                "SpecifiedServiceWithoutDecoding" -> 3
+                "View" -> 4
+                else -> 1 // SpecifiedService
+            }
+        } else {
+            when (s.recordingMode) {
+                "AllServices" -> 9
+                "AllServicesWithoutDecoding" -> 6
+                "SpecifiedServiceWithoutDecoding" -> 7
+                "View" -> 8
+                else -> 5 // SpecifiedService (Disabled)
+            }
+        }
+
+        // 字幕・データ放送の録画設定
+        var serviceMode = 0
+        if (s.captionMode != "Default" || s.dataMode != "Default") {
+            serviceMode = 1 // 個別の設定値を使用するフラグ
+            if (s.captionMode == "Enable") serviceMode = serviceMode or 0x10
+            if (s.dataMode == "Enable") serviceMode = serviceMode or 0x20
+        }
+
+        // 録画後実行モード
+        val suspendMode = when (s.postRecordingMode) {
+            "Default" -> 0
+            "Nothing" -> 4
+            "Standby", "StandbyAndReboot" -> 1
+            "Suspend", "SuspendAndReboot" -> 2
+            "Shutdown" -> 3
+            else -> 0
+        }
+        val rebootFlag = if (s.postRecordingMode.contains("Reboot")) 1 else 0
+
+        // 録画フォルダ
+        val folderList = s.recordingFolders?.map {
+            EdcbRecFileSetInfo(it, "Write_Default.dll", "RecName_Macro.dll")
+        } ?: emptyList()
+        val partialFolderList = if (s.isOnesegSeparateOutputEnabled) folderList else emptyList()
+
+        return EdcbRecSettingData(
+            recMode = recMode,
+            priority = s.priority,
+            tuijyuuFlag = if (s.isEventRelayFollowEnabled) 1 else 0,
+            serviceMode = serviceMode,
+            pittariFlag = if (s.isExactRecordingEnabled) 1 else 0,
+            batFilePath = s.postRecordingBatFilePath ?: "",
+            recFolderList = folderList,
+            suspendMode = suspendMode,
+            rebootFlag = rebootFlag,
+            useMargineFlag = if (s.startMargin != 0 || s.endMargin != 0) 1 else 0,
+            startMargine = s.startMargin,
+            endMargine = s.endMargin,
+            continueRecFlag = if (s.isSequentialRecordingEnabled) 1 else 0,
+            partialRecFlag = if (s.isOnesegSeparateOutputEnabled) 1 else 0,
+            tunerID = s.forcedTunerId,
+            partialRecFolder = partialFolderList
+        )
+    }
+
+    // ==========================================
+    // ★ リクエスト処理の実装（フェイルセーフ追加）
+    // ==========================================
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun addReserve(r: ReserveRequest): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val edcbApi = EdcbApi(ip, port)
+
+            fetchEpgDataIfNeeded()
+
+            val parts = r.programId.split("_")
+            if (parts.size < 5) return@withContext Result.failure(Exception("Invalid program ID format"))
+            val onid = parts[1].toInt()
+            val tsid = parts[2].toInt()
+            val sid = parts[3].toInt()
+            val eid = parts[4].toInt()
+
+            val event =
+                cachedEvents.find { it.onid == onid && it.tsid == tsid && it.sid == sid && it.eid == eid }
+                    ?: return@withContext Result.failure(Exception("Event not found in EPG cache"))
+
+            val svc = cachedServices.find { it.onid == onid && it.tsid == tsid && it.sid == sid }
+
+            // ★ 事前重複チェック
+            val reserves = edcbApi.getReserves().getOrNull() ?: emptyList()
+            val isDuplicate = reserves.any {
+                it.originalNetworkID == onid && it.transportStreamID == tsid &&
+                        it.serviceID == sid && it.eventID == eid
+            }
+            if (isDuplicate) {
+                return@withContext Result.failure(Exception("既に同じ番組が予約されています"))
+            }
+
+            val recSetting = encodeReserveRecordSettings(r.recordSettings)
+
+            val reserveData = EdcbReserveData(
+                title = event.eventName,
+                startTime = event.startTime,
+                durationSec = event.durationSec,
+                stationName = svc?.serviceName ?: "",
+                originalNetworkID = onid,
+                transportStreamID = tsid,
+                serviceID = sid,
+                eventID = eid,
+                comment = "",
+                reserveID = 0,
+                bPadding = 0,
+                overlapMode = 0,
+                strPadding = "",
+                startTimeEpg = event.startTime,
+                recSetting = recSetting,
+                reserveStatus = 0,
+                recFileNameList = emptyList(),
+                trailingInt = 0
+            )
+
+            // 送信
+            val result = edcbApi.sendAddReserve(listOf(reserveData))
+            if (result.isSuccess) {
+                return@withContext Result.success(Unit)
+            }
+
+            // ★ チューナー不足（録画重複）時のフェイルセーフ
+            // EDCBはチューナー不足時、エラーコード 0 を返しますが、データベースには「一部録画」として登録します。
+            // そのため、エラーが返ってきても、実際には登録に成功していないかを再取得して確認します。
+            val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
+            val successfullyAdded = checkReserves.any {
+                it.originalNetworkID == onid && it.transportStreamID == tsid &&
+                        it.serviceID == sid && it.eventID == eid
+            }
+            if (successfullyAdded) {
+                Log.w(
+                    TAG,
+                    "EDCB returned 0 (Overlap warning), but reservation was added successfully."
+                )
+                return@withContext Result.success(Unit)
+            }
+
+            // KonomiTVのフェイルオーバー（放送終了扱い時の時刻延長リトライ）
+            val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+            val startLdt = LocalDateTime.parse(event.startTime, formatter)
+            val startMs = startLdt.atZone(ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+            val nowMs = System.currentTimeMillis()
+            val endMs = startMs + (event.durationSec * 1000)
+
+            if (nowMs >= endMs) {
+                val retryDuration = maxOf(((nowMs - startMs) / 1000).toInt() + 120, 120)
+                val retryData = reserveData.copy(durationSec = retryDuration)
+                Log.w(TAG, "Retrying with adjusted duration: $retryDuration")
+
+                val retryResult = edcbApi.sendAddReserve(listOf(retryData))
+                if (retryResult.isSuccess) return@withContext Result.success(Unit)
+            }
+
+            Result.failure(Exception("Failed to add reserve (EDCB rejected)"))
+        } catch (e: Exception) {
+            Log.e(TAG, "addReserve failed", e)
+            Result.failure(e)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun updateReserve(i: Int, r: ReserveRequest): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val edcbApi = EdcbApi(ip, port)
+
+                val reserves = edcbApi.getReserves().getOrThrow()
+                val existing = reserves.find { it.reserveID == i }
+                    ?: return@withContext Result.failure(Exception("Reserve not found on server"))
+
+                val recSetting = encodeReserveRecordSettings(r.recordSettings)
+                val updatedData = existing.copy(recSetting = recSetting)
+
+                val result = edcbApi.sendChgReserve(listOf(updatedData))
+                if (result.isSuccess) {
+                    return@withContext Result.success(Unit)
+                }
+
+                // ★ 更新時も重複警告で 0 が返ることがあるためフェイルセーフ
+                val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
+                val successfullyUpdated = checkReserves.find { it.reserveID == i }
+                if (successfullyUpdated != null) {
+                    Log.w(
+                        TAG,
+                        "EDCB returned 0, but reservation update might have succeeded (Overlap)."
+                    )
+                    return@withContext Result.success(Unit)
+                }
+
+                Result.failure(Exception("Failed to update reserve"))
+            } catch (e: Exception) {
+                Log.e(TAG, "updateReserve failed", e)
+                Result.failure(e)
+            }
+        }
+
+// ==========================================
+    // ★ 自動予約のエンコード処理
+    // ==========================================
+
+    private fun encodeAutoAddRecordSettings(s: RecordSettings): EdcbRecSettingData {
+        val recMode = if (s.isEnabled) {
+            when (s.recordingMode) {
+                "AllServices" -> 0
+                "AllServicesWithoutDecoding" -> 2
+                "SpecifiedServiceWithoutDecoding" -> 3
+                "View" -> 4
+                else -> 1
+            }
+        } else {
+            when (s.recordingMode) {
+                "AllServices" -> 9
+                "AllServicesWithoutDecoding" -> 6
+                "SpecifiedServiceWithoutDecoding" -> 7
+                "View" -> 8
+                else -> 5
+            }
+        }
+
+        var serviceMode = 0
+        if (s.captionRecordingMode != "Default" || s.dataBroadcastingRecordingMode != "Default") {
+            serviceMode = 1
+            if (s.captionRecordingMode == "Enable") serviceMode = serviceMode or 0x10
+            if (s.dataBroadcastingRecordingMode == "Enable") serviceMode = serviceMode or 0x20
+        }
+
+        val suspendMode = when (s.postRecordingMode) {
+            "Default" -> 0
+            "Nothing" -> 4
+            "Standby", "StandbyAndReboot" -> 1
+            "Suspend", "SuspendAndReboot" -> 2
+            "Shutdown" -> 3
+            else -> 0
+        }
+        val rebootFlag = if (s.postRecordingMode.contains("Reboot")) 1 else 0
+
+        val folderList = s.recordingFolders.map {
+            val template = if (it.recordingFileNameTemplate.isNullOrBlank()) "RecName_Macro.dll" else "RecName_Macro.dll?${it.recordingFileNameTemplate}"
+            EdcbRecFileSetInfo(it.recordingFolderPath, "Write_Default.dll", template)
+        }
+        val partialFolderList = if (s.isOnesegSeparateOutputEnabled) folderList else emptyList()
+
+        return EdcbRecSettingData(
+            recMode = recMode,
+            priority = s.priority,
+            tuijyuuFlag = if (s.isEventRelayFollowEnabled) 1 else 0,
+            serviceMode = serviceMode,
+            pittariFlag = if (s.isExactRecordingEnabled) 1 else 0,
+            batFilePath = s.postRecordingBatFilePath ?: "",
+            recFolderList = folderList,
+            suspendMode = suspendMode,
+            rebootFlag = rebootFlag,
+            useMargineFlag = if (s.recordingStartMargin != null && s.recordingEndMargin != null) 1 else 0,
+            startMargine = s.recordingStartMargin ?: 0,
+            endMargine = s.recordingEndMargin ?: 0,
+            continueRecFlag = if (s.isSequentialRecordingInSingleFileEnabled) 1 else 0,
+            partialRecFlag = if (s.isOnesegSeparateOutputEnabled) 1 else 0,
+            tunerID = s.forcedTunerId ?: 0,
+            partialRecFolder = partialFolderList
+        )
+    }
+
+    private fun encodeSearchKeyInfo(cond: ProgramSearchCondition): EdcbSearchInfo {
+        // 対象サービスリスト。nullの場合はEPGキャッシュから全チャンネルを生成して「全指定」とする
+        val serviceList = cond.serviceRanges?.map {
+            (it.networkId.toLong() shl 32) or (it.transportStreamId.toLong() shl 16) or it.serviceId.toLong()
+        } ?: cachedServices.map {
+            (it.onid.toLong() shl 32) or (it.tsid.toLong() shl 16) or it.sid.toLong()
+        }
+
+        val dateList = cond.dateRanges?.map {
+            EdcbDateData(it.startDayOfWeek, it.startHour, it.startMinute, it.endDayOfWeek, it.endHour, it.endMinute)
+        } ?: emptyList()
+
+        val freeCaFlag = when (cond.broadcastType) {
+            "All" -> 0
+            "FreeOnly" -> 1
+            "PaidOnly" -> 2
+            else -> 0
+        }
+
+        val chkRecEnd = if (cond.duplicateTitleCheckScope != "None") 1 else 0
+        val chkRecNoService = if (cond.duplicateTitleCheckScope == "AllChannels") 1 else 0
+        val chkRecDay = cond.duplicateTitleCheckPeriodDays
+
+        // KonomiTVの「・」から「／」への戻しを含め、ジャンルの逆変換を試みる（簡易実装）
+        val contentList = mutableListOf<EdcbContentData>()
+        cond.genreRanges?.forEach { genre ->
+            var cn1 = 0xFF
+            var cn2 = 0xFF
+            var un = 0x0
+            val majorStr = genre.major.replace("・", "／")
+            val middleStr = genre.middle.replace("・", "／")
+
+            for ((key, value) in EdcbConstants.CONTENT_TYPE) {
+                if (value.first == majorStr) {
+                    cn1 = key
+                    if (cn1 == 0x0E) { // 拡張
+                        for ((uKey, uVal) in EdcbConstants.USER_TYPE) {
+                            if (uVal == middleStr) {
+                                cn2 = 0x00
+                                un = uKey
+                                break
+                            }
+                        }
+                    } else if (middleStr == "すべて") {
+                        cn2 = 0xFF
+                    } else {
+                        for ((mKey, mVal) in value.second) {
+                            if (mVal == middleStr) {
+                                cn2 = mKey
+                                break
+                            }
+                        }
+                    }
+                    break
+                }
+            }
+            val contentNibble = (cn1 shl 8) or cn2
+            contentList.add(EdcbContentData(contentNibble, un))
+        }
+
+        return EdcbSearchInfo(
+            andKey = cond.keyword,
+            notKey = cond.excludeKeyword, // EDCBByteUtils.writeSearchKeyInfo内でnoteと共に処理される
+            keyDisabled = !cond.isEnabled,
+            caseSensitive = cond.isCaseSensitive,
+            regExpFlag = if (cond.isRegexSearchEnabled) 1 else 0,
+            titleOnlyFlag = if (cond.isTitleOnly) 1 else 0,
+            contentList = contentList,
+            dateList = dateList,
+            serviceList = serviceList,
+            videoList = emptyList(),
+            audioList = emptyList(),
+            aimaiFlag = if (cond.isFuzzySearchEnabled) 1 else 0,
+            notContetFlag = if (cond.isExcludeGenreRanges) 1 else 0,
+            notDateFlag = if (cond.isExcludeDateRanges) 1 else 0,
+            freeCAFlag = freeCaFlag,
+            chkRecEnd = chkRecEnd,
+            chkRecDay = chkRecDay,
+            chkRecNoService = chkRecNoService,
+            chkDurationMin = cond.durationRangeMin ?: 0,
+            chkDurationMax = cond.durationRangeMax ?: 0
+        )
+    }
+
+    // ==========================================
+    // ★ 自動予約 (AutoAdd) の追加・更新処理
+    // ==========================================
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val edcbApi = EdcbApi(ip, port)
+
+            fetchEpgDataIfNeeded()
+
+            // 追加前の条件リストの数を記憶（フェイルセーフ用）
+            val existingConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+
+            // 検索条件と録画設定をEDCBバイナリ用にエンコード
+            val searchInfo = encodeSearchKeyInfo(r.programSearchCondition)
+            val recSetting = encodeAutoAddRecordSettings(r.recordSettings)
+
+            val autoAddData = EdcbAutoAddData(
+                dataID = 0, // 新規追加なのでIDは0
+                searchInfo = searchInfo,
+                recSetting = recSetting,
+                addCount = 0
+            )
+
+            // 送信
+            val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
+            if (result.isSuccess) {
+                return@withContext Result.success(Unit)
+            }
+
+            // ★ フェイルセーフ: EDCBが 0 (エラー) を返しても、実は登録されているか確認する
+            val afterConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+            if (afterConditions.size > existingConditions.size) {
+                Log.w(TAG, "EDCB returned 0, but auto add condition was successfully added.")
+                return@withContext Result.success(Unit)
+            }
+
+            Result.failure(Exception("Failed to add auto add condition (EDCB rejected)"))
+        } catch (e: Exception) {
+            Log.e(TAG, "addReservationCondition failed", e)
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun updateReservationCondition(i: Int, r: ReservationConditionUpdateRequest): Result<ReservationCondition> = withContext(Dispatchers.IO) {
+        try {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val edcbApi = EdcbApi(ip, port)
+
+            val existingList = edcbApi.getAutoAddConditions().getOrThrow()
+            val existing = existingList.find { it.dataID == i }
+                ?: return@withContext Result.failure(Exception("Condition not found on server"))
+
+            val searchInfo = encodeSearchKeyInfo(r.programSearchCondition)
+            val recSetting = encodeAutoAddRecordSettings(r.recordSettings)
+
+            val updatedData = existing.copy(
+                searchInfo = searchInfo,
+                recSetting = recSetting
+            )
+
+            val result = edcbApi.sendChgAutoAdd(listOf(updatedData))
+            if (result.isSuccess) {
+                // 更新後のリストを再取得して結果として返す
+                val newList = getReservationConditions().getOrThrow()
+                return@withContext Result.success(newList.find { it.id == i }!!)
+            }
+
+            // ★ フェイルセーフ
+            val checkList = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+            if (checkList.any { it.dataID == i }) {
+                Log.w(TAG, "EDCB returned 0, but auto add condition update might have succeeded.")
+                val newList = getReservationConditions().getOrThrow()
+                return@withContext Result.success(newList.find { it.id == i }!!)
+            }
+
+            Result.failure(Exception("Failed to update auto add condition"))
+        } catch (e: Exception) {
+            Log.e(TAG, "updateReservationCondition failed", e)
+            Result.failure(e)
+        }
+    }
 }
