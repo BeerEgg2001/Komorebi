@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -96,24 +96,12 @@ fun RecordSeriesGridContent(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            .focusRestorer { firstItemFocusRequester }
+            // ★ 修正: クラッシュの原因だった focusRestorer を安全な focusGroup に変更
+            .focusGroup()
     ) {
         itemsIndexed(seriesList) { index, series ->
             var isFocused by remember { mutableStateOf(false) }
             val specificRequester = remember { FocusRequester() }
-
-            // ★ 修正: SeriesInfoが持つURLを利用してフォールバック処理を実装
-            val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
-                backendType,
-                konomiIp,
-                konomiPort,
-                series.representativeVideoId.toString()
-            )
-            val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
-            var currentThumbnailUrl by remember(
-                series.representativeVideoId,
-                primaryUrl
-            ) { mutableStateOf(primaryUrl) }
 
             LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                 val ticket = ticketManager.currentTicket
@@ -174,13 +162,25 @@ fun RecordSeriesGridContent(
                 )
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+                        backendType,
+                        konomiIp,
+                        konomiPort,
+                        series.representativeVideoId.toString()
+                    )
+                    val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+                    var currentThumbnailUrl by remember(
+                        series.representativeVideoId,
+                        primaryUrl
+                    ) { mutableStateOf(primaryUrl) }
+
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current).data(currentThumbnailUrl)
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(currentThumbnailUrl)
                             .crossfade(true).build(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
-                        // ★ 修正: DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
                         onError = {
                             if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
                                 currentThumbnailUrl = fallbackUrl
