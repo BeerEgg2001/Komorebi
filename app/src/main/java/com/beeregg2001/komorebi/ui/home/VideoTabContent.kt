@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,8 @@ import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.KonomiHistoryProgram
@@ -226,7 +229,6 @@ fun VideoTabContent(
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
         ) {
-            // ★ 修正(Step2): HeroDashboard にコールバックとフラグを渡す
             HomeHeroDashboard(
                 state = currentHeroInfo ?: initialHeroInfo,
                 getLogoUrl = getLogoUrl,
@@ -323,17 +325,22 @@ fun VideoTabContent(
                                                 if (duration > 0 && program.playbackPosition > 5.0) (program.playbackPosition / duration).toFloat()
                                                     .coerceIn(0f, 1f) else null
 
-                                            pendingHeroInfo = HomeHeroInfo(
-                                                title = program.title,
-                                                subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
-                                                description = "番組情報を取得中...",
-                                                // ※ ビデオタブのサムネイルはKonomiTV固有のものなので UrlBuilder.getThumbnailUrl をそのまま使用
-                                                imageUrl = UrlBuilder.getThumbnailUrl(
+                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
+                                            val fallbackUrl = program.apiThumbnailUrl
+                                                ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     program.id.toString()
-                                                ),
+                                                )
+                                            val primaryUrl =
+                                                program.directThumbnailUrl ?: fallbackUrl
+
+                                            pendingHeroInfo = HomeHeroInfo(
+                                                title = program.title,
+                                                subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
+                                                description = "番組情報を取得中...",
+                                                imageUrl = primaryUrl, // 上部の大きな画像にセット
                                                 isThumbnail = true,
                                                 tag = "最近の録画",
                                                 progress = progress
@@ -345,7 +352,8 @@ fun VideoTabContent(
                                             if (index == itemsToTake.lastIndex) right =
                                                 FocusRequester.Cancel
                                         },
-                                        timeFormat = timeFormat
+                                        timeFormat = timeFormat,
+                                        backendType = backendType // ★追加
                                     )
                                 }
                             }
@@ -393,16 +401,23 @@ fun VideoTabContent(
                                                 focusedProgramId = videoId
                                                 recordViewModel.fetchProgramDetail(videoId)
                                             }
-                                            pendingHeroInfo = HomeHeroInfo(
-                                                title = historyItem.program.title.toString(),
-                                                subtitle = "続きから再生を再開",
-                                                description = "番組情報を取得中...",
-                                                imageUrl = UrlBuilder.getThumbnailUrl(
+
+                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
+                                            val fallbackUrl = matchedProgram?.apiThumbnailUrl
+                                                ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     videoId.toString()
-                                                ),
+                                                )
+                                            val primaryUrl =
+                                                matchedProgram?.directThumbnailUrl ?: fallbackUrl
+
+                                            pendingHeroInfo = HomeHeroInfo(
+                                                title = historyItem.program.title.toString(),
+                                                subtitle = "続きから再生を再開",
+                                                description = "番組情報を取得中...",
+                                                imageUrl = primaryUrl,
                                                 isThumbnail = true,
                                                 tag = "視聴履歴",
                                                 progress = if ((matchedProgram?.duration
@@ -415,7 +430,8 @@ fun VideoTabContent(
                                             if (index == 0) left = FocusRequester.Cancel
                                             if (index == itemsToTake.lastIndex) right =
                                                 FocusRequester.Cancel
-                                        }
+                                        },
+                                        backendType = backendType // ★追加
                                     )
                                 }
                             }
@@ -509,16 +525,23 @@ fun VideoTabContent(
                                         onClick = { recordViewModel.searchRecordings(series.displayTitle); onShowAllRecordings() },
                                         onFocus = {
                                             focusedProgramId = null // シリーズには特定のVideoIDがないためnull
-                                            pendingHeroInfo = HomeHeroInfo(
-                                                title = series.displayTitle,
-                                                subtitle = "録画エピソード: ${series.programCount}件",
-                                                description = "「${series.displayTitle}」の録画一覧を表示します。",
-                                                imageUrl = UrlBuilder.getThumbnailUrl(
+
+                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
+                                            val fallbackUrl = series.apiThumbnailUrl
+                                                ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
                                                     konomiIp,
                                                     konomiPort,
                                                     series.representativeVideoId.toString()
-                                                ),
+                                                )
+                                            val primaryUrl =
+                                                series.directThumbnailUrl ?: fallbackUrl
+
+                                            pendingHeroInfo = HomeHeroInfo(
+                                                title = series.displayTitle,
+                                                subtitle = "録画エピソード: ${series.programCount}件",
+                                                description = "「${series.displayTitle}」の録画一覧を表示します。",
+                                                imageUrl = primaryUrl,
                                                 isThumbnail = true,
                                                 tag = "シリーズ"
                                             )
@@ -527,7 +550,8 @@ fun VideoTabContent(
                                             if (index == 0) left = FocusRequester.Cancel
                                             if (index == filteredSeries.lastIndex) right =
                                                 FocusRequester.Cancel
-                                        }
+                                        },
+                                        backendType = backendType // ★追加
                                     )
                                 }
                             }
@@ -539,7 +563,7 @@ fun VideoTabContent(
     }
 }
 
-// ---------------- 以下、既存のカードコンポーネント等は一切変更なし ----------------
+// ---------------- 以下、既存のカードコンポーネント（画像URLの取得部分のみ修正） ----------------
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -548,7 +572,7 @@ private fun VideoRecentRecordCard(
     history: KonomiHistoryProgram?,
     konomiIp: String,
     konomiPort: String,
-    settingViewModel: SettingsViewModel = hiltViewModel(),
+    backendType: String, // ★ 追加
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
@@ -559,8 +583,17 @@ private fun VideoRecentRecordCard(
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    val backendType by settingViewModel.backendType.collectAsState()
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, program.id.toString())
+
+    // ★ 修正: サムネイルのフォールバック機能を実装
+    val fallbackUrl = program.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+        backendType,
+        konomiIp,
+        konomiPort,
+        program.id.toString()
+    )
+    val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
+
     val duration = if (program.duration > 0) program.duration else program.recordedVideo.duration
     val progress = if (history != null && duration > 0 && history.playback_position > 5.0) {
         (history.playback_position / duration).toFloat().coerceIn(0f, 1f)
@@ -574,6 +607,17 @@ private fun VideoRecentRecordCard(
             ticketManager.consume(FocusTicket.TARGET_ID)
             onReturnFocusConsumed()
         }
+    }
+
+    val context = LocalContext.current
+    val imageRequest = remember(currentThumbnailUrl) {
+        ImageRequest.Builder(context)
+            .data(currentThumbnailUrl)
+            .crossfade(true)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .build()
     }
 
     Surface(
@@ -603,12 +647,18 @@ private fun VideoRecentRecordCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = thumbnailUrl,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(if (isFocused) 0.8f else 0.5f)
+                    .alpha(if (isFocused) 0.8f else 0.5f),
+                // ★ 追加: 画像読み込み失敗時のフォールバック処理
+                onError = {
+                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                        currentThumbnailUrl = fallbackUrl
+                    }
+                }
             )
             Box(
                 modifier = Modifier
@@ -695,7 +745,7 @@ private fun VideoWatchHistoryCard(
     matchedProgram: RecordedProgram?,
     konomiIp: String,
     konomiPort: String,
-    settingViewModel: SettingsViewModel = hiltViewModel(),
+    backendType: String, // ★ 追加
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
@@ -703,17 +753,26 @@ private fun VideoWatchHistoryCard(
     onReturnFocusConsumed: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val backendType by settingViewModel.backendType.collectAsState()
     var isFocused by remember { mutableStateOf(false) }
     val videoId = matchedProgram?.id ?: try {
         historyItem.program.id.toString().toInt()
     } catch (e: Exception) {
         0
     }
+
+    // ★ 修正: サムネイルのフォールバック機能を実装
+    val fallbackUrl = matchedProgram?.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+        backendType,
+        konomiIp,
+        konomiPort,
+        videoId.toString()
+    )
+    val primaryUrl = matchedProgram?.directThumbnailUrl ?: fallbackUrl
+    var currentThumbnailUrl by remember(videoId, primaryUrl) { mutableStateOf(primaryUrl) }
+
     val duration = matchedProgram?.duration ?: 0.0
     val progress = if (duration > 0) (historyItem.playback_position / duration).toFloat()
         .coerceIn(0f, 1f) else null
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, videoId.toString())
 
     val specificRequester = remember { FocusRequester() }
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
@@ -723,6 +782,17 @@ private fun VideoWatchHistoryCard(
             ticketManager.consume(FocusTicket.TARGET_ID)
             onReturnFocusConsumed()
         }
+    }
+
+    val context = LocalContext.current
+    val imageRequest = remember(currentThumbnailUrl) {
+        ImageRequest.Builder(context)
+            .data(currentThumbnailUrl)
+            .crossfade(true)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .build()
     }
 
     Surface(
@@ -751,12 +821,18 @@ private fun VideoWatchHistoryCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = thumbnailUrl,
+                model = imageRequest,
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()
                     .alpha(if (isFocused) 0.8f else 0.5f),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                // ★ 追加: 画像読み込み失敗時のフォールバック処理
+                onError = {
+                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                        currentThumbnailUrl = fallbackUrl
+                    }
+                }
             )
             Box(
                 modifier = Modifier
@@ -824,16 +900,38 @@ private fun VideoSeriesCard(
     series: SeriesInfo,
     konomiIp: String,
     konomiPort: String,
-    settingViewModel: SettingsViewModel = hiltViewModel(),
+    backendType: String, // ★ 追加
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    val backendType by settingViewModel.backendType.collectAsState()
-    val thumbnailUrl =
-        UrlBuilder.getThumbnailUrl(backendType, konomiIp, konomiPort, series.representativeVideoId.toString())
+
+    // ★ 修正: サムネイルのフォールバック機能を実装
+    val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+        backendType,
+        konomiIp,
+        konomiPort,
+        series.representativeVideoId.toString()
+    )
+    val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+    var currentThumbnailUrl by remember(series.representativeVideoId, primaryUrl) {
+        mutableStateOf(
+            primaryUrl
+        )
+    }
+
+    val context = LocalContext.current
+    val imageRequest = remember(currentThumbnailUrl) {
+        ImageRequest.Builder(context)
+            .data(currentThumbnailUrl)
+            .crossfade(true)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
 
     Surface(
         onClick = onClick,
@@ -860,12 +958,18 @@ private fun VideoSeriesCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = thumbnailUrl,
+                model = imageRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(if (isFocused) 0.8f else 0.4f)
+                    .alpha(if (isFocused) 0.8f else 0.4f),
+                // ★ 追加: 画像読み込み失敗時のフォールバック処理
+                onError = {
+                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                        currentThumbnailUrl = fallbackUrl
+                    }
+                }
             )
             Box(
                 modifier = Modifier

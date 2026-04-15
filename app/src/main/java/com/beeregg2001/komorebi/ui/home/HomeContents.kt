@@ -19,6 +19,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.foundation.lazy.list.*
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.*
@@ -26,6 +27,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.home.components.*
 import com.beeregg2001.komorebi.viewmodel.HomeViewModel
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
 
 private const val TAG = "HomeContents"
@@ -41,8 +43,8 @@ fun HomeContents(
     pickupGenreName: String,
     pickupTimeSlot: String,
     groupedChannels: Map<String, List<Channel>>,
-    getLogoUrl: suspend (String) -> String, // ★ 追加: URL解決コールバック
-    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグ
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
@@ -59,9 +61,11 @@ fun HomeContents(
     isTopNavFocused: Boolean = false,
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
-    timeFormat: String
+    recordViewModel: RecordViewModel = hiltViewModel(),
+    timeFormat: String,
 ) {
     val lazyListState = rememberTvLazyListState()
+    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val isFirstItemRendered =
         remember { derivedStateOf { lazyListState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
@@ -181,7 +185,6 @@ fun HomeContents(
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
         ) {
-            // ★ 修正: HeroDashboard にロゴ解決用パラメータを渡す
             HomeHeroDashboard(
                 state = currentHeroInfo,
                 getLogoUrl = getLogoUrl,
@@ -207,8 +210,8 @@ fun HomeContents(
                         LastWatchedSection(
                             channels = lastWatchedChannels,
                             groupedChannels = groupedChannels,
-                            getLogoUrl = getLogoUrl,         // ★ 追加
-                            shouldCropLogo = shouldCropLogo, // ★ 追加
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "lastWatched") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -222,8 +225,8 @@ fun HomeContents(
                     item(key = "section_hot") {
                         HotChannelSection(
                             hotChannels = hotChannels,
-                            getLogoUrl = getLogoUrl,         // ★ 追加
-                            shouldCropLogo = shouldCropLogo, // ★ 追加
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "hot") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -239,8 +242,8 @@ fun HomeContents(
                             genrePickup = genrePickup,
                             pickupGenreName = pickupGenreName,
                             pickupTimeSlot = pickupTimeSlot,
-                            getLogoUrl = getLogoUrl,         // ★ 追加
-                            shouldCropLogo = shouldCropLogo, // ★ 追加
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "pickup") upToTabModifier else Modifier,
                             onProgramClick = onProgramClick,
                             onNavigateToTab = onNavigateToTab,
@@ -254,11 +257,9 @@ fun HomeContents(
                 }
                 if (watchHistory.isNotEmpty()) {
                     item(key = "section_history") {
-                        // ※ WatchHistorySectionは、独自のKonomiTVサムネイル画像を使うため
-                        // getLogoUrl等のフラグは内部で使用しませんが、シグネチャとしては不要なため渡しません
-                        // （HomeSections.kt側でWatchHistorySectionの引数は変更していないため、コンパイルエラーにはなりません）
                         WatchHistorySection(
                             watchHistory = watchHistory,
+                            recentRecordings = recentRecordings, // ★ 追加: サムネイル用データを渡す
                             konomiIp = konomiIp,
                             konomiPort = konomiPort,
                             modifier = if (topSection == "history") upToTabModifier else Modifier,
@@ -274,8 +275,8 @@ fun HomeContents(
                     item(key = "section_upcoming") {
                         UpcomingReserveSection(
                             upcomingReserves = upcomingReserves,
-                            getLogoUrl = getLogoUrl,         // ★ 追加
-                            shouldCropLogo = shouldCropLogo, // ★ 追加
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "upcoming") upToTabModifier else Modifier,
                             onReserveClick = onReserveClick,
                             onNavigateToTab = onNavigateToTab,

@@ -84,8 +84,8 @@ fun NavigationLinkButton(label: String, icon: ImageVector, onClick: () -> Unit) 
 fun LastWatchedSection(
     channels: List<Channel>,
     groupedChannels: Map<String, List<Channel>>,
-    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
-    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -136,8 +136,8 @@ fun LastWatchedSection(
                 LastWatchedChannelCard(
                     channel = channel,
                     liveChannel = liveChannel,
-                    getLogoUrl = getLogoUrl,     // ★ 修正: 子へ渡す
-                    shouldCropLogo = shouldCropLogo, // ★ 修正: 子へ渡す
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo,
                     onClick = { onChannelClick(channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -146,7 +146,7 @@ fun LastWatchedSection(
                                 subtitle = channel.name,
                                 description = liveChannel?.programPresent?.description
                                     ?: "前回視聴していたチャンネルです。",
-                                channelId = channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
+                                channelId = channel.id,
                                 isThumbnail = false,
                                 tag = "前回視聴"
                             )
@@ -179,8 +179,8 @@ fun LastWatchedSection(
 @Composable
 fun HotChannelSection(
     hotChannels: List<UiChannelState>,
-    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
-    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -226,8 +226,8 @@ fun HotChannelSection(
 
                 HotChannelCard(
                     uiState = uiState,
-                    getLogoUrl = getLogoUrl,     // ★ 修正: 子へ渡す
-                    shouldCropLogo = shouldCropLogo, // ★ 修正: 子へ渡す
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo,
                     onClick = { onChannelClick(uiState.channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -235,7 +235,7 @@ fun HotChannelSection(
                                 title = uiState.programTitle,
                                 subtitle = uiState.name,
                                 description = uiState.channel.programPresent?.description ?: "",
-                                channelId = uiState.channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
+                                channelId = uiState.channel.id,
                                 isThumbnail = false,
                                 tag = "盛り上がり"
                             )
@@ -268,6 +268,7 @@ fun HotChannelSection(
 @Composable
 fun WatchHistorySection(
     watchHistory: List<KonomiHistoryProgram>,
+    recentRecordings: List<RecordedProgram>, // ★ 追加: DBのメタデータを持つ録画リスト
     konomiIp: String, konomiPort: String,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
@@ -315,10 +316,13 @@ fun WatchHistorySection(
                     }
                 }
 
-                // ※ WatchHistoryCard は KonomiTV API の録画サムネイル画像を使用するため、
-                // URLの組み立てロジック（UrlBuilder）への依存をそのまま保護します。
+                // ★ 追加: KonomiHistoryProgram と DBの RecordedProgram を突き合わせる
+                val matchedProgram =
+                    recentRecordings.find { it.id.toString() == history.program.id.toString() }
+
                 WatchHistoryCard(
                     history = history,
+                    matchedProgram = matchedProgram, // ★ 追加: カードに渡す
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
                     onClick = { onHistoryClick(history) },
@@ -362,8 +366,8 @@ fun WatchHistorySection(
 @Composable
 fun UpcomingReserveSection(
     upcomingReserves: List<ReserveItem>,
-    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
-    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onReserveClick: (ReserveItem) -> Unit,
@@ -372,7 +376,7 @@ fun UpcomingReserveSection(
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
     sectionId: String,
-    timeFormat: String // ★ 追加
+    timeFormat: String
 ) {
     val rowState = rememberTvLazyListState()
 
@@ -419,7 +423,7 @@ fun UpcomingReserveSection(
                                 title = reserve.program.title,
                                 subtitle = "$startFormat - ${reserve.channel.name}",
                                 description = reserve.program.description ?: "",
-                                channelId = reserve.channel.id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
+                                channelId = reserve.channel.id,
                                 isThumbnail = false,
                                 tag = "録画予約"
                             )
@@ -442,7 +446,7 @@ fun UpcomingReserveSection(
                                 homeViewModel.lastClickedItemId = reserve.id.toString()
                             }
                         },
-                    timeFormat = timeFormat // ★ 追加
+                    timeFormat = timeFormat
                 )
             }
         }
@@ -459,8 +463,8 @@ fun GenrePickupSection(
     genrePickup: List<Pair<EpgProgram, String>>,
     pickupGenreName: String,
     pickupTimeSlot: String,
-    getLogoUrl: suspend (String) -> String, // ★ 追加: コールバックを受け取る
-    shouldCropLogo: Boolean,                // ★ 追加: クロップフラグを受け取る
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onProgramClick: (EpgProgram) -> Unit,
@@ -469,7 +473,7 @@ fun GenrePickupSection(
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
     sectionId: String,
-    timeFormat: String // ★ 追加
+    timeFormat: String
 ) {
     val rowState = rememberTvLazyListState()
 
@@ -522,7 +526,7 @@ fun GenrePickupSection(
                                 title = program.title,
                                 subtitle = "$startFormat - $channelName",
                                 description = program.description,
-                                channelId = program.channel_id, // ★ 修正: HeroDashboard側でロゴを取得させるためにIDを渡す
+                                channelId = program.channel_id,
                                 isThumbnail = false,
                                 tag = "ピックアップ"
                             )
@@ -545,7 +549,7 @@ fun GenrePickupSection(
                                 homeViewModel.lastClickedItemId = program.id
                             }
                         },
-                    timeFormat = timeFormat // ★ 追加
+                    timeFormat = timeFormat
                 )
             }
         }
