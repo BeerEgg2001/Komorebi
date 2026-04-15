@@ -29,6 +29,9 @@ class EdcbRepository @Inject constructor(
     companion object {
         private const val TAG = "EdcbRepository"
         private const val CACHE_EXPIRATION_MS = 15 * 60 * 1000L
+
+        // ★ 追加: ドロップ数の許容上限（これを超えると録画失敗とみなして表示しない）
+        private const val MAX_ALLOWED_DROPS = 1000L
     }
 
     private var httpPortCache: Int? = null
@@ -474,15 +477,6 @@ class EdcbRepository @Inject constructor(
 
     override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
 
-
-    // =========================================================================
-    // ★ 録画リスト・番組詳細 関連機能
-    // =========================================================================
-
-    /**
-     * EDCBの programInfo (.program.txtの内容) からジャンルを抽出します。
-     * ★修正: 全角スペースやタブで区切られた複数ジャンルに対応し、大分類と中分類を正確に抽出します。
-     */
     private fun extractGenresFromProgramInfo(programInfo: String): List<EpgGenre> {
         if (programInfo.isBlank()) return emptyList()
         val lines = programInfo.lines()
@@ -491,12 +485,10 @@ class EdcbRepository @Inject constructor(
         if (genreIndex != -1 && genreIndex + 1 < lines.size) {
             val genreList = mutableListOf<EpgGenre>()
 
-            // 次の行から空行になるまでジャンルを読み取る
             for (i in genreIndex + 1 until lines.size) {
                 val line = lines[i].trim()
-                if (line.isEmpty()) break // 空行でジャンル表記終了とみなす
+                if (line.isEmpty()) break
 
-                // EDCB(rplsinfo)は1行の中に全角スペースやタブで複数ジャンルを並べるため分割
                 val parts = line.split("　", "\t")
 
                 for (part in parts) {
@@ -506,22 +498,16 @@ class EdcbRepository @Inject constructor(
                     var major = ""
                     var middle = ""
 
-                    // 1. 〔 〕 や [ ] などの括弧で中分類が書かれているパターン
                     if (p.contains("〔") && p.contains("〕")) {
                         major = p.substringBefore("〔").trim()
                         middle = p.substringAfter("〔").substringBefore("〕").trim()
-                    }
-                    // 2. " - " で分割されているパターン
-                    else if (p.contains(" - ")) {
+                    } else if (p.contains(" - ")) {
                         major = p.substringBefore(" - ").trim()
                         middle = p.substringAfter(" - ").trim()
-                    }
-                    // 3. 大分類のみ
-                    else {
+                    } else {
                         major = p
                     }
 
-                    // KonomiTV互換性のため「／」を「・」に統一 (例: アニメ／特撮 -> アニメ・特撮)
                     major = major.replace("／", "・")
 
                     if (major.isNotEmpty()) {
@@ -532,6 +518,20 @@ class EdcbRepository @Inject constructor(
             return genreList
         }
         return emptyList()
+    }
+
+    // ★ 追加: 録画情報が有効（表示すべき）かどうかを判定する関数
+    private fun isValidRecord(info: EdcbRecFileInfo): Boolean {
+//        // ドロップ数が上限を超えている場合は失敗とみなす
+//        if (info.drops > MAX_ALLOWED_DROPS) return false
+        // ファイルパスが空（または無効な文字列）の場合は削除済みとみなす
+        if (info.recFilePath.isBlank() || info.recFilePath.contains(
+                "録画ファイルがありません",
+                ignoreCase = true
+            )
+        ) return false
+
+        return true
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -547,7 +547,10 @@ class EdcbRepository @Inject constructor(
                     if (cachedRecInfos == null || (System.currentTimeMillis() - lastRecFetchTime) > 30_000L) {
                         val result = EdcbApi(ip, port).getRecInfosFull()
                         if (result.isSuccess) {
-                            cachedRecInfos = result.getOrNull()?.sortedByDescending { it.startTime }
+                            // ★ 修正: キャッシュする前に、無効な録画（失敗・削除済み）をフィルタリングして取り除く
+                            val validInfos =
+                                result.getOrNull()?.filter { isValidRecord(it) } ?: emptyList()
+                            cachedRecInfos = validInfos.sortedByDescending { it.startTime }
                             lastRecFetchTime = System.currentTimeMillis()
                         } else {
                             return@withContext RecordedApiResponse(0, emptyList())
@@ -597,6 +600,11 @@ class EdcbRepository @Inject constructor(
                         videoId
                     ).getOrNull()
 
+                // ★ 追加: 単体取得でも、無効な番組ならエラーを返すようにする
+                if (info == null || !isValidRecord(info)) {
+                    return@withContext Result.failure(Exception("Not found or invalid record"))
+                }
+
                 var safeHttpPort = httpPortCache ?: 5510
                 if (httpPortCache == null && !logoDataIniAttempted) {
                     try {
@@ -611,13 +619,13 @@ class EdcbRepository @Inject constructor(
                     }
                 }
 
-                if (info != null) Result.success(
+                Result.success(
                     mapToRecordedProgram(
                         info,
                         ip,
                         safeHttpPort
                     )
-                ) else Result.failure(Exception("Not found"))
+                )
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -710,7 +718,8 @@ class EdcbRepository @Inject constructor(
         val extractedGenres = extractGenresFromProgramInfo(info.programInfo)
 
         val detailStartIdx = info.programInfo.indexOf("詳細情報")
-        val genreStartIdx = info.programInfo.indexOf("ジャンル").takeIf { it != -1 } ?: info.programInfo.length
+        val genreStartIdx =
+            info.programInfo.indexOf("ジャンル").takeIf { it != -1 } ?: info.programInfo.length
 
         val cleanDescription = if (info.programInfo.isNotBlank()) {
             val endIdx = if (detailStartIdx != -1) detailStartIdx else genreStartIdx
@@ -719,13 +728,11 @@ class EdcbRepository @Inject constructor(
             info.comment
         }
 
-        // ★ 修正: ハックを削除し、純粋な詳細情報のみを持つように変更
         val detailMap = mutableMapOf<String, String>(
             "Error" to "${info.drops}",
             "Path" to info.recFilePath
         )
 
-        // ★ 追加: 正しいプロパティに設定するためのURL構築
         val relativePath = info.recFilePath
             .replace(Regex("^[a-zA-Z]:\\\\"), "")
             .replace("\\", "/")
@@ -771,7 +778,6 @@ class EdcbRepository @Inject constructor(
             ),
             extractedGenres,
             isRecording, 0.0,
-            // ★ 追加: プロパティに直接URLを設定
             directThumbnailUrl = primaryUrl,
             apiThumbnailUrl = fallbackUrl
         )
