@@ -64,7 +64,10 @@ data class SeriesInfo(
     val searchKeyword: String,
     val programCount: Int,
     val representativeVideoId: Int,
-    val isEpisodic: Boolean = false
+    val isEpisodic: Boolean = false,
+    // ★ 修正: シリーズ代表番組のサムネイルURLを持たせる
+    val directThumbnailUrl: String? = null,
+    val apiThumbnailUrl: String? = null
 )
 
 /**
@@ -566,7 +569,9 @@ class RecordViewModel @Inject constructor(
                         searchKeyword = searchKeyword,
                         programCount = proj.programCount,
                         representativeVideoId = proj.representativeVideoId, // サムネイル用
-                        isEpisodic = proj.isEpisodic
+                        isEpisodic = proj.isEpisodic,
+                        directThumbnailUrl = proj.directThumbnailUrl,
+                        apiThumbnailUrl = proj.apiThumbnailUrl
                     )
 
                     val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }

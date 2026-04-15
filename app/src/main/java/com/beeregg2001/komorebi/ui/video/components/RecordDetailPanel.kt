@@ -46,7 +46,7 @@ fun RecordDetailPanel(
     focusRequester: FocusRequester,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-    timeFormat: String = "24H" // ★ 追加
+    timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     val scrollState = rememberScrollState()
@@ -55,9 +55,16 @@ fun RecordDetailPanel(
 
     if (program == null) return
 
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString(),backendType)
+    // ★ 修正: UrlBuilderの直接呼び出しをやめ、モデルが持つURLを使ってフォールバック処理を実装
+    val fallbackUrl = program.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+        backendType,
+        konomiIp,
+        konomiPort,
+        program.id.toString()
+    )
+    val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
-    // ★ 修正: timeFormat に応じて日付+時刻のフォーマットを動的に切り替える
     val displayDate = remember(program.startTime, timeFormat) {
         try {
             val zdt = ZonedDateTime.parse(program.startTime)
@@ -110,14 +117,20 @@ fun RecordDetailPanel(
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current).data(thumbnailUrl)
+                    model = ImageRequest.Builder(LocalContext.current).data(currentThumbnailUrl)
                         .crossfade(true).build(),
                     contentDescription = null,
                     modifier = Modifier
                         .width(160.dp)
                         .aspectRatio(16f / 9f)
                         .clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    // ★ 修正: DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
+                    onError = {
+                        if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                            currentThumbnailUrl = fallbackUrl
+                        }
+                    }
                 )
             }
 

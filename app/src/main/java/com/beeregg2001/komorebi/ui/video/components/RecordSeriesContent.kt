@@ -93,12 +93,24 @@ fun RecordSeriesContent(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(contentContainerFocusRequester)
-                // ★修正: focusGroup を削除し、focusRestorer を追加。
                 .focusRestorer { firstItemFocusRequester }
         ) {
             itemsIndexed(seriesList) { index, series ->
                 var isFocused by remember { mutableStateOf(false) }
                 val specificRequester = remember { FocusRequester() }
+
+                // ★ 修正: SeriesInfoが持つURLを利用してフォールバック処理を実装
+                val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+                    backendType,
+                    konomiIp,
+                    konomiPort,
+                    series.representativeVideoId.toString()
+                )
+                val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+                var currentThumbnailUrl by remember(
+                    series.representativeVideoId,
+                    primaryUrl
+                ) { mutableStateOf(primaryUrl) }
 
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     val ticket = ticketManager.currentTicket
@@ -172,17 +184,18 @@ fun RecordSeriesContent(
                                 .background(Color.DarkGray.copy(alpha = 0.5f))
                         ) {
                             AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current).data(
-                                    UrlBuilder.getThumbnailUrl(
-                                        backendType,
-                                        konomiIp,
-                                        konomiPort,
-                                        series.representativeVideoId.toString(),
-                                    )
-                                ).crossfade(true).build(),
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(currentThumbnailUrl)
+                                    .crossfade(true).build(),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.Crop,
+                                // ★ 修正: DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
+                                onError = {
+                                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                                        currentThumbnailUrl = fallbackUrl
+                                    }
+                                }
                             )
                         }
                         Spacer(modifier = Modifier.width(16.dp))

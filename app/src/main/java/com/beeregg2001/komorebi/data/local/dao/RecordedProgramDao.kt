@@ -68,18 +68,21 @@ interface RecordedProgramDao {
     @Query("SELECT DISTINCT channel_id as channelId, channel_type as channelType, channel_name as channelName FROM recorded_programs WHERE channel_id IS NOT NULL")
     suspend fun getDistinctChannels(): List<ChannelProjection>
 
+    // ★ 修正: direct_thumbnail_url と api_thumbnail_url をクエリの取得対象に追加
     @Query(
         """
-    SELECT 
-        series_name as seriesName, 
-        COUNT(id) as programCount, 
-        MAX(id) as representativeVideoId, 
-        MAX(is_episodic) as isEpisodic,
-        MAX(genres) as genres 
-    FROM recorded_programs 
-    WHERE series_name != '' 
-    GROUP BY series_name
-"""
+        SELECT 
+            series_name as seriesName, 
+            COUNT(id) as programCount, 
+            MAX(id) as representativeVideoId, 
+            MAX(is_episodic) as isEpisodic,
+            MAX(genres) as genres,
+            MAX(direct_thumbnail_url) as directThumbnailUrl,
+            MAX(api_thumbnail_url) as apiThumbnailUrl
+        FROM recorded_programs 
+        WHERE series_name != '' 
+        GROUP BY series_name
+        """
     )
     suspend fun getGroupedSeries(): List<SeriesProjection>
 
@@ -149,7 +152,9 @@ data class SeriesProjection(
     val programCount: Int,
     val representativeVideoId: Int,
     val isEpisodic: Boolean,
-    val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?
+    val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?,
+    val directThumbnailUrl: String?,
+    val apiThumbnailUrl: String?
 )
 
 data class ProgramTitleProjection(
