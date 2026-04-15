@@ -11,6 +11,7 @@ import com.beeregg2001.komorebi.data.model.*
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -50,13 +51,18 @@ class EdcbRepository @Inject constructor(
     private var cachedRecInfos: List<EdcbRecFileInfo>? = null
     private var lastRecFetchTime = 0L
 
+    // ★ 追加: バックグラウンド取得用のコルーチンスコープとJob
+    private val repositoryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    private var fullEpgFetchJob: kotlinx.coroutines.Job? = null
+    private var isFullEpgFetched = false
+
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchEpgDataIfNeeded() = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         if (cachedServices.isEmpty() || cachedEvents.isEmpty() || (now - lastEpgFetchTime) > CACHE_EXPIRATION_MS) {
             epgMutex.withLock {
                 if (cachedServices.isEmpty() || cachedEvents.isEmpty() || (System.currentTimeMillis() - lastEpgFetchTime) > CACHE_EXPIRATION_MS) {
-                    Log.i(TAG, "🔄 Fetching fresh EPG data from EDCB...")
+                    Log.i(TAG, "🔄 Fetching fresh EPG data from EDCB (Quick Load)...")
                     val ip = settingsRepository.edcbIp.first()
                     val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
                     if (ip.isBlank()) throw Exception("EDCB IP is not set")
@@ -65,11 +71,17 @@ class EdcbRepository @Inject constructor(
                     val services = edcbApi.getServices().getOrNull() ?: emptyList()
                     val targetServices =
                         services.filter { it.serviceType == 1 || it.serviceType == 165 }
-                    val events = edcbApi.getEventInfos(targetServices).getOrNull() ?: emptyList()
+
+                    // ★ 高速化: 取得する期間を「現在時刻の1時間前から24時間後まで」に制限する
+                    val fetchStartTime = LocalDateTime.now().minusHours(1)
+                    val fetchEndTime = LocalDateTime.now().plusHours(24)
+
+                    val events = edcbApi.getEventInfos(targetServices, fetchStartTime, fetchEndTime).getOrNull() ?: emptyList()
 
                     cachedServices = targetServices
                     cachedEvents = events
                     lastEpgFetchTime = System.currentTimeMillis()
+                    isFullEpgFetched = false // 簡易版なのでフラグを下ろす
 
                     tsidToSidsMap = targetServices
                         .filter { getChannelType(it.onid) == "GR" }
@@ -81,11 +93,36 @@ class EdcbRepository @Inject constructor(
                         .groupBy { it.sid / 10 }
                         .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
 
-                    Log.i(
-                        TAG,
-                        "✅ EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}"
-                    )
+                    Log.i(TAG, "✅ Quick EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}")
+
+                    // ★ バックグラウンドで全EPG(1週間分)の取得を非同期で開始
+                    fetchFullEpgDataInBackground(targetServices, ip, port)
                 }
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun fetchFullEpgDataInBackground(services: List<EdcbServiceInfo>, ip: String, port: Int) {
+        fullEpgFetchJob?.cancel()
+        fullEpgFetchJob = repositoryScope.launch {
+            try {
+                Log.i(TAG, "⏳ Starting full EPG data fetch in background...")
+                val edcbApi = EdcbApi(ip, port)
+
+                // 期間指定なしで全取得 (1週間分)
+                val allEvents = edcbApi.getEventInfos(services).getOrNull()
+
+                if (allEvents != null) {
+                    epgMutex.withLock {
+                        cachedEvents = allEvents
+                        isFullEpgFetched = true
+                        lastEpgFetchTime = System.currentTimeMillis()
+                        Log.i(TAG, "✅ Full EPG Cache updated in background! Events=${cachedEvents.size}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to fetch full EPG data in background", e)
             }
         }
     }
@@ -407,9 +444,65 @@ class EdcbRepository @Inject constructor(
         }
     }
 
+//    override suspend fun getChannelLogoUrl(channelId: String): String =
+//        withContext(Dispatchers.IO) {
+//            if (failedLogoIds.contains(channelId)) return@withContext ""
+//
+//            val parts = channelId.split("_")
+//            if (parts.size < 4 || parts[0] != "edcb") return@withContext ""
+//
+//            val onid = parts[1].toIntOrNull() ?: return@withContext ""
+//            val tsid = parts[2].toIntOrNull() ?: return@withContext ""
+//            val sid = parts[3].toIntOrNull() ?: return@withContext ""
+//
+//            val ip = settingsRepository.edcbIp.first()
+//            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+//            if (ip.isBlank()) return@withContext ""
+//
+//            val edcbApi = EdcbApi(ip, port)
+//
+//            logoMutex.withLock {
+//                if (!logoDataIniAttempted) {
+//                    logoDataIniAttempted = true
+//                    httpPortCache = 5510
+//                    enableHttpCache = true
+//
+//                    val srvIni = edcbApi.fetchFiles(listOf("EpgTimerSrv.ini"))
+//                        ?.firstOrNull { it.data.isNotEmpty() }
+//                    if (srvIni != null) {
+//                        val iniText = decodeEdcbString(srvIni.data)
+//                        val portMatch = Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
+//                        if (portMatch != null) {
+//                            httpPortCache = portMatch.groupValues[1].toInt()
+//                        }
+//                        val enableMatch = Regex("EnableHttpSrv\\s*=\\s*(\\d+)").find(iniText)
+//                        if (enableMatch != null) {
+//                            enableHttpCache = enableMatch.groupValues[1] != "0"
+//                        }
+//                    }
+//                }
+//            }
+//
+//            if (enableHttpCache == true) {
+//                return@withContext "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
+//            }
+//
+//            failedLogoIds.add(channelId)
+//            return@withContext ""
+//        }
     override suspend fun getChannelLogoUrl(channelId: String): String =
         withContext(Dispatchers.IO) {
             if (failedLogoIds.contains(channelId)) return@withContext ""
+
+            // ★ 1. ローカルキャッシュの確認
+            val logoDir = java.io.File(context.cacheDir, "channel_logos")
+            if (!logoDir.exists()) logoDir.mkdirs()
+
+            val cachedFile = java.io.File(logoDir, "$channelId.img")
+            if (cachedFile.exists() && cachedFile.length() > 0) {
+                // すでにキャッシュがあればローカルファイルのURIを返す（爆速で表示されます）
+                return@withContext android.net.Uri.fromFile(cachedFile).toString()
+            }
 
             val parts = channelId.split("_")
             if (parts.size < 4 || parts[0] != "edcb") return@withContext ""
@@ -447,13 +540,35 @@ class EdcbRepository @Inject constructor(
             }
 
             if (enableHttpCache == true) {
-                return@withContext "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
+                val targetUrl = "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
+
+                // ★ 2. キャッシュがない場合のみダウンロードして保存
+                try {
+                    val url = java.net.URL(targetUrl)
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 5000
+                    connection.readTimeout = 5000
+
+                    if (connection.responseCode == 200) {
+                        connection.inputStream.use { input ->
+                            java.io.FileOutputStream(cachedFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        // 正常に保存できたらローカルファイルのURIを返す
+                        if (cachedFile.length() > 0) {
+                            return@withContext android.net.Uri.fromFile(cachedFile).toString()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to download and cache logo for $channelId", e)
+                }
             }
 
             failedLogoIds.add(channelId)
             return@withContext ""
         }
-
     private fun decodeEdcbString(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
         try {

@@ -15,7 +15,6 @@ import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -74,9 +73,9 @@ class LivePlayerViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "LivePlayerViewModel"
+        private const val MAX_AUTO_RETRY = 2 // ★自動リカバリの最大回数
     }
 
-    // ★ 修正: ExoPlayerを動的に再生成してUIに伝えるため、StateFlowに変更
     private val _mainPlayer = MutableStateFlow<ExoPlayer?>(null)
     val mainPlayer: StateFlow<ExoPlayer?> = _mainPlayer.asStateFlow()
 
@@ -136,6 +135,15 @@ class LivePlayerViewModel @Inject constructor(
     private var mainCurrentSource = StreamSource.KONOMITV
     private var dualCurrentSource = StreamSource.KONOMITV
 
+    // ★追加: 自動リカバリ用の状態保持変数
+    private var mainCurrentChannel: Channel? = null
+    private var mainCurrentQuality: StreamQuality? = null
+    private var mainAutoRetryCount = 0
+
+    private var dualCurrentChannel: Channel? = null
+    private var dualCurrentQuality: StreamQuality? = null
+    private var dualAutoRetryCount = 0
+
     init {
         viewModelScope.launch {
             val backendType = settingsRepository.backendType.first()
@@ -181,7 +189,6 @@ class LivePlayerViewModel @Inject constructor(
         return sources.first()
     }
 
-    // ★ 修正: ストリーム停止時にExoPlayerインスタンスを完全に破棄(release)して null にする
     private fun stopMainPlaybackSafely() {
         Log.d(TAG, "stopMainPlaybackSafely() called. Destroying ExoPlayer instance...")
         mainEventSource?.cancel()
@@ -193,7 +200,6 @@ class LivePlayerViewModel @Inject constructor(
 
         _mainSseStatus.value = "Standby"
         _mainSseDetail.value = AppStrings.SSE_CONNECTING
-        _mainPlayerError.value = null
     }
 
     private fun stopDualPlaybackSafely() {
@@ -225,14 +231,82 @@ class LivePlayerViewModel @Inject constructor(
         _dualSseStatus.value = "Standby"
     }
 
+    // ★追加: Mainプレイヤーのエラー時自動リカバリ処理
+    private fun handleMainError(uiContext: Context, errorMsg: String) {
+        viewModelScope.launch {
+            if (mainAutoRetryCount < MAX_AUTO_RETRY) {
+                mainAutoRetryCount++
+                Log.w(
+                    TAG,
+                    "Auto-recovering main player (Attempt $mainAutoRetryCount / $MAX_AUTO_RETRY) after error: $errorMsg"
+                )
+                _mainSseDetail.value = "通信復旧中... ($mainAutoRetryCount/$MAX_AUTO_RETRY)"
+
+                stopMainPlaybackSafely()
+
+                // ★重要: KonomiTVがプロセスをKillしてリソースを解放する猶予を与えるため2秒待つ (ゾンビプロセス防止)
+                delay(2000)
+
+                val channel = mainCurrentChannel
+                val source = mainCurrentSource
+                val quality = mainCurrentQuality
+                if (channel != null && quality != null) {
+                    playMainChannel(uiContext, channel, source, quality, isAutoRetry = true)
+                }
+            } else {
+                Log.e(TAG, "Max auto-retry reached. Showing error dialog.")
+                _mainPlayerError.value = errorMsg
+                stopMainPlaybackSafely()
+            }
+        }
+    }
+
+    // ★追加: Dualプレイヤーのエラー時自動リカバリ処理
+    private fun handleDualError(uiContext: Context, errorMsg: String) {
+        viewModelScope.launch {
+            if (dualAutoRetryCount < MAX_AUTO_RETRY) {
+                dualAutoRetryCount++
+                Log.w(
+                    TAG,
+                    "Auto-recovering dual player (Attempt $dualAutoRetryCount / $MAX_AUTO_RETRY) after error: $errorMsg"
+                )
+                _dualSseDetail.value = "通信復旧中... ($dualAutoRetryCount/$MAX_AUTO_RETRY)"
+
+                stopDualPlaybackSafely()
+                delay(2000)
+
+                val channel = dualCurrentChannel
+                val source = dualCurrentSource
+                val quality = dualCurrentQuality
+                if (channel != null && quality != null) {
+                    playDualChannel(uiContext, channel, source, quality, isAutoRetry = true)
+                }
+            } else {
+                Log.e(TAG, "Max auto-retry reached on dual player.")
+                _dualSseStatus.value = "Error"
+                _dualSseDetail.value = errorMsg
+                stopDualPlaybackSafely()
+            }
+        }
+    }
+
     fun playMainChannel(
         uiContext: Context,
         channel: Channel,
         source: StreamSource,
-        quality: StreamQuality
+        quality: StreamQuality,
+        isAutoRetry: Boolean = false // ★追加
     ) {
         Log.d(TAG, "playMainChannel() called: channel=${channel.name}")
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+
+        if (!isAutoRetry) {
+            mainAutoRetryCount = 0
+            _mainPlayerError.value = null
+        }
+        mainCurrentChannel = channel
+        mainCurrentSource = source
+        mainCurrentQuality = quality
 
         viewModelScope.launch {
             _currentLogoUrl.value = liveProvider.getChannelLogoUrl(channel.id)
@@ -243,18 +317,17 @@ class LivePlayerViewModel @Inject constructor(
             try {
                 mainPlaybackMutex.withLock {
                     stopMainPlaybackSafely()
-                    mainCurrentSource = source
 
-                    delay(400) // デコーダとEDCBチューナーの完全解放を待つ
+                    // ★修正: チャンネル切り替え時も古いプロセスの解放を少しだけ待つ（ゾンビ対策）
+                    delay(if (isAutoRetry) 0 else 600)
 
-                    // ★ 修正: ここで全く新しい ExoPlayer インスタンスを生成する！
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
                     val newPlayer = createExoPlayer(
                         uiContext,
                         audioOutputMode,
                         { mainCurrentSource == StreamSource.KONOMITV }) { error ->
                         Log.e(TAG, "ExoPlayer (Main) Error: ${error.message}", error)
-                        _mainPlayerError.value = analyzePlayerError(error)
+                        handleMainError(uiContext, analyzePlayerError(error))
                     }
                     _mainPlayer.value = newPlayer
 
@@ -267,14 +340,7 @@ class LivePlayerViewModel @Inject constructor(
                         _mainSseDetail.value = ""
                     } else {
                         if (config is BackendConfig.KonomiTv) {
-                            startMainSse(
-                                channel.displayChannelId,
-                                quality.value,
-                                config,
-                                streamUrl,
-                                source,
-                                mainTsDataSourceFactory
-                            )
+                            startMainSse(uiContext, channel.displayChannelId, quality.value, config)
                         }
                     }
 
@@ -290,25 +356,33 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channel: Channel,
         source: StreamSource,
-        quality: StreamQuality
+        quality: StreamQuality,
+        isAutoRetry: Boolean = false // ★追加
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+
+        if (!isAutoRetry) {
+            dualAutoRetryCount = 0
+        }
+        dualCurrentChannel = channel
+        dualCurrentSource = source
+        dualCurrentQuality = quality
 
         dualPlaybackJob?.cancel()
         dualPlaybackJob = viewModelScope.launch {
             try {
                 dualPlaybackMutex.withLock {
                     stopDualPlaybackSafely()
-                    dualCurrentSource = source
 
-                    delay(400)
+                    delay(if (isAutoRetry) 0 else 600)
 
-                    // ★ 修正: デュアル側も毎回新しい ExoPlayer を生成する
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
                     val newDualPlayer = createExoPlayer(
                         uiContext,
                         audioOutputMode,
-                        { dualCurrentSource == StreamSource.KONOMITV }) { }
+                        { dualCurrentSource == StreamSource.KONOMITV }) { error ->
+                        handleDualError(uiContext, analyzePlayerError(error))
+                    }
                     _dualPlayer.value = newDualPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
@@ -320,14 +394,7 @@ class LivePlayerViewModel @Inject constructor(
                         _dualSseDetail.value = ""
                     } else {
                         if (config is BackendConfig.KonomiTv) {
-                            startDualSse(
-                                channel.displayChannelId,
-                                quality.value,
-                                config,
-                                streamUrl,
-                                source,
-                                dualTsDataSourceFactory
-                            )
+                            startDualSse(uiContext, channel.displayChannelId, quality.value, config)
                         }
                     }
 
@@ -373,6 +440,7 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun retry() {
+        mainAutoRetryCount = 0 // 手動リトライ時はカウントをリセット
         _mainPlayerError.value = null
     }
 
@@ -472,22 +540,22 @@ class LivePlayerViewModel @Inject constructor(
             Log.d(TAG, "startPlayback: ExoPlayer configured and play() called.")
         } catch (e: Exception) {
             Log.e(TAG, "startPlayback: Exception thrown", e)
-            _mainPlayerError.value = AppStrings.LIVE_PLAYER_INIT_ERROR
+            handleMainError(uiContext, AppStrings.LIVE_PLAYER_INIT_ERROR)
         }
     }
 
+    // ★ 修正: SSE側からのエラー検知時にも自動リカバリをトリガーする
     private fun startMainSse(
+        uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv,
-        streamUrl: String,
-        source: StreamSource,
-        factory: TsReadExDataSourceFactory
+        config: BackendConfig.KonomiTv
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
             Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)").build()
+
         mainEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onOpen(eventSource: EventSource, response: Response) {}
@@ -500,9 +568,10 @@ class LivePlayerViewModel @Inject constructor(
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         if (response != null && response.code !in 200..299) {
-                            _mainPlayerError.value =
+                            handleMainError(
+                                uiContext,
                                 "KonomiTVサーバーエラー (HTTP ${response.code})"
-                            _mainPlayer.value?.stop()
+                            )
                         }
                     }
                 }
@@ -522,13 +591,14 @@ class LivePlayerViewModel @Inject constructor(
                             _mainSseStatus.value = status
                             _mainSseDetail.value = if (detail.contains("OnAirです")) "" else detail
 
+                            // ★ 修正: エンコード失敗やチューナーエラー時に自動リカバリをトリガー
                             if (status == "Error" || (status == "Offline" && (detail.contains("失敗") || detail.contains(
                                     "エラー"
                                 )))
                             ) {
-                                _mainPlayerError.value =
+                                val errMsg =
                                     _mainSseDetail.value.ifEmpty { AppStrings.ERR_TUNER_START_FAILED }
-                                _mainPlayer.value?.stop()
+                                handleMainError(uiContext, errMsg)
                                 return@launch
                             }
 
@@ -552,17 +622,16 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     private fun startDualSse(
+        uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv,
-        streamUrl: String,
-        source: StreamSource,
-        factory: TsReadExDataSourceFactory
+        config: BackendConfig.KonomiTv
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
             Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)").build()
+
         dualEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onFailure(
@@ -574,9 +643,7 @@ class LivePlayerViewModel @Inject constructor(
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         if (response != null && response.code !in 200..299) {
-                            _dualSseStatus.value = "Error"
-                            _dualSseDetail.value = "接続失敗: HTTP ${response.code}"
-                            _dualPlayer.value?.stop()
+                            handleDualError(uiContext, "接続失敗: HTTP ${response.code}")
                         }
                     }
                 }
@@ -594,6 +661,17 @@ class LivePlayerViewModel @Inject constructor(
                             _dualSseStatus.value = status
                             _dualSseDetail.value =
                                 json.optString("detail", AppStrings.STATUS_LOADING)
+
+                            if (status == "Error" || (status == "Offline" && (dualSseDetail.value.contains(
+                                    "失敗"
+                                ) || dualSseDetail.value.contains("エラー")))
+                            ) {
+                                handleDualError(
+                                    uiContext,
+                                    dualSseDetail.value.ifEmpty { "エラーが発生しました" })
+                                return@launch
+                            }
+
                             when (status) {
                                 "Standby", "Restart" -> _dualPlayer.value?.pause()
                                 "ONAir" -> {
@@ -601,7 +679,7 @@ class LivePlayerViewModel @Inject constructor(
                                     _dualPlayer.value?.play()
                                 }
 
-                                "Offline", "Error" -> _dualPlayer.value?.pause()
+                                "Offline" -> _dualPlayer.value?.pause()
                             }
                         } catch (e: Exception) {
                         }
@@ -693,7 +771,6 @@ class LivePlayerViewModel @Inject constructor(
         signalPollJob?.cancel()
         signalPollJob = viewModelScope.launch(Dispatchers.Main) {
             while (true) {
-                // ★ 修正: _mainPlayer.value から情報を取る
                 _mainPlayer.value?.let { player ->
                     val vFormat = player.videoFormat
                     val aFormat = player.audioFormat

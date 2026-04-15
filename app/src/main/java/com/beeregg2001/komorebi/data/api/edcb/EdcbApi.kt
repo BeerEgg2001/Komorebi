@@ -179,7 +179,12 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    suspend fun getEventInfos(services: List<EdcbServiceInfo>): Result<List<EdcbEventInfo>> {
+    @RequiresApi(Build.VERSION_CODES.O)
+    suspend fun getEventInfos(
+        services: List<EdcbServiceInfo>,
+        startTime: java.time.LocalDateTime? = null,
+        endTime: java.time.LocalDateTime? = null
+    ): Result<List<EdcbEventInfo>> {
         if (services.isEmpty()) return Result.success(emptyList())
         return try {
             val elementCount = services.size * 2 + 2
@@ -193,8 +198,21 @@ class EdcbApi(private val ip: String, private val port: Int) {
                 requestBuffer.putLong(0L)
                 requestBuffer.putLong(serviceIdLong)
             }
-            requestBuffer.putLong(0L)
-            requestBuffer.putLong(Long.MAX_VALUE)
+
+            // ★ 高速化用: 取得期間を指定された場合、FILETIMEに変換してリクエストに付与
+            val startFileTime = if (startTime != null) {
+                val startMs = startTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                EdcbByteUtils.dateTimeToFileTime(startMs)
+            } else 0L
+
+            val endFileTime = if (endTime != null) {
+                val endMs = endTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                EdcbByteUtils.dateTimeToFileTime(endMs)
+            } else Long.MAX_VALUE
+
+            requestBuffer.putLong(startFileTime)
+            requestBuffer.putLong(endFileTime)
+
             val responseBuffer =
                 tcpClient.sendCommand(CMD_EPG_SRV_ENUM_PG_INFO_EX, requestBuffer.array())
                     ?: return Result.failure(Exception("Failed response from EDCB"))
