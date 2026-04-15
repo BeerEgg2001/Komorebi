@@ -19,7 +19,7 @@ data class EdcbRecFileInfo(
     val recStatus: Int,
     val startTimeEpg: String?,
     val comment: String,
-    val programInfo: String, // ★ここに .program.txt の中身が入ります
+    val programInfo: String,
     val errInfo: String,
     val protectFlag: Boolean
 )
@@ -45,6 +45,49 @@ data class EdcbEventInfo(
     val detailMap: Map<String, String> = emptyMap()
 )
 
+data class EdcbReserveData(
+    val title: String, val startTime: String?, val durationSec: Int,
+    val stationName: String, val originalNetworkID: Int, val transportStreamID: Int,
+    val serviceID: Int, val eventID: Int, val comment: String, val reserveID: Int,
+    val bPadding: Int, val overlapMode: Int, val strPadding: String,
+    val startTimeEpg: String?, val recSetting: EdcbRecSettingData, val reserveStatus: Int,
+    val recFileNameList: List<String>, val trailingInt: Int
+)
+
+data class EdcbAutoAddData(
+    val dataID: Int, val searchInfo: EdcbSearchInfo,
+    val recSetting: EdcbRecSettingData, val addCount: Int
+)
+
+data class EdcbSearchInfo(
+    val andKey: String, val notKey: String, val keyDisabled: Boolean, val caseSensitive: Boolean,
+    val regExpFlag: Int, val titleOnlyFlag: Int,
+    val contentList: List<EdcbContentData>, val dateList: List<EdcbDateData>,
+    val serviceList: List<Long>, val videoList: List<Int>, val audioList: List<Int>,
+    val aimaiFlag: Int, val notContetFlag: Int, val notDateFlag: Int, val freeCAFlag: Int,
+    val chkRecEnd: Int, var chkRecDay: Int = 6, var chkRecNoService: Int = 0,
+    var chkDurationMin: Int = 0, var chkDurationMax: Int = 0
+)
+
+data class EdcbDateData(
+    val startDayOfWeek: Int, val startHour: Int, val startMin: Int,
+    val endDayOfWeek: Int, val endHour: Int, val endMin: Int
+)
+
+data class EdcbRecSettingData(
+    val recMode: Int, val priority: Int, val tuijyuuFlag: Int, val serviceMode: Int,
+    val pittariFlag: Int, val batFilePath: String, val recFolderList: List<EdcbRecFileSetInfo>,
+    val suspendMode: Int, val rebootFlag: Int, val useMargineFlag: Int,
+    val startMargine: Int, val endMargine: Int, val continueRecFlag: Int,
+    val partialRecFlag: Int, val tunerID: Int, val partialRecFolder: List<EdcbRecFileSetInfo>
+)
+
+data class EdcbRecFileSetInfo(
+    val recFolder: String,
+    val writePlugIn: String,
+    val recNamePlugIn: String
+)
+
 class EdcbApi(private val ip: String, private val port: Int) {
     companion object {
         private const val TAG = "EdcbApi"
@@ -52,8 +95,6 @@ class EdcbApi(private val ip: String, private val port: Int) {
         const val CMD_EPG_SRV_ENUM_SERVICE = 1021
         const val CMD_EPG_SRV_ENUM_PG_INFO_EX = 1029
         const val CMD_EPG_SRV_FILE_COPY2 = 2060
-
-        // ★ 修正: 2018ではなく、正しいコマンドID 2017 に変更
         const val CMD_EPG_SRV_ENUM_RECINFO2 = 2017
         const val CMD_EPG_SRV_ENUM_RECINFO_BASIC2 = 2020
         const val CMD_EPG_SRV_GET_RECINFO2 = 2024
@@ -270,15 +311,15 @@ class EdcbApi(private val ip: String, private val port: Int) {
             }
         }
 
-    // ★ 新規追加: 録画リスト取得 (詳細版)
     suspend fun getRecInfosFull(): Result<List<EdcbRecFileInfo>> {
         return try {
             val payload =
                 ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
                     .array()
-            // ★ 正しいコマンドID 2017 でリクエストを送信
-            val res = tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload)
-                ?: return Result.success(emptyList())
+            val res =
+                tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload) ?: return Result.success(
+                    emptyList()
+                )
             EdcbByteUtils.readUshort(res)
 
             val list = EdcbByteUtils.readVector(res) { buf ->
@@ -300,7 +341,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
                     recStatus = EdcbByteUtils.readInt(buf),
                     startTimeEpg = EdcbByteUtils.readSystemTime(buf),
                     comment = EdcbByteUtils.readString(buf),
-                    programInfo = EdcbByteUtils.readString(buf), // ここで詳細情報が取得されます
+                    programInfo = EdcbByteUtils.readString(buf),
                     errInfo = EdcbByteUtils.readString(buf),
                     protectFlag = EdcbByteUtils.readByte(buf) != 0
                 )
@@ -315,7 +356,6 @@ class EdcbApi(private val ip: String, private val port: Int) {
         }
     }
 
-    // 録画詳細取得（個別用）
     suspend fun getRecInfo(infoId: Int): Result<EdcbRecFileInfo> {
         return try {
             val payload =
@@ -354,4 +394,48 @@ class EdcbApi(private val ip: String, private val port: Int) {
             Result.failure(e)
         }
     }
+
+    suspend fun getReserves(): Result<List<EdcbReserveData>> = withContext(Dispatchers.IO) {
+        val client = EdcbTcpClient(ip, port)
+        val payload =
+            ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
+                .array()
+
+        val res = client.sendCommand(2011, payload)
+            ?: return@withContext Result.failure(Exception("Network Error"))
+        try {
+            EdcbByteUtils.readUshort(res)
+            val list = EdcbByteUtils.readVector(
+                res,
+                res.limit()
+            ) { buf, endPos -> EdcbByteUtils.readReserveData(buf, endPos) }
+            Result.success(list)
+        } catch (e: Exception) {
+            Log.e(TAG, "Parse error in getReserves", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getAutoAddConditions(): Result<List<EdcbAutoAddData>> =
+        withContext(Dispatchers.IO) {
+            val client = EdcbTcpClient(ip, port)
+            val payload =
+                ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
+                    .array()
+
+            val res = client.sendCommand(2131, payload) ?: return@withContext Result.failure(
+                Exception("Network Error")
+            )
+            try {
+                EdcbByteUtils.readUshort(res)
+                val list = EdcbByteUtils.readVector(
+                    res,
+                    res.limit()
+                ) { buf, endPos -> EdcbByteUtils.readAutoAddData(buf, endPos) }
+                Result.success(list)
+            } catch (e: Exception) {
+                Log.e(TAG, "Parse error in getAutoAddConditions", e)
+                Result.failure(e)
+            }
+        }
 }

@@ -41,7 +41,8 @@ fun KeywordConditionCard(
     konomiPort: String,
     groupedChannels: Map<String, List<Channel>> = emptyMap(),
     reserves: List<ReserveItem> = emptyList(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    getLogoUrl: suspend (String) -> String = { "" } // ★追加: ViewModel等の非同期取得用
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -65,32 +66,46 @@ fun KeywordConditionCard(
     val serviceRanges = searchCondition.serviceRanges
     val channelName: String
     val channelNumberText: String
-    val logoUrl: String?
+    val displayId: String
 
     if (serviceRanges.isNullOrEmpty()) {
         channelName = "全チャンネル対象"
         channelNumberText = ""
-        logoUrl = null
+        displayId = ""
     } else {
         val firstService = serviceRanges.first()
-        val targetId = "NID${firstService.networkId}-SID${firstService.serviceId}"
 
-        val reserveMatch = reserves.find { it.channel.id == targetId }?.channel
+        val reserveMatch = reserves.find {
+            it.channel.network_Id == firstService.networkId.toLong() &&
+                    it.channel.service_Id == firstService.serviceId.toLong()
+        }?.channel
+
         val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
-        val channelMatch = flatChannels.find { it.id == targetId }
+        val channelMatch = flatChannels.find {
+            it.networkId == firstService.networkId.toLong() &&
+                    it.serviceId == firstService.serviceId.toLong()
+        }
 
         channelName = reserveMatch?.name ?: channelMatch?.name ?: "不明なチャンネル"
 
-        val num = reserveMatch?.channelNumber ?: ""
+        val num = reserveMatch?.channelNumber ?: channelMatch?.channelNumber ?: ""
         channelNumberText = if (num.isNotEmpty()) "$num " else ""
 
-        val displayId = reserveMatch?.displayChannelId ?: channelMatch?.displayChannelId ?: targetId
+        displayId = reserveMatch?.displayChannelId ?: channelMatch?.displayChannelId
+                ?: "edcb_${firstService.networkId}_${firstService.transportStreamId}_${firstService.serviceId}"
+    }
 
-        logoUrl = UrlBuilder.getKonomiTvLogoUrl(
-            ip = konomiIp,
-            port = konomiPort,
-            displayChannelId = displayId
-        )
+    // ★修正: EDCB/KonomiTV両対応の非同期ロゴ取得
+    var logoUrl by remember(displayId) { mutableStateOf("") }
+    LaunchedEffect(displayId) {
+        if (displayId.isNotEmpty()) {
+            val fetchedUrl = getLogoUrl(displayId)
+            logoUrl = fetchedUrl.ifEmpty {
+                UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, displayId)
+            }
+        } else {
+            logoUrl = ""
+        }
     }
 
     val extraText = if (serviceRanges != null && serviceRanges.size > 1) {
@@ -101,7 +116,7 @@ fun KeywordConditionCard(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .height(68.dp) // ★修正: 88.dp -> 68.dp に大幅縮小してスッキリさせる
+            .height(68.dp)
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
@@ -121,7 +136,7 @@ fun KeywordConditionCard(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 8.dp), // ★修正: 上下パディングをさらに削減
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // --- 左カラム: 優先度 ---
@@ -185,9 +200,9 @@ fun KeywordConditionCard(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // 2行目: チャンネル情報 ＋ 除外キーワード(横に並べることで行数を節約)
+                // 2行目: チャンネル情報 ＋ 除外キーワード
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (logoUrl != null) {
+                    if (logoUrl.isNotEmpty()) {
                         AsyncImage(
                             model = logoUrl,
                             contentDescription = null,
@@ -251,7 +266,7 @@ fun KeywordConditionCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "予約数${condition.reservationCount}件", // 「関連予約」の文字を削ってスッキリ
+                            text = "予約数${condition.reservationCount}件",
                             color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else subTextColor,
                             style = MaterialTheme.typography.labelSmall
                         )

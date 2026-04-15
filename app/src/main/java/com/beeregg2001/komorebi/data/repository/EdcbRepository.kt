@@ -29,8 +29,6 @@ class EdcbRepository @Inject constructor(
     companion object {
         private const val TAG = "EdcbRepository"
         private const val CACHE_EXPIRATION_MS = 15 * 60 * 1000L
-
-        // ★ 追加: ドロップ数の許容上限（これを超えると録画失敗とみなして表示しない）
         private const val MAX_ALLOWED_DROPS = 1000L
     }
 
@@ -520,17 +518,13 @@ class EdcbRepository @Inject constructor(
         return emptyList()
     }
 
-    // ★ 追加: 録画情報が有効（表示すべき）かどうかを判定する関数
     private fun isValidRecord(info: EdcbRecFileInfo): Boolean {
-//        // ドロップ数が上限を超えている場合は失敗とみなす
-//        if (info.drops > MAX_ALLOWED_DROPS) return false
-        // ファイルパスが空（または無効な文字列）の場合は削除済みとみなす
+        if (info.drops > MAX_ALLOWED_DROPS) return false
         if (info.recFilePath.isBlank() || info.recFilePath.contains(
                 "録画ファイルがありません",
                 ignoreCase = true
             )
         ) return false
-
         return true
     }
 
@@ -547,7 +541,6 @@ class EdcbRepository @Inject constructor(
                     if (cachedRecInfos == null || (System.currentTimeMillis() - lastRecFetchTime) > 30_000L) {
                         val result = EdcbApi(ip, port).getRecInfosFull()
                         if (result.isSuccess) {
-                            // ★ 修正: キャッシュする前に、無効な録画（失敗・削除済み）をフィルタリングして取り除く
                             val validInfos =
                                 result.getOrNull()?.filter { isValidRecord(it) } ?: emptyList()
                             cachedRecInfos = validInfos.sortedByDescending { it.startTime }
@@ -600,7 +593,6 @@ class EdcbRepository @Inject constructor(
                         videoId
                     ).getOrNull()
 
-                // ★ 追加: 単体取得でも、無効な番組ならエラーを返すようにする
                 if (info == null || !isValidRecord(info)) {
                     return@withContext Result.failure(Exception("Not found or invalid record"))
                 }
@@ -793,7 +785,287 @@ class EdcbRepository @Inject constructor(
     override suspend fun keepAlive(v: Int, q: String, s: String) {
     }
 
-    override suspend fun getReserves(): Result<List<ReserveItem>> = Result.success(emptyList())
+    // ==========================================
+    // ★ 録画予約（Reserve）関連
+    // ==========================================
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getReserves(): Result<List<ReserveItem>> = withContext(Dispatchers.IO) {
+        try {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val edcbApi = EdcbApi(ip, port)
+
+            fetchEpgDataIfNeeded()
+
+            val reserves = edcbApi.getReserves().getOrThrow()
+
+            val mappedReserves = reserves.map { res ->
+                val isoStart = formatToIso(res.startTime)
+                val isoEnd = if (res.startTime != null && res.durationSec > 0) {
+                    try {
+                        val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+                        val startLdt = LocalDateTime.parse(res.startTime, formatter)
+                        startLdt.plusSeconds(res.durationSec.toLong())
+                            .atZone(ZoneId.of("Asia/Tokyo"))
+                            .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                    } catch (e: Exception) {
+                        ""
+                    }
+                } else ""
+
+                val channelTypeStr = getChannelType(res.originalNetworkID)
+                val channelIdStr =
+                    "edcb_${res.originalNetworkID}_${res.transportStreamID}_${res.serviceID}"
+
+                val serviceInfo =
+                    cachedServices.find { it.onid == res.originalNetworkID && it.tsid == res.transportStreamID && it.sid == res.serviceID }
+                val remoconId = serviceInfo?.remoteControlKeyId ?: 0
+                val stationName =
+                    serviceInfo?.serviceName ?: res.stationName.ifBlank { "不明なチャンネル" }
+                val channelNumber = formatChannelNumber(
+                    channelTypeStr,
+                    remoconId,
+                    res.serviceID,
+                    res.transportStreamID
+                )
+
+                val reserveChannel = ReserveChannel(
+                    id = channelIdStr,
+                    network_Id = res.originalNetworkID.toLong(),
+                    service_Id = res.serviceID.toLong(),
+                    channelNumber = channelNumber,
+                    displayChannelId = channelIdStr,
+                    type = channelTypeStr,
+                    name = stationName
+                )
+
+                // ★ 修正: EPGキャッシュから詳細情報を引っ張ってくる
+                val eventInfo = cachedEvents.find {
+                    it.onid == res.originalNetworkID &&
+                            it.tsid == res.transportStreamID &&
+                            it.sid == res.serviceID &&
+                            it.eid == res.eventID
+                }
+
+                val description = eventInfo?.eventText ?: ""
+                val detail = eventInfo?.detailMap ?: emptyMap()
+                val genres = eventInfo?.contentList?.let {
+                    mapEdcbGenre(it).map { g -> ReserveGenre(major = g.major, middle = g.middle) }
+                } ?: emptyList()
+
+                val reserveProgram = ReserveProgramDetail(
+                    id = channelIdStr + "_${res.eventID}",
+                    title = res.title,
+                    description = description, // ★修正: EPGの概要をセット
+                    startTime = isoStart,
+                    endTime = isoEnd,
+                    duration = res.durationSec,
+                    genres = genres,           // ★修正: EPGのジャンルをセット
+                    detail = detail,           // ★修正: EPGの詳細情報をセット
+                    isFree = true,
+                    videoType = "mpeg2",
+                    audioType = "2/0",
+                    audioSamplingRate = "48000"
+                )
+
+                val recordSettings = ReserveRecordSettings(
+                    isEnabled = res.recSetting.recMode != 5,
+                    priority = res.recSetting.priority,
+                    recordingFolders = res.recSetting.recFolderList.map { it.recFolder }
+                        .filter { it.isNotBlank() },
+                    startMargin = res.recSetting.startMargine,
+                    endMargin = res.recSetting.endMargine,
+                    recordingMode = "SpecifiedService",
+                    postRecordingBatFilePath = res.recSetting.batFilePath.takeIf { it.isNotBlank() },
+                    isEventRelayFollowEnabled = res.recSetting.tuijyuuFlag != 0,
+                    isExactRecordingEnabled = res.recSetting.pittariFlag != 0,
+                    forcedTunerId = res.recSetting.tunerID
+                )
+
+                val availability = when (res.overlapMode) {
+                    1 -> "Partial"
+                    2 -> "Unavailable"
+                    else -> "Full"
+                }
+
+                val bitrateKbps = 19456
+                val estimatedSize =
+                    Math.max((bitrateKbps / 8.0 * 1000 * res.durationSec).toLong(), 0L)
+
+                var isRecording = false
+                try {
+                    val now = LocalDateTime.now()
+                    val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+                    val startLdt = LocalDateTime.parse(res.startTime, formatter)
+                    val endLdt = startLdt.plusSeconds(res.durationSec.toLong())
+                    if (now.isAfter(startLdt) && now.isBefore(endLdt) && res.recSetting.recMode != 5) {
+                        isRecording = true
+                    }
+                } catch (e: Exception) {
+                }
+
+                ReserveItem(
+                    id = res.reserveID,
+                    channel = reserveChannel,
+                    program = reserveProgram,
+                    isRecordingInProgress = isRecording,
+                    recordingAvailability = availability,
+                    comment = res.comment, // コメントはメモ欄として別で保持する
+                    estimatedRecordingFileSize = estimatedSize,
+                    recordSettings = recordSettings
+                )
+            }
+            Result.success(mappedReserves)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get reserves from EDCB", e)
+            Result.failure(e)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getReservationConditions(): Result<List<ReservationCondition>> =
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val edcbApi = EdcbApi(ip, port)
+
+                fetchEpgDataIfNeeded()
+
+                val conditions = edcbApi.getAutoAddConditions().getOrThrow()
+
+                val uniqueServiceKeys =
+                    cachedServices.map { "${it.onid}_${it.tsid}_${it.sid}" }.toSet()
+
+                val mappedConditions = conditions.map { cond ->
+
+                    val dateRanges = cond.searchInfo.dateList.map { dateInfo ->
+                        ProgramSearchConditionDate(
+                            startDayOfWeek = dateInfo.startDayOfWeek,
+                            startHour = dateInfo.startHour,
+                            startMinute = dateInfo.startMin,
+                            endDayOfWeek = dateInfo.endDayOfWeek,
+                            endHour = dateInfo.endHour,
+                            endMinute = dateInfo.endMin
+                        )
+                    }.takeIf { it.isNotEmpty() }
+
+                    val serviceRangesList = cond.searchInfo.serviceList.mapNotNull { serviceLong ->
+                        val onid = (serviceLong ushr 32).toInt() and 0xFFFF
+                        val tsid = (serviceLong ushr 16).toInt() and 0xFFFF
+                        val sid = serviceLong.toInt() and 0xFFFF
+                        ProgramSearchConditionService(
+                            networkId = onid,
+                            transportStreamId = tsid,
+                            serviceId = sid
+                        )
+                    }
+
+                    val conditionServiceKeys =
+                        serviceRangesList.map { "${it.networkId}_${it.transportStreamId}_${it.serviceId}" }
+                            .toSet()
+                    val isAllChannelsSelected =
+                        conditionServiceKeys.isNotEmpty() && conditionServiceKeys == uniqueServiceKeys
+                    val serviceRanges =
+                        if (isAllChannelsSelected) null else serviceRangesList.takeIf { it.isNotEmpty() }
+
+                    val channels = cond.searchInfo.serviceList.mapNotNull { serviceLong ->
+                        val onid = (serviceLong ushr 32).toInt() and 0xFFFF
+                        val tsid = (serviceLong ushr 16).toInt() and 0xFFFF
+                        val sid = serviceLong.toInt() and 0xFFFF
+
+                        val typeStr = getChannelType(onid)
+                        val svc =
+                            cachedServices.find { it.onid == onid && it.tsid == tsid && it.sid == sid }
+
+                        Channel(
+                            id = "edcb_${onid}_${tsid}_${sid}",
+                            displayChannelId = "edcb_${onid}_${tsid}_${sid}",
+                            name = svc?.serviceName ?: "不明なチャンネル",
+                            channelNumber = formatChannelNumber(
+                                typeStr,
+                                svc?.remoteControlKeyId ?: 0,
+                                sid,
+                                tsid
+                            ),
+                            networkId = onid.toLong(),
+                            serviceId = sid.toLong(),
+                            transportStreamId = tsid.toLong(),
+                            type = typeStr,
+                            isWatchable = true,
+                            isDisplay = true,
+                            is_subchannel = isSubChannelInternal(typeStr, sid, tsid),
+                            programPresent = null,
+                            programFollowing = null,
+                            remocon_Id = svc?.remoteControlKeyId ?: 0,
+                            jikkyoForce = 0
+                        )
+                    }
+
+                    val searchCondition = ProgramSearchCondition(
+                        isEnabled = cond.recSetting.recMode != 5,
+                        keyword = cond.searchInfo.andKey,
+                        excludeKeyword = cond.searchInfo.notKey,
+                        note = "",
+                        isTitleOnly = cond.searchInfo.titleOnlyFlag != 0,
+                        isCaseSensitive = cond.searchInfo.caseSensitive,
+                        isFuzzySearchEnabled = cond.searchInfo.aimaiFlag != 0,
+                        isRegexSearchEnabled = cond.searchInfo.regExpFlag != 0,
+                        serviceRanges = serviceRanges,
+//                        channels = channels.takeIf { it.isNotEmpty() },
+                        genreRanges = emptyList(),
+                        isExcludeGenreRanges = cond.searchInfo.notContetFlag != 0,
+                        dateRanges = dateRanges,
+                        isExcludeDateRanges = cond.searchInfo.notDateFlag != 0,
+                        durationRangeMin = cond.searchInfo.chkDurationMin.takeIf { it > 0 },
+                        durationRangeMax = cond.searchInfo.chkDurationMax.takeIf { it > 0 },
+                        broadcastType = "All",
+                        duplicateTitleCheckScope = if (cond.searchInfo.chkRecEnd != 0) "AllChannels" else "None",
+                        duplicateTitleCheckPeriodDays = cond.searchInfo.chkRecDay
+                    )
+
+                    val recFolders = cond.recSetting.recFolderList.mapNotNull { folderInfo ->
+                        if (folderInfo.recFolder.isNotBlank()) {
+                            RecordingFolder(
+                                recordingFolderPath = folderInfo.recFolder,
+                                recordingFileNameTemplate = folderInfo.recNamePlugIn.takeIf { it.isNotBlank() },
+                                isOnesegSeparateRecordingFolder = false
+                            )
+                        } else null
+                    }
+
+                    val recordSettings = RecordSettings(
+                        isEnabled = cond.recSetting.recMode != 5,
+                        priority = cond.recSetting.priority,
+                        recordingFolders = recFolders,
+                        recordingStartMargin = if (cond.recSetting.useMargineFlag != 0) cond.recSetting.startMargine else null,
+                        recordingEndMargin = if (cond.recSetting.useMargineFlag != 0) cond.recSetting.endMargine else null,
+                        recordingMode = "SpecifiedService",
+                        captionRecordingMode = "Default",
+                        dataBroadcastingRecordingMode = "Default",
+                        postRecordingMode = "Default",
+                        postRecordingBatFilePath = cond.recSetting.batFilePath.takeIf { it.isNotBlank() },
+                        isEventRelayFollowEnabled = cond.recSetting.tuijyuuFlag != 0,
+                        isExactRecordingEnabled = cond.recSetting.pittariFlag != 0,
+                        isOnesegSeparateOutputEnabled = false,
+                        isSequentialRecordingInSingleFileEnabled = false,
+                        forcedTunerId = cond.recSetting.tunerID.takeIf { it != 0 }
+                    )
+
+                    ReservationCondition(
+                        id = cond.dataID,
+                        reservationCount = cond.addCount,
+                        programSearchCondition = searchCondition,
+                        recordSettings = recordSettings
+                    )
+                }
+                Result.success(mappedConditions)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get conditions from EDCB", e)
+                Result.failure(e)
+            }
+        }
+
     override suspend fun addReserve(r: ReserveRequest): Result<Unit> =
         Result.failure(Exception("Not implemented"))
 
@@ -802,9 +1074,6 @@ class EdcbRepository @Inject constructor(
 
     override suspend fun deleteReservation(i: Int): Result<Unit> =
         Result.failure(Exception("Not implemented"))
-
-    override suspend fun getReservationConditions(): Result<List<ReservationCondition>> =
-        Result.success(emptyList())
 
     override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> =
         Result.failure(Exception("Not implemented"))

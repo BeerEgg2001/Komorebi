@@ -34,6 +34,7 @@ import com.beeregg2001.komorebi.ui.components.ReserveCard
 import com.beeregg2001.komorebi.viewmodel.ReserveViewModel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -101,6 +102,7 @@ fun ReserveListScreen(
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {},
     viewModel: ReserveViewModel = hiltViewModel(),
+    channelViewModel: ChannelViewModel = hiltViewModel(),
     timeFormat: String = "24H",
     // ★ 追加(Step3): AIコンシェルジュからの復帰シグナル
     aiFocusReturnTick: Int = 0,
@@ -501,7 +503,8 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = null
                                                 }
                                             },
-                                        timeFormat = timeFormat
+                                        timeFormat = timeFormat,
+                                        getLogoUrl = { displayId -> channelViewModel.getChannelLogoUrl(displayId) }
                                     )
                                 }
                             }
@@ -559,7 +562,8 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = null
                                                 }
                                             },
-                                        timeFormat = timeFormat
+                                        timeFormat = timeFormat,
+                                        getLogoUrl = { displayId -> channelViewModel.getChannelLogoUrl(displayId) }
                                     )
                                 }
                             }
@@ -618,7 +622,8 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = condition.id
                                                     viewModel.lastClickedReserveId = null
                                                 }
-                                            }
+                                            },
+                                        getLogoUrl = { displayId -> channelViewModel.getChannelLogoUrl(displayId) }
                                     )
                                 }
                             }
