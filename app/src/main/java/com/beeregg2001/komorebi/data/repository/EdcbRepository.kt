@@ -10,11 +10,15 @@ import com.beeregg2001.komorebi.data.api.edcb.*
 import com.beeregg2001.komorebi.data.model.*
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -31,6 +35,22 @@ class EdcbRepository @Inject constructor(
         private const val TAG = "EdcbRepository"
         private const val CACHE_EXPIRATION_MS = 15 * 60 * 1000L
         private const val MAX_ALLOWED_DROPS = 1000L
+
+        val epgBackgroundUpdateEvent =
+            kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+        private val JIKKYO_CHANNEL_ID_MAP = mapOf(
+            "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
+            "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
+            "jk8" to "ch2646442", "jk9" to "ch2646485", "jk10" to null,
+            "jk11" to null, "jk12" to null, "jk13" to null, "jk14" to null,
+            "jk101" to "ch2647992", "jk103" to null, "jk141" to null,
+            "jk151" to null, "jk161" to null, "jk171" to null, "jk181" to null,
+            "jk191" to null, "jk192" to null, "jk193" to null, "jk200" to null,
+            "jk201" to null, "jk211" to "ch2646846", "jk222" to null,
+            "jk236" to null, "jk252" to null, "jk260" to null, "jk263" to null,
+            "jk265" to null, "jk333" to null
+        )
     }
 
     private var httpPortCache: Int? = null
@@ -51,8 +71,10 @@ class EdcbRepository @Inject constructor(
     private var cachedRecInfos: List<EdcbRecFileInfo>? = null
     private var lastRecFetchTime = 0L
 
-    // ★ 追加: バックグラウンド取得用のコルーチンスコープとJob
-    private val repositoryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    private var jikkyoChannelsCache: JSONArray? = null
+
+    private val repositoryScope =
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
     private var fullEpgFetchJob: kotlinx.coroutines.Job? = null
     private var isFullEpgFetched = false
 
@@ -72,16 +94,16 @@ class EdcbRepository @Inject constructor(
                     val targetServices =
                         services.filter { it.serviceType == 1 || it.serviceType == 165 }
 
-                    // ★ 高速化: 取得する期間を「現在時刻の1時間前から24時間後まで」に制限する
                     val fetchStartTime = LocalDateTime.now().minusHours(1)
                     val fetchEndTime = LocalDateTime.now().plusHours(24)
 
-                    val events = edcbApi.getEventInfos(targetServices, fetchStartTime, fetchEndTime).getOrNull() ?: emptyList()
+                    val events = edcbApi.getEventInfos(targetServices, fetchStartTime, fetchEndTime)
+                        .getOrNull() ?: emptyList()
 
                     cachedServices = targetServices
                     cachedEvents = events
                     lastEpgFetchTime = System.currentTimeMillis()
-                    isFullEpgFetched = false // 簡易版なのでフラグを下ろす
+                    isFullEpgFetched = false
 
                     tsidToSidsMap = targetServices
                         .filter { getChannelType(it.onid) == "GR" }
@@ -93,9 +115,11 @@ class EdcbRepository @Inject constructor(
                         .groupBy { it.sid / 10 }
                         .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
 
-                    Log.i(TAG, "✅ Quick EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}")
+                    Log.i(
+                        TAG,
+                        "✅ Quick EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}"
+                    )
 
-                    // ★ バックグラウンドで全EPG(1週間分)の取得を非同期で開始
                     fetchFullEpgDataInBackground(targetServices, ip, port)
                 }
             }
@@ -103,14 +127,17 @@ class EdcbRepository @Inject constructor(
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun fetchFullEpgDataInBackground(services: List<EdcbServiceInfo>, ip: String, port: Int) {
+    private fun fetchFullEpgDataInBackground(
+        services: List<EdcbServiceInfo>,
+        ip: String,
+        port: Int
+    ) {
         fullEpgFetchJob?.cancel()
         fullEpgFetchJob = repositoryScope.launch {
             try {
                 Log.i(TAG, "⏳ Starting full EPG data fetch in background...")
                 val edcbApi = EdcbApi(ip, port)
 
-                // 期間指定なしで全取得 (1週間分)
                 val allEvents = edcbApi.getEventInfos(services).getOrNull()
 
                 if (allEvents != null) {
@@ -118,8 +145,12 @@ class EdcbRepository @Inject constructor(
                         cachedEvents = allEvents
                         isFullEpgFetched = true
                         lastEpgFetchTime = System.currentTimeMillis()
-                        Log.i(TAG, "✅ Full EPG Cache updated in background! Events=${cachedEvents.size}")
+                        Log.i(
+                            TAG,
+                            "✅ Full EPG Cache updated in background! Events=${cachedEvents.size}"
+                        )
                     }
+                    epgBackgroundUpdateEvent.tryEmit(Unit)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed to fetch full EPG data in background", e)
@@ -127,9 +158,51 @@ class EdcbRepository @Inject constructor(
         }
     }
 
+    // ==========================================
+    // ★ リアルタイム実況勢い (NX-Jikkyo) 取得
+    // ==========================================
+    private fun fetchNxJikkyoForce(): Map<String, Int> {
+        val forceMap = mutableMapOf<String, Int>()
+        try {
+            val url = java.net.URL("https://nx-jikkyo.tsukumijima.net/api/v1/channels")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            // UIの読み込みをブロックしないようタイムアウトは極力短く設定
+            connection.connectTimeout = 2000
+            connection.readTimeout = 2000
+
+            if (connection.responseCode == 200) {
+                val responseJson = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonArray = JSONArray(responseJson)
+                for (i in 0 until jsonArray.length()) {
+                    val channelObj = jsonArray.optJSONObject(i) ?: continue
+                    val jkId = channelObj.optString("id", "")
+                    if (jkId.isBlank()) continue
+
+                    val threads = channelObj.optJSONArray("threads") ?: continue
+                    var maxForce = 0
+                    for (j in 0 until threads.length()) {
+                        val thread = threads.optJSONObject(j) ?: continue
+                        val force = thread.optInt("jikkyo_force", 0)
+                        if (force > maxForce) maxForce = force
+                    }
+                    forceMap[jkId] = maxForce
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch NX-Jikkyo force (Timeout or Network error)")
+        }
+        return forceMap
+    }
+
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getChannels(): ChannelApiResponse = withContext(Dispatchers.Default) {
+        // ★ 実況の勢いデータを並行取得してUI表示速度の低下を防ぐ
+        val forceJob = async(Dispatchers.IO) { fetchNxJikkyoForce() }
+
         fetchEpgDataIfNeeded()
+
+        val forceMap = forceJob.await()
 
         val now = LocalDateTime.now()
         val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
@@ -177,6 +250,10 @@ class EdcbRepository @Inject constructor(
 
             val isSub = isSubChannelInternal(type, svc.sid, svc.tsid)
 
+            // ★ 実況ID(jk〇〇)を推論し、取得した勢いをセットする
+            val jkId = getJikkyoId(svc.onid, svc.sid)
+            val jikkyoForce = if (jkId != null) forceMap[jkId] ?: 0 else 0
+
             val channel = Channel(
                 id = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
                 displayChannelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
@@ -197,7 +274,7 @@ class EdcbRepository @Inject constructor(
                 programPresent = presentEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 programFollowing = followingEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 remocon_Id = svc.remoteControlKeyId,
-                jikkyoForce = 0
+                jikkyoForce = jikkyoForce // ★ ここに注入！
             )
 
             when (type) {
@@ -444,63 +521,15 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-//    override suspend fun getChannelLogoUrl(channelId: String): String =
-//        withContext(Dispatchers.IO) {
-//            if (failedLogoIds.contains(channelId)) return@withContext ""
-//
-//            val parts = channelId.split("_")
-//            if (parts.size < 4 || parts[0] != "edcb") return@withContext ""
-//
-//            val onid = parts[1].toIntOrNull() ?: return@withContext ""
-//            val tsid = parts[2].toIntOrNull() ?: return@withContext ""
-//            val sid = parts[3].toIntOrNull() ?: return@withContext ""
-//
-//            val ip = settingsRepository.edcbIp.first()
-//            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
-//            if (ip.isBlank()) return@withContext ""
-//
-//            val edcbApi = EdcbApi(ip, port)
-//
-//            logoMutex.withLock {
-//                if (!logoDataIniAttempted) {
-//                    logoDataIniAttempted = true
-//                    httpPortCache = 5510
-//                    enableHttpCache = true
-//
-//                    val srvIni = edcbApi.fetchFiles(listOf("EpgTimerSrv.ini"))
-//                        ?.firstOrNull { it.data.isNotEmpty() }
-//                    if (srvIni != null) {
-//                        val iniText = decodeEdcbString(srvIni.data)
-//                        val portMatch = Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-//                        if (portMatch != null) {
-//                            httpPortCache = portMatch.groupValues[1].toInt()
-//                        }
-//                        val enableMatch = Regex("EnableHttpSrv\\s*=\\s*(\\d+)").find(iniText)
-//                        if (enableMatch != null) {
-//                            enableHttpCache = enableMatch.groupValues[1] != "0"
-//                        }
-//                    }
-//                }
-//            }
-//
-//            if (enableHttpCache == true) {
-//                return@withContext "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
-//            }
-//
-//            failedLogoIds.add(channelId)
-//            return@withContext ""
-//        }
     override suspend fun getChannelLogoUrl(channelId: String): String =
         withContext(Dispatchers.IO) {
             if (failedLogoIds.contains(channelId)) return@withContext ""
 
-            // ★ 1. ローカルキャッシュの確認
             val logoDir = java.io.File(context.cacheDir, "channel_logos")
             if (!logoDir.exists()) logoDir.mkdirs()
 
             val cachedFile = java.io.File(logoDir, "$channelId.img")
             if (cachedFile.exists() && cachedFile.length() > 0) {
-                // すでにキャッシュがあればローカルファイルのURIを返す（爆速で表示されます）
                 return@withContext android.net.Uri.fromFile(cachedFile).toString()
             }
 
@@ -542,7 +571,6 @@ class EdcbRepository @Inject constructor(
             if (enableHttpCache == true) {
                 val targetUrl = "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
 
-                // ★ 2. キャッシュがない場合のみダウンロードして保存
                 try {
                     val url = java.net.URL(targetUrl)
                     val connection = url.openConnection() as java.net.HttpURLConnection
@@ -556,7 +584,6 @@ class EdcbRepository @Inject constructor(
                                 input.copyTo(output)
                             }
                         }
-                        // 正常に保存できたらローカルファイルのURIを返す
                         if (cachedFile.length() > 0) {
                             return@withContext android.net.Uri.fromFile(cachedFile).toString()
                         }
@@ -569,6 +596,7 @@ class EdcbRepository @Inject constructor(
             failedLogoIds.add(channelId)
             return@withContext ""
         }
+
     private fun decodeEdcbString(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
         try {
@@ -686,8 +714,10 @@ class EdcbRepository @Inject constructor(
                         }
                     }
 
-                    val programs =
-                        all.subList(from, to).map { mapToRecordedProgram(it, ip, safeHttpPort) }
+                    val programs = all.subList(from, to).map { info ->
+                        async { mapToRecordedProgram(info, ip, safeHttpPort) }
+                    }.awaitAll()
+
                     Log.i(TAG, "[getRecordedPrograms] Page $page 返却完了 (件数: ${programs.size})")
                     RecordedApiResponse(total, programs)
                 } catch (e: Exception) {
@@ -797,12 +827,76 @@ class EdcbRepository @Inject constructor(
         }
     }
 
+    private fun parseChapterTextToCmSections(
+        chapterText: String,
+        durationSec: Double
+    ): List<CmSection> {
+        val lines = chapterText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val chapters = mutableListOf<Triple<Int, String, Double>>()
+        val cmSections = mutableListOf<CmSection>()
+
+        var pendingTime: Double? = null
+
+        for (line in lines) {
+            if (line.startsWith("CHAPTER") && !line.contains("NAME=")) {
+                try {
+                    val timeStr = line.substringAfter("=")
+                    pendingTime = timeToSeconds(timeStr)
+                } catch (e: Exception) {
+                    Log.w("ChapterParser", "Failed to parse time line: $line", e)
+                }
+            } else if (line.startsWith("CHAPTER") && line.contains("NAME=")) {
+                try {
+                    val chapterName = line.substringAfter("=")
+                    if (pendingTime != null) {
+                        if (pendingTime <= durationSec + 5.0) {
+                            chapters.add(Triple(0, chapterName, pendingTime))
+                        } else {
+                            Log.w(
+                                "ChapterParser",
+                                "Chapter time $pendingTime exceeds duration $durationSec"
+                            )
+                        }
+                        pendingTime = null
+                    }
+                } catch (e: Exception) {
+                    Log.w("ChapterParser", "Failed to parse name line: $line", e)
+                }
+            }
+        }
+
+        var currentCmStart: Double? = null
+        for ((_, name, ctime) in chapters) {
+            if (name.startsWith("CM") && currentCmStart == null) {
+                currentCmStart = ctime
+            } else if (!name.startsWith("CM") && currentCmStart != null) {
+                cmSections.add(CmSection(currentCmStart, ctime))
+                currentCmStart = null
+            }
+        }
+
+        if (currentCmStart != null) {
+            cmSections.add(CmSection(currentCmStart, durationSec))
+        }
+
+        return cmSections
+    }
+
+    private fun timeToSeconds(timeStr: String): Double {
+        val parts = timeStr.split(":")
+        if (parts.size != 3) return 0.0
+        val h = parts[0].toDoubleOrNull() ?: 0.0
+        val m = parts[1].toDoubleOrNull() ?: 0.0
+        val s = parts[2].toDoubleOrNull() ?: 0.0
+        return h * 3600.0 + m * 60.0 + s
+    }
+
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun mapToRecordedProgram(
+    private suspend fun mapToRecordedProgram(
         info: EdcbRecFileInfo,
         ip: String,
         httpPort: Int
-    ): RecordedProgram {
+    ): RecordedProgram = withContext(Dispatchers.IO) {
         var isoStart = ""
         var isoEnd = ""
         if (!info.startTime.isNullOrBlank()) {
@@ -859,7 +953,41 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-        return RecordedProgram(
+        var cmSections: List<CmSection>? = null
+        try {
+            val urlsToTry = listOf(
+                "http://$ip:$httpPort/rec/$encodedPath.chapter.txt",
+                "http://$ip:$httpPort/rec/${encodedPath.replace(Regex("\\.ts$"), "")}.chapter.txt"
+            )
+
+            var chapterText: String? = null
+            for (urlStr in urlsToTry) {
+                try {
+                    val url = java.net.URL(urlStr)
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 1500
+                    connection.readTimeout = 1500
+
+                    if (connection.responseCode == 200) {
+                        val bytes = connection.inputStream.readBytes()
+                        chapterText = decodeEdcbString(bytes)
+                        break
+                    }
+                } catch (e: Exception) {
+                }
+            }
+
+            if (chapterText != null) {
+                val parsed = parseChapterTextToCmSections(chapterText, info.durationSec.toDouble())
+                if (parsed.isNotEmpty()) {
+                    cmSections = parsed
+                }
+            }
+        } catch (e: Exception) {
+        }
+
+        return@withContext RecordedProgram(
             info.id, info.title, null, false,
             cleanDescription,
             detailMap,
@@ -873,15 +1001,16 @@ class EdcbRepository @Inject constructor(
                 String.format("%03d", info.sid % 1000)
             ),
             RecordedVideo(
-                info.id,
-                if (isRecording) "Recording" else "Recorded",
-                "http://$ip:$httpPort/legacy/view.lua?id=${info.id}",
-                isoStart,
-                isoEnd,
-                info.durationSec.toDouble(),
-                "mpegts",
-                "mpeg2",
-                "aac"
+                id = info.id,
+                status = if (isRecording) "Recording" else "Recorded",
+                filePath = "http://$ip:$httpPort/legacy/view.lua?id=${info.id}",
+                recordingStartTime = isoStart,
+                recordingEndTime = isoEnd,
+                duration = info.durationSec.toDouble(),
+                containerFormat = "mpegts",
+                videoCodec = "mpeg2",
+                audioCodec = "aac",
+                cmSections = cmSections
             ),
             extractedGenres,
             isRecording, 0.0,
@@ -890,19 +1019,191 @@ class EdcbRepository @Inject constructor(
         )
     }
 
+    private fun getJikkyoChannels(): JSONArray {
+        if (jikkyoChannelsCache != null) return jikkyoChannelsCache!!
+        return try {
+            val jsonString =
+                context.assets.open("jikkyo_channels.json").bufferedReader().use { it.readText() }
+            val array = JSONArray(jsonString)
+            jikkyoChannelsCache = array
+            array
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "jikkyo_channels.json not found in assets! Please put it in src/main/assets/",
+                e
+            )
+            JSONArray()
+        }
+    }
+
+    private fun getJikkyoId(networkId: Int, serviceId: Int): String? {
+        val channels = getJikkyoChannels()
+        for (i in 0 until channels.length()) {
+            val jc = channels.optJSONObject(i) ?: continue
+            val jcNid = jc.optInt("network_id", -1)
+
+            val sidRaw = jc.opt("service_id")?.toString() ?: "-1"
+            val jcSid = if (sidRaw.startsWith("0x", ignoreCase = true)) {
+                sidRaw.substring(2).toIntOrNull(16) ?: -1
+            } else {
+                sidRaw.toIntOrNull() ?: -1
+            }
+            val jkJikkyoId = jc.optInt("jikkyo_id", -1)
+
+            var matched = false
+            if (networkId == jcNid && serviceId == jcSid) {
+                matched = true
+            } else if (networkId in 0x7880..0x7FEF && jcNid == 15) {
+                if (serviceId == jcSid || serviceId - 1 == jcSid || serviceId - 2 == jcSid) {
+                    matched = true
+                }
+            }
+
+            if (matched && jkJikkyoId != -1) {
+                val jkId = "jk$jkJikkyoId"
+                if (JIKKYO_CHANNEL_ID_MAP.containsKey(jkId)) {
+                    return jkId
+                }
+            }
+        }
+        return null
+    }
+
+    private fun getCommentColor(color: String): String? {
+        if (color.matches(Regex("^#[0-9A-Fa-f]{6}$"))) return color
+        val map = mapOf(
+            "white" to "#FFEAEA", "red" to "#F02840", "pink" to "#FD7E80",
+            "orange" to "#FDA708", "yellow" to "#FFE133", "green" to "#64DD17",
+            "cyan" to "#00D4F5", "blue" to "#4763FF", "purple" to "#D500F9",
+            "black" to "#1E1310", "white2" to "#CCCC99", "niconicowhite" to "#CCCC99",
+            "red2" to "#CC0033", "truered" to "#CC0033", "pink2" to "#FF33CC",
+            "orange2" to "#FF6600", "passionorange" to "#FF6600", "yellow2" to "#999900",
+            "madyellow" to "#999900", "green2" to "#00CC66", "elementalgreen" to "#00CC66",
+            "cyan2" to "#00CCCC", "blue2" to "#3399FF", "marineblue" to "#3399FF",
+            "purple2" to "#6633CC", "nobleviolet" to "#6633CC", "black2" to "#666666"
+        )
+        return map[color]
+    }
+
+    private fun getCommentPosition(pos: String): String? {
+        val map = mapOf("ue" to "top", "naka" to "right", "shita" to "bottom")
+        return map[pos]
+    }
+
+    private fun getCommentSize(size: String): String? {
+        val map = mapOf("big" to "big", "medium" to "medium", "small" to "small")
+        return map[size]
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getArchivedJikkyo(v: Int): Result<List<ArchivedComment>> =
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+
+                val info = cachedRecInfos?.find { it.id == v } ?: EdcbApi(ip, port).getRecInfo(v)
+                    .getOrNull()
+                if (info == null || info.startTime.isNullOrBlank()) {
+                    return@withContext Result.failure(Exception("録画情報が見つからないか、開始時刻が不正です。"))
+                }
+
+                val jikkyoId = getJikkyoId(info.onid, info.sid)
+                    ?: return@withContext Result.failure(Exception("このチャンネルは実況(過去ログ)に対応していません。"))
+
+                val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+                val startLdt = LocalDateTime.parse(info.startTime, formatter)
+                val startUnix = startLdt.atZone(ZoneId.of("Asia/Tokyo")).toEpochSecond()
+                val endUnix = startUnix + info.durationSec
+
+                Log.i(TAG, "Fetching jikkyo past log for $jikkyoId ($startUnix ~ $endUnix)")
+
+                val urlStr =
+                    "https://jikkyo.tsukumijima.net/api/kakolog/$jikkyoId?starttime=$startUnix&endtime=$endUnix&format=json"
+                val url = java.net.URL(urlStr)
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 30000
+
+                if (connection.responseCode != 200) {
+                    return@withContext Result.failure(Exception("NX-Jikkyo APIエラー: HTTP ${connection.responseCode}"))
+                }
+
+                val responseJson = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonObject = JSONObject(responseJson)
+
+                if (jsonObject.has("error")) {
+                    return@withContext Result.failure(
+                        Exception(
+                            "NX-Jikkyo APIエラー: ${
+                                jsonObject.getString(
+                                    "error"
+                                )
+                            }"
+                        )
+                    )
+                }
+
+                val packetArray = jsonObject.optJSONArray("packet") ?: org.json.JSONArray()
+                val comments = mutableListOf<ArchivedComment>()
+
+                for (i in 0 until packetArray.length()) {
+                    val packet = packetArray.optJSONObject(i) ?: continue
+                    val chat = packet.optJSONObject("chat") ?: continue
+
+                    val content = chat.optString("content", "")
+                    if (content.isBlank()) continue
+                    if (chat.optString("deleted") == "1") continue
+
+                    if (content.startsWith("/") && content.matches(Regex("^/[a-z][a-z0-9_-]*(?:\\s|$).*"))) {
+                        if (chat.optString("premium") == "3") continue
+                    }
+
+                    val mail = chat.optString("mail", "")
+                    var color = "#FFEAEA"
+                    var position = "right"
+                    var size = "medium"
+
+                    val commands = mail.replace("184", "").split(" ")
+                    for (cmd in commands) {
+                        getCommentColor(cmd)?.let { color = it }
+                        getCommentPosition(cmd)?.let { position = it }
+                        getCommentSize(cmd)?.let { size = it }
+                    }
+
+                    val chatDate = chat.optDouble("date", 0.0)
+                    val chatDateUsec = chat.optDouble("date_usec", 0.0)
+                    val commentTime = (chatDate - startUnix) + (chatDateUsec / 1000000.0)
+
+                    comments.add(
+                        ArchivedComment(
+                            time = commentTime,
+                            type = position,
+                            size = size,
+                            color = color,
+                            author = chat.optString("user_id", ""),
+                            text = content
+                        )
+                    )
+                }
+
+                Log.i(TAG, "Successfully mapped ${comments.size} archived comments.")
+                Result.success(comments)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch archived jikkyo", e)
+                Result.failure(e)
+            }
+        }
+
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse =
         RecordedApiResponse(0, emptyList())
-
-    override suspend fun getArchivedJikkyo(v: Int): Result<List<ArchivedComment>> =
-        Result.success(emptyList())
 
     @androidx.annotation.OptIn(UnstableApi::class)
     override suspend fun keepAlive(v: Int, q: String, s: String) {
     }
 
-    // ==========================================
-    // ★ 録画予約（Reserve）関連
-    // ==========================================
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getReserves(): Result<List<ReserveItem>> = withContext(Dispatchers.IO) {
         try {
@@ -954,7 +1255,6 @@ class EdcbRepository @Inject constructor(
                     name = stationName
                 )
 
-                // ★ 修正: EPGキャッシュから詳細情報を引っ張ってくる
                 val eventInfo = cachedEvents.find {
                     it.onid == res.originalNetworkID &&
                             it.tsid == res.transportStreamID &&
@@ -971,12 +1271,12 @@ class EdcbRepository @Inject constructor(
                 val reserveProgram = ReserveProgramDetail(
                     id = channelIdStr + "_${res.eventID}",
                     title = res.title,
-                    description = description, // ★修正: EPGの概要をセット
+                    description = description,
                     startTime = isoStart,
                     endTime = isoEnd,
                     duration = res.durationSec,
-                    genres = genres,           // ★修正: EPGのジャンルをセット
-                    detail = detail,           // ★修正: EPGの詳細情報をセット
+                    genres = genres,
+                    detail = detail,
                     isFree = true,
                     videoType = "mpeg2",
                     audioType = "2/0",
@@ -1025,7 +1325,7 @@ class EdcbRepository @Inject constructor(
                     program = reserveProgram,
                     isRecordingInProgress = isRecording,
                     recordingAvailability = availability,
-                    comment = res.comment, // コメントはメモ欄として別で保持する
+                    comment = res.comment,
                     estimatedRecordingFileSize = estimatedSize,
                     recordSettings = recordSettings
                 )
@@ -1084,39 +1384,6 @@ class EdcbRepository @Inject constructor(
                     val serviceRanges =
                         if (isAllChannelsSelected) null else serviceRangesList.takeIf { it.isNotEmpty() }
 
-                    val channels = cond.searchInfo.serviceList.mapNotNull { serviceLong ->
-                        val onid = (serviceLong ushr 32).toInt() and 0xFFFF
-                        val tsid = (serviceLong ushr 16).toInt() and 0xFFFF
-                        val sid = serviceLong.toInt() and 0xFFFF
-
-                        val typeStr = getChannelType(onid)
-                        val svc =
-                            cachedServices.find { it.onid == onid && it.tsid == tsid && it.sid == sid }
-
-                        Channel(
-                            id = "edcb_${onid}_${tsid}_${sid}",
-                            displayChannelId = "edcb_${onid}_${tsid}_${sid}",
-                            name = svc?.serviceName ?: "不明なチャンネル",
-                            channelNumber = formatChannelNumber(
-                                typeStr,
-                                svc?.remoteControlKeyId ?: 0,
-                                sid,
-                                tsid
-                            ),
-                            networkId = onid.toLong(),
-                            serviceId = sid.toLong(),
-                            transportStreamId = tsid.toLong(),
-                            type = typeStr,
-                            isWatchable = true,
-                            isDisplay = true,
-                            is_subchannel = isSubChannelInternal(typeStr, sid, tsid),
-                            programPresent = null,
-                            programFollowing = null,
-                            remocon_Id = svc?.remoteControlKeyId ?: 0,
-                            jikkyoForce = 0
-                        )
-                    }
-
                     val searchCondition = ProgramSearchCondition(
                         isEnabled = cond.recSetting.recMode != 5,
                         keyword = cond.searchInfo.andKey,
@@ -1127,7 +1394,6 @@ class EdcbRepository @Inject constructor(
                         isFuzzySearchEnabled = cond.searchInfo.aimaiFlag != 0,
                         isRegexSearchEnabled = cond.searchInfo.regExpFlag != 0,
                         serviceRanges = serviceRanges,
-//                        channels = channels.takeIf { it.isNotEmpty() },
                         genreRanges = emptyList(),
                         isExcludeGenreRanges = cond.searchInfo.notContetFlag != 0,
                         dateRanges = dateRanges,
@@ -1181,23 +1447,19 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    // ★修正: 単発予約の削除
     override suspend fun deleteReservation(i: Int): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val ip = settingsRepository.edcbIp.first()
             val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
             val edcbApi = EdcbApi(ip, port)
 
-            // 1回目の送信リクエスト
             val result = edcbApi.sendDelReserve(listOf(i))
             if (result.isSuccess) {
                 return@withContext Result.success(Unit)
             }
 
-            // ★ 削除時のフェイルセーフ
-            // EDCBがエラー(0)を返しても、実際には消えているケースが多発するため再確認する
             val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
-            val isDeleted = checkReserves.none { it.reserveID == i } // リストにもう存在しなければ削除成功
+            val isDeleted = checkReserves.none { it.reserveID == i }
 
             if (isDeleted) {
                 Log.w(TAG, "EDCB returned error on delete, but reservation was actually deleted.")
@@ -1211,7 +1473,6 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    // ★修正: 自動予約条件の削除
     override suspend fun deleteReservationCondition(i: Int): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
@@ -1219,13 +1480,11 @@ class EdcbRepository @Inject constructor(
                 val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
                 val edcbApi = EdcbApi(ip, port)
 
-                // 1回目の送信リクエスト
                 val result = edcbApi.sendDelAutoAdd(listOf(i))
                 if (result.isSuccess) {
                     return@withContext Result.success(Unit)
                 }
 
-                // ★ 削除時のフェイルセーフ
                 val checkConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
                 val isDeleted = checkConditions.none { it.dataID == i }
 
@@ -1244,19 +1503,14 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    // ==========================================
-    // ★ 単発予約のエンコード（Kotlin -> EDCBバイナリ）処理
-    // ==========================================
-
     private fun encodeReserveRecordSettings(s: ReserveRecordSettings): EdcbRecSettingData {
-        // 録画モード (有効: 0~4, 無効: 5~9)
         val recMode = if (s.isEnabled) {
             when (s.recordingMode) {
                 "AllServices" -> 0
                 "AllServicesWithoutDecoding" -> 2
                 "SpecifiedServiceWithoutDecoding" -> 3
                 "View" -> 4
-                else -> 1 // SpecifiedService
+                else -> 1
             }
         } else {
             when (s.recordingMode) {
@@ -1264,19 +1518,17 @@ class EdcbRepository @Inject constructor(
                 "AllServicesWithoutDecoding" -> 6
                 "SpecifiedServiceWithoutDecoding" -> 7
                 "View" -> 8
-                else -> 5 // SpecifiedService (Disabled)
+                else -> 5
             }
         }
 
-        // 字幕・データ放送の録画設定
         var serviceMode = 0
         if (s.captionMode != "Default" || s.dataMode != "Default") {
-            serviceMode = 1 // 個別の設定値を使用するフラグ
+            serviceMode = 1
             if (s.captionMode == "Enable") serviceMode = serviceMode or 0x10
             if (s.dataMode == "Enable") serviceMode = serviceMode or 0x20
         }
 
-        // 録画後実行モード
         val suspendMode = when (s.postRecordingMode) {
             "Default" -> 0
             "Nothing" -> 4
@@ -1287,7 +1539,6 @@ class EdcbRepository @Inject constructor(
         }
         val rebootFlag = if (s.postRecordingMode.contains("Reboot")) 1 else 0
 
-        // 録画フォルダ
         val folderList = s.recordingFolders?.map {
             EdcbRecFileSetInfo(it, "Write_Default.dll", "RecName_Macro.dll")
         } ?: emptyList()
@@ -1313,10 +1564,6 @@ class EdcbRepository @Inject constructor(
         )
     }
 
-    // ==========================================
-    // ★ リクエスト処理の実装（フェイルセーフ追加）
-    // ==========================================
-
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun addReserve(r: ReserveRequest): Result<Unit> = withContext(Dispatchers.IO) {
         try {
@@ -1339,7 +1586,6 @@ class EdcbRepository @Inject constructor(
 
             val svc = cachedServices.find { it.onid == onid && it.tsid == tsid && it.sid == sid }
 
-            // ★ 事前重複チェック
             val reserves = edcbApi.getReserves().getOrNull() ?: emptyList()
             val isDuplicate = reserves.any {
                 it.originalNetworkID == onid && it.transportStreamID == tsid &&
@@ -1372,15 +1618,11 @@ class EdcbRepository @Inject constructor(
                 trailingInt = 0
             )
 
-            // 送信
             val result = edcbApi.sendAddReserve(listOf(reserveData))
             if (result.isSuccess) {
                 return@withContext Result.success(Unit)
             }
 
-            // ★ チューナー不足（録画重複）時のフェイルセーフ
-            // EDCBはチューナー不足時、エラーコード 0 を返しますが、データベースには「一部録画」として登録します。
-            // そのため、エラーが返ってきても、実際には登録に成功していないかを再取得して確認します。
             val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
             val successfullyAdded = checkReserves.any {
                 it.originalNetworkID == onid && it.transportStreamID == tsid &&
@@ -1394,7 +1636,6 @@ class EdcbRepository @Inject constructor(
                 return@withContext Result.success(Unit)
             }
 
-            // KonomiTVのフェイルオーバー（放送終了扱い時の時刻延長リトライ）
             val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
             val startLdt = LocalDateTime.parse(event.startTime, formatter)
             val startMs = startLdt.atZone(ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
@@ -1437,7 +1678,6 @@ class EdcbRepository @Inject constructor(
                     return@withContext Result.success(Unit)
                 }
 
-                // ★ 更新時も重複警告で 0 が返ることがあるためフェイルセーフ
                 val checkReserves = edcbApi.getReserves().getOrNull() ?: emptyList()
                 val successfullyUpdated = checkReserves.find { it.reserveID == i }
                 if (successfullyUpdated != null) {
@@ -1454,10 +1694,6 @@ class EdcbRepository @Inject constructor(
                 Result.failure(e)
             }
         }
-
-// ==========================================
-    // ★ 自動予約のエンコード処理
-    // ==========================================
 
     private fun encodeAutoAddRecordSettings(s: RecordSettings): EdcbRecSettingData {
         val recMode = if (s.isEnabled) {
@@ -1496,7 +1732,8 @@ class EdcbRepository @Inject constructor(
         val rebootFlag = if (s.postRecordingMode.contains("Reboot")) 1 else 0
 
         val folderList = s.recordingFolders.map {
-            val template = if (it.recordingFileNameTemplate.isNullOrBlank()) "RecName_Macro.dll" else "RecName_Macro.dll?${it.recordingFileNameTemplate}"
+            val template =
+                if (it.recordingFileNameTemplate.isNullOrBlank()) "RecName_Macro.dll" else "RecName_Macro.dll?${it.recordingFileNameTemplate}"
             EdcbRecFileSetInfo(it.recordingFolderPath, "Write_Default.dll", template)
         }
         val partialFolderList = if (s.isOnesegSeparateOutputEnabled) folderList else emptyList()
@@ -1522,7 +1759,6 @@ class EdcbRepository @Inject constructor(
     }
 
     private fun encodeSearchKeyInfo(cond: ProgramSearchCondition): EdcbSearchInfo {
-        // 対象サービスリスト。nullの場合はEPGキャッシュから全チャンネルを生成して「全指定」とする
         val serviceList = cond.serviceRanges?.map {
             (it.networkId.toLong() shl 32) or (it.transportStreamId.toLong() shl 16) or it.serviceId.toLong()
         } ?: cachedServices.map {
@@ -1530,7 +1766,14 @@ class EdcbRepository @Inject constructor(
         }
 
         val dateList = cond.dateRanges?.map {
-            EdcbDateData(it.startDayOfWeek, it.startHour, it.startMinute, it.endDayOfWeek, it.endHour, it.endMinute)
+            EdcbDateData(
+                it.startDayOfWeek,
+                it.startHour,
+                it.startMinute,
+                it.endDayOfWeek,
+                it.endHour,
+                it.endMinute
+            )
         } ?: emptyList()
 
         val freeCaFlag = when (cond.broadcastType) {
@@ -1544,7 +1787,6 @@ class EdcbRepository @Inject constructor(
         val chkRecNoService = if (cond.duplicateTitleCheckScope == "AllChannels") 1 else 0
         val chkRecDay = cond.duplicateTitleCheckPeriodDays
 
-        // KonomiTVの「・」から「／」への戻しを含め、ジャンルの逆変換を試みる（簡易実装）
         val contentList = mutableListOf<EdcbContentData>()
         cond.genreRanges?.forEach { genre ->
             var cn1 = 0xFF
@@ -1556,7 +1798,7 @@ class EdcbRepository @Inject constructor(
             for ((key, value) in EdcbConstants.CONTENT_TYPE) {
                 if (value.first == majorStr) {
                     cn1 = key
-                    if (cn1 == 0x0E) { // 拡張
+                    if (cn1 == 0x0E) {
                         for ((uKey, uVal) in EdcbConstants.USER_TYPE) {
                             if (uVal == middleStr) {
                                 cn2 = 0x00
@@ -1583,7 +1825,7 @@ class EdcbRepository @Inject constructor(
 
         return EdcbSearchInfo(
             andKey = cond.keyword,
-            notKey = cond.excludeKeyword, // EDCBByteUtils.writeSearchKeyInfo内でnoteと共に処理される
+            notKey = cond.excludeKeyword,
             keyDisabled = !cond.isEnabled,
             caseSensitive = cond.isCaseSensitive,
             regExpFlag = if (cond.isRegexSearchEnabled) 1 else 0,
@@ -1605,54 +1847,50 @@ class EdcbRepository @Inject constructor(
         )
     }
 
-    // ==========================================
-    // ★ 自動予約 (AutoAdd) の追加・更新処理
-    // ==========================================
-
     @RequiresApi(Build.VERSION_CODES.O)
-    override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
-            val edcbApi = EdcbApi(ip, port)
+    override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val ip = settingsRepository.edcbIp.first()
+                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val edcbApi = EdcbApi(ip, port)
 
-            fetchEpgDataIfNeeded()
+                fetchEpgDataIfNeeded()
 
-            // 追加前の条件リストの数を記憶（フェイルセーフ用）
-            val existingConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+                val existingConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
 
-            // 検索条件と録画設定をEDCBバイナリ用にエンコード
-            val searchInfo = encodeSearchKeyInfo(r.programSearchCondition)
-            val recSetting = encodeAutoAddRecordSettings(r.recordSettings)
+                val searchInfo = encodeSearchKeyInfo(r.programSearchCondition)
+                val recSetting = encodeAutoAddRecordSettings(r.recordSettings)
 
-            val autoAddData = EdcbAutoAddData(
-                dataID = 0, // 新規追加なのでIDは0
-                searchInfo = searchInfo,
-                recSetting = recSetting,
-                addCount = 0
-            )
+                val autoAddData = EdcbAutoAddData(
+                    dataID = 0,
+                    searchInfo = searchInfo,
+                    recSetting = recSetting,
+                    addCount = 0
+                )
 
-            // 送信
-            val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
-            if (result.isSuccess) {
-                return@withContext Result.success(Unit)
+                val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
+                if (result.isSuccess) {
+                    return@withContext Result.success(Unit)
+                }
+
+                val afterConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
+                if (afterConditions.size > existingConditions.size) {
+                    Log.w(TAG, "EDCB returned 0, but auto add condition was successfully added.")
+                    return@withContext Result.success(Unit)
+                }
+
+                Result.failure(Exception("Failed to add auto add condition (EDCB rejected)"))
+            } catch (e: Exception) {
+                Log.e(TAG, "addReservationCondition failed", e)
+                Result.failure(e)
             }
-
-            // ★ フェイルセーフ: EDCBが 0 (エラー) を返しても、実は登録されているか確認する
-            val afterConditions = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
-            if (afterConditions.size > existingConditions.size) {
-                Log.w(TAG, "EDCB returned 0, but auto add condition was successfully added.")
-                return@withContext Result.success(Unit)
-            }
-
-            Result.failure(Exception("Failed to add auto add condition (EDCB rejected)"))
-        } catch (e: Exception) {
-            Log.e(TAG, "addReservationCondition failed", e)
-            Result.failure(e)
         }
-    }
 
-    override suspend fun updateReservationCondition(i: Int, r: ReservationConditionUpdateRequest): Result<ReservationCondition> = withContext(Dispatchers.IO) {
+    override suspend fun updateReservationCondition(
+        i: Int,
+        r: ReservationConditionUpdateRequest
+    ): Result<ReservationCondition> = withContext(Dispatchers.IO) {
         try {
             val ip = settingsRepository.edcbIp.first()
             val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
@@ -1672,12 +1910,10 @@ class EdcbRepository @Inject constructor(
 
             val result = edcbApi.sendChgAutoAdd(listOf(updatedData))
             if (result.isSuccess) {
-                // 更新後のリストを再取得して結果として返す
                 val newList = getReservationConditions().getOrThrow()
                 return@withContext Result.success(newList.find { it.id == i }!!)
             }
 
-            // ★ フェイルセーフ
             val checkList = edcbApi.getAutoAddConditions().getOrNull() ?: emptyList()
             if (checkList.any { it.dataID == i }) {
                 Log.w(TAG, "EDCB returned 0, but auto add condition update might have succeeded.")

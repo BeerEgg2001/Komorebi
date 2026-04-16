@@ -31,6 +31,7 @@ import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.data.model.BackendConfig
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.LivePlayerConstants
@@ -39,6 +40,7 @@ import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,21 +61,45 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Collections
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+
+data class LiveComment(
+    val text: String,
+    val color: String,
+    val position: String,
+    val size: String
+)
 
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class LivePlayerViewModel @Inject constructor(
+    @ApplicationContext private val context: Context, // ★追加: jikkyo_channels.json 読み込み用
     private val liveProvider: LiveProvider,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "LivePlayerViewModel"
-        private const val MAX_AUTO_RETRY = 2 // ★自動リカバリの最大回数
+        private const val MAX_AUTO_RETRY = 2
+
+        // ★ 追加: KonomiTV準拠の実況チャンネルマッピング
+        private val JIKKYO_CHANNEL_ID_MAP = mapOf(
+            "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
+            "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
+            "jk8" to "ch2646442", "jk9" to "ch2646485", "jk10" to null,
+            "jk11" to null, "jk12" to null, "jk13" to null, "jk14" to null,
+            "jk101" to "ch2647992", "jk103" to null, "jk141" to null,
+            "jk151" to null, "jk161" to null, "jk171" to null, "jk181" to null,
+            "jk191" to null, "jk192" to null, "jk193" to null, "jk200" to null,
+            "jk201" to null, "jk211" to "ch2646846", "jk222" to null,
+            "jk236" to null, "jk252" to null, "jk260" to null, "jk263" to null,
+            "jk265" to null, "jk333" to null
+        )
     }
 
     private val _mainPlayer = MutableStateFlow<ExoPlayer?>(null)
@@ -115,6 +141,12 @@ class LivePlayerViewModel @Inject constructor(
     private val _shouldCropLogo = MutableStateFlow<Boolean>(false)
     val shouldCropLogo: StateFlow<Boolean> = _shouldCropLogo.asStateFlow()
 
+    private val _liveComments = MutableSharedFlow<LiveComment>(extraBufferCapacity = 100)
+    val liveComments: SharedFlow<LiveComment> = _liveComments.asSharedFlow()
+
+    private val _clearCommentsEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val clearCommentsEvent: SharedFlow<Unit> = _clearCommentsEvent.asSharedFlow()
+
     private var isSubtitleEnabled = false
     private var signalPollJob: Job? = null
 
@@ -135,7 +167,6 @@ class LivePlayerViewModel @Inject constructor(
     private var mainCurrentSource = StreamSource.KONOMITV
     private var dualCurrentSource = StreamSource.KONOMITV
 
-    // ★追加: 自動リカバリ用の状態保持変数
     private var mainCurrentChannel: Channel? = null
     private var mainCurrentQuality: StreamQuality? = null
     private var mainAutoRetryCount = 0
@@ -143,6 +174,10 @@ class LivePlayerViewModel @Inject constructor(
     private var dualCurrentChannel: Channel? = null
     private var dualCurrentQuality: StreamQuality? = null
     private var dualAutoRetryCount = 0
+
+    private var jikkyoClient: JikkyoClient? = null
+    private val processedCommentIds = Collections.synchronizedSet(LinkedHashSet<String>())
+    private var jikkyoChannelsCache: JSONArray? = null // ★追加: jsonキャッシュ用
 
     init {
         viewModelScope.launch {
@@ -200,6 +235,8 @@ class LivePlayerViewModel @Inject constructor(
 
         _mainSseStatus.value = "Standby"
         _mainSseDetail.value = AppStrings.SSE_CONNECTING
+
+        stopJikkyo()
     }
 
     private fun stopDualPlaybackSafely() {
@@ -229,9 +266,10 @@ class LivePlayerViewModel @Inject constructor(
 
         _mainSseStatus.value = "Standby"
         _dualSseStatus.value = "Standby"
+
+        stopJikkyo()
     }
 
-    // ★追加: Mainプレイヤーのエラー時自動リカバリ処理
     private fun handleMainError(uiContext: Context, errorMsg: String) {
         viewModelScope.launch {
             if (mainAutoRetryCount < MAX_AUTO_RETRY) {
@@ -244,7 +282,6 @@ class LivePlayerViewModel @Inject constructor(
 
                 stopMainPlaybackSafely()
 
-                // ★重要: KonomiTVがプロセスをKillしてリソースを解放する猶予を与えるため2秒待つ (ゾンビプロセス防止)
                 delay(2000)
 
                 val channel = mainCurrentChannel
@@ -261,7 +298,6 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
-    // ★追加: Dualプレイヤーのエラー時自動リカバリ処理
     private fun handleDualError(uiContext: Context, errorMsg: String) {
         viewModelScope.launch {
             if (dualAutoRetryCount < MAX_AUTO_RETRY) {
@@ -295,7 +331,7 @@ class LivePlayerViewModel @Inject constructor(
         channel: Channel,
         source: StreamSource,
         quality: StreamQuality,
-        isAutoRetry: Boolean = false // ★追加
+        isAutoRetry: Boolean = false
     ) {
         Log.d(TAG, "playMainChannel() called: channel=${channel.name}")
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
@@ -318,7 +354,6 @@ class LivePlayerViewModel @Inject constructor(
                 mainPlaybackMutex.withLock {
                     stopMainPlaybackSafely()
 
-                    // ★修正: チャンネル切り替え時も古いプロセスの解放を少しだけ待つ（ゾンビ対策）
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
@@ -345,6 +380,8 @@ class LivePlayerViewModel @Inject constructor(
                     }
 
                     startPlayback(uiContext, newPlayer, streamUrl, source, mainTsDataSourceFactory)
+
+                    startJikkyo(channel, source)
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "playMainChannel: Job cancelled.")
@@ -357,7 +394,7 @@ class LivePlayerViewModel @Inject constructor(
         channel: Channel,
         source: StreamSource,
         quality: StreamQuality,
-        isAutoRetry: Boolean = false // ★追加
+        isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
 
@@ -440,9 +477,249 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun retry() {
-        mainAutoRetryCount = 0 // 手動リトライ時はカウントをリセット
+        mainAutoRetryCount = 0
         _mainPlayerError.value = null
     }
+
+    // ==========================================
+    // ★ 実況（ニコニコ実況）制御関連
+    // ==========================================
+
+    private fun getJikkyoChannels(): JSONArray {
+        if (jikkyoChannelsCache != null) return jikkyoChannelsCache!!
+        return try {
+            val jsonString =
+                context.assets.open("jikkyo_channels.json").bufferedReader().use { it.readText() }
+            val array = JSONArray(jsonString)
+            jikkyoChannelsCache = array
+            array
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "jikkyo_channels.json not found in assets! Please put it in src/main/assets/",
+                e
+            )
+            JSONArray()
+        }
+    }
+
+    private fun getJikkyoId(networkId: Int, serviceId: Int): String? {
+        val channels = getJikkyoChannels()
+        for (i in 0 until channels.length()) {
+            val jc = channels.optJSONObject(i) ?: continue
+            val jcNid = jc.optInt("network_id", -1)
+
+            val sidRaw = jc.opt("service_id")?.toString() ?: "-1"
+            val jcSid = if (sidRaw.startsWith("0x", ignoreCase = true)) {
+                sidRaw.substring(2).toIntOrNull(16) ?: -1
+            } else {
+                sidRaw.toIntOrNull() ?: -1
+            }
+            val jkJikkyoId = jc.optInt("jikkyo_id", -1)
+
+            var matched = false
+            if (networkId == jcNid && serviceId == jcSid) {
+                matched = true
+            } else if (networkId in 0x7880..0x7FEF && jcNid == 15) {
+                // サブチャンネルのオフセット考慮
+                if (serviceId == jcSid || serviceId - 1 == jcSid || serviceId - 2 == jcSid) {
+                    matched = true
+                }
+            }
+
+            if (matched && jkJikkyoId != -1) {
+                val jkId = "jk$jkJikkyoId"
+                if (JIKKYO_CHANNEL_ID_MAP.containsKey(jkId)) {
+                    return jkId
+                }
+            }
+        }
+        return null
+    }
+
+    private fun startJikkyo(channel: Channel, source: StreamSource) {
+        Log.i(TAG, "[Jikkyo] === startJikkyo() called ===")
+        Log.i(
+            TAG,
+            "[Jikkyo] Channel: ${channel.name} (${channel.displayChannelId}), Source: $source"
+        )
+        stopJikkyo()
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _clearCommentsEvent.emit(Unit)
+            Log.i(TAG, "[Jikkyo] Cleared old comments on UI.")
+
+            val watchUrl = getJikkyoWatchSessionUrl(channel, source)
+            if (watchUrl.isNullOrEmpty()) {
+                Log.w(
+                    TAG,
+                    "[Jikkyo] Watch URL not found or empty for ${channel.name}. Aborting Jikkyo start."
+                )
+                return@launch
+            }
+
+            Log.i(TAG, "[Jikkyo] Initializing JikkyoClient with URL: $watchUrl")
+            jikkyoClient = JikkyoClient(watchUrl)
+            jikkyoClient?.start { jsonText ->
+                parseAndEmitComment(jsonText)
+            }
+            Log.i(TAG, "[Jikkyo] JikkyoClient started successfully.")
+        }
+    }
+
+    private fun stopJikkyo() {
+        Log.i(TAG, "[Jikkyo] stopJikkyo() called. Clearing connections and cache.")
+        jikkyoClient?.stop()
+        jikkyoClient = null
+        processedCommentIds.clear()
+    }
+
+    private suspend fun getJikkyoWatchSessionUrl(channel: Channel, source: StreamSource): String? {
+        Log.i(TAG, "[Jikkyo] getJikkyoWatchSessionUrl() called. Source: $source")
+
+        if (source == StreamSource.KONOMITV) {
+            val config = settingsRepository.getBackendConfig(source) as? BackendConfig.KonomiTv
+            if (config == null) {
+                Log.i(TAG, "[Jikkyo] KonomiTv config is null. Aborting.")
+                return null
+            }
+            try {
+                // KonomiTVの API/channels/{id}/jikkyo からWebSocket URLを取得
+                val apiUrl =
+                    "${config.ip}:${config.port}/api/channels/${channel.displayChannelId}/jikkyo"
+                Log.i(TAG, "[Jikkyo] Requesting KonomiTV API: $apiUrl")
+
+                val request = Request.Builder().url(apiUrl).build()
+                val response = okHttpClient.newCall(request).execute()
+
+                val bodyString = response.body?.string() ?: "{}"
+                Log.i(TAG, "[Jikkyo] API Response Code: ${response.code}")
+                Log.i(TAG, "[Jikkyo] API Response Body: $bodyString")
+
+                if (response.isSuccessful) {
+                    val json = JSONObject(bodyString)
+                    val watchUrl = json.optString("watch_session_url").takeIf { it.isNotEmpty() }
+                    Log.i(TAG, "[Jikkyo] Extracted watch_session_url: $watchUrl")
+                    return watchUrl
+                } else {
+                    Log.w(TAG, "[Jikkyo] API Request failed. Code: ${response.code}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "[Jikkyo] Failed to get KonomiTV jikkyo url", e)
+            }
+            return null
+        } else {
+            Log.i(TAG, "[Jikkyo] Using EDCB/MIRAKURUN fallback inference logic.")
+
+            val networkId = channel.networkId.toInt()
+            val serviceId = channel.serviceId.toInt()
+
+            Log.i(TAG, "[Jikkyo] Target NID: $networkId, SID: $serviceId")
+            val jkId = getJikkyoId(networkId, serviceId)
+            Log.i(TAG, "[Jikkyo] Inferred jkId: $jkId")
+
+            if (jkId != null) {
+                val watchUrl = "wss://nx-jikkyo.tsukumijima.net/api/v1/channels/$jkId/ws/watch"
+                Log.i(TAG, "[Jikkyo] Generated fallback watch URL: $watchUrl")
+                return watchUrl
+            }
+            Log.w(TAG, "[Jikkyo] jkId could not be inferred. Returning null.")
+            return null
+        }
+    }
+
+    private fun parseAndEmitComment(jsonText: String) {
+        try {
+            val json = JSONObject(jsonText)
+            val chat = json.optJSONObject("chat")
+            if (chat == null) {
+                // Log.i(TAG, "[Jikkyo] 'chat' object not found in JSON. Skipping. JSON: $jsonText")
+                return
+            }
+
+            val content = chat.optString("content", "")
+            if (content.isBlank()) {
+                return
+            }
+
+            if (chat.optString("deleted") == "1") {
+                Log.i(TAG, "[Jikkyo] Comment is deleted. Skipping: $content")
+                return
+            }
+
+            // 運営の特殊コマンドコメントを除外
+            if (content.startsWith("/") && content.matches(Regex("^/[a-z][a-z0-9_-]*(?:\\s|$).*"))) {
+                if (chat.optString("premium") == "3") {
+                    Log.i(TAG, "[Jikkyo] Premium special command skipped: $content")
+                    return
+                }
+            }
+
+            val commentId = chat.optString("no", "") + "_" + content
+            // 重複排除
+            if (!processedCommentIds.add(commentId)) {
+                // Log.i(TAG, "[Jikkyo] Duplicate comment skipped: $commentId")
+                return
+            }
+            // メモリ節約のため一定数でキャッシュクリア
+            if (processedCommentIds.size > 2000) processedCommentIds.clear()
+
+            // コマンド解析 (色, 位置, サイズ)
+            var color = "#FFEAEA"
+            var position = "right"
+            var size = "medium"
+            val mail = chat.optString("mail", "")
+            val commands = mail.replace("184", "").split(" ")
+            for (cmd in commands) {
+                getCommentColor(cmd)?.let { color = it }
+                getCommentPosition(cmd)?.let { position = it }
+                getCommentSize(cmd)?.let { size = it }
+            }
+
+            Log.i(
+                TAG,
+                "[Jikkyo] Emitting comment -> text: $content, color: $color, pos: $position, size: $size"
+            )
+
+            // UI描画用にFlowへ流す
+            viewModelScope.launch(Dispatchers.Main) {
+                _liveComments.emit(LiveComment(content, color, position, size))
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "[Jikkyo] JSON parse error. JSON: $jsonText", e)
+        }
+    }
+
+    private fun getCommentColor(color: String): String? {
+        if (color.matches(Regex("^#[0-9A-Fa-f]{6}$"))) return color
+        val map = mapOf(
+            "white" to "#FFEAEA", "red" to "#F02840", "pink" to "#FD7E80",
+            "orange" to "#FDA708", "yellow" to "#FFE133", "green" to "#64DD17",
+            "cyan" to "#00D4F5", "blue" to "#4763FF", "purple" to "#D500F9",
+            "black" to "#1E1310", "white2" to "#CCCC99", "niconicowhite" to "#CCCC99",
+            "red2" to "#CC0033", "truered" to "#CC0033", "pink2" to "#FF33CC",
+            "orange2" to "#FF6600", "passionorange" to "#FF6600", "yellow2" to "#999900",
+            "madyellow" to "#999900", "green2" to "#00CC66", "elementalgreen" to "#00CC66",
+            "cyan2" to "#00CCCC", "blue2" to "#3399FF", "marineblue" to "#3399FF",
+            "purple2" to "#6633CC", "nobleviolet" to "#6633CC", "black2" to "#666666"
+        )
+        return map[color]
+    }
+
+    private fun getCommentPosition(pos: String): String? {
+        val map = mapOf("ue" to "top", "naka" to "right", "shita" to "bottom")
+        return map[pos]
+    }
+
+    private fun getCommentSize(size: String): String? {
+        val map = mapOf("big" to "big", "medium" to "medium", "small" to "small")
+        return map[size]
+    }
+
+    // ==========================================
+    // ★ 映像再生処理本体
+    // ==========================================
 
     private fun buildStreamUrl(
         channel: Channel,
@@ -544,7 +821,6 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: SSE側からのエラー検知時にも自動リカバリをトリガーする
     private fun startMainSse(
         uiContext: Context,
         channelId: String,
@@ -591,7 +867,6 @@ class LivePlayerViewModel @Inject constructor(
                             _mainSseStatus.value = status
                             _mainSseDetail.value = if (detail.contains("OnAirです")) "" else detail
 
-                            // ★ 修正: エンコード失敗やチューナーエラー時に自動リカバリをトリガー
                             if (status == "Error" || (status == "Offline" && (detail.contains("失敗") || detail.contains(
                                     "エラー"
                                 )))

@@ -46,7 +46,8 @@ private const val KEY_EPG_HISTORY = "history_list"
  */
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
-class EpgViewModel @Inject constructor(
+class EpgViewModel @OptIn(UnstableApi::class)
+@Inject constructor(
     private val repository: EpgRepository, // EpgRepositoryは検索・キャッシュマネージャーとしてそのまま利用
     private val liveProvider: LiveProvider, // ★ 追加: ロゴURL生成などの抽象化プロバイダ
     private val settingsRepository: SettingsRepository,
@@ -130,7 +131,19 @@ class EpgViewModel @Inject constructor(
 
     init {
         loadSearchHistory() // アプリ起動時に履歴を読み込む
-        loadInitialData()
+//        loadInitialData()
+        // ★ 追加: EDCBのバックグラウンドEPG取得完了を検知して、自分(ViewModel)のキャッシュを更新する
+        viewModelScope.launch {
+            com.beeregg2001.komorebi.data.repository.EdcbRepository.epgBackgroundUpdateEvent.collect {
+                Log.i("EpgViewModel", "Background EPG fetch completed! Refreshing ViewModel cache...")
+
+                // ★ 注意: 以下の関数名は、EpgViewModel内で「最初にEPGデータを取得している関数」の名前に書き換えてください。
+                // 例: fetchEpgData() や loadPrograms() など
+                // この関数を呼ぶことで、最新の1週間分のデータが cachedAllPrograms に上書きされます。
+//                loadSearchHistory() // アプリ起動時に履歴を読み込む
+                loadInitialData()
+            }
+        }
     }
 
     // ==========================================
@@ -210,22 +223,37 @@ class EpgViewModel @Inject constructor(
             if (displayQuery.isNotBlank()) addSearchHistory(displayQuery)
 
             try {
-                val rawResults = repository.searchFuturePrograms(
-                    keyword,
-                    genre,
-                    dateStr,
-                    isLiveOnly,
-                    channelName
-                )
-
-                _searchResults.value = rawResults.map { item ->
-                    UiSearchResultItem(
-                        program = item.program,
-                        channel = item.channel,
-                        // ★ 修正: LiveProvider経由で取得 (suspend関数のため自動で非同期実行されます)
-                        logoUrl = getLogoUrl(item.channel)
+                // 1. リポジトリから検索結果を取得（数千件になる可能性がある）
+                val rawResults = withContext(Dispatchers.Default) {
+                    repository.searchFuturePrograms(
+                        keyword,
+                        genre,
+                        dateStr,
+                        isLiveOnly,
+                        channelName
                     )
                 }
+
+                // ★改善点1: 先に日時順でソートし、最大100件に絞り込む（ここで無駄な処理をカット）
+                val topMatches = rawResults.sortedBy {
+                    try { OffsetDateTime.parse(it.program.start_time) }
+                    catch (e: Exception) { OffsetDateTime.MAX }
+                }.take(100)
+
+                // ★改善点2: 絞り込んだ最大100件に対してだけ、ロゴ取得を「並列（async）」で一気に実行する
+                val results = withContext(Dispatchers.IO) {
+                    topMatches.map { item ->
+                        async {
+                            UiSearchResultItem(
+                                program = item.program,
+                                channel = item.channel,
+                                logoUrl = getLogoUrl(item.channel)
+                            )
+                        }
+                    }.awaitAll() // 全部のロゴ取得が並行して走り、全部終わるまで待つ
+                }
+
+                _searchResults.value = results
             } catch (e: Exception) {
                 Log.e("EpgViewModel", "Search Error", e)
                 _searchResults.value = emptyList()
@@ -243,15 +271,26 @@ class EpgViewModel @Inject constructor(
         channelName: String? = null
     ): List<UiSearchResultItem> {
         return try {
-            val rawResults =
+            val rawResults = withContext(Dispatchers.Default) {
                 repository.searchFuturePrograms(keyword, genre, dateStr, isLiveOnly, channelName)
-            rawResults.map { item ->
-                UiSearchResultItem(
-                    program = item.program,
-                    channel = item.channel,
-                    // ★ 修正: LiveProvider経由で取得
-                    logoUrl = getLogoUrl(item.channel)
-                )
+            }
+
+            // こちらも同様に100件に絞ってから並列でロゴを取得
+            val topMatches = rawResults.sortedBy {
+                try { OffsetDateTime.parse(it.program.start_time) }
+                catch (e: Exception) { OffsetDateTime.MAX }
+            }.take(100)
+
+            withContext(Dispatchers.IO) {
+                topMatches.map { item ->
+                    async {
+                        UiSearchResultItem(
+                            program = item.program,
+                            channel = item.channel,
+                            logoUrl = getLogoUrl(item.channel)
+                        )
+                    }
+                }.awaitAll()
             }
         } catch (e: Exception) {
             emptyList()

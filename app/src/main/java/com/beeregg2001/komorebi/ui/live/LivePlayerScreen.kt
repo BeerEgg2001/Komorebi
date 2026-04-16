@@ -37,7 +37,7 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
+// ★ JikkyoClient のインポートを削除
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.AudioMode
@@ -144,7 +144,8 @@ fun LivePlayerScreen(
     var isHeavyUiReady by remember { mutableStateOf(false) }
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
-    val processedCommentIds = remember { Collections.synchronizedSet(LinkedHashSet<String>()) }
+
+    // ★ 不要なコメント履歴管理をViewModelへ移譲したためSetを削除
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
 
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -352,57 +353,51 @@ fun LivePlayerScreen(
         }
     }
 
-    DisposableEffect(
-        currentChannelItem.id,
-        isCommentEnabled,
-        isHeavyUiReady,
-        ps.isDualDisplayMode,
-        ps.sseStatus,
-        ps.currentStreamSource
-    ) {
-        processedCommentIds.clear()
-        val isKonomiTV = ps.currentStreamSource == StreamSource.KONOMITV
-
-        val canShowComment = isCommentEnabled && isHeavyUiReady && !ps.isDualDisplayMode &&
-                konomiIp.isNotBlank() && konomiPort.isNotBlank() &&
-                (!isKonomiTV || ps.sseStatus == "ONAir")
-
-        if (!canShowComment) {
+    // ★追加: チャンネル切替等で画面の古いコメントを全クリアする指令を受信
+    LaunchedEffect(Unit) {
+        livePlayerViewModel.clearCommentsEvent.collect {
             danmakuViewRef.value?.removeAllDanmakus(true)
-            return@DisposableEffect onDispose { }
         }
-        if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") return@DisposableEffect onDispose { }
+    }
 
-        val jikkyoClient = JikkyoClient(konomiIp, konomiPort, currentChannelItem.displayChannelId)
-        jikkyoClient.start { jsonText ->
-            try {
-                val json = JSONObject(jsonText)
-                val chat = json.optJSONObject("chat") ?: return@start
-                val content = chat.optString("content")
-                if (content.isEmpty()) return@start
-                val commentId = chat.optString("no", "") + "_" + content
-                if (commentId.isNotEmpty() && !processedCommentIds.add(commentId)) return@start
+    // ★追加: ViewModelから流れてくるコメントを受信して描画するだけ
+    LaunchedEffect(Unit) {
+        livePlayerViewModel.liveComments.collect { comment ->
+            if (!isCommentEnabled || !isHeavyUiReady || ps.isDualDisplayMode) return@collect
 
-                danmakuViewRef.value?.let { view ->
-                    (view as? android.view.View)?.post {
-                        if (!view.isPrepared) return@post
-                        val danmaku =
-                            view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL)
-                                ?: return@post
-                        danmaku.text = content; danmaku.padding = 5
-                        danmaku.textSize =
-                            (32f * commentFontSizeScale) * view.context.resources.displayMetrics.density
-                        danmaku.textColor = AndroidColor.WHITE; danmaku.textShadowColor =
-                        AndroidColor.BLACK
-                        danmaku.setTime(view.currentTime + 10)
-                        view.addDanmaku(danmaku)
+            danmakuViewRef.value?.let { view ->
+                (view as? android.view.View)?.post {
+                    if (!view.isPrepared) return@post
+
+                    val danmakuType = when (comment.position) {
+                        "top" -> BaseDanmaku.TYPE_FIX_TOP
+                        "bottom" -> BaseDanmaku.TYPE_FIX_BOTTOM
+                        else -> BaseDanmaku.TYPE_SCROLL_RL
                     }
+                    val danmaku =
+                        view.config.mDanmakuFactory.createDanmaku(danmakuType) ?: return@post
+                    danmaku.text = comment.text
+                    danmaku.padding = 5
+
+                    val sizeFactor = when (comment.size) {
+                        "big" -> 1.5f
+                        "small" -> 0.8f
+                        else -> 1.0f
+                    }
+                    danmaku.textSize =
+                        (32f * commentFontSizeScale * sizeFactor) * view.context.resources.displayMetrics.density
+
+                    try {
+                        danmaku.textColor = AndroidColor.parseColor(comment.color)
+                    } catch (e: Exception) {
+                        danmaku.textColor = AndroidColor.WHITE
+                    }
+                    danmaku.textShadowColor = AndroidColor.BLACK
+                    danmaku.setTime(view.currentTime + 10)
+                    view.addDanmaku(danmaku)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Parse Error", e)
             }
         }
-        onDispose { jikkyoClient.stop() }
     }
 
     var hasStoppedByLifecycle by remember { mutableStateOf(false) }
@@ -412,7 +407,6 @@ fun LivePlayerScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 hasStoppedByLifecycle = true
-                // ★ 修正1: ホームボタン押下時等にデコーダを完全にOSへ返却し、他アプリの邪魔をしないようにする
                 livePlayerViewModel.releasePlayers()
             } else if (event == Lifecycle.Event.ON_START) {
                 if (hasStoppedByLifecycle) {
@@ -531,7 +525,6 @@ fun LivePlayerScreen(
                         if (view.resizeMode != targetMode) view.resizeMode = targetMode
                     }
                 },
-                // ★ 修正2: OOM(メモリリーク)を防ぐため、PlayerViewの参照を解放
                 onRelease = { view -> view.player = null },
                 modifier = Modifier
                     .fillMaxSize()
@@ -581,7 +574,6 @@ fun LivePlayerScreen(
                             view.visibility =
                                 if (isSubtitleEnabled && !isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
                         },
-                        // ★ 修正2: OOM(メモリリーク)を防ぐため、WebViewを明示的に破棄する
                         onRelease = { view ->
                             view.destroy()
                             webViewRef.value = null

@@ -463,24 +463,23 @@ fun HeroDashboard(
 
                             Spacer(modifier = Modifier.width(28.dp))
 
-                            // ★ 修正: EDCBメインの時は実況の勢い表記を非表示にする
-                            if (backendType != "EDCB") {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Whatshot,
-                                        contentDescription = "Hot",
-                                        tint = if (isHot) Color(0xFFE53935) else colors.textSecondary.copy(
-                                            alpha = 0.7f
-                                        ),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "勢い: ${state.jikkyoForce ?: 0}コメ/分",
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isHot) Color(0xFFE53935) else colors.textSecondary
-                                    )
-                                }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Whatshot,
+                                    contentDescription = "Hot",
+                                    tint = if (isHot) Color(0xFFE53935) else colors.textSecondary.copy(
+                                        alpha = 0.7f
+                                    ),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "勢い: ${state.jikkyoForce ?: 0}コメ/分",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isHot) Color(0xFFE53935) else colors.textSecondary
+                                )
+
                             }
                         }
 
