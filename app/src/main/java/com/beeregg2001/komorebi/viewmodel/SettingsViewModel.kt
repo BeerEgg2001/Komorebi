@@ -63,7 +63,6 @@ class SettingsViewModel @Inject constructor(
     val edcbPort: StateFlow<String> = settingsRepository.edcbPort
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "5510")
 
-    // ★ 追加: EDCBの録画再生方式の設定 ("API" または "DIRECT")
     val edcbRecordPlayMethod: StateFlow<String> = settingsRepository.edcbRecordPlayMethod
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "API")
 
@@ -111,6 +110,10 @@ class SettingsViewModel @Inject constructor(
     val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
 
+    // ★ 追加: プレイヤーUIモードを公開
+    val playerUiMode: StateFlow<String> = settingsRepository.playerUiMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MODERN")
+
     val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val labShobocalIntegration: StateFlow<String> = settingsRepository.labShobocalIntegration
@@ -136,16 +139,19 @@ class SettingsViewModel @Inject constructor(
 
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                // 1. Roomデータベースの初期化
                 db.clearAllTables()
-
-                // 2. ★ 追加: Coilの画像キャッシュ（メモリ＆ディスク）を完全に消去する
                 context.imageLoader.memoryCache?.clear()
                 context.imageLoader.diskCache?.clear()
-
-                android.util.Log.i("SettingsViewModel", "Backend changed to $newType. Cleared AppDatabase and Image Caches.")
+                android.util.Log.i(
+                    "SettingsViewModel",
+                    "Backend changed to $newType. Cleared AppDatabase and Image Caches."
+                )
             } catch (e: Exception) {
-                android.util.Log.e("SettingsViewModel", "Failed to clear DB/Caches on backend change", e)
+                android.util.Log.e(
+                    "SettingsViewModel",
+                    "Failed to clear DB/Caches on backend change",
+                    e
+                )
             }
         }
 
@@ -160,7 +166,6 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
     }
 
-    // ★ 追加: EDCB録画再生方式の更新メソッド
     fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
     }

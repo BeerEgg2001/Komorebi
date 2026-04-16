@@ -21,12 +21,10 @@ class SettingsRepository @Inject constructor(
 ) {
 
     companion object {
-        // ★ 追加: バックエンドの選択と、各システムのIP/Port
         val BACKEND_TYPE = stringPreferencesKey("backend_type")
         val EDCB_IP = stringPreferencesKey("edcb_ip")
         val EDCB_PORT = stringPreferencesKey("edcb_port")
 
-        // ★ 追加: EDCB録画ファイルの再生方式（API経由か直接参照か）
         val EDCB_RECORD_PLAY_METHOD = stringPreferencesKey("edcb_record_play_method")
         val EPGSTATION_IP = stringPreferencesKey("epgstation_ip")
         val EPGSTATION_PORT = stringPreferencesKey("epgstation_port")
@@ -47,6 +45,10 @@ class SettingsRepository @Inject constructor(
         val VIDEO_SUBTITLE_DEFAULT = stringPreferencesKey("video_subtitle_default")
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
         val AUDIO_OUTPUT_MODE = stringPreferencesKey("audio_output_mode")
+
+        // ★ 追加: プレイヤーUIモードの設定キー
+        val PLAYER_UI_MODE = stringPreferencesKey("player_ui_mode")
+
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val LAB_ALLOW_MIRAKURUN_DUAL = stringPreferencesKey("lab_allow_mirakurun_dual")
@@ -67,7 +69,6 @@ class SettingsRepository @Inject constructor(
 
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
 
-        // ★ 追加: サブチャンネル非表示設定
         val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
     }
 
@@ -83,9 +84,8 @@ class SettingsRepository @Inject constructor(
         .map { preferences -> preferences[EDCB_IP] ?: "" }
 
     val edcbPort: Flow<String> = context.dataStore.data
-        .map { preferences -> preferences[EDCB_PORT] ?: "5510" }
+        .map { preferences -> preferences[EDCB_PORT] ?: "4510" }
 
-    // ★ 追加: EDCB録画再生方式の設定 (API または DIRECT)
     val edcbRecordPlayMethod: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[EDCB_RECORD_PLAY_METHOD] ?: "API" }
 
@@ -142,6 +142,10 @@ class SettingsRepository @Inject constructor(
 
     val audioOutputMode: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
+
+    // ★ 追加: プレイヤーUIモードのFlow (デフォルトは新機能の MODERN)
+    val playerUiMode: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[PLAYER_UI_MODE] ?: "MODERN" }
 
     val labAnnictIntegration: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[LAB_ANNICT_INTEGRATION] ?: "OFF" }
@@ -223,7 +227,7 @@ class SettingsRepository @Inject constructor(
 
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> {
                 ip = prefs[EDCB_IP] ?: ""
-                port = prefs[EDCB_PORT] ?: "5510"
+                port = prefs[EDCB_PORT] ?: "4510"
             }
         }
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
@@ -246,7 +250,6 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    // ★ 追加: 指定されたStreamSourceに対応するBackendConfigを直接生成して返す
     suspend fun getBackendConfig(source: com.beeregg2001.komorebi.data.model.StreamSource): com.beeregg2001.komorebi.data.model.BackendConfig {
         val prefs = context.dataStore.data.first()
         return when (source) {
@@ -262,7 +265,7 @@ class SettingsRepository @Inject constructor(
 
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
                 ip = prefs[EDCB_IP] ?: "",
-                port = prefs[EDCB_PORT] ?: "5510"
+                port = prefs[EDCB_PORT] ?: "4510"
             )
         }
     }

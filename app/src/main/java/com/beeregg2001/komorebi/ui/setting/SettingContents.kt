@@ -229,11 +229,9 @@ fun ConnectionSettingsContent(
     mIp: String,
     mPort: String,
     prefSrc: String,
-    // ★ 追加: EDCBの録画再生方式の設定項目
     edcbPlayMethod: String,
     onSelectEdcbPlayMethod: () -> Unit,
     edcbPlayMethodR: FocusRequester,
-    // -----------
     onEdit: (String, String) -> Unit,
     onSelectBackend: () -> Unit,
     onSelectSrc: () -> Unit,
@@ -318,7 +316,6 @@ fun ConnectionSettingsContent(
                     .focusRequester(backendPortR)
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
-                        // ★ 修正: EDCBの場合は次に再生方式フォーカスへ
                         down =
                             if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                     },
@@ -330,7 +327,6 @@ fun ConnectionSettingsContent(
             }
         }
 
-        // ★ 追加: メインシステムがEDCBの場合のみ、録画ファイルの再生方式設定を表示
         if (backendType == "EDCB") {
             SettingsSection("EDCB 録画再生設定") {
                 SettingItem(
@@ -366,7 +362,6 @@ fun ConnectionSettingsContent(
                         .focusRequester(prefSrcR)
                         .focusProperties {
                             left = sidebarR
-                            // ★ 修正: EDCBの場合は上を再生方式フォーカスへ
                             up = if (backendType == "EDCB") edcbPlayMethodR else backendPortR
                             down = if (hasOverride) overrideIpR else FocusRequester.Cancel
                         },
@@ -445,12 +440,14 @@ fun PlaybackSettingsContent(
     videoSub: String,
     layerOrder: String,
     audioMode: String,
+    uiMode: String, // ★ 追加: プレイヤーUIモード
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
     audioR: FocusRequester,
     layerR: FocusRequester,
+    uiModeR: FocusRequester, // ★ 追加: UIモード設定用のFocusRequester
     sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
@@ -458,6 +455,7 @@ fun PlaybackSettingsContent(
     onVideoSub: () -> Unit,
     onAudioMode: () -> Unit,
     onLayer: () -> Unit,
+    onUiMode: () -> Unit, // ★ 追加: 変更時のコールバック
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -541,9 +539,26 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = audioR
-                        down = FocusRequester.Cancel
+                        down = uiModeR // ★ 変更: 下のフォーカスをuiModeRへ
                     },
                 onClick = { onClick(layerR); onLayer() })
+        }
+
+        // ★ 追加: プレイヤー操作・UI設定セクション
+        SettingsSection("プレイヤー操作・UI設定") {
+            SettingItem(
+                title = "プレイヤーUIモード",
+                value = if (uiMode == "CLASSIC") "クラシック (D-Pad完結)" else "モダン (オンスクリーン操作)",
+                icon = Icons.Default.SettingsRemote, // アイコンはリモコンのイメージ
+                modifier = Modifier
+                    .focusRequester(uiModeR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = layerR
+                        down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(uiModeR); onUiMode() }
+            )
         }
     }
 }

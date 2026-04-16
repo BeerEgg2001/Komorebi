@@ -5,8 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -24,8 +26,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 
 /* 画面中央に表示される再生・一時停止等のオーバーレイを表示するメソッド */
@@ -349,6 +353,120 @@ private fun VideoAdjustmentButton(
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(icon, null, modifier = Modifier.size(24.dp))
+        }
+    }
+}
+
+/**
+ * ★ 修正: 番組詳細を表示するオーバーレイパネル (右側に配置＆スクロール対応)
+ */
+@Composable
+fun ProgramInfoOverlay(
+    program: RecordedProgram,
+    onClose: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+    val scrollState = rememberScrollState() // ★ スクロール状態の管理
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        delay(150)
+        try { focusRequester.requestFocus() } catch (e: Exception) {}
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.6f))
+            .onKeyEvent {
+                if (it.type == androidx.compose.ui.input.key.KeyEventType.KeyDown) {
+                    when (it.nativeKeyEvent.keyCode) {
+                        // 戻るキー
+                        android.view.KeyEvent.KEYCODE_BACK,
+                        android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                            onClose()
+                            true
+                        }
+                        // ★ 下キーでスクロール
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
+                            true
+                        }
+                        // ★ 上キーでスクロール
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
+                            true
+                        }
+                        else -> false
+                    }
+                } else false
+            },
+        contentAlignment = Alignment.CenterEnd // ★ 修正: 右側に配置
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(480.dp)
+                .background(colors.surface.copy(alpha = 0.95f))
+                .border(1.dp, colors.textPrimary.copy(alpha = 0.1f))
+                .focusRequester(focusRequester)
+                .focusable()
+                .verticalScroll(scrollState) // ★ 修正: paddingの前にscrollを置く
+                .padding(32.dp)
+        ) {
+            Text(
+                text = program.title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = program.description,
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.textSecondary,
+                lineHeight = 24.sp
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+
+            if (!program.genres.isNullOrEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    program.genres?.forEach { genre ->
+                        Box(
+                            modifier = Modifier
+                                .background(colors.accent.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = genre.major,
+                                color = colors.accent,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            program.detail?.forEach { (key, value) ->
+                Text(
+                    text = key,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
 }

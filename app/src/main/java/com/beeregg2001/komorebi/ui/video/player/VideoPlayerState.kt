@@ -8,11 +8,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.AudioMode
 
-// ★ 追加: L字クロップ機能のモードと起点の定義
 enum class LCropMode { HIDDEN, MENU, DIRECT_ADJUST }
 enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
 
-// ★ 追加: チャプター情報のデータモデル (SceneSearchOverlayから移動)
 data class ChapterInfo(
     val startTimeMs: Long,
     val endTimeMs: Long,
@@ -42,24 +40,21 @@ class VideoPlayerState(
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
 
-    // ★ 追加: L字クロップ関連の状態変数
+    // ★ 追加: モダンUI時のシークバーフォーカス状態
+    var isSeekBarFocused by mutableStateOf(false)
+
+    // L字クロップ関連の状態変数
     var lCropEnabled by mutableStateOf(false)
     var lCropMode by mutableStateOf(LCropMode.HIDDEN)
-    var lCropZoom by mutableFloatStateOf(100f) // 100f to 200f
-    var lCropX by mutableFloatStateOf(0f) // -100f to 100f (パーセンテージ)
-    var lCropY by mutableFloatStateOf(0f) // -100f to 100f (パーセンテージ)
+    var lCropZoom by mutableFloatStateOf(100f)
+    var lCropX by mutableFloatStateOf(0f)
+    var lCropY by mutableFloatStateOf(0f)
     var lCropOrigin by mutableStateOf(ZoomOrigin.TopRight)
 
-    /**
-     * 画面中央のインジケーター（再生・一時停止など）を更新します
-     */
     fun updateIndicator(icon: ImageVector, label: String) {
         indicatorState = IndicatorState(icon, label)
     }
 
-    /**
-     * 再生・一時停止のトグルとインジケーター表示を行います
-     */
     fun togglePlayPause(isPlaying: Boolean) {
         if (isPlaying) {
             updateIndicator(Icons.Default.Pause, "停止")

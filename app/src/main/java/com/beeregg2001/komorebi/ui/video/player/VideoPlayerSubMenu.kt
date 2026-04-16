@@ -3,16 +3,19 @@
 package com.beeregg2001.komorebi.ui.video.player
 
 import android.view.KeyEvent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -162,7 +165,7 @@ fun VideoTopSubMenuUI(
                 )
 
                 VideoMenuTileItem(
-                    title = "実況",
+                    title = "実況コメント",
                     icon = Icons.Default.Chat,
                     subtitle = if (isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
@@ -305,6 +308,236 @@ fun VideoMenuTileItem(
                     color = LocalContentColor.current.copy(alpha = 0.7f)
                 )
             }
+        }
+    }
+}
+
+/**
+ * モダンUI専用の縦型設定メニュー (右端からスライドイン)
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+fun ModernVideoSettingsOverlay(
+    currentAudioMode: AudioMode,
+    currentSpeed: Float,
+    isSubtitleEnabled: Boolean,
+    currentQuality: StreamQuality,
+    isCommentEnabled: Boolean,
+    isLCropEnabled: Boolean,
+    isQualityEnabled: Boolean = true, // ★ 追加
+    onAudioToggle: () -> Unit,
+    onSpeedToggle: () -> Unit,
+    onSubtitleToggle: () -> Unit,
+    onQualitySelect: (StreamQuality) -> Unit,
+    onCommentToggle: () -> Unit,
+    onLCropToggle: () -> Unit,
+    onClose: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
+    val initialFocusRequester = remember { FocusRequester() }
+    val qualityListRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(150)
+        try {
+            initialFocusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
+    }
+
+    LaunchedEffect(selectedCategory) {
+        if (selectedCategory == SubMenuCategory.QUALITY) {
+            delay(100)
+            try {
+                qualityListRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.4f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown &&
+                    (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
+                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                ) {
+                    if (selectedCategory != null) {
+                        selectedCategory = null
+                        try {
+                            initialFocusRequester.requestFocus()
+                        } catch (e: Exception) {
+                        }
+                        true
+                    } else {
+                        onClose()
+                        true
+                    }
+                } else false
+            },
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(360.dp)
+                .background(colors.surface.copy(alpha = 0.95f))
+                .border(1.dp, colors.textPrimary.copy(alpha = 0.1f))
+                .padding(horizontal = 24.dp, vertical = 32.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = colors.textPrimary)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = if (selectedCategory == SubMenuCategory.QUALITY) "画質の選択" else "プレイヤー設定",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+
+            AnimatedContent(targetState = selectedCategory, label = "SettingsMenu") { category ->
+                if (category == null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ModernSettingRow(
+                            title = "音声切替",
+                            value = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
+                            icon = Icons.Default.Audiotrack,
+                            onClick = onAudioToggle,
+                            modifier = Modifier.focusRequester(initialFocusRequester)
+                        )
+                        ModernSettingRow(
+                            title = "再生速度",
+                            value = "${currentSpeed}x",
+                            icon = Icons.Default.Speed,
+                            onClick = onSpeedToggle
+                        )
+                        ModernSettingRow(
+                            title = "字幕",
+                            value = if (isSubtitleEnabled) "表示" else "非表示",
+                            icon = Icons.Default.Subtitles,
+                            onClick = onSubtitleToggle
+                        )
+                        // ★ 修正: EDCB時はグレーアウトし、テキストを「オリジナル」に変更
+                        ModernSettingRow(
+                            title = "画質",
+                            value = if (isQualityEnabled) currentQuality.label else "オリジナル (生TS)",
+                            icon = Icons.Default.HighQuality,
+                            onClick = {
+                                if (isQualityEnabled) selectedCategory = SubMenuCategory.QUALITY
+                            },
+                            enabled = isQualityEnabled
+                        )
+                        ModernSettingRow(
+                            title = "実況コメント",
+                            value = if (isCommentEnabled) "表示" else "非表示",
+                            icon = Icons.Default.Chat,
+                            onClick = onCommentToggle
+                        )
+                        ModernSettingRow(
+                            title = "L字クロップ",
+                            value = if (isLCropEnabled) "有効" else "設定",
+                            icon = Icons.Default.Crop,
+                            onClick = onLCropToggle,
+                            highlight = isLCropEnabled
+                        )
+                    }
+                } else if (category == SubMenuCategory.QUALITY) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StreamQuality.entries.forEachIndexed { index, quality ->
+                            val isSelected = currentQuality == quality
+                            ModernSettingRow(
+                                title = quality.label,
+                                value = if (isSelected) "✓" else "",
+                                icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                onClick = {
+                                    onQualitySelect(quality)
+                                    selectedCategory = null
+                                    try {
+                                        initialFocusRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
+                                },
+                                highlight = isSelected,
+                                modifier = if (isSelected) Modifier.focusRequester(
+                                    qualityListRequester
+                                ) else Modifier
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun ModernSettingRow(
+    title: String,
+    value: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    highlight: Boolean = false,
+    enabled: Boolean = true // ★ 追加: 無効化フラグ
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = { if (enabled) onClick() },
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        // ★ 無効時はフォーカス時の拡大アニメーションを止める
+        scale = if (enabled) ClickableSurfaceDefaults.scale(focusedScale = 1.05f) else ClickableSurfaceDefaults.scale(
+            focusedScale = 1f
+        ),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (highlight && enabled) colors.accent.copy(alpha = 0.1f) else Color.Transparent,
+            // ★ 無効時はフォーカスが当たっても薄いハイライトにする
+            focusedContainerColor = if (enabled) colors.accent else Color.White.copy(alpha = 0.1f),
+            contentColor = if (enabled) colors.textPrimary else colors.textSecondary.copy(alpha = 0.5f),
+            focusedContentColor = if (enabled) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary.copy(
+                alpha = 0.5f
+            )
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .alpha(if (enabled) 1f else 0.5f) // ★ 無効時は全体を半透明に
+            .onFocusChanged { isFocused = it.isFocused }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = if (isFocused) Color.Unspecified else if (highlight && enabled) colors.accent else colors.textSecondary
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isFocused) Color.Unspecified else colors.textSecondary
+            )
         }
     }
 }

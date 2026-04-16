@@ -63,6 +63,9 @@ fun SettingsScreen(
 
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
 
+    // ★ 追加: 新しく作成したUIモードのStateを取得
+    val playerUiMode by viewModel.playerUiMode.collectAsState()
+
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
@@ -105,7 +108,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester()
+                FocusRequester(),
+                FocusRequester() // ★ 追加: プレイヤーUIモード用のFocusRequester
             ), // 2: Playback
             listOf(FocusRequester()), // 3: Recording
             listOf(
@@ -310,7 +314,6 @@ fun SettingsScreen(
                         prefSrc = prefs.preferredSource,
                         edcbPlayMethod = prefs.edcbRecordPlayMethod,
                         onSelectEdcbPlayMethod = {
-                            // ★ 修正箇所: 表示名と保存する値の順序を逆にしました
                             val options = listOf(
                                 "API経由 (api/Movie)" to "API",
                                 "直接アクセス (高速シーク可)" to "DIRECT"
@@ -406,12 +409,14 @@ fun SettingsScreen(
                         videoSub = prefs.videoSubtitleDefault,
                         layerOrder = prefs.subtitleCommentLayer,
                         audioMode = prefs.audioOutputMode,
+                        uiMode = playerUiMode, // ★ 追加
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
                         liveSubR = itemFocusRequesters[2][2],
                         videoSubR = itemFocusRequesters[2][3],
                         audioR = itemFocusRequesters[2][4],
                         layerR = itemFocusRequesters[2][5],
+                        uiModeR = itemFocusRequesters[2][6], // ★ 追加
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
                             val options = StreamQuality.entries.map { it.label to it.value }
@@ -498,6 +503,27 @@ fun SettingsScreen(
                                 scope.launch {
                                     repository.saveString(
                                         SettingsRepository.AUDIO_OUTPUT_MODE,
+                                        it
+                                    )
+                                }
+                            }
+                        },
+                        // ★ 追加: プレイヤーUIモードの変更イベント
+                        onUiMode = {
+                            val options = listOf(
+                                "モダン (オンスクリーン操作)" to "MODERN",
+                                "クラシック (D-Pad完結)" to "CLASSIC"
+                            )
+                            val safeCurrent =
+                                if (options.any { it.second == playerUiMode }) playerUiMode else "MODERN"
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "プレイヤーUIモード",
+                                options,
+                                safeCurrent
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.PLAYER_UI_MODE,
                                         it
                                     )
                                 }
