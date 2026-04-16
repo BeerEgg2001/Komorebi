@@ -64,8 +64,7 @@ fun VideoPlayerScreen(
     program: RecordedProgram,
     initialPositionMs: Long = 0,
     initialQuality: String = "1080p-60fps",
-    konomiIp: String,
-    konomiPort: String,
+    // ★ 変更: konomiIp と konomiPort の引数を削除 (ViewModel内で解決するため不要)
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -84,6 +83,10 @@ fun VideoPlayerScreen(
 
     var currentProgram by remember { mutableStateOf(program) }
     val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
+
+    // ★ 追加: ViewModelからタイルURLとチャプター情報を取得
+    val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
+    val chapters by videoPlayerViewModel.chapters.collectAsState()
 
     var isBuffering by remember { mutableStateOf(true) }
 
@@ -403,10 +406,14 @@ fun VideoPlayerScreen(
                                 if (!isRightKeyLongPressed && elapsed > 500) {
                                     isRightKeyLongPressed = true; onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val boundaries = getChapterBoundaries(
-                                        duration,
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    )
+                                    // ★ 変更: ViewModelから取得したchaptersを使用
+                                    val boundaries = listOf(0L) + chapters.flatMap {
+                                        listOf(
+                                            it.startTimeMs,
+                                            it.endTimeMs
+                                        )
+                                    }.distinct() + duration
+
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition + 180_000).coerceAtMost(
@@ -446,10 +453,14 @@ fun VideoPlayerScreen(
                                 if (!isLeftKeyLongPressed && elapsed > 500) {
                                     isLeftKeyLongPressed = true; onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val boundaries = getChapterBoundaries(
-                                        duration,
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    )
+                                    // ★ 変更: ViewModelから取得したchaptersを使用
+                                    val boundaries = listOf(0L) + chapters.flatMap {
+                                        listOf(
+                                            it.startTimeMs,
+                                            it.endTimeMs
+                                        )
+                                    }.distinct() + duration
+
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition - 60_000).coerceAtLeast(
@@ -488,11 +499,8 @@ fun VideoPlayerScreen(
                                 val elapsed = System.currentTimeMillis() - downKeyDownTime
                                 if (!isDownKeyLongPressed && elapsed > 500) {
                                     isDownKeyLongPressed = true
-                                    if (getChapterBoundaries(
-                                            exoPlayer.duration.coerceAtLeast(1L),
-                                            mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                        ).size > 2
-                                    ) {
+                                    // ★ 変更: ViewModelから取得したchaptersを使用
+                                    if (chapters.size > 1) {
                                         isChapterListOpen = true; onShowControlsChange(true)
                                     }
                                 }
@@ -614,20 +622,19 @@ fun VideoPlayerScreen(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
+                // ★ 変更: tiledThumbnailUrl を ViewModel から渡す
                 SceneSearchOverlay(
-                    currentProgram, exoPlayer.currentPosition, konomiIp, konomiPort,
-                    {
+                    program = currentProgram,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = exoPlayer.currentPosition,
+                    onSeekRequested = {
                         exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(
-                        TAG
-                    )
+                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
                     }
                     },
-                    {
+                    onClose = {
                         onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(
-                        TAG
-                    )
+                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
                     }
                     }
                 )
@@ -637,17 +644,19 @@ fun VideoPlayerScreen(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
+                // ★ 変更: chapters と tiledThumbnailUrl を ViewModel から渡す
                 ChapterListOverlay(
-                    currentProgram, exoPlayer.currentPosition, konomiIp, konomiPort,
-                    {
+                    program = currentProgram,
+                    chapters = chapters,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = exoPlayer.currentPosition,
+                    onSeekRequested = {
                         exoPlayer.seekTo(it); isChapterListOpen =
                         false; scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
                     },
-                    {
+                    onClose = {
                         isChapterListOpen = false; scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(
-                        TAG
-                    )
+                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
                     }
                     }
                 )
@@ -685,11 +694,11 @@ fun VideoPlayerScreen(
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                            TrackSelectionOverride(
-                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                0
+                                TrackSelectionOverride(
+                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                    0
+                                )
                             )
-                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {

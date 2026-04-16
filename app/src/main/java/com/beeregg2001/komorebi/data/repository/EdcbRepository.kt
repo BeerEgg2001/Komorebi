@@ -1197,6 +1197,29 @@ class EdcbRepository @Inject constructor(
             }
         }
 
+    // ★ 追加: EDCB環境におけるタイル画像への直接URLを生成
+    override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
+        withContext(Dispatchers.IO) {
+            val ip = settingsRepository.edcbIp.first()
+            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+
+            // キャッシュまたはAPIから録画情報を取得
+            val info = cachedRecInfos?.find { it.id == videoId }
+                ?: EdcbApi(ip, port).getRecInfo(videoId).getOrNull()
+
+            if (info == null) return@withContext null
+
+            // EDCBの録画ファイルパスからURLパスへの変換
+            val relativePath = info.recFilePath
+                .replace(Regex("^[a-zA-Z]:\\\\"), "")
+                .replace("\\", "/")
+            val encodedPath = android.net.Uri.encode(relativePath, "/")
+
+            // Komorebi互換バッチが生成するファイル名 (例: _tile.webp) を想定したURLを返す
+            // 拡張子やサフィックスは、バッチの出力仕様に合わせて後から調整可能です
+            return@withContext "http://$ip:$port/rec/${encodedPath}_tile.webp"
+        }
+
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse =
         RecordedApiResponse(0, emptyList())
 

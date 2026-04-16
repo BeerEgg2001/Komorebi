@@ -97,6 +97,14 @@ class KonomiRepository @Inject constructor(
         }
     }
 
+    // ★ 追加: KonomiTV仕様のタイル画像URLを生成
+    override suspend fun getTiledThumbnailUrl(videoId: Int): String? {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        // 既存の UrlBuilder.getTiledThumbnailUrl をそのまま利用します
+        return UrlBuilder.getTiledThumbnailUrl(ip, port, videoId)
+    }
+
     // ==========================================
     // マイリスト・視聴履歴の管理 (API通信のみ)
     // ==========================================

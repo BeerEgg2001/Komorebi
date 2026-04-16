@@ -932,7 +932,6 @@ fun MainRootScreen(
                                     program = state.selectedProgram!!,
                                     initialPositionMs = state.initialPlaybackPositionMs,
                                     initialQuality = defaultVideoQuality,
-                                    konomiIp = konomiIp, konomiPort = konomiPort,
                                     showControls = state.showPlayerControls,
                                     onShowControlsChange = { state.showPlayerControls = it },
                                     isSubMenuOpen = state.isPlayerSubMenuOpen,

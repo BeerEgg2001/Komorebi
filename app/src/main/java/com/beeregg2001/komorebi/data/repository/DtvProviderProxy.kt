@@ -91,6 +91,10 @@ class DtvProviderProxy @Inject constructor(
         (getActiveProvider() as RecordProvider).keepAlive(videoId, quality, sessionId)
     }
 
+    // ★ 追加: アクティブなプロバイダにタイル画像URLの取得を委譲
+    override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
+        (getActiveProvider() as RecordProvider).getTiledThumbnailUrl(videoId)
+
     override suspend fun getReserves() =
         (getActiveProvider() as ReserveProvider).getReserves()
 

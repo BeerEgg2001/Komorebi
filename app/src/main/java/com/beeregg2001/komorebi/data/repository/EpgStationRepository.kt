@@ -37,6 +37,8 @@ class EpgStationRepository @Inject constructor(
     override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
     }
 
+    override suspend fun getTiledThumbnailUrl(videoId: Int): String = ""
+
     override suspend fun getReserves(): Result<List<ReserveItem>> = Result.success(emptyList())
     override suspend fun addReserve(request: ReserveRequest): Result<Unit> =
         Result.failure(NotImplementedError())

@@ -30,6 +30,9 @@ interface RecordProvider {
 
     @androidx.annotation.OptIn(UnstableApi::class)
     suspend fun keepAlive(videoId: Int, quality: String, sessionId: String)
+
+    // ★ 追加: シークバー・シーンサーチ用のタイル画像(スプライト)URLを取得する
+    suspend fun getTiledThumbnailUrl(videoId: Int): String?
 }
 
 /**

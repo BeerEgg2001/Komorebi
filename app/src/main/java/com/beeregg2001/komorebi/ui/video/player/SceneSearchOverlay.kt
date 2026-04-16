@@ -30,9 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.data.model.CmSection
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -45,7 +43,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
 import java.security.MessageDigest
-import kotlin.math.abs
 import kotlin.math.floor
 
 private const val TAG = "SceneSearchOverlay"
@@ -125,9 +122,8 @@ class TileSheetLoader(private val context: Context) {
 @Composable
 fun SceneSearchOverlay(
     program: RecordedProgram,
+    tiledThumbnailUrl: String?, // ★ ViewModelから受け取るように変更
     currentPositionMs: Long,
-    konomiIp: String,
-    konomiPort: String,
     onSeekRequested: (Long) -> Unit,
     onClose: () -> Unit
 ) {
@@ -222,17 +218,9 @@ fun SceneSearchOverlay(
                     .height(126.dp)
             ) {
                 itemsIndexed(timePoints) { index, time ->
-                    val tiledUrl = remember(program.recordedVideo.id) {
-                        UrlBuilder.getTiledThumbnailUrl(
-                            konomiIp,
-                            konomiPort,
-                            program.recordedVideo.id
-                        )
-                    }
-
                     TiledThumbnailItem(
                         time = time,
-                        imageUrl = tiledUrl,
+                        imageUrl = tiledThumbnailUrl ?: "", // ★ 変更
                         loader = loader,
                         tileColumns = tileColumns,
                         tileInterval = tileInterval,
@@ -304,19 +292,18 @@ fun TiledThumbnailItem(
     onClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
-    // ★追加: 表示する時間表示（UI）はそのままに、取得する画像の時間をずらすためのパラメータ
     imageTimeOffsetSec: Long = 0L,
     overlayContent: @Composable BoxScope.() -> Unit = {}
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    // ★追加: 実際の画像取得にはオフセットを加算した時間を使用する
     val fetchTime = time + imageTimeOffsetSec
     val tileIndex = floor(fetchTime / tileInterval).toInt()
     val col = tileIndex % tileColumns
     val row = tileIndex / tileColumns
 
     LaunchedEffect(imageUrl, col, row) {
+        if (imageUrl.isBlank()) return@LaunchedEffect // 画像がない場合はスキップ
         delay(50)
         if (isActive) {
             val result = loader.loadTile(imageUrl, col, row, tileWidth, tileHeight)
@@ -349,7 +336,10 @@ fun TiledThumbnailItem(
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
-                Box(Modifier.fillMaxSize())
+                // サムネイルがない場合のフォールバック表示 (グレー背景)
+                Box(Modifier
+                    .fillMaxSize()
+                    .background(Color.DarkGray))
             }
 
             overlayContent()
@@ -360,7 +350,6 @@ fun TiledThumbnailItem(
                     .background(Color.Black.copy(0.7f))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
-                // UI上の表示テキストは元の `time` のまま（シーク先も元の時間）
                 Text(
                     text = formatSecondsToTime(time),
                     color = Color.White,
@@ -380,64 +369,13 @@ private fun formatSecondsToTime(sec: Long): String {
 }
 
 
-// =========================================================================
-// ★ チャプター計算ロジック と チャプター一覧UI
-// =========================================================================
-
-data class ChapterInfo(
-    val startTimeMs: Long,
-    val endTimeMs: Long,
-    val isCm: Boolean
-)
-
-/**
- * 連続するCM区間をマージし、本編とCMを交互に並べたチャプターリストを生成する
- */
-fun mergeCmSections(sections: List<CmSection>?): List<CmSection> {
-    if (sections.isNullOrEmpty()) return emptyList()
-    // 開始時間順にソート
-    val sorted = sections.sortedBy { it.startTime }
-    val merged = mutableListOf<CmSection>()
-
-    if (sorted.isEmpty()) return merged
-
-    var currentStart = sorted[0].startTime
-    var currentEnd = sorted[0].endTime
-
-    for (i in 1 until sorted.size) {
-        val next = sorted[i]
-        // 区間が重なっているか、隙間が1秒以内ならマージする
-        if (next.startTime <= currentEnd + 1.0) {
-            currentEnd = maxOf(currentEnd, next.endTime)
-        } else {
-            merged.add(CmSection(currentStart, currentEnd))
-            currentStart = next.startTime
-            currentEnd = next.endTime
-        }
-    }
-    merged.add(CmSection(currentStart, currentEnd))
-    return merged
-}
-
-/**
- * 番組全体の尺とマージ済みCM区間から、全てのチャプター境界(ms)を算出する
- */
-fun getChapterBoundaries(durationMs: Long, mergedCmSections: List<CmSection>): List<Long> {
-    val boundaries = mutableSetOf<Long>(0L, durationMs)
-    mergedCmSections.forEach {
-        boundaries.add((it.startTime * 1000).toLong())
-        boundaries.add((it.endTime * 1000).toLong())
-    }
-    return boundaries.sorted()
-}
-
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun ChapterListOverlay(
     program: RecordedProgram,
+    chapters: List<ChapterInfo>, // ★ ViewModelから受け取るように変更
+    tiledThumbnailUrl: String?,  // ★ ViewModelから受け取るように変更
     currentPositionMs: Long,
-    konomiIp: String,
-    konomiPort: String,
     onSeekRequested: (Long) -> Unit,
     onClose: () -> Unit
 ) {
@@ -454,43 +392,10 @@ fun ChapterListOverlay(
 
     val durationMs = (program.recordedVideo.duration * 1000).toLong()
 
-    // 1. CM区間をマージして整理
-    val mergedCmSections = remember(program.recordedVideo.cmSections) {
-        mergeCmSections(program.recordedVideo.cmSections)
-    }
-
-    // 2. 本編/CMの切り替わりポイントを算出
-    val boundaries = remember(durationMs, mergedCmSections) {
-        getChapterBoundaries(durationMs, mergedCmSections)
-    }
-
-    // 3. チャプター情報のリストを作成
-    val chapters = remember(boundaries, mergedCmSections) {
-        val list = mutableListOf<ChapterInfo>()
-        for (i in 0 until boundaries.size - 1) {
-            val start = boundaries[i]
-            val end = boundaries[i + 1]
-
-            // 判定にノイズが混ざるのを防ぐため、1秒未満の極端に短い区間はスキップ（末尾以外）
-            if (end - start < 2000 && i != boundaries.size - 2) continue
-
-            // この区間の「ど真ん中」の時間がCMブロックに含まれているかで判定
-            val midPoint = (start + end) / 2
-            val isCm = mergedCmSections.any { cm ->
-                val cmStartMs = (cm.startTime * 1000).toLong()
-                val cmEndMs = (cm.endTime * 1000).toLong()
-                midPoint in cmStartMs..cmEndMs
-            }
-            list.add(ChapterInfo(start, end, isCm))
-        }
-        list
-    }
-
     var focusedTime by remember { mutableLongStateOf(currentPositionMs / 1000) }
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    // 現在の再生位置が含まれるチャプターを特定して初期フォーカス
     val targetIndex = remember(chapters) {
         val idx =
             chapters.indexOfFirst { it.startTimeMs <= currentPositionMs && currentPositionMs < it.endTimeMs }
@@ -504,9 +409,11 @@ fun ChapterListOverlay(
     val centerOffset = (-(screenWidthPx / 2) + (itemWidthPx / 2)).toInt()
 
     LaunchedEffect(targetIndex) {
-        listState.scrollToItem(targetIndex, centerOffset)
-        delay(150)
-        focusRequester.safeRequestFocus(TAG)
+        if (chapters.isNotEmpty()) {
+            listState.scrollToItem(targetIndex, centerOffset)
+            delay(150)
+            focusRequester.safeRequestFocus(TAG)
+        }
     }
 
     Box(
@@ -522,7 +429,7 @@ fun ChapterListOverlay(
                     }
 
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        true // 下キーは無効化（長押しの流れ弾防止）
+                        true
                     }
 
                     else -> false
@@ -554,15 +461,6 @@ fun ChapterListOverlay(
                     .height(126.dp)
             ) {
                 itemsIndexed(chapters) { index, chapter ->
-                    val tiledUrl = remember(program.recordedVideo.id) {
-                        UrlBuilder.getTiledThumbnailUrl(
-                            konomiIp,
-                            konomiPort,
-                            program.recordedVideo.id
-                        )
-                    }
-
-                    // バッジの色設定
                     val tagColor = if (chapter.isCm) Color(0xFFE53935) else Color(0xFF1E88E5)
                     val tagText = if (chapter.isCm) "CM" else "本編"
 
@@ -571,7 +469,6 @@ fun ChapterListOverlay(
                     val s = lengthSec % 60
                     val lengthText = if (m > 0) "${m}分${s}秒" else "${s}秒"
 
-                    // ★追加: サムネイル取得時間を+5秒オフセットする（ただしチャプター尺が極端に短い場合ははみ出さないように制限）
                     val offsetSec = minOf(5L, maxOf(0L, lengthSec / 2))
 
                     Box(
@@ -579,17 +476,16 @@ fun ChapterListOverlay(
                     ) {
                         TiledThumbnailItem(
                             time = chapter.startTimeMs / 1000,
-                            imageUrl = tiledUrl,
+                            imageUrl = tiledThumbnailUrl ?: "", // ★ 変更
                             loader = loader,
                             tileColumns = tileColumns,
                             tileInterval = tileInterval,
                             tileWidth = tileWidth,
                             tileHeight = tileHeight,
-                            imageTimeOffsetSec = offsetSec, // ★オフセットを適用
+                            imageTimeOffsetSec = offsetSec,
                             onClick = { onSeekRequested(chapter.startTimeMs) },
                             onFocused = { focusedTime = chapter.startTimeMs / 1000 },
                             overlayContent = {
-                                // バッジの描画（フォーカス時に拡大に追従するように内部に配置）
                                 Row(
                                     modifier = Modifier
                                         .align(Alignment.TopStart)

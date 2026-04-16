@@ -12,6 +12,13 @@ import com.beeregg2001.komorebi.data.model.AudioMode
 enum class LCropMode { HIDDEN, MENU, DIRECT_ADJUST }
 enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
 
+// ★ 追加: チャプター情報のデータモデル (SceneSearchOverlayから移動)
+data class ChapterInfo(
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val isCm: Boolean
+)
+
 @Stable
 class VideoPlayerState(
     initialQuality: String
