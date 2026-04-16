@@ -987,6 +987,49 @@ class EdcbRepository @Inject constructor(
         } catch (e: Exception) {
         }
 
+        // ★ 追加: .tile.json を取得してサムネイル情報を構築する
+        var thumbnailInfo: ThumbnailInfo? = null
+        try {
+            val jsonUrlsToTry = listOf(
+                "http://$ip:$httpPort/rec/$encodedPath.tile.json"
+            )
+
+            var jsonText: String? = null
+            for (urlStr in jsonUrlsToTry) {
+                try {
+                    val url = java.net.URL(urlStr)
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 1500
+                    connection.readTimeout = 1500
+
+                    if (connection.responseCode == 200) {
+                        val bytes = connection.inputStream.readBytes()
+                        jsonText = String(bytes, Charsets.UTF_8)
+                        break
+                    }
+                } catch (e: Exception) {
+                }
+            }
+
+            if (jsonText != null) {
+                val jsonObj = org.json.JSONObject(jsonText)
+                val tileInfo = TileInfo(
+                    imageWidth = jsonObj.optInt("image_width", 0),
+                    imageHeight = jsonObj.optInt("image_height", 0),
+                    tileWidth = jsonObj.optInt("tile_width", 320),
+                    tileHeight = jsonObj.optInt("tile_height", 180),
+                    columnCount = jsonObj.optInt("column_count", 1),
+                    rowCount = jsonObj.optInt("row_count", 1),
+                    intervalSec = jsonObj.optDouble("interval_sec", 10.0),
+                    totalTiles = jsonObj.optInt("total_tiles", 1)
+                )
+                thumbnailInfo = ThumbnailInfo(version = 1, tile = tileInfo)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse tile.json", e)
+        }
+
         return@withContext RecordedProgram(
             info.id, info.title, null, false,
             cleanDescription,
@@ -1010,6 +1053,8 @@ class EdcbRepository @Inject constructor(
                 containerFormat = "mpegts",
                 videoCodec = "mpeg2",
                 audioCodec = "aac",
+                hasKeyFrames = true, // ★ 追加に伴う引数整理
+                thumbnailInfo = thumbnailInfo, // ★ Jsonから生成した情報をセット
                 cmSections = cmSections
             ),
             extractedGenres,
@@ -1197,11 +1242,26 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    // ★ 追加: EDCB環境におけるタイル画像への直接URLを生成
+    // ★ 修正: EDCB環境におけるタイル画像への直接URLを生成 (.tile.webp)
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
         withContext(Dispatchers.IO) {
             val ip = settingsRepository.edcbIp.first()
             val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+
+            var safeHttpPort = httpPortCache ?: 5510
+            if (httpPortCache == null && !logoDataIniAttempted) {
+                try {
+                    val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
+                        ?.firstOrNull { it.data.isNotEmpty() }
+                    if (srvIni != null) {
+                        val iniText = decodeEdcbString(srvIni.data)
+                        Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
+                            ?.let { safeHttpPort = it.groupValues[1].toInt() }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to get HttpPort from EpgTimerSrv.ini", e)
+                }
+            }
 
             // キャッシュまたはAPIから録画情報を取得
             val info = cachedRecInfos?.find { it.id == videoId }
@@ -1215,9 +1275,8 @@ class EdcbRepository @Inject constructor(
                 .replace("\\", "/")
             val encodedPath = android.net.Uri.encode(relativePath, "/")
 
-            // Komorebi互換バッチが生成するファイル名 (例: _tile.webp) を想定したURLを返す
-            // 拡張子やサフィックスは、バッチの出力仕様に合わせて後から調整可能です
-            return@withContext "http://$ip:$port/rec/${encodedPath}_tile.webp"
+            // Komorebi互換バッチが生成するファイル名 (.tile.webp) を想定したURLを返す
+            return@withContext "http://$ip:$safeHttpPort/rec/${encodedPath}.tile.webp"
         }
 
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse =

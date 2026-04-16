@@ -5,7 +5,7 @@ package com.beeregg2001.komorebi.ui.video.player
 import android.content.Context
 import android.os.Build
 import android.util.Base64
-import android.util.Log
+import android.util.Log // ★ 追加: ログ用
 import android.view.SurfaceView
 import android.view.View
 import android.view.KeyEvent as NativeKeyEvent
@@ -86,6 +86,11 @@ fun VideoPlayerScreen(
 
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
+
+    // ★ ログ仕込み: ViewModelからのURL伝播を確認
+    LaunchedEffect(tiledThumbnailUrl) {
+        Log.i(TAG, "[DataCheck] Screen received tiledThumbnailUrl update: $tiledThumbnailUrl")
+    }
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
     val backendType by settingsViewModel.backendType.collectAsState()
@@ -334,7 +339,7 @@ fun VideoPlayerScreen(
         if (isSubMenuOpen) {
             subMenuFocusRequester.safeRequestFocus(TAG)
         } else if (isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen) {
-            // 各オーバーレイに委ねる
+            // オーバーレイ内で処理
         } else if (showControls && isModern) {
             playerControlsFocusRequester.safeRequestFocus(TAG)
         } else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) {
@@ -380,7 +385,6 @@ fun VideoPlayerScreen(
                 }
 
                 if (vs.lCropMode == LCropMode.MENU) return@onKeyEvent false
-
                 if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen) return@onKeyEvent false
 
                 if (isActionDown) {
@@ -415,19 +419,114 @@ fun VideoPlayerScreen(
                 }
 
                 if (isModern) {
+                    // 1. コントロールが非表示の時 (長押しでチャプタースキップ)
                     if (!showControls) {
-                        if (isActionDown && keyCode in listOf(
-                                NativeKeyEvent.KEYCODE_DPAD_UP, NativeKeyEvent.KEYCODE_DPAD_DOWN,
-                                NativeKeyEvent.KEYCODE_DPAD_LEFT, NativeKeyEvent.KEYCODE_DPAD_RIGHT,
-                                NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER
+                        if (keyCode in listOf(
+                                NativeKeyEvent.KEYCODE_DPAD_UP,
+                                NativeKeyEvent.KEYCODE_DPAD_DOWN,
+                                NativeKeyEvent.KEYCODE_DPAD_CENTER,
+                                NativeKeyEvent.KEYCODE_ENTER
                             )
                         ) {
-                            onShowControlsChange(true)
+                            if (isActionDown) {
+                                onShowControlsChange(true)
+                                return@onKeyEvent true
+                            }
+                            return@onKeyEvent false
+                        }
+
+                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
+                            if (isActionDown) {
+                                if (repeatCount == 0) {
+                                    rightKeyDownTime = System.currentTimeMillis()
+                                    isRightKeyLongPressed = false
+                                } else {
+                                    if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
+                                        isRightKeyLongPressed = true
+                                        onShowControlsChange(true)
+                                        val duration = exoPlayer.duration.coerceAtLeast(1L)
+                                        val boundaries = listOf(0L) + chapters.flatMap {
+                                            listOf(
+                                                it.startTimeMs,
+                                                it.endTimeMs
+                                            )
+                                        }.distinct() + duration
+                                        if (boundaries.size <= 2) {
+                                            exoPlayer.seekTo(
+                                                (exoPlayer.currentPosition + 180_000).coerceAtMost(
+                                                    duration
+                                                )
+                                            )
+                                            vs.updateIndicator(Icons.Default.FastForward, "+3m")
+                                        } else {
+                                            val next =
+                                                boundaries.firstOrNull { it > exoPlayer.currentPosition + 1000 }
+                                            exoPlayer.seekTo(next ?: duration)
+                                            vs.updateIndicator(
+                                                Icons.Default.SkipNext,
+                                                "次チャプター"
+                                            )
+                                        }
+                                    }
+                                }
+                            } else if (isActionUp) {
+                                if (!isRightKeyLongPressed) {
+                                    onShowControlsChange(true)
+                                    // 非表示時に単押しした場合は、コントロールを表示するだけでシークさせない（誤操作防止）
+                                }
+                                rightKeyDownTime = 0L
+                                isRightKeyLongPressed = false
+                            }
+                            return@onKeyEvent true
+                        }
+
+                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
+                            if (isActionDown) {
+                                if (repeatCount == 0) {
+                                    leftKeyDownTime = System.currentTimeMillis()
+                                    isLeftKeyLongPressed = false
+                                } else {
+                                    if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
+                                        isLeftKeyLongPressed = true
+                                        onShowControlsChange(true)
+                                        val duration = exoPlayer.duration.coerceAtLeast(1L)
+                                        val boundaries = listOf(0L) + chapters.flatMap {
+                                            listOf(
+                                                it.startTimeMs,
+                                                it.endTimeMs
+                                            )
+                                        }.distinct() + duration
+                                        if (boundaries.size <= 2) {
+                                            exoPlayer.seekTo(
+                                                (exoPlayer.currentPosition - 60_000).coerceAtLeast(
+                                                    0L
+                                                )
+                                            )
+                                            vs.updateIndicator(Icons.Default.FastRewind, "-1m")
+                                        } else {
+                                            val prev =
+                                                boundaries.lastOrNull { it < exoPlayer.currentPosition - 1000 }
+                                            exoPlayer.seekTo(prev ?: 0L)
+                                            vs.updateIndicator(
+                                                Icons.Default.SkipPrevious,
+                                                "前チャプター"
+                                            )
+                                        }
+                                    }
+                                }
+                            } else if (isActionUp) {
+                                if (!isLeftKeyLongPressed) {
+                                    onShowControlsChange(true)
+                                }
+                                leftKeyDownTime = 0L
+                                isLeftKeyLongPressed = false
+                            }
                             return@onKeyEvent true
                         }
                         return@onKeyEvent false
                     }
 
+                    // 2. コントロール表示中で、シークバーにフォーカスがある時 (長押しで連続通常シーク)
                     if (vs.isSeekBarFocused) {
                         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) {
                             return@onKeyEvent false
@@ -448,6 +547,7 @@ fun VideoPlayerScreen(
                                         isRightKeyLongPressed = true
                                     }
                                     if (isRightKeyLongPressed) {
+                                        // ★ 修正: シークバーでの長押しは通常シーク (+15秒)
                                         val duration = exoPlayer.duration.coerceAtLeast(1L)
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition + 15_000).coerceAtMost(
@@ -485,6 +585,7 @@ fun VideoPlayerScreen(
                                         isLeftKeyLongPressed = true
                                     }
                                     if (isLeftKeyLongPressed) {
+                                        // ★ 修正: シークバーでの長押しは通常シーク (-15秒)
                                         exoPlayer.seekTo(
                                             (exoPlayer.currentPosition - 15_000).coerceAtLeast(
                                                 0L
@@ -518,6 +619,7 @@ fun VideoPlayerScreen(
                         }
                         return@onKeyEvent false
                     } else {
+                        // 3. ボタン列にフォーカスがある時
                         return@onKeyEvent false
                     }
                 }
@@ -545,10 +647,7 @@ fun VideoPlayerScreen(
                                     onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
                                     val boundaries = listOf(0L) + chapters.flatMap {
-                                        listOf(
-                                            it.startTimeMs,
-                                            it.endTimeMs
-                                        )
+                                        listOf(it.startTimeMs, it.endTimeMs)
                                     }.distinct() + duration
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
@@ -593,10 +692,7 @@ fun VideoPlayerScreen(
                                     onShowControlsChange(true)
                                     val duration = exoPlayer.duration.coerceAtLeast(1L)
                                     val boundaries = listOf(0L) + chapters.flatMap {
-                                        listOf(
-                                            it.startTimeMs,
-                                            it.endTimeMs
-                                        )
+                                        listOf(it.startTimeMs, it.endTimeMs)
                                     }.distinct() + duration
                                     if (boundaries.size <= 2) {
                                         exoPlayer.seekTo(
@@ -751,7 +847,6 @@ fun VideoPlayerScreen(
                 modifier = Modifier.align(Alignment.Center), color = Color.White
             )
 
-            // ★ 修正: it の型推論エラーを防ぐためラムダの引数名を明示
             PlayerControls(
                 exoPlayer = exoPlayer,
                 program = currentProgram,
@@ -760,6 +855,7 @@ fun VideoPlayerScreen(
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
                 isPlaying = exoPlayer.isPlaying,
+                hasChapters = chapters.size > 1, // ★ 追加: チャプターが2つ以上（番組全体を1つとカウントするため）あるか判定
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
                 onPlayPauseToggle = {
@@ -782,10 +878,11 @@ fun VideoPlayerScreen(
                 }
             )
 
+            // ★ 修正: 親(背景)は fadeIn / fadeOut のみにする
             AnimatedVisibility(
                 visible = isProgramInfoOpen,
-                enter = slideInHorizontally { fullWidth -> fullWidth } + fadeIn(),
-                exit = slideOutHorizontally { fullWidth -> fullWidth } + fadeOut()
+                enter = fadeIn(),
+                exit = fadeOut()
             ) {
                 ProgramInfoOverlay(
                     program = currentProgram,
@@ -793,10 +890,11 @@ fun VideoPlayerScreen(
                 )
             }
 
+            // ★ 修正: 親(背景)は fadeIn / fadeOut のみにする
             AnimatedVisibility(
                 visible = isModernSettingsOpen,
-                enter = slideInHorizontally { fullWidth -> fullWidth } + fadeIn(),
-                exit = slideOutHorizontally { fullWidth -> fullWidth } + fadeOut()
+                enter = fadeIn(),
+                exit = fadeOut()
             ) {
                 ModernVideoSettingsOverlay(
                     currentAudioMode = vs.currentAudioMode, currentSpeed = vs.currentSpeed,

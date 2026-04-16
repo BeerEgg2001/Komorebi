@@ -358,23 +358,28 @@ private fun VideoAdjustmentButton(
 }
 
 /**
- * ★ 修正: 番組詳細を表示するオーバーレイパネル (右側に配置＆スクロール対応)
+ * ★ 修正: 背景はフェード、パネルはスライドインする番組詳細オーバーレイ
  */
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun ProgramInfoOverlay(
+fun AnimatedVisibilityScope.ProgramInfoOverlay( // ★ 修正: AnimatedVisibilityScopeの拡張関数にする
     program: RecordedProgram,
     onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     val focusRequester = remember { FocusRequester() }
-    val scrollState = rememberScrollState() // ★ スクロール状態の管理
+    val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         delay(150)
-        try { focusRequester.requestFocus() } catch (e: Exception) {}
+        try {
+            focusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
     }
 
+    // 全体の背景 (ここは親の fadeIn に連動してふわっと現れる)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -382,37 +387,43 @@ fun ProgramInfoOverlay(
             .onKeyEvent {
                 if (it.type == androidx.compose.ui.input.key.KeyEventType.KeyDown) {
                     when (it.nativeKeyEvent.keyCode) {
-                        // 戻るキー
                         android.view.KeyEvent.KEYCODE_BACK,
                         android.view.KeyEvent.KEYCODE_ESCAPE -> {
                             onClose()
                             true
                         }
-                        // ★ 下キーでスクロール
+
                         android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                             scope.launch { scrollState.animateScrollTo(scrollState.value + 200) }
                             true
                         }
-                        // ★ 上キーでスクロール
+
                         android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                             scope.launch { scrollState.animateScrollTo(scrollState.value - 200) }
                             true
                         }
+
                         else -> false
                     }
                 } else false
             },
-        contentAlignment = Alignment.CenterEnd // ★ 修正: 右側に配置
+        contentAlignment = Alignment.CenterEnd
     ) {
+        // メニューパネル本体
         Column(
             modifier = Modifier
+                // ★ 追加: パネル部分だけ右からスライドイン・アウトさせる
+                .animateEnterExit(
+                    enter = slideInHorizontally { fullWidth -> fullWidth },
+                    exit = slideOutHorizontally { fullWidth -> fullWidth }
+                )
                 .fillMaxHeight()
                 .width(480.dp)
                 .background(colors.surface.copy(alpha = 0.95f))
                 .border(1.dp, colors.textPrimary.copy(alpha = 0.1f))
                 .focusRequester(focusRequester)
                 .focusable()
-                .verticalScroll(scrollState) // ★ 修正: paddingの前にscrollを置く
+                .verticalScroll(scrollState)
                 .padding(32.dp)
         ) {
             Text(
@@ -436,7 +447,10 @@ fun ProgramInfoOverlay(
                     program.genres?.forEach { genre ->
                         Box(
                             modifier = Modifier
-                                .background(colors.accent.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .background(
+                                    colors.accent.copy(alpha = 0.2f),
+                                    RoundedCornerShape(4.dp)
+                                )
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(

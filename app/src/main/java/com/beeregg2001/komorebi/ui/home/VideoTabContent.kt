@@ -10,6 +10,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+// ★ 修正: 標準の Lazy コンポーネントをインポート
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,11 +45,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.items
-import androidx.tv.foundation.lazy.list.itemsIndexed
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.CachePolicy
@@ -78,7 +79,6 @@ fun VideoTabContent(
     konomiPort: String,
     tabFocusRequester: FocusRequester,
     contentFirstItemRequester: FocusRequester,
-    // ★ 修正(Step1): HomeLauncherScreen からの呼び出しに合わせるためパラメータを追加
     getLogoUrl: suspend (String) -> String = { "" },
     shouldCropLogo: Boolean = false,
     onProgramClick: (RecordedProgram) -> Unit,
@@ -100,9 +100,10 @@ fun VideoTabContent(
     val colors = KomorebiTheme.colors
 
     val ticketManager = rememberFocusTicketManager()
-    val listState = rememberTvLazyListState()
-    val recentRowState = rememberTvLazyListState()
-    val historyRowState = rememberTvLazyListState()
+    // ★ 修正: 標準の rememberLazyListState を使用
+    val listState = rememberLazyListState()
+    val recentRowState = rememberLazyListState()
+    val historyRowState = rememberLazyListState()
 
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val groupedSeries by recordViewModel.groupedSeries.collectAsState()
@@ -241,7 +242,8 @@ fun VideoTabContent(
                 .fillMaxWidth()
                 .weight(0.55f)
         ) {
-            TvLazyColumn(
+            // ★ 修正: 標準の LazyColumn を使用
+            LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 80.dp),
@@ -280,7 +282,8 @@ fun VideoTabContent(
                                 icon = Icons.Default.PlayCircle,
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
-                            TvLazyRow(
+                            // ★ 修正: 標準の LazyRow を使用
+                            LazyRow(
                                 state = recentRowState,
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -325,7 +328,6 @@ fun VideoTabContent(
                                                 if (duration > 0 && program.playbackPosition > 5.0) (program.playbackPosition / duration).toFloat()
                                                     .coerceIn(0f, 1f) else null
 
-                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
                                             val fallbackUrl = program.apiThumbnailUrl
                                                 ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
@@ -340,7 +342,7 @@ fun VideoTabContent(
                                                 title = program.title,
                                                 subtitle = "$startFormat - ${program.channel?.name ?: "不明"}",
                                                 description = "番組情報を取得中...",
-                                                imageUrl = primaryUrl, // 上部の大きな画像にセット
+                                                imageUrl = primaryUrl,
                                                 isThumbnail = true,
                                                 tag = "最近の録画",
                                                 progress = progress
@@ -353,7 +355,7 @@ fun VideoTabContent(
                                                 FocusRequester.Cancel
                                         },
                                         timeFormat = timeFormat,
-                                        backendType = backendType // ★追加
+                                        backendType = backendType
                                     )
                                 }
                             }
@@ -370,7 +372,8 @@ fun VideoTabContent(
                                 icon = Icons.Default.PlayCircle,
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
-                            TvLazyRow(
+                            // ★ 修正: 標準の LazyRow を使用
+                            LazyRow(
                                 state = historyRowState,
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -402,7 +405,6 @@ fun VideoTabContent(
                                                 recordViewModel.fetchProgramDetail(videoId)
                                             }
 
-                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
                                             val fallbackUrl = matchedProgram?.apiThumbnailUrl
                                                 ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
@@ -431,7 +433,7 @@ fun VideoTabContent(
                                             if (index == itemsToTake.lastIndex) right =
                                                 FocusRequester.Cancel
                                         },
-                                        backendType = backendType // ★追加
+                                        backendType = backendType
                                     )
                                 }
                             }
@@ -448,7 +450,8 @@ fun VideoTabContent(
                                 icon = Icons.Default.VideoLibrary,
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
-                            TvLazyRow(
+                            // ★ 修正: 標準の LazyRow を使用
+                            LazyRow(
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -511,7 +514,8 @@ fun VideoTabContent(
                             val filteredSeries =
                                 if (selectedGenre == null) groupedSeries.values.flatten() else groupedSeries[selectedGenre]
                                     ?: emptyList()
-                            TvLazyRow(
+                            // ★ 修正: 標準の LazyRow を使用
+                            LazyRow(
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
@@ -524,9 +528,8 @@ fun VideoTabContent(
                                         konomiPort = konomiPort,
                                         onClick = { recordViewModel.searchRecordings(series.displayTitle); onShowAllRecordings() },
                                         onFocus = {
-                                            focusedProgramId = null // シリーズには特定のVideoIDがないためnull
+                                            focusedProgramId = null
 
-                                            // ★ 修正: HeroDashboard(上部バナー)用の画像URLもモデルから取得する
                                             val fallbackUrl = series.apiThumbnailUrl
                                                 ?: UrlBuilder.getThumbnailUrl(
                                                     backendType,
@@ -551,7 +554,7 @@ fun VideoTabContent(
                                             if (index == filteredSeries.lastIndex) right =
                                                 FocusRequester.Cancel
                                         },
-                                        backendType = backendType // ★追加
+                                        backendType = backendType
                                     )
                                 }
                             }
@@ -563,7 +566,7 @@ fun VideoTabContent(
     }
 }
 
-// ---------------- 以下、既存のカードコンポーネント（画像URLの取得部分のみ修正） ----------------
+// ---------------- 既存のカードコンポーネント ----------------
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -572,7 +575,7 @@ private fun VideoRecentRecordCard(
     history: KonomiHistoryProgram?,
     konomiIp: String,
     konomiPort: String,
-    backendType: String, // ★ 追加
+    backendType: String,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier,
@@ -584,7 +587,6 @@ private fun VideoRecentRecordCard(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    // ★ 修正: サムネイルのフォールバック機能を実装
     val fallbackUrl = program.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
         backendType,
         konomiIp,
@@ -653,7 +655,6 @@ private fun VideoRecentRecordCard(
                 modifier = Modifier
                     .fillMaxSize()
                     .alpha(if (isFocused) 0.8f else 0.5f),
-                // ★ 追加: 画像読み込み失敗時のフォールバック処理
                 onError = {
                     if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
                         currentThumbnailUrl = fallbackUrl
@@ -760,7 +761,6 @@ private fun VideoWatchHistoryCard(
         0
     }
 
-    // ★ 修正: サムネイルのフォールバック機能を実装
     val fallbackUrl = matchedProgram?.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
         backendType,
         konomiIp,
@@ -827,7 +827,6 @@ private fun VideoWatchHistoryCard(
                     .fillMaxSize()
                     .alpha(if (isFocused) 0.8f else 0.5f),
                 contentScale = ContentScale.Crop,
-                // ★ 追加: 画像読み込み失敗時のフォールバック処理
                 onError = {
                     if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
                         currentThumbnailUrl = fallbackUrl
@@ -908,7 +907,6 @@ private fun VideoSeriesCard(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    // ★ 修正: サムネイルのフォールバック機能を実装
     val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
         backendType,
         konomiIp,
@@ -964,7 +962,6 @@ private fun VideoSeriesCard(
                 modifier = Modifier
                     .fillMaxSize()
                     .alpha(if (isFocused) 0.8f else 0.4f),
-                // ★ 追加: 画像読み込み失敗時のフォールバック処理
                 onError = {
                     if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
                         currentThumbnailUrl = fallbackUrl

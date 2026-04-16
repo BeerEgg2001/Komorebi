@@ -2,6 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.video.player
 
+import android.util.Log // ★ 追加: ログ用
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
@@ -53,6 +54,7 @@ fun PlayerControls(
     isSeekingPreviewVisible: Boolean,
     isModernUi: Boolean,
     isPlaying: Boolean,
+    hasChapters: Boolean, // ★ 追加: チャプターの有無を受け取る
     controlsFocusRequester: FocusRequester,
     onSeekBarFocusChanged: (Boolean) -> Unit,
     onPlayPauseToggle: () -> Unit,
@@ -78,6 +80,11 @@ fun PlayerControls(
     val tileWidth = tileInfo?.tileWidth ?: 320
     val tileHeight = tileInfo?.tileHeight ?: 180
 
+    // ★ ログ仕込み: UI層で認識しているタイル情報
+    LaunchedEffect(tileInfo) {
+        Log.i("PlayerControls", "[Controls] Composed. TileInfo: $tileInfo, URL: $tiledThumbnailUrl")
+    }
+
     var isSeekBarFocused by remember { mutableStateOf(false) }
     val trackHeight by animateDpAsState(if (isSeekBarFocused) 8.dp else 6.dp, label = "trackHeight")
     val playHeadSize by animateDpAsState(
@@ -85,7 +92,14 @@ fun PlayerControls(
         label = "playHeadSize"
     )
 
-    LaunchedEffect(isVisible) {
+    LaunchedEffect(isVisible, isModernUi) {
+        if (isVisible && isModernUi) {
+            delay(100)
+            try {
+                controlsFocusRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
         while (isVisible) {
             currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
             duration = exoPlayer.duration.coerceAtLeast(1L)
@@ -94,7 +108,6 @@ fun PlayerControls(
         }
     }
 
-    // ★ 修正: it の型推論エラーを防ぐため fullHeight を明示
     AnimatedVisibility(
         visible = isVisible,
         enter = slideInVertically { fullHeight -> fullHeight } + fadeIn(),
@@ -106,7 +119,6 @@ fun PlayerControls(
                 .fillMaxSize()
                 .then(
                     if (isModernUi) Modifier
-                        .focusRequester(controlsFocusRequester)
                         .focusGroup()
                         .focusRestorer() else Modifier
                 )
@@ -164,10 +176,27 @@ fun PlayerControls(
                         val row = tileIndex / tileColumns
 
                         LaunchedEffect(tiledThumbnailUrl, col, row) {
-                            if (tiledThumbnailUrl.isNullOrBlank()) return@LaunchedEffect
+                            if (tiledThumbnailUrl.isNullOrBlank()) {
+                                Log.w(
+                                    "PlayerControls",
+                                    "[SeekPreview] Image URL is blank. Cannot load preview."
+                                )
+                                return@LaunchedEffect
+                            }
+                            Log.i(
+                                "PlayerControls",
+                                "[SeekPreview] Requesting preview tile: col=$col, row=$row, url=$tiledThumbnailUrl"
+                            )
                             val res =
                                 loader.loadTile(tiledThumbnailUrl, col, row, tileWidth, tileHeight)
-                            if (res != null) bitmap = res
+                            if (res != null) {
+                                bitmap = res
+                            } else {
+                                Log.w(
+                                    "PlayerControls",
+                                    "[SeekPreview] loadTile returned null for col=$col, row=$row"
+                                )
+                            }
                         }
 
                         Box(
@@ -310,11 +339,14 @@ fun PlayerControls(
                                 label = "番組詳細",
                                 onClick = onInfoToggle
                             )
-                            OsdIconButton(
-                                icon = Icons.Default.FormatListBulleted,
-                                label = "チャプター",
-                                onClick = onChapterListToggle
-                            )
+                            // ★ 修正: チャプター情報がある場合のみボタンを表示する
+                            if (hasChapters) {
+                                OsdIconButton(
+                                    icon = Icons.Default.FormatListBulleted,
+                                    label = "チャプター",
+                                    onClick = onChapterListToggle
+                                )
+                            }
                         }
 
                         Row(

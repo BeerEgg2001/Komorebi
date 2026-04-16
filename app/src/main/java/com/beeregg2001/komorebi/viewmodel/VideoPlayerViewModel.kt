@@ -66,8 +66,19 @@ class VideoPlayerViewModel @Inject constructor(
             recordProvider.getRecordedProgram(videoId).onSuccess { program ->
                 _programDetail.value = program
 
+                // ★ ログ仕込み: JSONパース結果(TileInfo)が正しく取得できているか確認
+                Log.i(TAG, "[DataCheck] Fetched Program Detail. Title: ${program.title}")
+                Log.i(
+                    TAG,
+                    "[DataCheck] ThumbnailInfo from DB/API: ${program.recordedVideo.thumbnailInfo?.tile}"
+                )
+
                 // ★ タイル画像URLの解決と保持
-                _tiledThumbnailUrl.value = recordProvider.getTiledThumbnailUrl(videoId)
+                val tileUrl = recordProvider.getTiledThumbnailUrl(videoId)
+                _tiledThumbnailUrl.value = tileUrl
+
+                // ★ ログ仕込み: タイル画像のURLが正しく生成されているか確認
+                Log.i(TAG, "[DataCheck] Resolved TiledThumbnailUrl: $tileUrl")
 
                 // ★ チャプターの計算と保持
                 val durationMs = (program.recordedVideo.duration * 1000).toLong()

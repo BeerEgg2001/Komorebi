@@ -68,18 +68,47 @@ class TileSheetLoader(private val context: Context) {
     suspend fun loadTile(url: String, col: Int, row: Int, tileW: Int, tileH: Int): Bitmap? {
         if (isReleased) return null
         val key = "c${col}_r${row}"
-        synchronized(tileCache) { tileCache.get(key)?.let { return it } }
+
+        synchronized(tileCache) {
+            tileCache.get(key)?.let {
+                // Log.i(TAG, "[TileLoader] Cache hit for tile: $key") // キャッシュヒットはログが膨大になるのでコメントアウト
+                return it
+            }
+        }
+
         return withContext(decodeDispatcher) {
             if (!isActive || isReleased) return@withContext null
             try {
-                val sheet = getOrLoadFullSheet(url) ?: return@withContext null
+                // ★ ログ仕込み: タイルの切り出し要求座標
+                Log.i(
+                    TAG,
+                    "[TileLoader] Requesting tile: url=$url, col=$col, row=$row, w=$tileW, h=$tileH"
+                )
+
+                val sheet = getOrLoadFullSheet(url) ?: run {
+                    Log.w(TAG, "[TileLoader] Failed to get or load full sheet!")
+                    return@withContext null
+                }
+
                 val x = col * tileW
                 val y = row * tileH
-                if (x + tileW > sheet.width || y + tileH > sheet.height) return@withContext null
+
+                // ★ ログ仕込み: 画像の範囲外を参照していないかチェック
+                if (x + tileW > sheet.width || y + tileH > sheet.height) {
+                    Log.e(
+                        TAG,
+                        "[TileLoader] Out of bounds! Request: x=$x, y=$y, w=$tileW, h=$tileH / Sheet Size: ${sheet.width}x${sheet.height}"
+                    )
+                    return@withContext null
+                }
+
                 val tileBitmap = Bitmap.createBitmap(sheet, x, y, tileW, tileH)
                 synchronized(tileCache) { if (!isReleased) tileCache.put(key, tileBitmap) }
+
+                Log.i(TAG, "[TileLoader] Successfully cropped and cached tile: $key")
                 tileBitmap
             } catch (e: Exception) {
+                Log.e(TAG, "[TileLoader] Error creating tile bitmap: col=$col, row=$row", e)
                 null
             }
         }
@@ -91,9 +120,16 @@ class TileSheetLoader(private val context: Context) {
             if (fullSheetBitmap != null && !fullSheetBitmap!!.isRecycled) return@withLock fullSheetBitmap
             if (isReleased) return@withLock null
             try {
+                Log.i(TAG, "[TileLoader] Start loading full sheet from: $url")
+
                 val fileName = hashString(url) + ".webp"
                 val file = File(context.cacheDir, fileName)
+
                 if (!file.exists() || file.length() == 0L) {
+                    Log.i(
+                        TAG,
+                        "[TileLoader] Downloading sheet to local cache file: ${file.absolutePath}"
+                    )
                     withContext(Dispatchers.IO) {
                         URL(url).openStream().use { input ->
                             FileOutputStream(file).use { output ->
@@ -101,13 +137,34 @@ class TileSheetLoader(private val context: Context) {
                             }
                         }
                     }
+                    Log.i(TAG, "[TileLoader] Download complete. File size: ${file.length()} bytes")
+                } else {
+                    Log.i(
+                        TAG,
+                        "[TileLoader] Found sheet in local cache file. Size: ${file.length()} bytes"
+                    )
                 }
+
                 val options = BitmapFactory.Options()
                     .apply { inPreferredConfig = Bitmap.Config.RGB_565; inMutable = true }
                 val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
-                if (bitmap != null) fullSheetBitmap = bitmap
+
+                if (bitmap != null) {
+                    fullSheetBitmap = bitmap
+                    Log.i(
+                        TAG,
+                        "[TileLoader] Successfully decoded sheet. Size: ${bitmap.width}x${bitmap.height}"
+                    )
+                } else {
+                    Log.e(
+                        TAG,
+                        "[TileLoader] Failed to decode image file! (BitmapFactory returned null)"
+                    )
+                }
+
                 bitmap
             } catch (e: Exception) {
+                Log.e(TAG, "[TileLoader] Exception during sheet download or decoding", e)
                 null
             }
         }
@@ -133,6 +190,12 @@ fun SceneSearchOverlay(
     DisposableEffect(Unit) { onDispose { loader.release() } }
 
     val tileInfo = program.recordedVideo.thumbnailInfo?.tile
+
+    // ★ ログ仕込み: UI層で認識しているタイル情報
+    LaunchedEffect(tileInfo) {
+        Log.i(TAG, "[SceneSearch] Overlay opened. TileInfo: $tileInfo, URL: $tiledThumbnailUrl")
+    }
+
     val tileColumns = tileInfo?.columnCount ?: 1
     val tileInterval = tileInfo?.intervalSec ?: 10.0
     val tileWidth = tileInfo?.tileWidth ?: 320
@@ -303,12 +366,20 @@ fun TiledThumbnailItem(
     val row = tileIndex / tileColumns
 
     LaunchedEffect(imageUrl, col, row) {
-        if (imageUrl.isBlank()) return@LaunchedEffect // 画像がない場合はスキップ
+        if (imageUrl.isBlank()) {
+            Log.w(TAG, "[TiledItem] Image URL is blank. Cannot load thumbnail for time: $fetchTime")
+            return@LaunchedEffect
+        }
         delay(50)
         if (isActive) {
             val result = loader.loadTile(imageUrl, col, row, tileWidth, tileHeight)
             if (result != null && isActive) {
                 bitmap = result
+            } else {
+                Log.w(
+                    TAG,
+                    "[TiledItem] loadTile returned null for time: $fetchTime (col=$col, row=$row)"
+                )
             }
         }
     }
@@ -337,9 +408,11 @@ fun TiledThumbnailItem(
                 )
             } else {
                 // サムネイルがない場合のフォールバック表示 (グレー背景)
-                Box(Modifier
-                    .fillMaxSize()
-                    .background(Color.DarkGray))
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.DarkGray)
+                )
             }
 
             overlayContent()
@@ -385,6 +458,12 @@ fun ChapterListOverlay(
     DisposableEffect(Unit) { onDispose { loader.release() } }
 
     val tileInfo = program.recordedVideo.thumbnailInfo?.tile
+
+    // ★ ログ仕込み: UI層で認識しているタイル情報
+    LaunchedEffect(tileInfo) {
+        Log.i(TAG, "[ChapterList] Overlay opened. TileInfo: $tileInfo, URL: $tiledThumbnailUrl")
+    }
+
     val tileColumns = tileInfo?.columnCount ?: 1
     val tileInterval = tileInfo?.intervalSec ?: 10.0
     val tileWidth = tileInfo?.tileWidth ?: 320

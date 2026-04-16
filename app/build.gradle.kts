@@ -127,6 +127,7 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.59.2")
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.hilt.work)
+    implementation(libs.androidx.compose.foundation.layout)
     "baselineProfile"(project(":baselineprofile"))
     ksp("com.google.dagger:hilt-compiler:2.59.2")
 

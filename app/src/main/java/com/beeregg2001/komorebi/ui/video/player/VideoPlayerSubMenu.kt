@@ -5,14 +5,19 @@ package com.beeregg2001.komorebi.ui.video.player
 import android.view.KeyEvent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -313,18 +318,18 @@ fun VideoMenuTileItem(
 }
 
 /**
- * モダンUI専用の縦型設定メニュー (右端からスライドイン)
+ * ★ 修正: 背景はフェード、パネルはスライドインするモダンUI専用設定メニュー
  */
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class, ExperimentalAnimationApi::class)
 @Composable
-fun ModernVideoSettingsOverlay(
+fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedVisibilityScopeの拡張関数にする
     currentAudioMode: AudioMode,
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
-    isQualityEnabled: Boolean = true, // ★ 追加
+    isQualityEnabled: Boolean = true,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
@@ -340,22 +345,17 @@ fun ModernVideoSettingsOverlay(
 
     LaunchedEffect(Unit) {
         delay(150)
-        try {
-            initialFocusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
     }
 
     LaunchedEffect(selectedCategory) {
         if (selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
-            try {
-                qualityListRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            try { qualityListRequester.requestFocus() } catch (e: Exception) {}
         }
     }
 
+    // 全体の背景
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -363,14 +363,10 @@ fun ModernVideoSettingsOverlay(
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown &&
                     (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
-                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
-                ) {
+                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
                     if (selectedCategory != null) {
                         selectedCategory = null
-                        try {
-                            initialFocusRequester.requestFocus()
-                        } catch (e: Exception) {
-                        }
+                        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
                         true
                     } else {
                         onClose()
@@ -378,10 +374,16 @@ fun ModernVideoSettingsOverlay(
                     }
                 } else false
             },
-        contentAlignment = Alignment.CenterEnd
+        contentAlignment = Alignment.CenterEnd // ★ 修正: CenterEndで右寄せ
     ) {
+        // メニューパネル本体
         Column(
             modifier = Modifier
+                // ★ 追加: パネル部分だけ右からスライドイン・アウトさせる
+                .animateEnterExit(
+                    enter = slideInHorizontally { fullWidth -> fullWidth },
+                    exit = slideOutHorizontally { fullWidth -> fullWidth }
+                )
                 .fillMaxHeight()
                 .width(360.dp)
                 .background(colors.surface.copy(alpha = 0.95f))
@@ -422,14 +424,11 @@ fun ModernVideoSettingsOverlay(
                             icon = Icons.Default.Subtitles,
                             onClick = onSubtitleToggle
                         )
-                        // ★ 修正: EDCB時はグレーアウトし、テキストを「オリジナル」に変更
                         ModernSettingRow(
                             title = "画質",
                             value = if (isQualityEnabled) currentQuality.label else "オリジナル (生TS)",
                             icon = Icons.Default.HighQuality,
-                            onClick = {
-                                if (isQualityEnabled) selectedCategory = SubMenuCategory.QUALITY
-                            },
+                            onClick = { if (isQualityEnabled) selectedCategory = SubMenuCategory.QUALITY },
                             enabled = isQualityEnabled
                         )
                         ModernSettingRow(
@@ -460,15 +459,10 @@ fun ModernVideoSettingsOverlay(
                                 onClick = {
                                     onQualitySelect(quality)
                                     selectedCategory = null
-                                    try {
-                                        initialFocusRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    try { initialFocusRequester.requestFocus() } catch(e: Exception) {}
                                 },
                                 highlight = isSelected,
-                                modifier = if (isSelected) Modifier.focusRequester(
-                                    qualityListRequester
-                                ) else Modifier
+                                modifier = if (isSelected) Modifier.focusRequester(qualityListRequester) else Modifier
                             )
                         }
                     }
