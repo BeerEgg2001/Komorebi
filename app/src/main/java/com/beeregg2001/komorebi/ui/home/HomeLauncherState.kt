@@ -11,7 +11,6 @@ import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.viewmodel.*
 
-// 🌟 修正: HOME_RESTORE チケットを追加（ホーム画面の2次元復帰用）
 enum class HomeFocusTicket { NONE, TAB_BAR, CONTENT_TOP, HOME_RESTORE }
 
 @Stable
@@ -21,7 +20,6 @@ class HomeFocusTicketManager {
     var issueTime by mutableLongStateOf(0L)
         private set
 
-    // 🌟 追加: ホーム画面復帰用のターゲット指定
     var targetSection by mutableStateOf<String?>(null)
         private set
     var targetItemId by mutableStateOf<String?>(null)
@@ -33,7 +31,6 @@ class HomeFocusTicketManager {
         Log.i("KomorebiFocus", "🎟️ HomeTicket ISSUED: $ticket")
     }
 
-    // 🌟 追加: 2段階追尾用のチケット発行メソッド
     fun issueForHomeRestore(section: String, itemId: String) {
         targetSection = section
         targetItemId = itemId
@@ -97,6 +94,7 @@ class HomeLauncherState(
         emptyList()
     )
 
+    // ★ 修正: タブがいくつ増えても対応できるようにRequesterをあらかじめ余裕を持って生成しておく
     val tabFocusRequesters = List(10) { FocusRequester() }
     val contentFirstItemRequesters = List(10) { FocusRequester() }
     val settingsFocusRequester = FocusRequester()
@@ -111,6 +109,7 @@ class HomeLauncherState(
     @RequiresApi(Build.VERSION_CODES.O)
     fun onTabSelected(
         index: Int,
+        tabs: List<String>, // ★ 追加: 実際のタブ名リストを受け取り、ハードコードを排除
         onTabChange: (Int) -> Unit,
         homeViewModel: HomeViewModel,
         channelViewModel: ChannelViewModel,
@@ -119,34 +118,35 @@ class HomeLauncherState(
     ) {
         onTabChange(index)
         isCurrentTabContentReady = false
-        // 🌟 追加: タブを切り替えたら、復帰用の記憶をリセットする
         homeViewModel.clearFocusMemory()
 
-        when (index) {
-            0 -> {
+        val tabName = tabs.getOrNull(index)
+
+        when (tabName) {
+            "ホーム" -> {
                 homeViewModel.refreshHomeData()
                 channelViewModel.startPolling()
             }
 
-            1 -> {
+            "ライブ" -> {
                 channelViewModel.startPolling()
             }
 
-            2 -> {
+            "ビデオ" -> {
                 channelViewModel.stopPolling()
                 recordViewModel.fetchRecentRecordings(forceRefresh = false)
             }
 
-            3 -> {
+            "番組表" -> {
                 channelViewModel.stopPolling()
             }
 
-            4 -> {
+            "録画予約" -> {
                 channelViewModel.stopPolling()
                 reserveViewModel.fetchReserves()
             }
 
-            5 -> {
+            "プロ野球" -> {
                 channelViewModel.stopPolling()
             }
 
@@ -242,10 +242,11 @@ fun rememberHomeLauncherState(
     state.genrePickup = homeViewModel.genrePickupPrograms.collectAsState().value
     state.pickupGenreLabel = homeViewModel.pickupGenreLabel.collectAsState().value
     state.genrePickupTimeSlot = homeViewModel.genrePickupTimeSlot.collectAsState().value
+
     state.epgUiState = epgViewModel.uiState
     state.logoUrls = remember(state.epgUiState) {
         val eData = state.epgUiState
-        if (eData is EpgUiState.Success) eData.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList()
+        if (eData is EpgUiState.Success) eData.logoUrls else emptyList()
     }
 
     state.favoriteBaseballTeams = homeViewModel.favoriteBaseballTeams.collectAsState().value

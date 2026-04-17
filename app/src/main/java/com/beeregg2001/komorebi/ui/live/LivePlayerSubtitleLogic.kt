@@ -4,8 +4,6 @@ package com.beeregg2001.komorebi.ui.live
 
 import android.util.Base64
 import android.util.SparseArray
-import android.webkit.WebView
-import androidx.compose.runtime.MutableState
 import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
@@ -15,10 +13,13 @@ import androidx.media3.extractor.ts.TsPayloadReader
 import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import java.io.ByteArrayOutputStream
 
+/**
+ * 字幕データを抽出し、UI層（WebView等）へコールバックでデータを渡す PayloadReader
+ */
 @UnstableApi
 class DirectSubtitlePayloadReader(
-    private val webViewRef: MutableState<WebView?>,
-    private val isSubtitleEnabledState: MutableState<Boolean>
+    private val onSubtitleDataReceived: (Long, String) -> Unit, // ★ WebViewの代わりにコールバック関数を受取
+    private val isSubtitleEnabled: () -> Boolean                // ★ 状態確認も関数で受取
 ) : TsPayloadReader {
     private var timestampAdjuster: TimestampAdjuster? = null
     private val buffer = ByteArrayOutputStream()
@@ -36,7 +37,7 @@ class DirectSubtitlePayloadReader(
     }
 
     override fun consume(data: ParsableByteArray, flags: Int) {
-        if (!isSubtitleEnabledState.value) return
+        if (!isSubtitleEnabled()) return
         val isStart = (flags and TsPayloadReader.FLAG_PAYLOAD_UNIT_START_INDICATOR) != 0
         if (isStart && buffer.size() > 0) {
             parseAndSendBuffer()
@@ -82,15 +83,12 @@ class DirectSubtitlePayloadReader(
                                 privateDataStart,
                                 privateDataStart + privateDataLength
                             )
+                            // ★ 抽出したデータをUI層へコールバックで通知
                             val base64Data = Base64.encodeToString(privateData, Base64.NO_WRAP)
                             val currentPtsMs = ((timestampAdjuster?.lastAdjustedTimestampUs
                                 ?: 0L) / 1000) + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
-                            webViewRef.value?.post {
-                                webViewRef.value?.evaluateJavascript(
-                                    "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPtsMs, '$base64Data'); }",
-                                    null
-                                )
-                            }
+
+                            onSubtitleDataReceived(currentPtsMs, base64Data)
                         }
                     }
                 }
@@ -105,8 +103,8 @@ class DirectSubtitlePayloadReader(
 
 @UnstableApi
 class DirectSubtitlePayloadReaderFactory(
-    private val webViewRef: MutableState<WebView?>,
-    private val isSubtitleEnabledState: MutableState<Boolean>
+    private val onSubtitleDataReceived: (Long, String) -> Unit,
+    private val isSubtitleEnabled: () -> Boolean
 ) : TsPayloadReader.Factory {
     private val defaultFactory = DefaultTsPayloadReaderFactory(
         DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
@@ -120,8 +118,8 @@ class DirectSubtitlePayloadReaderFactory(
         esInfo: TsPayloadReader.EsInfo
     ): TsPayloadReader? {
         if (streamType == 0x06 || streamType == 0x15) return DirectSubtitlePayloadReader(
-            webViewRef,
-            isSubtitleEnabledState
+            onSubtitleDataReceived,
+            isSubtitleEnabled
         )
         return defaultFactory.createPayloadReader(streamType, esInfo)
     }

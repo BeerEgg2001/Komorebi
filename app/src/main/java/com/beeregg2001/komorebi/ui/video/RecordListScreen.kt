@@ -15,7 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,8 +40,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -72,7 +70,6 @@ fun RecordListScreen(
     timeFormat: String = "24H",
     autoReserveKeywords: List<String> = emptyList(),
     onAutoReserveClick: (RecordedProgram) -> Unit = {},
-    // ★ 追加(Step3): AIコンシェルジュ復帰シグナルを受け取る
     aiFocusReturnTick: Int = 0,
     onAiReturnConsumed: () -> Unit = {}
 ) {
@@ -169,7 +166,6 @@ fun RecordListScreen(
     var focusedSeries by remember { mutableStateOf<SeriesInfo?>(null) }
     var savedFocusProgramId by remember { mutableStateOf<Int?>(null) }
 
-    // ★ 追加: フォーカスが外れても「最後に見ていたID」を保持し続ける変数
     var lastKnownFocusedId by remember { mutableStateOf<Int?>(null) }
 
     val paneTransitionState =
@@ -218,7 +214,7 @@ fun RecordListScreen(
     }
 
     val listState = remember(stateKey) { LazyListState() }
-    val gridState = remember(stateKey) { TvLazyGridState() }
+    val gridState = remember(stateKey) { LazyGridState() }
     val seriesListState = remember(stateKey) { LazyListState() }
 
     val isListFirstItemReady by remember(
@@ -275,13 +271,10 @@ fun RecordListScreen(
     val currentTicket = ticketManager.currentTicket
     val issueTime = ticketManager.issueTime
 
-    // ★ 修正: AIコンシェルジュから戻ってきた時のフォーカス復元（チケット発行）
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
-            // Android TVのフォーカス復帰ラグを考慮し、少し長めに待つ
             delay(400)
 
-            // 記憶しておいたIDを使ってチケット発行
             if (lastKnownFocusedId != null) {
                 ticketManager.issue(FocusTicket.TARGET_ID, lastKnownFocusedId)
             } else {
@@ -520,7 +513,12 @@ fun RecordListScreen(
                                     ticketManager = ticketManager,
                                     onFocusedSeriesChanged = {
                                         focusedSeries = it
-                                        if (it != null) lastKnownFocusedId = it.representativeVideoId // ★ 追加
+                                        if (it != null) lastKnownFocusedId =
+                                            it.representativeVideoId
+                                    },
+                                    // ★ 追加: 見えている一番上のアイテムを親に伝える
+                                    onTopBarDownRequesterChanged = {
+                                        listContentDownRequester = it
                                     }
                                 )
                             }
@@ -555,7 +553,7 @@ fun RecordListScreen(
                                     onClearDetail = { viewModel.clearProgramDetail() },
                                     onFocusedItemChanged = {
                                         focusedProgram = it
-                                        if (it != null) lastKnownFocusedId = it.id // ★ 追加
+                                        if (it != null) lastKnownFocusedId = it.id
                                     },
                                     onOpenNavPane = handleOpenNavPane,
                                     onTopBarDownRequesterChanged = {
@@ -589,7 +587,8 @@ fun RecordListScreen(
                                     ticketManager = ticketManager,
                                     onFocusedSeriesChanged = {
                                         focusedSeries = it
-                                        if (it != null) lastKnownFocusedId = it.representativeVideoId // ★ 追加
+                                        if (it != null) lastKnownFocusedId =
+                                            it.representativeVideoId
                                     }
                                 )
                             }
@@ -611,7 +610,7 @@ fun RecordListScreen(
                                     ticketManager = ticketManager,
                                     onFocusedItemChanged = {
                                         focusedProgram = it
-                                        if (it != null) lastKnownFocusedId = it.id // ★ 追加
+                                        if (it != null) lastKnownFocusedId = it.id
                                     }
                                 )
                             }

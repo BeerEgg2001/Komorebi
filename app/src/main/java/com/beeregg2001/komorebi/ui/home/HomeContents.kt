@@ -10,6 +10,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,13 +21,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.*
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.home.components.*
 import com.beeregg2001.komorebi.viewmodel.HomeViewModel
+import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import kotlinx.coroutines.delay
 
 private const val TAG = "HomeContents"
@@ -41,6 +44,8 @@ fun HomeContents(
     pickupGenreName: String,
     pickupTimeSlot: String,
     groupedChannels: Map<String, List<Channel>>,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     onChannelClick: (Channel) -> Unit,
     onHistoryClick: (KonomiHistoryProgram) -> Unit,
     onReserveClick: (ReserveItem) -> Unit,
@@ -57,9 +62,11 @@ fun HomeContents(
     isTopNavFocused: Boolean = false,
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
-    timeFormat: String
+    recordViewModel: RecordViewModel = hiltViewModel(),
+    timeFormat: String,
 ) {
-    val lazyListState = rememberTvLazyListState()
+    val lazyListState = rememberLazyListState()
+    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val isFirstItemRendered =
         remember { derivedStateOf { lazyListState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
@@ -132,7 +139,6 @@ fun HomeContents(
             list
         }
 
-    // ★ 修正(Step4): AIコンシェルジュ復帰などで HOME_RESTORE チケットが発行された時のスクロール処理を強化
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE) {
             val targetSection = ticketManager.targetSection
@@ -145,11 +151,9 @@ fun HomeContents(
                     )
                     delay(50)
                     lazyListState.scrollToItem(index)
-                    // スクロール後、各Sectionコンポーネント内にある FocusRequester が itemId を見て自動フォーカスを拾います
                     delay(200)
                 }
             }
-            // 消費
             ticketManager.consume(HomeFocusTicket.HOME_RESTORE)
         }
     }
@@ -182,7 +186,11 @@ fun HomeContents(
                 .weight(0.45f)
                 .padding(start = 48.dp, end = 48.dp, top = 24.dp, bottom = 16.dp)
         ) {
-            HomeHeroDashboard(info = currentHeroInfo)
+            HomeHeroDashboard(
+                state = currentHeroInfo,
+                getLogoUrl = getLogoUrl,
+                shouldCropLogo = shouldCropLogo
+            )
         }
 
         Box(
@@ -190,7 +198,7 @@ fun HomeContents(
                 .weight(0.55f)
                 .fillMaxWidth()
         ) {
-            TvLazyColumn(
+            LazyColumn(
                 state = lazyListState,
                 modifier = Modifier
                     .fillMaxSize()
@@ -203,10 +211,8 @@ fun HomeContents(
                         LastWatchedSection(
                             channels = lastWatchedChannels,
                             groupedChannels = groupedChannels,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
-                            mirakurunIp = mirakurunIp,
-                            mirakurunPort = mirakurunPort,
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "lastWatched") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -220,8 +226,8 @@ fun HomeContents(
                     item(key = "section_hot") {
                         HotChannelSection(
                             hotChannels = hotChannels,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "hot") upToTabModifier else Modifier,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -237,8 +243,8 @@ fun HomeContents(
                             genrePickup = genrePickup,
                             pickupGenreName = pickupGenreName,
                             pickupTimeSlot = pickupTimeSlot,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "pickup") upToTabModifier else Modifier,
                             onProgramClick = onProgramClick,
                             onNavigateToTab = onNavigateToTab,
@@ -254,6 +260,7 @@ fun HomeContents(
                     item(key = "section_history") {
                         WatchHistorySection(
                             watchHistory = watchHistory,
+                            recentRecordings = recentRecordings, // ★ 追加: サムネイル用データを渡す
                             konomiIp = konomiIp,
                             konomiPort = konomiPort,
                             modifier = if (topSection == "history") upToTabModifier else Modifier,
@@ -269,8 +276,8 @@ fun HomeContents(
                     item(key = "section_upcoming") {
                         UpcomingReserveSection(
                             upcomingReserves = upcomingReserves,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            getLogoUrl = getLogoUrl,
+                            shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "upcoming") upToTabModifier else Modifier,
                             onReserveClick = onReserveClick,
                             onNavigateToTab = onNavigateToTab,

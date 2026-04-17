@@ -11,7 +11,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.*
@@ -164,21 +163,17 @@ fun ReserveSettingsDialog(
                     )
                 }
 
+                // ★修正: IconButton をTV向けの PriorityCircleButton に変更
                 SettingRow(label = "優先度 (1-5)") {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        IconButton(
-                            onClick = { if (priority > 1) priority-- },
-                            enabled = priority > 1
-                        ) {
-                            Icon(
-                                Icons.Default.Remove,
-                                null,
-                                tint = if (priority > 1) colors.textPrimary else colors.textSecondary
-                            )
-                        }
+                        PriorityCircleButton(
+                            icon = Icons.Default.Remove,
+                            enabled = priority > 1,
+                            onClick = { priority-- }
+                        )
                         Text(
                             text = priority.toString(),
                             style = MaterialTheme.typography.titleLarge,
@@ -187,16 +182,11 @@ fun ReserveSettingsDialog(
                             modifier = Modifier.width(30.dp),
                             textAlign = TextAlign.Center
                         )
-                        IconButton(
-                            onClick = { if (priority < 5) priority++ },
-                            enabled = priority < 5
-                        ) {
-                            Icon(
-                                Icons.Default.Add,
-                                null,
-                                tint = if (priority < 5) colors.textPrimary else colors.textSecondary
-                            )
-                        }
+                        PriorityCircleButton(
+                            icon = Icons.Default.Add,
+                            enabled = priority < 5,
+                            onClick = { priority++ }
+                        )
                     }
                 }
 
@@ -283,13 +273,11 @@ fun ReserveSettingsDialog(
                 options = options.map { it.first to (it.second ?: "") },
                 current = selectedBatPath ?: "",
                 onDismiss = {
-                    // ★トラップが解除されているので、今度は確実にボタンへフォーカスが移ります
                     batSelectionFocusRequester.requestFocus()
                     isBatSelectionOpen = false
                 },
                 onSelect = {
                     selectedBatPath = if (it.isEmpty()) null else it
-                    // ★選択完了時も同様です
                     batSelectionFocusRequester.requestFocus()
                     isBatSelectionOpen = false
                 }

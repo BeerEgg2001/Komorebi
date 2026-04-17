@@ -2,6 +2,9 @@ package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -12,18 +15,17 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -32,7 +34,8 @@ fun RecordGridContent(
     pagedRecordings: LazyPagingItems<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
-    gridState: TvLazyGridState,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
+    gridState: LazyGridState,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
@@ -46,6 +49,7 @@ fun RecordGridContent(
     onFocusedItemChanged: (RecordedProgram?) -> Unit = {}
 ) {
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val backendType by settingViewModel.backendType.collectAsState()
 
     LaunchedEffect(isListReady, pagedRecordings.itemCount) {
         onFirstItemBound(isListReady && pagedRecordings.itemCount > 0)
@@ -90,9 +94,9 @@ fun RecordGridContent(
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
 
-    TvLazyVerticalGrid(
+    LazyVerticalGrid(
         state = gridState,
-        columns = TvGridCells.Fixed(4),
+        columns = GridCells.Fixed(4),
         contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -146,6 +150,7 @@ fun RecordGridContent(
                     program = program,
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
+                    backendType = backendType,
                     isScrolling = isScrollingLambda,
                     onClick = { onProgramClick(program, null) },
                     modifier = itemModifier

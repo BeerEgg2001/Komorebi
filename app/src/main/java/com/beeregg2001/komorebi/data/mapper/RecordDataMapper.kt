@@ -43,22 +43,32 @@ object RecordDataMapper {
             tileRows = tile?.rowCount,
             tileInterval = tile?.intervalSec,
             tileWidth = tile?.tileWidth,
-            tileHeight = tile?.tileHeight
+            tileHeight = tile?.tileHeight,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = program.directThumbnailUrl,
+            apiThumbnailUrl = program.apiThumbnailUrl
         )
     }
 
     fun toDomainModel(entity: RecordedProgramEntity): RecordedProgram {
         val thumbnailInfo = if (entity.tileColumns != null) {
+            // ★修正: 保持している列数・行数から画像の全体サイズと総タイル数を計算して完全なTileInfoを復元する
+            val cCount = entity.tileColumns
+            val rCount = entity.tileRows ?: 1
+            val tWidth = entity.tileWidth ?: 320
+            val tHeight = entity.tileHeight ?: 180
+
             ThumbnailInfo(
                 version = 1,
                 tile = TileInfo(
-                    imageWidth = 0, imageHeight = 0,
-                    tileWidth = entity.tileWidth ?: 320,
-                    tileHeight = entity.tileHeight ?: 180,
-                    columnCount = entity.tileColumns,
-                    rowCount = entity.tileRows ?: 1,
+                    imageWidth = tWidth * cCount,
+                    imageHeight = tHeight * rCount,
+                    tileWidth = tWidth,
+                    tileHeight = tHeight,
+                    columnCount = cCount,
+                    rowCount = rCount,
                     intervalSec = entity.tileInterval ?: 10.0,
-                    totalTiles = 0
+                    totalTiles = cCount * rCount
                 )
             )
         } else null
@@ -96,7 +106,10 @@ object RecordDataMapper {
             ),
             genres = entity.genres,
             isRecording = entity.isRecording,
-            playbackPosition = entity.playbackPosition
+            playbackPosition = entity.playbackPosition,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = entity.directThumbnailUrl,
+            apiThumbnailUrl = entity.apiThumbnailUrl
         )
     }
 }

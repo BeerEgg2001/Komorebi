@@ -3,7 +3,12 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -14,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,10 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
-import androidx.tv.foundation.lazy.grid.itemsIndexed
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -38,6 +39,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -46,6 +48,7 @@ fun RecordSeriesGridContent(
     seriesList: List<SeriesInfo>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
@@ -54,13 +57,14 @@ fun RecordSeriesGridContent(
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
     onBackPress: () -> Unit,
-    gridState: TvLazyGridState,
+    gridState: LazyGridState,
     ticketManager: FocusTicketManager,
     onFirstItemBound: (Boolean) -> Unit = {},
     onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val backendType by settingViewModel.backendType.collectAsState()
     val isScrollInProgress = gridState.isScrollInProgress
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -83,17 +87,17 @@ fun RecordSeriesGridContent(
         }
     }
 
-    TvLazyVerticalGrid(
+    LazyVerticalGrid(
         state = gridState,
-        columns = TvGridCells.Fixed(4),
+        columns = GridCells.Fixed(4),
         contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            // ★修正: focusGroup を削除し、focusRestorer を追加。
-            .focusRestorer { firstItemFocusRequester }
+            // ★ 修正: クラッシュの原因だった focusRestorer を安全な focusGroup に変更
+            .focusGroup()
     ) {
         itemsIndexed(seriesList) { index, series ->
             var isFocused by remember { mutableStateOf(false) }
@@ -158,17 +162,30 @@ fun RecordSeriesGridContent(
                 )
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+                        backendType,
+                        konomiIp,
+                        konomiPort,
+                        series.representativeVideoId.toString()
+                    )
+                    val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+                    var currentThumbnailUrl by remember(
+                        series.representativeVideoId,
+                        primaryUrl
+                    ) { mutableStateOf(primaryUrl) }
+
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current).data(
-                            UrlBuilder.getThumbnailUrl(
-                                konomiIp,
-                                konomiPort,
-                                series.representativeVideoId.toString()
-                            )
-                        ).crossfade(true).build(),
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(currentThumbnailUrl)
+                            .crossfade(true).build(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        onError = {
+                            if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                                currentThumbnailUrl = fallbackUrl
+                            }
+                        }
                     )
                     Box(
                         modifier = Modifier

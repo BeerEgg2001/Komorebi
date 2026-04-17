@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -19,9 +21,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.items
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -105,7 +105,7 @@ fun DayOfWeekSelectionDialog(
                     color = colors.textPrimary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                TvLazyColumn(
+                LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(dayOrder) { dayValue ->
@@ -193,7 +193,7 @@ fun NumberSelectionDialog(
     onDismiss: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val listState = rememberTvLazyListState(
+    val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = range.indexOf(initialValue).coerceAtLeast(0)
     )
 
@@ -238,7 +238,7 @@ fun NumberSelectionDialog(
                     color = colors.textSecondary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                TvLazyColumn(
+                LazyColumn(
                     state = listState,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,

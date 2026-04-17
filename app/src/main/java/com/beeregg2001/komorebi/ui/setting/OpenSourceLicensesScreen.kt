@@ -7,11 +7,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -21,9 +22,6 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.itemsIndexed
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
@@ -574,7 +572,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     var selectedLib by remember { mutableStateOf(ossLibraries.first()) }
     val listFocusRequester = remember { FocusRequester() }
     val textFocusRequester = remember { FocusRequester() }
-    val listState = rememberTvLazyListState()
+    val listState = rememberLazyListState()
 
     val inverseColor = if (colors.isDark) Color.Black else Color.White
 
@@ -602,7 +600,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(bottom = 24.dp, start = 16.dp)
             )
 
-            TvLazyColumn(
+            LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)

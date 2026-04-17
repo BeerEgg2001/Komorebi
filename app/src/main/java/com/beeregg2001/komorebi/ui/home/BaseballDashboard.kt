@@ -4,12 +4,16 @@ package com.beeregg2001.komorebi.ui.home
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -23,9 +27,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.itemsIndexed
+// ★ 変更: TvLazy 系のインポートを削除し、標準の Lazy 系パッケージに変更しました
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.data.model.Channel
@@ -48,7 +53,7 @@ fun BaseballDashboardScreen(
     topNavFocusRequester: FocusRequester,
     contentFirstItemRequester: FocusRequester,
     onUiReady: suspend () -> Unit,
-    timeFormat: String = "24H" // ★ 追加: 12H/24H フォーマットを受け取る
+    timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
 
@@ -67,10 +72,14 @@ fun BaseballDashboardScreen(
         targetDate.format(formatter)
     }
 
+    // ★ 修正: 画面全体をくるむ Column に contentFirstItemRequester と focusGroup() を付与。
+    // LazyRow の中身が破棄されても、親コンテナが安全にフォーカスを受け止め、内部の適切な子へフォーカスを流すためクラッシュしません。
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 48.dp)
+            .focusRequester(contentFirstItemRequester)
+            .focusGroup()
     ) {
         Row(
             modifier = Modifier
@@ -79,10 +88,6 @@ fun BaseballDashboardScreen(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val prevBtnModifier = if (groupedGames.isEmpty() && dateOffset == 2) {
-                Modifier.focusRequester(contentFirstItemRequester)
-            } else Modifier
-
             Button(
                 onClick = { onDateOffsetChange(dateOffset - 1) },
                 enabled = dateOffset > 0,
@@ -92,8 +97,8 @@ fun BaseballDashboardScreen(
                     contentColor = colors.textPrimary,
                     focusedContentColor = if (colors.isDark) Color.Black else Color.White
                 ),
-                // 🌟 追加: ボタンの左抜けブロック
-                modifier = prevBtnModifier.focusProperties {
+                // ★ 修正: 直接的な Requester 割り当てを削除し、純粋なフォーカス移動のプロパティのみにする
+                modifier = Modifier.focusProperties {
                     up = topNavFocusRequester
                     left = FocusRequester.Cancel
                 }
@@ -114,10 +119,6 @@ fun BaseballDashboardScreen(
 
             Spacer(Modifier.width(32.dp))
 
-            val nextBtnModifier = if (groupedGames.isEmpty() && dateOffset < 2) {
-                Modifier.focusRequester(contentFirstItemRequester)
-            } else Modifier
-
             Button(
                 onClick = { onDateOffsetChange(dateOffset + 1) },
                 enabled = dateOffset < 2,
@@ -127,8 +128,8 @@ fun BaseballDashboardScreen(
                     contentColor = colors.textPrimary,
                     focusedContentColor = if (colors.isDark) Color.Black else Color.White
                 ),
-                // 🌟 追加: ボタンの右抜けブロック
-                modifier = nextBtnModifier.focusProperties {
+                // ★ 修正: 直接的な Requester 割り当てを削除
+                modifier = Modifier.focusProperties {
                     up = topNavFocusRequester
                     right = FocusRequester.Cancel
                 }
@@ -143,17 +144,31 @@ fun BaseballDashboardScreen(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    // ★ 修正: フォーカスを受け取れるようにし、上キーで確実に戻れるようにする
+                    .focusable()
+                    .focusProperties { up = topNavFocusRequester },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "この日の放送予定はありません",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = colors.textSecondary.copy(alpha = 0.6f)
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.EventBusy,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .padding(bottom = 16.dp),
+                        tint = colors.textSecondary.copy(alpha = 0.3f)
+                    )
+                    Text(
+                        text = "この日の放送予定はありません",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = colors.textSecondary.copy(alpha = 0.6f)
+                    )
+                }
             }
         } else {
-            TvLazyColumn(
+            // ★ 変更: LazyColumn -> LazyColumn に置換
+            LazyColumn(
                 contentPadding = PaddingValues(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(40.dp),
                 modifier = Modifier.fillMaxSize()
@@ -167,14 +182,11 @@ fun BaseballDashboardScreen(
                             color = colors.textPrimary
                         )
 
-                        TvLazyRow(
+                        // ★ 変更: LazyRow -> LazyRow に置換
+                        LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
                             itemsIndexed(teamGames) { gameIndex, game ->
-                                val modifier = if (teamIndex == 0 && gameIndex == 0) {
-                                    Modifier.focusRequester(contentFirstItemRequester)
-                                } else Modifier
-
                                 BaseballGameCard(
                                     game = game,
                                     onClick = {
@@ -199,22 +211,23 @@ fun BaseballDashboardScreen(
                                                 isDisplay = true,
                                                 programPresent = null,
                                                 programFollowing = null,
-                                                remocon_Id = 0
+                                                remocon_Id = 0,
+                                                is_subchannel = game.channel.is_subchannel
                                             )
                                             onChannelClick(channel)
                                         } else {
                                             onProgramClick(game.program)
                                         }
                                     },
-                                    // 🌟 追加: 横方向の端ガード
-                                    modifier = modifier
+                                    // ★ 修正: 不安定なRequesterの割り当てを削除。端のガード処理のみ残す
+                                    modifier = Modifier
                                         .width(380.dp)
                                         .focusProperties {
                                             if (gameIndex == 0) left = FocusRequester.Cancel
                                             if (gameIndex == teamGames.lastIndex) right =
                                                 FocusRequester.Cancel
                                         },
-                                    timeFormat = timeFormat // ★ 追加: 12H/24H フォーマットを渡す
+                                    timeFormat = timeFormat
                                 )
                             }
                         }
@@ -231,7 +244,7 @@ fun BaseballGameCard(
     game: BaseballGameInfo,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    timeFormat: String = "24H" // ★ 追加: 12H/24H フォーマットを受け取る
+    timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -249,7 +262,6 @@ fun BaseballGameCard(
     }
     val statusColor = if (isLive) Color(0xFFFF5252) else colors.textSecondary
 
-    // ★ 修正: timeFormat に応じた時刻表示
     val timeStr = remember(start, end, timeFormat) {
         val pattern = if (timeFormat == "12H") "a h:mm" else "HH:mm"
         val formatter = DateTimeFormatter.ofPattern(pattern, Locale.JAPANESE)

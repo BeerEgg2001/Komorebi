@@ -8,6 +8,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.AudioMode
 
+enum class LCropMode { HIDDEN, MENU, DIRECT_ADJUST }
+enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
+
+data class ChapterInfo(
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val isCm: Boolean
+)
+
 @Stable
 class VideoPlayerState(
     initialQuality: String
@@ -27,9 +36,20 @@ class VideoPlayerState(
     var isCommentEnabled by mutableStateOf(true)
     var isSubtitleEnabled by mutableStateOf(false)
 
-    // ★ 追加: 戻るキー長押し判定用
+    // 戻るキー長押し判定用
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
+
+    // ★ 追加: モダンUI時のシークバーフォーカス状態
+    var isSeekBarFocused by mutableStateOf(false)
+
+    // L字クロップ関連の状態変数
+    var lCropEnabled by mutableStateOf(false)
+    var lCropMode by mutableStateOf(LCropMode.HIDDEN)
+    var lCropZoom by mutableFloatStateOf(100f)
+    var lCropX by mutableFloatStateOf(0f)
+    var lCropY by mutableFloatStateOf(0f)
+    var lCropOrigin by mutableStateOf(ZoomOrigin.TopRight)
 
     fun updateIndicator(icon: ImageVector, label: String) {
         indicatorState = IndicatorState(icon, label)

@@ -61,8 +61,10 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
 
-    // ★ 追加: ViewModelからベータ版受信設定の状態を購読
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
+
+    // ★ 追加: 新しく作成したUIモードのStateを取得
+    val playerUiMode by viewModel.playerUiMode.collectAsState()
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
@@ -83,6 +85,8 @@ fun SettingsScreen(
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
 
+    val edcbPlayMethodR = remember { FocusRequester() }
+
     val itemFocusRequesters = remember {
         listOf(
             listOf(
@@ -90,14 +94,13 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester() // ★ 修正: General用に FocusRequester を 4個 → 5個 に増強
+                FocusRequester()
             ), // 0: General
             listOf(
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester()
+                FocusRequester(), // BackendType
+                FocusRequester(), FocusRequester(), // Backend IP, Port
+                FocusRequester(), // Stream Priority
+                FocusRequester(), FocusRequester()  // Override IP, Port
             ), // 1: Connection
             listOf(
                 FocusRequester(),
@@ -105,7 +108,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester()
+                FocusRequester(),
+                FocusRequester() // ★ 追加: プレイヤーUIモード用のFocusRequester
             ), // 2: Playback
             listOf(FocusRequester()), // 3: Recording
             listOf(
@@ -117,6 +121,7 @@ fun SettingsScreen(
                 FocusRequester()
             ), // 4: Home
             listOf(
+                FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
@@ -258,7 +263,6 @@ fun SettingsScreen(
                     0 -> GeneralSettingsContent(
                         totalRecordCount = totalRecordCount,
                         lastSyncedAt = lastSyncedAt,
-                        // ★ 追加: ベータ設定の引数を渡す
                         receiveBetaUpdates = receiveBetaUpdates,
                         onToggleBetaUpdates = { newValue ->
                             scope.launch {
@@ -269,12 +273,10 @@ fun SettingsScreen(
                             }
                         },
                         betaUpdateR = itemFocusRequesters[0][0],
-                        // ★ 修正: 残りのインデックスを1つずつずらす
                         dbInfoR = itemFocusRequesters[0][1],
                         forceSyncR = itemFocusRequesters[0][2],
                         clearChannelR = itemFocusRequesters[0][3],
                         clearHistoryR = itemFocusRequesters[0][4],
-                        // ----------
                         onForceSync = {
                             uiState.activeDialog = SettingDialogState.ConfirmClear(
                                 "データベースの再構築",
@@ -300,36 +302,85 @@ fun SettingsScreen(
                     )
 
                     1 -> ConnectionSettingsContent(
+                        backendType = prefs.backendType,
+                        edcbIp = prefs.edcbIp,
+                        edcbPort = prefs.edcbPort,
+                        epgStationIp = prefs.epgStationIp,
+                        epgStationPort = prefs.epgStationPort,
                         kIp = prefs.konomiIp,
                         kPort = prefs.konomiPort,
                         mIp = prefs.mirakurunIp,
                         mPort = prefs.mirakurunPort,
                         prefSrc = prefs.preferredSource,
+                        edcbPlayMethod = prefs.edcbRecordPlayMethod,
+                        onSelectEdcbPlayMethod = {
+                            val options = listOf(
+                                "API経由 (api/Movie)" to "API",
+                                "直接アクセス (高速シーク可)" to "DIRECT"
+                            )
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "録画ファイルの再生方式",
+                                options,
+                                prefs.edcbRecordPlayMethod
+                            ) { newValue ->
+                                viewModel.updateEdcbRecordPlayMethod(newValue)
+                            }
+                        },
+                        edcbPlayMethodR = edcbPlayMethodR,
                         onEdit = { t, v ->
-                            uiState.activeDialog = SettingDialogState.Input(
-                                t,
-                                v
-                            ) {
-                                if (t == AppStrings.SETTINGS_INPUT_KONOMITV_ADDRESS) viewModel.updateKonomiIp(
-                                    it
-                                ) else if (t == AppStrings.SETTINGS_INPUT_KONOMITV_PORT) viewModel.updateKonomiPort(
-                                    it
-                                ) else scope.launch {
-                                    repository.saveString(
-                                        if (t == AppStrings.SETTINGS_INPUT_MIRAKURUN_ADDRESS) SettingsRepository.MIRAKURUN_IP else SettingsRepository.MIRAKURUN_PORT,
-                                        it
-                                    )
+                            uiState.activeDialog = SettingDialogState.Input(t, v) {
+                                when (t) {
+                                    "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(it)
+                                    "KonomiTV (ポート)" -> viewModel.updateKonomiPort(it)
+                                    "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(it)
+                                    "EDCB (ポート)" -> viewModel.updateEdcbPort(it)
+                                    "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(it)
+                                    "EPGStation (ポート)" -> viewModel.updateEpgStationPort(it)
+                                    "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(it)
+                                    "Mirakurun (ポート)" -> scope.launch {
+                                        repository.saveString(SettingsRepository.MIRAKURUN_PORT, it)
+                                    }
                                 }
                             }
                         },
+                        onSelectBackend = {
+                            val options = listOf(
+                                "KonomiTV" to "KONOMITV",
+                                "EDCB (EpgTimerSrv)" to "EDCB",
+                                "EPGStation" to "EPGSTATION",
+                                "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
+                            )
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.backendType }) prefs.backendType else "KONOMITV"
+
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "バックエンドシステムの選択",
+                                options,
+                                safeCurrent
+                            ) {
+                                viewModel.updateBackendType(it)
+                            }
+                        },
                         onSelectSrc = {
+                            val options = mutableListOf(
+                                "メインシステムに従う" to "KONOMITV",
+                                "Mirakurun を優先" to "MIRAKURUN"
+                            )
+                            if (prefs.backendType != "EDCB") {
+                                options.add("EDCB (TCP) を優先" to "EDCB")
+                            }
+
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.preferredSource }) {
+                                    prefs.preferredSource
+                                } else {
+                                    "KONOMITV"
+                                }
+
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
-                                if (prefs.mirakurunIp.isBlank()) listOf(AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_FIXED to "KONOMITV") else listOf(
-                                    AppStrings.SETTINGS_VALUE_SOURCE_KONOMITV_PREFERRED to "KONOMITV",
-                                    AppStrings.SETTINGS_VALUE_SOURCE_MIRAKURUN_PREFERRED to "MIRAKURUN"
-                                ),
-                                prefs.preferredSource
+                                options,
+                                safeCurrent
                             ) {
                                 scope.launch {
                                     repository.saveString(
@@ -339,11 +390,12 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        kIpR = itemFocusRequesters[1][0],
-                        kPortR = itemFocusRequesters[1][1],
-                        mIpR = itemFocusRequesters[1][2],
-                        mPortR = itemFocusRequesters[1][3],
-                        prefSrcR = itemFocusRequesters[1][4],
+                        backendTypeR = itemFocusRequesters[1][0],
+                        backendIpR = itemFocusRequesters[1][1],
+                        backendPortR = itemFocusRequesters[1][2],
+                        prefSrcR = itemFocusRequesters[1][3],
+                        overrideIpR = itemFocusRequesters[1][4],
+                        overridePortR = itemFocusRequesters[1][5],
                         sidebarR = categoryFocusRequesters[1],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1
@@ -357,18 +409,23 @@ fun SettingsScreen(
                         videoSub = prefs.videoSubtitleDefault,
                         layerOrder = prefs.subtitleCommentLayer,
                         audioMode = prefs.audioOutputMode,
+                        uiMode = playerUiMode, // ★ 追加
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
                         liveSubR = itemFocusRequesters[2][2],
                         videoSubR = itemFocusRequesters[2][3],
                         audioR = itemFocusRequesters[2][4],
                         layerR = itemFocusRequesters[2][5],
+                        uiModeR = itemFocusRequesters[2][6], // ★ 追加
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
+                            val options = StreamQuality.entries.map { it.label to it.value }
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.liveQuality }) prefs.liveQuality else StreamQuality.Q1080P_60.value
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_QUALITY_TITLE,
-                                StreamQuality.entries.map { it.label to it.value },
-                                prefs.liveQuality
+                                options,
+                                safeCurrent
                             ) {
                                 scope.launch {
                                     repository.saveString(
@@ -379,10 +436,13 @@ fun SettingsScreen(
                             }
                         },
                         onV = {
+                            val options = StreamQuality.entries.map { it.label to it.value }
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.videoQuality }) prefs.videoQuality else StreamQuality.Q1080P_60.value
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_QUALITY_TITLE,
-                                StreamQuality.entries.map { it.label to it.value },
-                                prefs.videoQuality
+                                options,
+                                safeCurrent
                             ) {
                                 scope.launch {
                                     repository.saveString(
@@ -409,13 +469,16 @@ fun SettingsScreen(
                             }
                         },
                         onLayer = {
+                            val options = listOf(
+                                AppStrings.DIALOG_LAYER_COMMENT_TOP to "CommentOnTop",
+                                AppStrings.DIALOG_LAYER_SUBTITLE_TOP to "SubtitleOnTop"
+                            )
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.subtitleCommentLayer }) prefs.subtitleCommentLayer else "CommentOnTop"
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_LAYER_ORDER_TITLE,
-                                listOf(
-                                    AppStrings.DIALOG_LAYER_COMMENT_TOP to "CommentOnTop",
-                                    AppStrings.DIALOG_LAYER_SUBTITLE_TOP to "SubtitleOnTop"
-                                ),
-                                prefs.subtitleCommentLayer
+                                options,
+                                safeCurrent
                             ) {
                                 scope.launch {
                                     repository.saveString(
@@ -426,17 +489,41 @@ fun SettingsScreen(
                             }
                         },
                         onAudioMode = {
+                            val options = listOf(
+                                AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX_DESC to "DOWNMIX",
+                                AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC to "PASSTHROUGH"
+                            )
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.audioOutputMode }) prefs.audioOutputMode else "DOWNMIX"
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_AUDIO_OUTPUT_TITLE,
-                                listOf(
-                                    AppStrings.SETTINGS_VALUE_AUDIO_DOWNMIX_DESC to "DOWNMIX",
-                                    AppStrings.SETTINGS_VALUE_AUDIO_PASSTHROUGH_DESC to "PASSTHROUGH"
-                                ),
-                                prefs.audioOutputMode
+                                options,
+                                safeCurrent
                             ) {
                                 scope.launch {
                                     repository.saveString(
                                         SettingsRepository.AUDIO_OUTPUT_MODE,
+                                        it
+                                    )
+                                }
+                            }
+                        },
+                        // ★ 追加: プレイヤーUIモードの変更イベント
+                        onUiMode = {
+                            val options = listOf(
+                                "モダン (オンスクリーン操作)" to "MODERN",
+                                "クラシック (D-Pad完結)" to "CLASSIC"
+                            )
+                            val safeCurrent =
+                                if (options.any { it.second == playerUiMode }) playerUiMode else "MODERN"
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "プレイヤーUIモード",
+                                options,
+                                safeCurrent
+                            ) {
+                                scope.launch {
+                                    repository.saveString(
+                                        SettingsRepository.PLAYER_UI_MODE,
                                         it
                                     )
                                 }
@@ -451,10 +538,7 @@ fun SettingsScreen(
                         batchList = prefs.postRecordingBatchList,
                         onAdd = {
                             uiState.activeDialog = SettingDialogState.BatchInput { n, p ->
-                                viewModel.addPostRecordingBatch(
-                                    n,
-                                    p
-                                )
+                                viewModel.addPostRecordingBatch(n, p)
                             }
                         },
                         onDelete = { batch ->
@@ -513,20 +597,26 @@ fun SettingsScreen(
                                 }
                             },
                             onColor = {
+                                val options = listOf(
+                                    AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
+                                    AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
+                                    AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
+                                    AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
+                                    AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
+                                )
+                                val safeCurrent =
+                                    if (options.any { it.second == currentSeason }) currentSeason else "DEFAULT"
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                                    listOf(
-                                        AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
-                                        AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
-                                        AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
-                                        AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
-                                        AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
-                                    ),
-                                    currentSeason
+                                    options,
+                                    safeCurrent
                                 ) {
                                     val nt = getThemeFromModeAndSeason(isDarkMode, it)
                                     scope.launch {
-                                        repository.saveString(SettingsRepository.APP_THEME, nt)
+                                        repository.saveString(
+                                            SettingsRepository.APP_THEME,
+                                            nt
+                                        )
                                     }
                                 }
                             },
@@ -550,10 +640,13 @@ fun SettingsScreen(
                                     )
                                 }
 
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.startupTab }) prefs.startupTab else "ホーム"
+
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_STARTUP_TAB,
                                     options,
-                                    prefs.startupTab
+                                    safeCurrent
                                 ) {
                                     scope.launch {
                                         repository.saveString(
@@ -564,18 +657,21 @@ fun SettingsScreen(
                                 }
                             },
                             onG = {
+                                val options = listOf(
+                                    AppStrings.SETTINGS_GENRE_ANIME to "アニメ",
+                                    AppStrings.SETTINGS_GENRE_MOVIE to "映画",
+                                    AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ",
+                                    AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ",
+                                    AppStrings.SETTINGS_GENRE_MUSIC to "音楽",
+                                    AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ",
+                                    AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"
+                                )
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.pickupGenre }) prefs.pickupGenre else "アニメ"
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.DIALOG_PICKUP_GENRE_TITLE,
-                                    listOf(
-                                        AppStrings.SETTINGS_GENRE_ANIME to "アニメ",
-                                        AppStrings.SETTINGS_GENRE_MOVIE to "映画",
-                                        AppStrings.SETTINGS_GENRE_DRAMA to "ドラマ",
-                                        AppStrings.SETTINGS_GENRE_SPORTS to "スポーツ",
-                                        AppStrings.SETTINGS_GENRE_MUSIC to "音楽",
-                                        AppStrings.SETTINGS_GENRE_VARIETY to "バラエティ",
-                                        AppStrings.SETTINGS_GENRE_DOCUMENTARY to "ドキュメンタリー"
-                                    ),
-                                    prefs.pickupGenre
+                                    options,
+                                    safeCurrent
                                 ) {
                                     scope.launch {
                                         repository.saveString(
@@ -586,15 +682,18 @@ fun SettingsScreen(
                                 }
                             },
                             onTime = {
+                                val options = listOf(
+                                    AppStrings.SETTINGS_TIME_AUTO to "自動",
+                                    AppStrings.SETTINGS_TIME_MORNING to "朝",
+                                    AppStrings.SETTINGS_TIME_NOON to "昼",
+                                    AppStrings.SETTINGS_TIME_NIGHT to "夜"
+                                )
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.pickupTime }) prefs.pickupTime else "自動"
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.DIALOG_PICKUP_TIME_TITLE,
-                                    listOf(
-                                        AppStrings.SETTINGS_TIME_AUTO to "自動",
-                                        AppStrings.SETTINGS_TIME_MORNING to "朝",
-                                        AppStrings.SETTINGS_TIME_NOON to "昼",
-                                        AppStrings.SETTINGS_TIME_NIGHT to "夜"
-                                    ),
-                                    prefs.pickupTime
+                                    options,
+                                    safeCurrent
                                 ) {
                                     scope.launch {
                                         repository.saveString(
@@ -650,10 +749,13 @@ fun SettingsScreen(
                                     )
                                 }
 
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.startupTab }) prefs.startupTab else "ホーム"
+
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_STARTUP_TAB,
                                     options,
-                                    prefs.startupTab
+                                    safeCurrent
                                 ) {
                                     scope.launch {
                                         repository.saveString(
@@ -669,22 +771,29 @@ fun SettingsScreen(
                                     AppStrings.SETTINGS_VALUE_STARTUP_LAST to "LAST_WATCHED"
                                 )
                                 val channelOptions = flatChannels.map { it.name to it.id }
+                                val allOptions = baseOptions + channelOptions
+                                val safeCurrent =
+                                    if (allOptions.any { it.second == prefs.startupChannel }) prefs.startupChannel else "OFF"
+
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.DIALOG_STARTUP_CHANNEL_TITLE,
-                                    baseOptions + channelOptions,
-                                    prefs.startupChannel
+                                    allOptions,
+                                    safeCurrent
                                 ) {
                                     viewModel.updateStartupChannel(it)
                                 }
                             },
                             onEditDefaultView = {
+                                val options = listOf(
+                                    AppStrings.SETTINGS_VALUE_VIEW_LIST to "LIST",
+                                    AppStrings.SETTINGS_VALUE_VIEW_GRID to "GRID"
+                                )
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.defaultRecordListView }) prefs.defaultRecordListView else "LIST"
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_DEFAULT_RECORD_VIEW,
-                                    listOf(
-                                        AppStrings.SETTINGS_VALUE_VIEW_LIST to "LIST",
-                                        AppStrings.SETTINGS_VALUE_VIEW_GRID to "GRID"
-                                    ),
-                                    prefs.defaultRecordListView
+                                    options,
+                                    safeCurrent
                                 ) {
                                     scope.launch {
                                         repository.saveString(
@@ -695,18 +804,25 @@ fun SettingsScreen(
                                 }
                             },
                             onEditTimeFormat = {
+                                val options = listOf(
+                                    "24時間表記" to "24H",
+                                    "12時間表記 (AM/PM)" to "12H"
+                                )
+                                val safeCurrent =
+                                    if (options.any { it.second == prefs.timeFormat }) prefs.timeFormat else "24H"
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     "時刻の表示形式",
-                                    listOf(
-                                        "24時間表記" to "24H",
-                                        "12時間表記 (AM/PM)" to "12H"
-                                    ),
-                                    prefs.timeFormat
+                                    options,
+                                    safeCurrent
                                 ) {
                                     viewModel.updateTimeFormat(it)
                                 }
                             },
-                            itemRs = itemFocusRequesters[5],
+                            onToggleHideSubChannels = {
+                                viewModel.toggleHideSubChannels()
+                            },
+                            itemRs = itemFocusRequesters[5].dropLast(1),
+                            hideSubChannelsR = itemFocusRequesters[5].last(),
                             onClick = {
                                 uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5
                             }
@@ -775,7 +891,8 @@ fun SettingsScreen(
                                 "福岡ソフトバンクホークス" to "ソフトバンク",
                                 "東北楽天ゴールデンイーグルス" to "楽天",
                                 "埼玉西武ライオンズ" to "西武",
-                                "北海道日本ハムファイターズ" to "日本ハム"
+                                "北海道日本ハムファイターズ" to "日本ハム",
+                                "侍ジャパン" to "侍ジャパン"
                             )
                             uiState.activeDialog = SettingDialogState.MultiSelection(
                                 "フォロー球団の選択",

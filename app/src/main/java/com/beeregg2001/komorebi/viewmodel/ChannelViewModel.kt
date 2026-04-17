@@ -5,9 +5,12 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.data.repository.KonomiRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -17,7 +20,10 @@ import javax.inject.Inject
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class ChannelViewModel @Inject constructor(
-    private val repository: KonomiRepository
+    private val liveProvider: LiveProvider,
+    private val recordProvider: RecordProvider,
+    private val watchHistoryRepository: WatchHistoryRepository,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(true)
@@ -29,7 +35,6 @@ class ChannelViewModel @Inject constructor(
     private val _groupedChannels = MutableStateFlow<Map<String, List<Channel>>>(emptyMap())
     val groupedChannels: StateFlow<Map<String, List<Channel>>> = _groupedChannels
 
-    // ★ 修正: 野球判定ロジックの厳格化
     private val baseballKeywords = listOf(
         "阪神", "タイガース", "広島", "カープ", "DeNA", "ベイスターズ",
         "巨人", "ジャイアンツ", "ヤクルト", "スワローズ", "中日", "ドラゴンズ",
@@ -37,19 +42,16 @@ class ChannelViewModel @Inject constructor(
         "楽天", "イーグルス", "西武", "ライオンズ", "日本ハム", "ファイターズ", "プロ野球"
     )
 
-    // 中継を見たいユーザーのノイズになる番組を強力に弾く
     private val excludeKeywords = listOf(
         "プロ野球ニュース", "すぽると", "熱闘", "ダイジェスト", "ハイライト",
         "特集", "傑作選", "名勝負", "セレクション", "回顧", "伝説", "競馬"
     )
 
-    // 単なる「生放送」や「中継」ではなく、野球に特化したワードを中心に
     private val matchKeywords = listOf(
         "ナイター", "デーゲーム", "ベースボール", "プロ野球中継", "実況中継",
         "ガオトラ", "オープン戦", "公式戦", "クライマックスシリーズ", "日本シリーズ"
     )
 
-    // 対戦カードを表す記号
     private val versusSymbols = listOf("対", "×", "vs", "VS", "-", "ー")
 
     val baseballGroupedChannels: StateFlow<Map<String, List<Channel>>> =
@@ -61,30 +63,21 @@ class ChannelViewModel @Inject constructor(
                     val followingTitle = ch.programFollowing?.title ?: ""
                     val followingDesc = ch.programFollowing?.description ?: ""
 
-                    // ★ 修正: 現在の番組と次の番組を独立して判定するローカル関数
                     fun isBaseballGame(title: String, desc: String): Boolean {
                         if (title.isBlank()) return false
 
                         val fullText = "$title $desc"
 
-                        // 1. 球団名または「プロ野球」が含まれているか（大前提）
                         val hasKeyword = baseballKeywords.any { keyword ->
                             fullText.contains(keyword)
                         }
                         if (!hasKeyword) return false
 
-                        // 2. 過去の試合や関連番組ではないか（除外判定）
-                        // ※ タイトルのみで除外判定し、説明文の「昨日のハイライト」等での誤爆を防ぐ
                         val isExcluded = excludeKeywords.any { keyword ->
                             title.contains(keyword)
                         }
                         if (isExcluded) return false
 
-                        // 3. 実際の「試合中継」であるかどうかの精査
-
-                        // パターンA: 対戦カード表記（例: 「阪神×巨人」「DeNA 対 中日」）があるか
-                        // 球団名が含まれていることは前提(1)でクリアしているので、単に「対」「×」等が含まれ、
-                        // かつタイトルに「生」「中継」が含まれていれば、ほぼ確実に試合。
                         val hasVersusSymbol = versusSymbols.any { title.contains(it) }
                         val hasGenericLiveWord =
                             title.contains("中継") || title.contains("生") || title.contains(
@@ -94,7 +87,6 @@ class ChannelViewModel @Inject constructor(
 
                         if (hasVersusSymbol && hasGenericLiveWord) return true
 
-                        // パターンB: 野球特有の強いマッチキーワード（「ナイター」「プロ野球中継」など）が含まれているか
                         val isStrongMatch = matchKeywords.any { keyword ->
                             title.contains(keyword, ignoreCase = true) || desc.contains(
                                 keyword,
@@ -103,14 +95,11 @@ class ChannelViewModel @Inject constructor(
                         }
                         if (isStrongMatch) return true
 
-                        // パターンC: タイトルが非常に短い場合（EPGの省略表記など）の救済
-                        // 例: 「[生]プロ野球」などの場合
                         if (title.length <= 15 && title.contains("プロ野球") && hasGenericLiveWord) return true
 
                         return false
                     }
 
-                    // 現在放送中の番組、または次に放送される番組の「どちらか」が野球中継であれば表示する
                     isBaseballGame(presentTitle, presentDesc) || isBaseballGame(
                         followingTitle,
                         followingDesc
@@ -118,7 +107,6 @@ class ChannelViewModel @Inject constructor(
                 }
             }.filterValues { it.isNotEmpty() }
 
-            // 試合が全く無い時は、空のMapを返す
         }
             .flowOn(Dispatchers.Default)
             .stateIn(
@@ -138,14 +126,26 @@ class ChannelViewModel @Inject constructor(
 
     private var pollingJob: Job? = null
     private var progressUpdateJob: Job? = null
-
     private var fetchJob: Job? = null
-
     private var lastFetchedTimeMillis = 0L
+
+    private var isPollingPaused = false
+
+    private val logoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     init {
         startPolling()
         startProgressUpdater()
+    }
+
+    fun setPollingPaused(paused: Boolean) {
+        if (isPollingPaused != paused) {
+            isPollingPaused = paused
+            Log.d("ChannelViewModel", "Polling paused state changed to: $paused")
+            if (!paused) {
+                fetchChannels()
+            }
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -195,7 +195,10 @@ class ChannelViewModel @Inject constructor(
     private suspend fun fetchChannelsInternal() {
         try {
             _connectionError.value = false
-            val response = repository.getChannels()
+            val response = liveProvider.getChannels()
+
+            // サブチャンネル非表示設定を取得
+            val hideSubChannels = settingsRepository.hideSubChannels.first()
 
             val processed = withContext(Dispatchers.Default) {
                 val rawChannels = listOfNotNull(
@@ -216,17 +219,24 @@ class ChannelViewModel @Inject constructor(
                         programPresent = apiChannel.programPresent,
                         programFollowing = apiChannel.programFollowing,
                         remocon_Id = apiChannel.remocon_Id,
-                        jikkyoForce = apiChannel.jikkyoForce
+                        jikkyoForce = apiChannel.jikkyoForce,
+                        is_subchannel = apiChannel.is_subchannel
                     )
                 }
 
-                val hotCount = allChannels.count { (it.jikkyoForce ?: 0) > 0 }
+                val filteredChannels = if (hideSubChannels) {
+                    allChannels.filter { !it.is_subchannel }
+                } else {
+                    allChannels
+                }
+
+                val hotCount = filteredChannels.count { (it.jikkyoForce ?: 0) > 0 }
                 Log.i(
                     "ChannelViewModel",
-                    "Fetched channels. Total: ${allChannels.size}, Hot(force > 0): $hotCount"
+                    "Fetched channels. Total: ${filteredChannels.size}, Hot(force > 0): $hotCount"
                 )
 
-                allChannels.filter { it.isDisplay }.groupBy { it.type }
+                filteredChannels.filter { it.isDisplay }.groupBy { it.type }
             }
             _groupedChannels.value = processed
             _liveRows.value = transformToUiState(processed)
@@ -235,7 +245,7 @@ class ChannelViewModel @Inject constructor(
         } catch (e: CancellationException) {
             Log.d("ChannelViewModel", "fetchChannelsInternal cancelled")
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("ChannelViewModel", "Error fetching channels", e)
             _connectionError.value = true
         } finally {
@@ -249,7 +259,7 @@ class ChannelViewModel @Inject constructor(
         progressUpdateJob = viewModelScope.launch {
             while (isActive) {
                 delay(15_000L)
-                if (_groupedChannels.value.isNotEmpty()) {
+                if (_groupedChannels.value.isNotEmpty() && !isPollingPaused) {
                     _liveRows.value = transformToUiState(_groupedChannels.value)
                 }
             }
@@ -269,9 +279,9 @@ class ChannelViewModel @Inject constructor(
         _isRecordingLoading.value = true
         viewModelScope.launch {
             try {
-                val response = repository.getRecordedPrograms(page = 1)
+                val response = recordProvider.getRecordedPrograms(page = 1)
                 _recentRecordings.value = response.recordedPrograms
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e("ChannelViewModel", "Error recordings", e)
             } finally {
                 _isRecordingLoading.value = false
@@ -283,7 +293,7 @@ class ChannelViewModel @Inject constructor(
     fun startPolling() {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
-            if (System.currentTimeMillis() - lastFetchedTimeMillis > 60_000L) {
+            if (System.currentTimeMillis() - lastFetchedTimeMillis > 60_000L && !isPollingPaused) {
                 Log.i("ChannelViewModel", "Data is stale. Fetching immediately.")
                 fetchChannelsInternal()
             }
@@ -294,8 +304,10 @@ class ChannelViewModel @Inject constructor(
 
                 delay(delayToNextMinute + 1500L)
 
-                if (isActive) {
+                if (isActive && !isPollingPaused) {
                     fetchChannelsInternal()
+                } else if (isPollingPaused) {
+                    Log.d("ChannelViewModel", "Polling skipped due to pause (Player active)")
                 }
             }
         }
@@ -315,7 +327,14 @@ class ChannelViewModel @Inject constructor(
     fun saveToHistory(program: RecordedProgram) {
         viewModelScope.launch {
             val entity = KonomiDataMapper.toEntity(program)
-            repository.saveToLocalHistory(entity)
+            watchHistoryRepository.saveToLocalHistory(entity)
+        }
+    }
+
+    suspend fun getChannelLogoUrl(channelId: String): String {
+        logoCache[channelId]?.let { return it }
+        return liveProvider.getChannelLogoUrl(channelId).also {
+            logoCache[channelId] = it
         }
     }
 }

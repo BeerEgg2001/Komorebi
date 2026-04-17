@@ -41,9 +41,18 @@ object UrlBuilder {
     }
 
     // --- サムネイル関連 ---
-    fun getThumbnailUrl(ip: String, port: String, videoId: String): String {
-        val baseUrl = formatBaseUrl(ip, port, "https")
-        return "$baseUrl/api/videos/$videoId/thumbnail"
+    // ★修正: backendTypeを受け取り、システムごとに正しいパスを生成する
+    fun getThumbnailUrl(backendType: String, ip: String, port: String, videoId: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "http") // サムネイルは基本的にhttpフォールバックで安全に組む
+        return when (backendType) {
+            // ★修正: TODOを削除し、EMWUIの標準サムネイルAPIパスを設定
+            "EDCB" -> "$baseUrl/api/Thumbnail?id=$videoId"
+            "EPGSTATION" -> "$baseUrl/api/thumbnails/$videoId" // EPGStationの標準サムネイルAPI
+            else -> { // KonomiTV (デフォルト)
+                val secureBaseUrl = formatBaseUrl(ip, port, "https")
+                "$secureBaseUrl/api/videos/$videoId/thumbnail"
+            }
+        }
     }
 
     // --- ストリーミング関連 ---
@@ -53,20 +62,35 @@ object UrlBuilder {
         return "$baseUrl/api/services/$streamId/stream"
     }
 
-    fun getKonomiTvLiveStreamUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
+    fun getKonomiTvLiveStreamUrl(
+        ip: String,
+        port: String,
+        displayChannelId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/mpegts"
     }
 
-    fun getKonomiTvLiveEventsUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
+    fun getKonomiTvLiveEventsUrl(
+        ip: String,
+        port: String,
+        displayChannelId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/events"
     }
 
     @OptIn(UnstableApi::class)
-    fun getVideoPlaylistUrl(ip: String, port: String, videoId: Int, sessionId: String, quality: String = "1080p-60fps"): String {
+    fun getVideoPlaylistUrl(
+        ip: String,
+        port: String,
+        videoId: Int,
+        sessionId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
-//        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
     }
 
@@ -80,9 +104,23 @@ object UrlBuilder {
         return "$baseUrl/api/videos/$videoId/thumbnail/tiled"
     }
 
-    // ★追加: アーカイブ実況コメントAPIのURL
-    fun getArchivedJikkyoUrl(ip: String, port: String, videoId: Int): String {
+    // アーカイブ実況コメントAPIのURL
+    fun getArchivedJikkyoUrl(ip: String, port:  String, videoId: Int): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/videos/$videoId/jikkyo"
+    }
+
+    /**
+     * EDCBの録画フォルダにある静的サムネイル (録画ファイル名.ts.jpg) を直接取得するURL
+     */
+    fun getEdcbDirectThumbnailUrl(ip: String, port: String, recFilePath: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "http")
+        val relativePath = recFilePath
+            .replace(Regex("^[a-zA-Z]:\\\\"), "")
+            .replace("\\", "/")
+
+        // 録画ファイルの末尾に .jpg を足すことで "hoge.ts.jpg" を指定
+        val encodedPath = android.net.Uri.encode(relativePath, "/")
+        return "$baseUrl/rec/$encodedPath.jpg"
     }
 }

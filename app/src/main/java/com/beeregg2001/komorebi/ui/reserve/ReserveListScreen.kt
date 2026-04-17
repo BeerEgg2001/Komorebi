@@ -8,6 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+// ★ 追加・変更: 標準の Lazy系のインポート。items も明示的にインポートすることで Argument type mismatch を防ぎます
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,9 +26,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.items
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.ReservationCondition
@@ -34,6 +35,7 @@ import com.beeregg2001.komorebi.ui.components.ReserveCard
 import com.beeregg2001.komorebi.viewmodel.ReserveViewModel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -101,6 +103,7 @@ fun ReserveListScreen(
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {},
     viewModel: ReserveViewModel = hiltViewModel(),
+    channelViewModel: ChannelViewModel = hiltViewModel(),
     timeFormat: String = "24H",
     // ★ 追加(Step3): AIコンシェルジュからの復帰シグナル
     aiFocusReturnTick: Int = 0,
@@ -123,9 +126,10 @@ fun ReserveListScreen(
 
     val scope = rememberCoroutineScope()
 
-    val allListState = rememberTvLazyListState()
-    val normalListState = rememberTvLazyListState()
-    val conditionListState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val allListState = rememberLazyListState()
+    val normalListState = rememberLazyListState()
+    val conditionListState = rememberLazyListState()
 
     var previousOverlayOpen by remember { mutableStateOf(isReserveOverlayOpen) }
 
@@ -458,7 +462,8 @@ fun ReserveListScreen(
                                 targetTabRequester = tabFocusRequesters[0]
                             )
                         } else {
-                            TvLazyColumn(
+                            // ★ 変更: TvLazyColumn -> LazyColumn
+                            LazyColumn(
                                 state = allListState,
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
@@ -467,6 +472,7 @@ fun ReserveListScreen(
                                     .focusRequester(listFocusRequester)
                                     .focusProperties { up = tabFocusRequesters[0] }
                             ) {
+                                // ★ items(reserves) が上でインポートしたことにより正しく型解決されます
                                 items(reserves, key = { "all_res_${it.id}" }) { program ->
                                     val specificRequester = remember { FocusRequester() }
                                     LaunchedEffect(
@@ -501,7 +507,12 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = null
                                                 }
                                             },
-                                        timeFormat = timeFormat
+                                        timeFormat = timeFormat,
+                                        getLogoUrl = { displayId ->
+                                            channelViewModel.getChannelLogoUrl(
+                                                displayId
+                                            )
+                                        }
                                     )
                                 }
                             }
@@ -516,7 +527,8 @@ fun ReserveListScreen(
                                 targetTabRequester = tabFocusRequesters[1]
                             )
                         } else {
-                            TvLazyColumn(
+                            // ★ 変更: TvLazyColumn -> LazyColumn
+                            LazyColumn(
                                 state = normalListState,
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
@@ -559,7 +571,12 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = null
                                                 }
                                             },
-                                        timeFormat = timeFormat
+                                        timeFormat = timeFormat,
+                                        getLogoUrl = { displayId ->
+                                            channelViewModel.getChannelLogoUrl(
+                                                displayId
+                                            )
+                                        }
                                     )
                                 }
                             }
@@ -574,7 +591,8 @@ fun ReserveListScreen(
                                 targetTabRequester = tabFocusRequesters[2]
                             )
                         } else {
-                            TvLazyColumn(
+                            // ★ 変更: TvLazyColumn -> LazyColumn
+                            LazyColumn(
                                 state = conditionListState,
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
@@ -618,7 +636,12 @@ fun ReserveListScreen(
                                                     viewModel.lastClickedConditionId = condition.id
                                                     viewModel.lastClickedReserveId = null
                                                 }
-                                            }
+                                            },
+                                        getLogoUrl = { displayId ->
+                                            channelViewModel.getChannelLogoUrl(
+                                                displayId
+                                            )
+                                        }
                                     )
                                 }
                             }

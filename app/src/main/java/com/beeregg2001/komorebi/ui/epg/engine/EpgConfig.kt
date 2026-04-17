@@ -10,7 +10,8 @@ import androidx.compose.ui.unit.sp
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import com.beeregg2001.komorebi.ui.theme.KomorebiColors
 
-class EpgConfig(density: Density, colors: KomorebiColors) {
+// ★ 修正: hideSubChannels をコンストラクタの引数に追加
+class EpgConfig(density: Density, colors: KomorebiColors, val hideSubChannels: Boolean = false) {
     // サイズ (px)
     val cwPx = with(density) { 130.dp.toPx() }
     val hhPx = with(density) { 75.dp.toPx() }
@@ -22,9 +23,8 @@ class EpgConfig(density: Density, colors: KomorebiColors) {
     val sPadPx = with(density) { 32.dp.toPx() }
 
     // --- 色のテーマ化 ---
-    // ★修正: 番組表自体の背景を透明にして、MainRootScreenの光を通す
     val colorBg = Color.Transparent
-    val colorHeaderBg = colors.surface.copy(alpha = 0.95f) // ヘッダーは少しだけ透けさせる
+    val colorHeaderBg = colors.surface.copy(alpha = 0.95f)
 
     val colorTimeHourEven = if (colors.isDark) Color(0xFF2E2424) else Color(0xFFFDEFEF)
     val colorTimeHourOdd = if (colors.isDark) Color(0xFF242E24) else Color(0xFFEFFDEE)

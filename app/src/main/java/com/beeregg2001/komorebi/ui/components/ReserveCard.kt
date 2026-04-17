@@ -11,14 +11,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -46,7 +44,8 @@ fun ReserveCard(
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    timeFormat: String = "24H" // ★追加: 12H/24H フォーマットを受け取る（他のタブでエラーにならないようデフォルト値設定）
+    timeFormat: String = "24H",
+    getLogoUrl: suspend (String) -> String = { "" } // ★追加: ViewModel等の非同期取得用
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -93,7 +92,6 @@ fun ReserveCard(
         else -> Triple(item.recordingAvailability, warningYellow, Icons.Default.Warning)
     }
 
-    // ★修正: 時刻フォーマットを timeFormat に応じて分岐
     val timeInfo = remember(program.startTime, program.endTime, timeFormat) {
         try {
             val start =
@@ -119,12 +117,16 @@ fun ReserveCard(
         String.format("約 %.1fGB", gb)
     }
 
-    val logoUrl = remember(item.channel) {
-        UrlBuilder.getKonomiTvLogoUrl(
-            konomiIp,
-            konomiPort,
-            item.channel.displayChannelId ?: item.channel.id
-        )
+    // ★修正: EDCBとKonomiTVの両方に対応した非同期ロゴ取得
+    val displayId = item.channel.displayChannelId ?: item.channel.id
+    var logoUrl by remember(item.channel.id) { mutableStateOf("") }
+
+    LaunchedEffect(item.channel.id) {
+        val fetchedUrl = getLogoUrl(displayId)
+        logoUrl = fetchedUrl.ifEmpty {
+            // 取得できなかった場合はKonomiTVのURLビルダーにフォールバック
+            UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, displayId)
+        }
     }
 
     Surface(
@@ -159,9 +161,11 @@ fun ReserveCard(
                 modifier = Modifier.width(60.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Box(modifier = Modifier
-                        .size(24.dp)
-                        .background(badgeBgColor, CircleShape))
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(badgeBgColor, CircleShape)
+                    )
                     Text(
                         text = settings.priority.toString(),
                         style = MaterialTheme.typography.labelSmall,
@@ -198,20 +202,24 @@ fun ReserveCard(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(
-                        model = logoUrl,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .width(48.dp)
-                            .aspectRatio(16f / 9f)
-                            .clipToBounds()
-                            .background(
-                                if (isFocused) Color.Transparent else colors.textPrimary.copy(0.1f),
-                                RoundedCornerShape(2.dp)
-                            ),
-                        contentScale = ContentScale.Crop
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    if (logoUrl.isNotEmpty()) {
+                        AsyncImage(
+                            model = logoUrl,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .width(48.dp)
+                                .aspectRatio(16f / 9f)
+                                .clipToBounds()
+                                .background(
+                                    if (isFocused) Color.Transparent else colors.textPrimary.copy(
+                                        0.1f
+                                    ),
+                                    RoundedCornerShape(2.dp)
+                                ),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
                     Text(
                         text = "${item.channel.channelNumber} ${item.channel.name}",
                         style = MaterialTheme.typography.bodySmall,

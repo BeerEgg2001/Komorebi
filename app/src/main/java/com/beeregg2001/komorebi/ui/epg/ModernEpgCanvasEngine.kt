@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.rememberAsyncImagePainter
 import com.beeregg2001.komorebi.data.model.EpgProgram
@@ -42,6 +43,7 @@ import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import java.time.Duration
 import java.time.OffsetDateTime
 import kotlinx.coroutines.delay
@@ -67,17 +69,40 @@ fun ModernEpgCanvasEngine_Smooth(
     onRequestJumpToNow: () -> Unit,
     searchButtonFocusRequester: FocusRequester,
     onSearchClick: () -> Unit,
-    timeFormat: String
+    timeFormat: String,
+    settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
     val density = LocalDensity.current
     val colors = KomorebiTheme.colors
 
-    val config = remember(density, colors) { EpgConfig(density, colors) }
-    val epgState = remember { EpgState(config) }
+    val hideSubChannels by settingsViewModel.hideSubChannels.collectAsState(initial = false)
+
+    val config =
+        remember(density, colors, hideSubChannels) { EpgConfig(density, colors, hideSubChannels) }
+    val epgState = remember(config) { EpgState(config) }
 
     val textMeasurer = rememberTextMeasurer()
     val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
-    val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
+
+    val filteredLogoUrls = remember(uiState, hideSubChannels, logoUrls) {
+        if (uiState is EpgUiState.Success) {
+            val allChannels = uiState.data
+            if (allChannels.size == logoUrls.size) {
+                allChannels.mapIndexedNotNull { index, wrapper ->
+                    if (hideSubChannels && wrapper.channel.is_subchannel) null else logoUrls[index]
+                }
+            } else {
+                logoUrls
+            }
+        } else {
+            emptyList()
+        }
+    }
+
+    val filteredLogoPainters = filteredLogoUrls.map { url ->
+        rememberAsyncImagePainter(model = url)
+    }
+
     val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
     val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
 
@@ -92,11 +117,17 @@ fun ModernEpgCanvasEngine_Smooth(
     val epgViewModel: com.beeregg2001.komorebi.viewmodel.EpgViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
 
+    // ★修正: epgRestoreTrigger の処理に「期限切れ判定」を追加
     LaunchedEffect(epgViewModel.epgRestoreTrigger) {
-        if (epgViewModel.epgRestoreTrigger > 0L) {
+        val triggerTime = epgViewModel.epgRestoreTrigger
+        if (triggerTime > 0L) {
             val targetCh = epgViewModel.lastFocusedChannelId
             val targetTime = epgViewModel.lastFocusedTime
-            if (targetCh != null && targetTime != null) {
+            val now = System.currentTimeMillis()
+
+            // トリガーが発行されてから1秒(1000ms)未満の「新鮮なトリガー」のみジャンプを実行する
+            // （別タブで詳細を開閉した際の古いトリガーの暴発を防ぐため）
+            if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
                 Log.i(
                     "KomorebiFocus",
                     "[ModernEpgCanvas] 復元トリガー検知！ $targetCh - $targetTime へジャンプします"
@@ -104,8 +135,14 @@ fun ModernEpgCanvasEngine_Smooth(
                 epgState.restoreFocus(targetCh, targetTime)
                 delay(150)
                 gridFocusRequester.requestFocus()
-                epgViewModel.clearEpgFocus()
+            } else {
+                Log.i(
+                    "KomorebiFocus",
+                    "[ModernEpgCanvas] 古いトリガー($triggerTime) または無効なデータのためジャンプをスキップします"
+                )
             }
+            // 処理後は必ずフラグをクリアする
+            epgViewModel.clearEpgFocus()
         }
     }
 
@@ -123,6 +160,17 @@ fun ModernEpgCanvasEngine_Smooth(
                 epgState.baseTime
             )
             epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
+
+            // =========================================================
+            // ★ 追加: 番組にフォーカスが当たったときにジャンル情報をログ出力
+            // =========================================================
+            Log.i("EpgGenreCheck", "====================================")
+            Log.i("EpgGenreCheck", "Focused: ${prog.title}")
+            Log.i(
+                "EpgGenreCheck",
+                "Genres : ${prog.genres?.joinToString { "${it.major} / ${it.middle}" }}"
+            )
+            Log.i("EpgGenreCheck", "====================================")
         }
     }
 
@@ -153,10 +201,7 @@ fun ModernEpgCanvasEngine_Smooth(
         }
     }
 
-    // ==========================================================
-    // ★ 修正箇所: ジャンプ後に元のチャンネル列を復元するロジック
-    // ==========================================================
-    LaunchedEffect(uiState) {
+    LaunchedEffect(uiState, hideSubChannels) {
         if (uiState is EpgUiState.Success) {
             val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
             lastLoadedType = currentType
@@ -165,7 +210,6 @@ fun ModernEpgCanvasEngine_Smooth(
             isJumping = true
             lastRequestedTargetTime = null
 
-            // ★ 修正: データ更新（ジャンプ）直前に見ていたチャンネルのIDを保存しておく
             val prevChannelId = epgViewModel.lastFocusedChannelId
 
             epgState.updateData(
@@ -174,9 +218,7 @@ fun ModernEpgCanvasEngine_Smooth(
                 resetFocus = isTypeChanged
             )
 
-            // ★ 修正: 放送波(地デジ等)の切り替えでなければ、直前にフォーカスしていたチャンネル列へ復元する
             if (!isTypeChanged && prevChannelId != null) {
-                // targetTimeがある場合はその時間へ、なければ直前に見ていた時間へジャンプ
                 val targetTime =
                     uiState.targetTime ?: epgViewModel.lastFocusedTime ?: OffsetDateTime.now()
                 epgState.restoreFocus(prevChannelId, targetTime)
@@ -373,7 +415,7 @@ fun ModernEpgCanvasEngine_Smooth(
                                         drawScope = this,
                                         state = epgState,
                                         animValues = animValues,
-                                        logoPainters = logoPainters,
+                                        logoPainters = filteredLogoPainters,
                                         isGridFocused = isContentFocused || epgState.hasData,
                                         reserveMap = reserveMap,
                                         clockPainter = clockPainter,

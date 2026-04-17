@@ -1,9 +1,11 @@
 package com.beeregg2001.komorebi.viewmodel
 
+import android.content.Context
 import android.util.Log
 import androidx.annotation.Keep
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coil.imageLoader
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
@@ -17,7 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.cio.CIO
@@ -38,6 +40,7 @@ data class PostRecordingBatch(
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
     private val db: AppDatabase
@@ -51,6 +54,22 @@ class SettingsViewModel @Inject constructor(
     val lastSyncedAt: StateFlow<Long> = db.syncMetaDao().getSyncMetaFlow()
         .map { it?.lastSyncedAt ?: 0L }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    val backendType: StateFlow<String> = settingsRepository.backendType
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "KONOMITV")
+
+    val edcbIp: StateFlow<String> = settingsRepository.edcbIp
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val edcbPort: StateFlow<String> = settingsRepository.edcbPort
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "5510")
+
+    val edcbRecordPlayMethod: StateFlow<String> = settingsRepository.edcbRecordPlayMethod
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "API")
+
+    val epgStationIp: StateFlow<String> = settingsRepository.epgStationIp
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val epgStationPort: StateFlow<String> = settingsRepository.epgStationPort
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "8888")
 
     val mirakurunIp: StateFlow<String> = settingsRepository.mirakurunIp
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -91,6 +110,10 @@ class SettingsViewModel @Inject constructor(
     val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
 
+    // ★ 追加: プレイヤーUIモードを公開
+    val playerUiMode: StateFlow<String> = settingsRepository.playerUiMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MODERN")
+
     val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
     val labShobocalIntegration: StateFlow<String> = settingsRepository.labShobocalIntegration
@@ -104,15 +127,61 @@ class SettingsViewModel @Inject constructor(
     val startupChannel: StateFlow<String> = settingsRepository.startupChannel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
 
-    // ★ 追加: 時間表記フォーマットのStateFlow
     val timeFormat: StateFlow<String> = settingsRepository.timeFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
+
+    fun updateBackendType(newType: String) = viewModelScope.launch {
+        val oldType = backendType.value
+
+        if (oldType == newType) return@launch
+
+        settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, newType)
+
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                db.clearAllTables()
+                context.imageLoader.memoryCache?.clear()
+                context.imageLoader.diskCache?.clear()
+                android.util.Log.i(
+                    "SettingsViewModel",
+                    "Backend changed to $newType. Cleared AppDatabase and Image Caches."
+                )
+            } catch (e: Exception) {
+                android.util.Log.e(
+                    "SettingsViewModel",
+                    "Failed to clear DB/Caches on backend change",
+                    e
+                )
+            }
+        }
+
+        syncEngine.launchSyncAllRecords(forceFullSync = true)
+    }
+
+    fun updateEdcbIp(ip: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_IP, ip)
+    }
+
+    fun updateEdcbPort(port: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
+    }
+
+    fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
+    }
+
+    fun updateEpgStationIp(ip: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_IP, ip)
+    }
+
+    fun updateEpgStationPort(port: String) = viewModelScope.launch {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_PORT, port)
+    }
 
     fun updateStartupChannel(value: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.STARTUP_CHANNEL, value)
     }
 
-    // ★ 追加: 時間フォーマットの保存
     fun updateTimeFormat(value: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.TIME_FORMAT, value)
     }
@@ -145,12 +214,14 @@ class SettingsViewModel @Inject constructor(
     val appTheme: StateFlow<String> = settingsRepository.appTheme
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MONOTONE")
 
-    // ★ 追加: ベータ版を受け取るかどうかの状態
     val receiveBetaUpdates: StateFlow<Boolean> = settingsRepository.receiveBetaUpdates
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val hideSubChannels: StateFlow<Boolean> = settingsRepository.hideSubChannels
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     fun updateMirakurunIp(ip: String) {
         viewModelScope.launch { settingsRepository.saveString(SettingsRepository.MIRAKURUN_IP, ip) }
@@ -266,13 +337,17 @@ class SettingsViewModel @Inject constructor(
                         viewModelScope.launch {
                             settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, apiKey)
                         }
-                        val successHtml = "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'>" +
-                                "<h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2>" +
-                                "<p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p>" +
-                                "</body></html>"
+                        val successHtml =
+                            "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'>" +
+                                    "<h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2>" +
+                                    "<p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p>" +
+                                    "</body></html>"
                         call.respondText(successHtml, ContentType.Text.Html)
                     } else {
-                        call.respondText("APIキーが空です。戻ってやり直してください。", ContentType.Text.Plain)
+                        call.respondText(
+                            "APIキーが空です。戻ってやり直してください。",
+                            ContentType.Text.Plain
+                        )
                     }
                 }
             }
@@ -288,6 +363,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleHideSubChannels() {
+        viewModelScope.launch {
+            settingsRepository.saveBoolean(
+                SettingsRepository.HIDE_SUB_CHANNELS,
+                !hideSubChannels.value
+            )
+        }
+    }
+
     private fun getLocalIpAddress(): String {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
@@ -299,7 +383,9 @@ class SettingsViewModel @Inject constructor(
                     }
                 }
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         return "127.0.0.1"
     }
 

@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -19,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -38,6 +39,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -45,6 +47,7 @@ fun RecordSeriesContent(
     seriesList: List<SeriesInfo>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onSeriesClick: (String) -> Unit,
     onOpenNavPane: () -> Unit,
     isListView: Boolean,
@@ -57,14 +60,33 @@ fun RecordSeriesContent(
     listState: LazyListState,
     ticketManager: FocusTicketManager,
     onFirstItemBound: (Boolean) -> Unit = {},
-    onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
+    onFocusedSeriesChanged: (SeriesInfo) -> Unit = {},
+    // ★ 追加: 現在見えている一番上のアイテムの FocusRequester を親に伝えるコールバック
+    onTopBarDownRequesterChanged: (FocusRequester) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
     val isScrollInProgress = listState.isScrollInProgress
+    val backendType by settingViewModel.backendType.collectAsState()
+
+    // ★ 追加: 各アイテムの FocusRequester を保持するマップ
+    val itemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
 
     LaunchedEffect(isListReady, seriesList) {
         onFirstItemBound(isListReady && seriesList.isNotEmpty())
+    }
+
+    // ★ 追加: スクロール位置を監視し、見えている一番上のアイテムのFocusRequesterを更新する
+    val firstVisibleItemIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+    LaunchedEffect(firstVisibleItemIndex, seriesList.size) {
+        val firstVisibleIndex = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index
+        val requester = if (firstVisibleIndex != null && firstVisibleIndex in seriesList.indices) {
+            itemFocusRequesters[seriesList[firstVisibleIndex].representativeVideoId]
+                ?: firstItemFocusRequester
+        } else {
+            firstItemFocusRequester
+        }
+        onTopBarDownRequesterChanged(requester)
     }
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
@@ -89,12 +111,27 @@ fun RecordSeriesContent(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(contentContainerFocusRequester)
-                // ★修正: focusGroup を削除し、focusRestorer を追加。
-                .focusRestorer { firstItemFocusRequester }
+                // ★ 修正: クラッシュの原因だった focusRestorer を安全な focusGroup に変更
+                .focusGroup()
         ) {
             itemsIndexed(seriesList) { index, series ->
                 var isFocused by remember { mutableStateOf(false) }
-                val specificRequester = remember { FocusRequester() }
+
+                // ★ 修正: 保持用のマップから FocusRequester を取得する
+                val specificRequester =
+                    itemFocusRequesters.getOrPut(series.representativeVideoId) { FocusRequester() }
+
+                val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+                    backendType,
+                    konomiIp,
+                    konomiPort,
+                    series.representativeVideoId.toString()
+                )
+                val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+                var currentThumbnailUrl by remember(
+                    series.representativeVideoId,
+                    primaryUrl
+                ) { mutableStateOf(primaryUrl) }
 
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     val ticket = ticketManager.currentTicket
@@ -120,6 +157,7 @@ fun RecordSeriesContent(
                         .focusProperties {
                             left = FocusRequester.Cancel
                             right = FocusRequester.Cancel
+                            // ★ 修正: 検索バー等への行き来を自然にするため、index==0 の up 制約をそのまま維持
                             if (index == 0) {
                                 up =
                                     if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -168,16 +206,17 @@ fun RecordSeriesContent(
                                 .background(Color.DarkGray.copy(alpha = 0.5f))
                         ) {
                             AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current).data(
-                                    UrlBuilder.getThumbnailUrl(
-                                        konomiIp,
-                                        konomiPort,
-                                        series.representativeVideoId.toString()
-                                    )
-                                ).crossfade(true).build(),
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(currentThumbnailUrl)
+                                    .crossfade(true).build(),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.Crop,
+                                onError = {
+                                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                                        currentThumbnailUrl = fallbackUrl
+                                    }
+                                }
                             )
                         }
                         Spacer(modifier = Modifier.width(16.dp))

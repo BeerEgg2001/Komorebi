@@ -43,24 +43,27 @@ private val COLOR_DEFAULT = Color.Gray
 @Composable
 fun RecordListItem(
     program: RecordedProgram,
+    backendType: String,
     konomiIp: String,
     konomiPort: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isPersistentFocused: Boolean = false,
-    timeFormat: String = "24H" // ★ 追加: 12H/24H フォーマットを受け取る
+    timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
     val isCurrentlyRecording = program.isRecording || program.recordedVideo.status == "Recording"
-
-    // 録画中は選択不可（非アクティブ）にするため、条件を「かつ録画中でないか」に変更
     val isAnalyzed = program.recordedVideo.hasKeyFrames && !isCurrentlyRecording
-
     val isVisualFocused = isFocused || isPersistentFocused
 
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    // 変更後：KonomiTV、EDCBともに、Repositoryが用意してくれたURLをそのまま使う！
+    val fallbackUrl = program.apiThumbnailUrl
+    val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
+
+    // 現在表示を試みているURL（失敗したらfallbackUrlに切り替わる）
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
     val (channelLabel, channelColor) = when (program.channel?.type) {
         "GR" -> "地デジ" to COLOR_GR
@@ -73,10 +76,12 @@ fun RecordListItem(
     val inverseColor = if (colors.isDark) Color.Black else Color.White
     val context = LocalContext.current
 
-    val imageRequest = remember(thumbnailUrl) {
+    val imageRequest = remember(currentThumbnailUrl) {
         ImageRequest.Builder(context)
-            .data(thumbnailUrl)
+            .data(currentThumbnailUrl)
             .size(180, 100)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .build()
     }
@@ -85,7 +90,6 @@ fun RecordListItem(
     val secondaryTextColor =
         if (isVisualFocused) inverseColor.copy(alpha = 0.8f) else colors.textSecondary
 
-    // ★ 修正: timeFormat に応じて日付+時刻のフォーマットを動的に切り替える
     val displayDate = remember(program.startTime, timeFormat) {
         try {
             val zdt = ZonedDateTime.parse(program.startTime)
@@ -148,7 +152,13 @@ fun RecordListItem(
                     model = imageRequest,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    // DIRECT画像が無くてエラーになった場合、自動的にAPI(fallback)に切り替える
+                    onError = {
+                        if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                            currentThumbnailUrl = fallbackUrl
+                        }
+                    }
                 )
                 if (channelLabel.isNotEmpty()) {
                     Box(

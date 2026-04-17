@@ -36,6 +36,9 @@ class MainRootState {
     var initialPlaybackPositionMs by mutableLongStateOf(0L)
     var epgSelectedProgram by mutableStateOf<EpgProgram?>(null)
 
+    // ★ 追加: 現在のバックエンドタイプ (タブの動的フィルタリング用)
+    var backendType by mutableStateOf("KONOMITV")
+
     // 予約・リスト状態
     var selectedReserve by mutableStateOf<ReserveItem?>(null)
     var editingReserveItem by mutableStateOf<ReserveItem?>(null)
@@ -130,6 +133,11 @@ class MainRootState {
                 selectedReserve != null || editingReserveItem != null ||
                 editingNewProgram != null || reserveToDelete != null ||
                 selectedProgramForAutoReserve != null
+    }
+
+    // ★ 追加: 現在のバックエンドで有効なタブ名のリストを取得するヘルパー関数
+    fun getVisibleTabs(): List<String> {
+        return listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
     }
 }
 

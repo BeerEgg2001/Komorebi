@@ -1,7 +1,7 @@
 package com.beeregg2001.komorebi.data.repository
 
+import android.content.Context
 import android.os.Build
-import android.util.Base64
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.media3.common.util.Log
@@ -9,21 +9,18 @@ import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.local.dao.EpgCacheDao
 import com.beeregg2001.komorebi.data.local.entity.EpgCacheEntity
 import com.beeregg2001.komorebi.data.model.EpgChannel
-import com.beeregg2001.komorebi.data.model.EpgChannelResponse
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
-import retrofit2.http.GET
-import retrofit2.http.Query
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.withContext
 import java.text.Normalizer
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -37,39 +34,74 @@ data class EpgSearchResultItem(
     val channel: EpgChannel
 )
 
-interface KonomiTvApiService {
-    @GET("api/programs/timetable")
-    suspend fun getEpgPrograms(
-        @Query("start_time") startTime: String? = null,
-        @Query("end_time") endTime: String? = null,
-        @Query("channel_type") channelType: String? = null,
-        @Query("pinned_channel_ids") pinnedChannelIds: String? = null
-    ): EpgChannelResponse
-}
-
 class EpgRepository @Inject constructor(
-    private val apiService: KonomiTvApiService,
+    @ApplicationContext private val context: Context, // ★ 追加: キャッシュディレクトリを使用するためContextを注入
+    private val epgProvider: EpgProvider,
     private val epgCacheDao: EpgCacheDao,
     private val gson: Gson
 ) {
     private val memoryCache = ConcurrentHashMap<String, List<EpgChannelWrapper>>()
 
-    private fun compress(data: String): String {
-        val bos = ByteArrayOutputStream()
-        GZIPOutputStream(bos).use { it.write(data.toByteArray(Charsets.UTF_8)) }
-        return Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP)
-    }
+    // ==========================================
+    // ★ 高速ファイルキャッシュ処理
+    // ==========================================
 
-    private fun decompress(compressed: String): String {
-        if (compressed.startsWith("[{") || compressed.startsWith("{")) return compressed
-        return try {
-            val bytes = Base64.decode(compressed, Base64.NO_WRAP)
-            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8)
-                .use { it.readText() }
+    @OptIn(UnstableApi::class)
+    private suspend fun saveToFileCache(channelType: String, channels: List<EpgChannelWrapper>) = withContext(Dispatchers.IO) {
+        try {
+            val cacheFile = java.io.File(context.cacheDir, "epg_cache_${channelType}.json.gz")
+            // 直接GZIP圧縮しながらファイルへ書き込む（Base64のオーバーヘッドを削減）
+            java.io.FileOutputStream(cacheFile).use { fos ->
+                GZIPOutputStream(fos).use { gzip ->
+                    val jsonString = gson.toJson(channels)
+                    gzip.write(jsonString.toByteArray(Charsets.UTF_8))
+                }
+            }
+
+            // DBにはメタデータと「FILE_BASED」という文字列だけを保存して2MB制限を回避
+            epgCacheDao.insertOrUpdate(
+                EpgCacheEntity(
+                    channelType = channelType,
+                    dataJson = "FILE_BASED",
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
         } catch (e: Exception) {
-            compressed
+            Log.e("EPG", "File Cache Save Error for $channelType", e)
         }
     }
+
+    @OptIn(UnstableApi::class)
+    private suspend fun readFromFileCache(channelType: String): List<EpgChannelWrapper>? = withContext(Dispatchers.IO) {
+        try {
+            val entity = try {
+                epgCacheDao.getCache(channelType)
+            } catch (e: android.database.sqlite.SQLiteException) {
+                // 古い巨大なBLOBがDBに残っていてクラッシュした場合、握りつぶして新規取得させる
+                Log.w("EPG", "Huge legacy DB blob found for $channelType. Ignoring to force refresh.", e)
+                return@withContext null
+            }
+
+            if (entity == null) return@withContext null
+
+            val cacheFile = java.io.File(context.cacheDir, "epg_cache_${channelType}.json.gz")
+            if (!cacheFile.exists()) return@withContext null
+
+            // ファイルから解凍しながら直接文字列として読み込む
+            val jsonString = java.io.FileInputStream(cacheFile).use { fis ->
+                GZIPInputStream(fis).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }
+
+            val listType = object : TypeToken<List<EpgChannelWrapper>>() {}.type
+            return@withContext gson.fromJson(jsonString, listType)
+
+        } catch (e: Exception) {
+            Log.e("EPG", "File Cache Read Error for $channelType", e)
+            return@withContext null
+        }
+    }
+
+    // ==========================================
 
     private fun normalizeForSearch(text: String): String {
         val normalized = Normalizer.normalize(text, Normalizer.Form.NFKC)
@@ -85,7 +117,6 @@ class EpgRepository @Inject constructor(
         channelName: String? = null
     ): List<EpgSearchResultItem> {
 
-        // ★ 修正: カンマ区切りならOR検索、空白のみならAND検索とするハイブリッド解析
         val isOrSearch = query.contains(",") || query.contains("、")
         val delimiters = if (isOrSearch) Regex("[,、]+") else Regex("[\\s]+")
         val keywords =
@@ -160,7 +191,6 @@ class EpgRepository @Inject constructor(
                                 "${wrapper.channel.name} ${prog.title} ${prog.description} $detailText"
                             val normalizedDesc = normalizeForSearch(combinedDesc)
 
-                            // ★ 修正: フラグに応じて AND と OR を使い分ける
                             val isMatch = if (isOrSearch) {
                                 keywords.any { k -> normalizedDesc.contains(k) }
                             } else {
@@ -200,30 +230,23 @@ class EpgRepository @Inject constructor(
 
         var isFreshCacheAvailable = false
 
-        try {
-            val cache = epgCacheDao.getCache(channelType)
-            if (cache != null) {
-                val json = decompress(cache.dataJson)
-                val listType = object : TypeToken<List<EpgChannelWrapper>>() {}.type
-                val data: List<EpgChannelWrapper> = gson.fromJson(json, listType)
-                memoryCache[channelType] = data
+        // ★修正: DBではなくファイルから読み込む
+        val cachedData = readFromFileCache(channelType)
+        if (cachedData != null) {
+            memoryCache[channelType] = cachedData
 
-                val oneDayLater = System.currentTimeMillis() + (24 * 60 * 60 * 1000)
-                val isFresh = data.flatMap { it.programs }.any {
-                    try {
-                        OffsetDateTime.parse(it.start_time).toInstant().toEpochMilli() > oneDayLater
-                    } catch (e: Exception) {
-                        false
-                    }
-                }
-
-                if (isFresh) {
-                    isFreshCacheAvailable = true
+            val oneDayLater = System.currentTimeMillis() + (24 * 60 * 60 * 1000)
+            val isFresh = cachedData.flatMap { it.programs }.any {
+                try {
+                    OffsetDateTime.parse(it.start_time).toInstant().toEpochMilli() > oneDayLater
+                } catch (e: Exception) {
+                    false
                 }
             }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Log.e("EPG", "Cache Read Error for $channelType (Healing with new fetch)", e)
+
+            if (isFresh) {
+                isFreshCacheAvailable = true
+            }
         }
 
         if (isFreshCacheAvailable) return
@@ -233,23 +256,16 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
-            memoryCache[channelType] = response.channels
+            memoryCache[channelType] = channels
 
-            val rawJson = gson.toJson(response.channels)
-            val compressedJson = compress(rawJson)
+            // ★修正: ファイルへ保存する
+            saveToFileCache(channelType, channels)
 
-            epgCacheDao.insertOrUpdate(
-                EpgCacheEntity(
-                    channelType,
-                    compressedJson,
-                    System.currentTimeMillis()
-                )
-            )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("EPG", "Silent Fetch Error for $channelType", e)
@@ -267,18 +283,11 @@ class EpgRepository @Inject constructor(
         memoryCache[channelType]?.let { emit(Result.success(it)) }
 
         if (memoryCache[channelType] == null) {
-            try {
-                val cache = epgCacheDao.getCache(channelType)
-                if (cache != null) {
-                    val json = decompress(cache.dataJson)
-                    val listType = object : TypeToken<List<EpgChannelWrapper>>() {}.type
-                    val data: List<EpgChannelWrapper> = gson.fromJson(json, listType)
-                    memoryCache[channelType] = data
-                    emit(Result.success(data))
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.e("EPG", "Cache Read Error", e)
+            // ★修正: DBではなくファイルから読み込む
+            val cachedData = readFromFileCache(channelType)
+            if (cachedData != null) {
+                memoryCache[channelType] = cachedData
+                emit(Result.success(cachedData))
             }
         }
 
@@ -287,25 +296,18 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
 
-            memoryCache[channelType] = response.channels
-            emit(Result.success(response.channels))
+            memoryCache[channelType] = channels
+            emit(Result.success(channels))
 
             CoroutineScope(Dispatchers.IO).launch {
-                val rawJson = gson.toJson(response.channels)
-                val compressedJson = compress(rawJson)
-                epgCacheDao.insertOrUpdate(
-                    EpgCacheEntity(
-                        channelType,
-                        compressedJson,
-                        System.currentTimeMillis()
-                    )
-                )
+                // ★修正: ファイルへ保存する
+                saveToFileCache(channelType, channels)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -326,12 +328,12 @@ class EpgRepository @Inject constructor(
             val startStr = startTime.format(formatter)
             val endStr = endTime.format(formatter)
 
-            val response = apiService.getEpgPrograms(
+            val channels = epgProvider.getEpgPrograms(
                 startTime = startStr,
                 endTime = endStr,
                 channelType = channelType
             )
-            Result.success(response.channels)
+            Result.success(channels)
         } catch (e: Exception) {
             Log.e("EPG", "Fetch Error: $startTime to $endTime", e)
             Result.failure(e)
@@ -340,8 +342,8 @@ class EpgRepository @Inject constructor(
 
     suspend fun fetchPinnedChannels(pinnedIds: List<String>): Result<List<EpgChannelWrapper>> {
         return try {
-            val response = apiService.getEpgPrograms(pinnedChannelIds = pinnedIds.joinToString(","))
-            Result.success(response.channels)
+            val channels = epgProvider.getPinnedEpgPrograms(pinnedIds.joinToString(","))
+            Result.success(channels)
         } catch (e: Exception) {
             Result.failure(e)
         }

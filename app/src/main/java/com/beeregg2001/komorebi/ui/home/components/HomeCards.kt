@@ -19,15 +19,20 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -37,7 +42,8 @@ import java.util.Locale
 fun LastWatchedChannelCard(
     channel: Channel,
     liveChannel: Channel?,
-    logoUrl: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
@@ -46,6 +52,11 @@ fun LastWatchedChannelCard(
     val colors = KomorebiTheme.colors
     val typeLabels =
         mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
+
+    var logoUrl by remember(channel.id) { mutableStateOf("") }
+    LaunchedEffect(channel.id) {
+        logoUrl = getLogoUrl(channel.id)
+    }
 
     Surface(
         onClick = onClick,
@@ -86,7 +97,7 @@ fun LastWatchedChannelCard(
                     model = logoUrl,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -132,13 +143,19 @@ fun LastWatchedChannelCard(
 @Composable
 fun HotChannelCard(
     uiState: UiChannelState,
-    logoUrl: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
+
+    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    LaunchedEffect(uiState.channel.id) {
+        logoUrl = getLogoUrl(uiState.channel.id)
+    }
 
     Surface(
         onClick = onClick,
@@ -179,7 +196,7 @@ fun HotChannelCard(
                     model = logoUrl,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -223,8 +240,10 @@ fun HotChannelCard(
 @Composable
 fun WatchHistoryCard(
     history: KonomiHistoryProgram,
+    matchedProgram: RecordedProgram?, // ★ 追加: サムネイル用URL解決のために追加
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     onClick: () -> Unit,
     onFocus: (progress: Float, thumbnailUrl: String) -> Unit,
     modifier: Modifier = Modifier
@@ -232,7 +251,17 @@ fun WatchHistoryCard(
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
     val program = history.program
-    val thumbnailUrl = UrlBuilder.getThumbnailUrl(konomiIp, konomiPort, program.id.toString())
+    val backendType by settingViewModel.backendType.collectAsState()
+
+    // ★ 修正: DB連携されたRecordedProgramがある場合はそれを使用し、フォールバック処理を実装
+    val fallbackUrl = matchedProgram?.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+        backendType,
+        konomiIp,
+        konomiPort,
+        program.id.toString()
+    )
+    val primaryUrl = matchedProgram?.directThumbnailUrl ?: fallbackUrl
+    var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
     val progress = remember(history) {
         runCatching {
@@ -243,6 +272,22 @@ fun WatchHistoryCard(
         }.getOrDefault(0f)
     }
 
+    // ★ 追加: サムネイルURLがエラー等で切り替わった際に、フォーカス中であればHeroDashboardを更新する
+    LaunchedEffect(currentThumbnailUrl, isFocused) {
+        if (isFocused) onFocus(progress, currentThumbnailUrl)
+    }
+
+    val context = LocalContext.current
+    val imageRequest = remember(currentThumbnailUrl) {
+        ImageRequest.Builder(context)
+            .data(currentThumbnailUrl)
+            .crossfade(true)
+            .memoryCacheKey(currentThumbnailUrl)
+            .diskCacheKey(currentThumbnailUrl)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
+
     Surface(
         onClick = onClick,
         modifier = modifier
@@ -250,7 +295,8 @@ fun WatchHistoryCard(
             .height(146.dp)
             .onFocusChanged {
                 isFocused = it.isFocused
-                if (it.isFocused) onFocus(progress, thumbnailUrl)
+                // LaunchedEffect側でも呼ぶが、フォーカス時も確実に呼ぶ
+                if (it.isFocused) onFocus(progress, currentThumbnailUrl)
             },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
@@ -267,10 +313,16 @@ fun WatchHistoryCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = thumbnailUrl,
+                model = imageRequest,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                // ★ 追加: 画像読み込み失敗時のフォールバック処理
+                onError = {
+                    if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                        currentThumbnailUrl = fallbackUrl
+                    }
+                }
             )
 
             Box(
@@ -342,19 +394,17 @@ fun UpcomingReserveCard(
     onClick: () -> Unit,
     onFocus: (startFormat: String) -> Unit,
     modifier: Modifier = Modifier,
-    timeFormat: String // ★ 追加: 12H/24H フォーマット
+    timeFormat: String
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
     val start = OffsetDateTime.parse(reserve.program.startTime)
 
-    // ★ 修正: timeFormat に応じた日付+時刻のフォーマット (HeroDashboard用)
     val startFormat = remember(start, timeFormat) {
         val pattern = if (timeFormat == "12H") "MM/dd a h:mm" else "MM/dd HH:mm"
         start.format(DateTimeFormatter.ofPattern(pattern, Locale.JAPANESE))
     }
 
-    // ★ 修正: timeFormat に応じたカード上の時刻表示 (時間のみ)
     val displayTime = remember(start, timeFormat) {
         val pattern = if (timeFormat == "12H") "a h:mm" else "HH:mm"
         start.format(DateTimeFormatter.ofPattern(pattern, Locale.JAPANESE))
@@ -385,7 +435,7 @@ fun UpcomingReserveCard(
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = displayTime, // ★ 修正
+                    text = displayTime,
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.textPrimary.copy(0.7f)
                 )
@@ -438,13 +488,12 @@ fun GenrePickupCard(
     onClick: () -> Unit,
     onFocus: (startFormat: String) -> Unit,
     modifier: Modifier = Modifier,
-    timeFormat: String // ★ 追加
+    timeFormat: String
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
     val start = OffsetDateTime.parse(program.start_time)
 
-    // ★ 修正: timeFormat に応じた日付+時刻のフォーマット
     val startFormat = remember(start, timeFormat) {
         val pattern = if (timeFormat == "12H") "MM/dd a h:mm" else "MM/dd HH:mm"
         start.format(DateTimeFormatter.ofPattern(pattern, Locale.JAPANESE))
@@ -469,7 +518,7 @@ fun GenrePickupCard(
             .height(116.dp)
             .onFocusChanged {
                 isFocused = it.isFocused
-                if (it.isFocused) onFocus(startFormat) // ★ 修正されたフォーマットを渡す
+                if (it.isFocused) onFocus(startFormat)
             },
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
         colors = ClickableSurfaceDefaults.colors(

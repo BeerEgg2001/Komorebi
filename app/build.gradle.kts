@@ -16,8 +16,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10 // 数値を1つ上げる
-        versionName = "1.0.0"
+        versionCode = 11 // 数値を1つ上げる
+        versionName = "1.1.0-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -120,13 +120,14 @@ dependencies {
     // --- TV用ライブラリ ---
     // これらは BOM に含まれないため、バージョンを固定します
     implementation("androidx.tv:tv-material:1.0.0")
-    implementation("androidx.tv:tv-foundation:1.0.0-alpha11")
+    implementation("androidx.tv:tv-foundation:1.0.0-rc01")
 
     // --- Hilt ---
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("com.google.dagger:hilt-android:2.59.2")
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.hilt.work)
+    implementation(libs.androidx.compose.foundation.layout)
     "baselineProfile"(project(":baselineprofile"))
     ksp("com.google.dagger:hilt-compiler:2.59.2")
 

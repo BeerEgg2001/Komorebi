@@ -12,6 +12,9 @@ import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.KonomiRepository
 import com.beeregg2001.komorebi.data.repository.EpgRepository
+import com.beeregg2001.komorebi.data.repository.LastChannelRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.util.AppUpdater
 import com.beeregg2001.komorebi.util.UpdateState
 import com.google.gson.Gson
@@ -37,29 +40,43 @@ data class BaseballGameInfo(
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val repository: KonomiRepository,
+    private val liveProvider: LiveProvider,
+    private val konomiRepository: KonomiRepository,
     private val epgRepository: EpgRepository,
     private val settingsRepository: SettingsRepository,
+    private val lastChannelRepository: LastChannelRepository,
+    private val watchHistoryRepository: WatchHistoryRepository,
     private val appUpdater: AppUpdater
 ) : ViewModel() {
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // 🌟 追加: ホーム画面からの復帰用「2段階記憶」
+    // ★ 追加: 現在のバックエンドタイプを公開 (RootUIでのタブ制御やロゴクロップ判定用)
+    val backendType: StateFlow<String> = settingsRepository.backendType
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "KONOMITV")
+
     var lastClickedSection: String? = null
     var lastClickedItemId: String? = null
+
+    private val _isFallbackTriggered = MutableStateFlow(false)
+    val isFallbackTriggered: StateFlow<Boolean> = _isFallbackTriggered.asStateFlow()
 
     fun clearFocusMemory() {
         lastClickedSection = null
         lastClickedItemId = null
     }
 
-    val watchHistory: StateFlow<List<KonomiHistoryProgram>> = repository.getLocalWatchHistory()
-        .map { entities -> entities.map { KonomiDataMapper.toUiModel(it) } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    fun dismissFallbackWarning() {
+        _isFallbackTriggered.value = false
+    }
 
-    val lastWatchedChannelFlow: StateFlow<List<Channel>> = repository.getLastChannels()
+    val watchHistory: StateFlow<List<KonomiHistoryProgram>> =
+        watchHistoryRepository.getLocalWatchHistory()
+            .map { entities -> entities.map { KonomiDataMapper.toUiModel(it) } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val lastWatchedChannelFlow: StateFlow<List<Channel>> = watchHistoryRepository.getLastChannels()
         .map { entities ->
             entities.map { entity ->
                 Channel(
@@ -113,11 +130,12 @@ class HomeViewModel @Inject constructor(
     private val _baseballDateOffset = MutableStateFlow(0)
     val baseballDateOffset: StateFlow<Int> = _baseballDateOffset.asStateFlow()
 
-    // キャッシュを保持し、日付切り替えの負荷をゼロにする
     private var cachedBaseballPrograms: List<Pair<EpgProgram, EpgChannel>> = emptyList()
 
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
+            // ★ 修正: 盛り上がっているチャンネル一覧では、設定に関わらずサブチャンネルを除外する（メインチャンネルのみ表示）
+            .filter { !it.channel.is_subchannel }
             .filter { (it.jikkyoForce ?: 0) > 0 }
             .sortedByDescending { it.jikkyoForce }
             .take(5)
@@ -156,7 +174,6 @@ class HomeViewModel @Inject constructor(
                 }
             }.awaitAll().flatten()
 
-            // ★最適化: 膨大なリストのループ処理をバックグラウンドスレッドに逃がしてUIのフリーズを防ぐ
             cachedBaseballPrograms = withContext(Dispatchers.Default) {
                 allPrograms.flatMap { wrapper ->
                     wrapper.programs.map { it to wrapper.channel }
@@ -165,7 +182,9 @@ class HomeViewModel @Inject constructor(
                     if (!isSports) return@filter false
 
                     val isBaseballGenre =
-                        prog.genres?.any { it.middle?.contains("野球") == true } == true || prog.title.contains("プロ野球")
+                        prog.genres?.any { it.middle?.contains("野球") == true } == true || prog.title.contains(
+                            "プロ野球"
+                        )
                     if (!isBaseballGenre) return@filter false
 
                     val excludeKeywords = listOf(
@@ -177,7 +196,10 @@ class HomeViewModel @Inject constructor(
 
                     val matchKeywords = listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE")
                     matchKeywords.any { keyword ->
-                        prog.title.contains(keyword, ignoreCase = true) || prog.description.contains(
+                        prog.title.contains(
+                            keyword,
+                            ignoreCase = true
+                        ) || prog.description.contains(
                             keyword,
                             ignoreCase = true
                         )
@@ -220,11 +242,6 @@ class HomeViewModel @Inject constructor(
     ): List<Pair<String, List<BaseballGameInfo>>> = withContext(Dispatchers.Default) {
         if (favoriteTeams.isEmpty() || baseballPrograms.isEmpty()) return@withContext emptyList()
 
-        val mIp = settingsRepository.mirakurunIp.first()
-        val mPort = settingsRepository.mirakurunPort.first()
-        val kIp = settingsRepository.konomiIp.first()
-        val kPort = settingsRepository.konomiPort.first()
-
         val now = OffsetDateTime.now()
         val targetDateStart = now.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
             if (now.hour < 4) it.minusDays(1) else it
@@ -239,16 +256,8 @@ class HomeViewModel @Inject constructor(
                     ?: return@filter false
                 start.isAfter(targetDateStart) && start.isBefore(targetDateEnd)
             }.map { (prog, channel) ->
-                val logoUrl = if (mIp.isNotEmpty() && mPort.isNotEmpty()) {
-                    UrlBuilder.getMirakurunLogoUrl(
-                        mIp,
-                        mPort,
-                        channel.network_id.toLong(),
-                        channel.service_id.toLong()
-                    )
-                } else {
-                    UrlBuilder.getKonomiTvLogoUrl(kIp, kPort, channel.display_channel_id)
-                }
+
+                val logoUrl = liveProvider.getChannelLogoUrl(channel.display_channel_id)
 
                 BaseballGameInfo(
                     program = prog,
@@ -305,6 +314,24 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.first.start_time }.take(15)
     }
 
+    private suspend fun performBackendHealthCheck() {
+        val currentBackend = settingsRepository.backendType.first()
+
+        if (currentBackend == "KONOMITV") return
+
+        try {
+            liveProvider.getChannels()
+            Log.i("Komorebi_Failsafe", "Health check passed for backend: $currentBackend")
+        } catch (e: Throwable) {
+            Log.e("Komorebi_Failsafe", "Health check FAILED for backend: $currentBackend", e)
+            _isFallbackTriggered.value = true
+            Log.w(
+                "Komorebi_Failsafe",
+                "Backend health check failed. Showing warning without overwriting settings."
+            )
+        }
+    }
+
     init {
         viewModelScope.launch {
             combine(
@@ -320,9 +347,12 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // ★ 修正: SettingsRepository から現在のベータ受信設定を取得して引数に渡す
             val receiveBeta = settingsRepository.receiveBetaUpdates.first()
             appUpdater.checkForUpdates(receiveBetaUpdates = receiveBeta)
+        }
+
+        viewModelScope.launch {
+            performBackendHealthCheck()
         }
     }
 
@@ -339,37 +369,57 @@ class HomeViewModel @Inject constructor(
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true
-            repository.getWatchHistory().onSuccess { apiHistoryList ->
-                val programIds = apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
-                val existingEntitiesMap =
-                    repository.getHistoryEntitiesByIds(programIds).associateBy { it.id }
-                val entitiesToSave = apiHistoryList.mapNotNull { history ->
-                    val programId = history.program.id.toIntOrNull() ?: return@mapNotNull null
-                    val existingEntity = existingEntitiesMap[programId]
-                    var newEntity = KonomiDataMapper.toEntity(history)
-                    if (existingEntity != null) {
-                        newEntity = newEntity.copy(
-                            videoId = existingEntity.videoId,
-                            tileColumns = existingEntity.tileColumns,
-                            tileRows = existingEntity.tileRows,
-                            tileInterval = existingEntity.tileInterval,
-                            tileWidth = existingEntity.tileWidth,
-                            tileHeight = existingEntity.tileHeight
-                        )
+            try {
+                performBackendHealthCheck()
+
+                try {
+                    val backend = settingsRepository.backendType.first()
+                    if (backend == "KONOMITV" || backend == "MIRAKURUN_ONLY") {
+                        konomiRepository.getWatchHistory().onSuccess { apiHistoryList ->
+                            val programIds =
+                                apiHistoryList.mapNotNull { it.program.id.toIntOrNull() }
+                            val existingEntitiesMap =
+                                watchHistoryRepository.getHistoryEntitiesByIds(programIds)
+                                    .associateBy { it.id }
+                            val entitiesToSave = apiHistoryList.mapNotNull { history ->
+                                val programId =
+                                    history.program.id.toIntOrNull() ?: return@mapNotNull null
+                                val existingEntity = existingEntitiesMap[programId]
+                                var newEntity = KonomiDataMapper.toEntity(history)
+                                if (existingEntity != null) {
+                                    newEntity = newEntity.copy(
+                                        videoId = existingEntity.videoId,
+                                        tileColumns = existingEntity.tileColumns,
+                                        tileRows = existingEntity.tileRows,
+                                        tileInterval = existingEntity.tileInterval,
+                                        tileWidth = existingEntity.tileWidth,
+                                        tileHeight = existingEntity.tileHeight
+                                    )
+                                }
+                                newEntity
+                            }
+                            if (entitiesToSave.isNotEmpty()) watchHistoryRepository.saveAllToLocalHistory(
+                                entitiesToSave
+                            )
+                        }
+                        konomiRepository.refreshUser()
                     }
-                    newEntity
+                } catch (e: Exception) {
+                    Log.w("HomeViewModel", "Failed to sync KonomiTV data. Skipping.", e)
                 }
-                if (entitiesToSave.isNotEmpty()) repository.saveAllToLocalHistory(entitiesToSave)
+
+                fetchAllTypeGenrePickup()
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Error refreshing home data", e)
+            } finally {
+                _isLoading.value = false
             }
-            repository.refreshUser()
-            fetchAllTypeGenrePickup()
-            _isLoading.value = false
         }
     }
 
     fun saveLastChannel(channel: Channel) {
         viewModelScope.launch {
-            repository.saveLastChannel(
+            lastChannelRepository.saveLastChannel(
                 LastChannelEntity(
                     channelId = channel.id, name = channel.name, type = channel.type,
                     channelNumber = channel.channelNumber, networkId = channel.networkId,
@@ -382,7 +432,7 @@ class HomeViewModel @Inject constructor(
     fun clearLastChannelHistory() {
         viewModelScope.launch {
             try {
-                repository.clearLastChannels()
+                lastChannelRepository.clearLastChannels()
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "Failed to clear last channels", e)
             }

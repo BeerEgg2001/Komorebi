@@ -6,8 +6,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.type
-import androidx.media3.common.PlaybackException
-import androidx.media3.datasource.HttpDataSource
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
@@ -28,6 +26,9 @@ data class SignalMetadata(
     val droppedFrames: String = "0"
 )
 
+enum class LCropMode { HIDDEN, MENU, DIRECT_ADJUST }
+enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
+
 @Stable
 class LivePlayerState(
     val context: Context,
@@ -37,18 +38,17 @@ class LivePlayerState(
     var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
     var currentStreamSource by mutableStateOf(StreamSource.KONOMITV)
 
+    // ViewModelから同期されるステータス群
     var playerError by mutableStateOf<String?>(null)
-    var retryKey by mutableIntStateOf(0)
     var isPlayerPlaying by mutableStateOf(false)
-
-    var isSignalInfoVisible by mutableStateOf(false)
     var signalInfo by mutableStateOf(SignalMetadata())
-
     var sseStatus by mutableStateOf("Standby")
     var sseDetail by mutableStateOf(AppStrings.SSE_CONNECTING)
-
     var dualSseStatus by mutableStateOf("Standby")
     var dualSseDetail by mutableStateOf(AppStrings.SSE_CONNECTING)
+
+    var retryKey by mutableIntStateOf(0)
+    var isSignalInfoVisible by mutableStateOf(false)
 
     var isDualDisplayMode by mutableStateOf(false)
     var activeDualPlayerIndex by mutableIntStateOf(0)
@@ -60,12 +60,18 @@ class LivePlayerState(
     var isCenterLongPressHandled by mutableStateOf(false)
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
-    // ★ 追加: 戻るキー長押し判定用
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
 
-    var showMirakurunDualWarningDialog by mutableStateOf(false)
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
+
+    // L字クロップ状態
+    var lCropEnabled by mutableStateOf(false)
+    var lCropMode by mutableStateOf(LCropMode.HIDDEN)
+    var lCropZoom by mutableFloatStateOf(100f)
+    var lCropX by mutableFloatStateOf(0f)
+    var lCropY by mutableFloatStateOf(0f)
+    var lCropOrigin by mutableStateOf(ZoomOrigin.TopRight)
 
     fun toggleDualScreenSize() {
         if (activeDualPlayerIndex == 0) {
@@ -93,30 +99,6 @@ class LivePlayerState(
         }
     }
 
-    fun analyzePlayerError(error: PlaybackException): String {
-        val cause = error.cause
-        return when {
-            cause is HttpDataSource.InvalidResponseCodeException -> {
-                when (cause.responseCode) {
-                    404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
-                    503 -> AppStrings.ERR_TUNER_FULL
-                    else -> String.format(AppStrings.ERR_SERVER_HTTP, cause.responseCode)
-                }
-            }
-
-            cause is HttpDataSource.HttpDataSourceException -> {
-                when (cause.cause) {
-                    is java.net.ConnectException -> AppStrings.ERR_CONNECTION_REFUSED
-                    is java.net.SocketTimeoutException -> AppStrings.ERR_TIMEOUT
-                    else -> AppStrings.ERR_NETWORK
-                }
-            }
-
-            cause is java.io.IOException -> String.format(AppStrings.ERR_DATA_READ, cause.message)
-            else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
-        }
-    }
-
     fun retry() {
         playerError = null
         retryKey++
@@ -140,10 +122,60 @@ class LivePlayerState(
         onSubMenuToggle: (Boolean) -> Unit,
         onMiniListToggle: (Boolean) -> Unit,
         onShowToast: (String) -> Unit,
-        // ★ 追加: コールバック
         onPiPRequested: () -> Unit,
         onBackPressed: () -> Unit
     ): Boolean {
+        // L字クロップ ダイレクト調整モード時のキーイベント
+        if (lCropMode == LCropMode.DIRECT_ADJUST) {
+            val keyCode = keyEvent.nativeKeyEvent.keyCode
+            val isTargetKey = keyCode in listOf(
+                android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
+                android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE
+            )
+
+            if (isTargetKey) {
+                val isActionDown = keyEvent.type == KeyEventType.KeyDown
+                if (!isActionDown) return true
+
+                when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                        lCropY -= 2f
+                    }
+
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        lCropY += 2f
+                    }
+
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        lCropX -= 2f
+                    }
+
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        lCropX += 2f
+                    }
+
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
+                        lCropZoom = when {
+                            lCropZoom < 125f -> 125f
+                            lCropZoom < 150f -> 150f
+                            lCropZoom < 175f -> 175f
+                            lCropZoom < 200f -> 200f
+                            else -> 100f
+                        }
+                    }
+
+                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                        lCropMode = LCropMode.MENU
+                    }
+                }
+                return true
+            }
+            return false
+        }
+
+        if (lCropMode == LCropMode.MENU) return false
         if (this.playerError != null || isSubMenuOpen || isMiniListOpen) return false
 
         val keyCode = keyEvent.nativeKeyEvent.keyCode
@@ -187,18 +219,14 @@ class LivePlayerState(
             }
         }
 
-        // ★ 戻るキー長押しの実装
         if (keyCode == android.view.KeyEvent.KEYCODE_BACK || keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) {
             if (this.isDualDisplayMode) {
-                // 2画面時はPiPを許可せず、2画面の解除を行う
                 if (isActionDown) {
-                    // ★ 修正: サブメニュー等の他のレイヤーが開いていてDownイベントが消費された場合は記録しない
                     if (repeatCount == 0) {
                         backKeyDownTime = System.currentTimeMillis()
                     }
                     return true
                 } else if (isActionUp) {
-                    // ★ 修正: この画面で正常にDownイベントをキャッチしていた場合のみ、解除処理を行う
                     if (backKeyDownTime > 0) {
                         this.isDualDisplayMode = false
                         this.leftScreenWeight = 1f
@@ -208,7 +236,6 @@ class LivePlayerState(
                             this.previousStreamSource = null
                         }
                     }
-                    // リセットして次の入力に備える
                     backKeyDownTime = 0L
                     return true
                 }

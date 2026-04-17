@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
@@ -44,6 +45,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.util.TitleNormalizer
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -54,6 +56,7 @@ fun RecordListContent(
     pagedRecordings: LazyPagingItems<RecordedProgram>,
     konomiIp: String,
     konomiPort: String,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
@@ -85,6 +88,7 @@ fun RecordListContent(
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var detailProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var isSideMenuOpen by remember { mutableStateOf(false) }
+    val backendType by settingViewModel.backendType.collectAsState()
 
     val itemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val menuFirstItemRequester = remember { FocusRequester() }
@@ -173,6 +177,7 @@ fun RecordListContent(
 
                     RecordListItem(
                         program = program, konomiIp = konomiIp, konomiPort = konomiPort,
+                        backendType = backendType,
                         onClick = { onProgramClick(program, null) },
                         isPersistentFocused = (isSideMenuOpen || isDetailVisible) &&
                                 (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),

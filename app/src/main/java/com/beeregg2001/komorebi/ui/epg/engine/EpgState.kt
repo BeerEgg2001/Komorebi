@@ -82,7 +82,16 @@ class EpgState(
                     }
                 val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
 
-                val newUiChannels = newData.map { wrapper ->
+                // ★ 修正: サブチャンネルを非表示にする設定（config.hideSubChannels）がONの場合、
+                // 渡されてきた newData の中から is_subchannel == true のものを除外する。
+                val filteredData = if (config.hideSubChannels) {
+                    newData.filter { !it.channel.is_subchannel }
+                } else {
+                    newData
+                }
+
+                // ★ 修正: newData ではなく filteredData をマッピングする
+                val newUiChannels = filteredData.map { wrapper ->
                     val filled = EpgDataConverter.getFilledPrograms(
                         wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime
                     )

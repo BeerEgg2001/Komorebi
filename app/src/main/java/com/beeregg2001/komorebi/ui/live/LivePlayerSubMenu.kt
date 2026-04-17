@@ -42,8 +42,10 @@ fun TopSubMenuUI(
     isRecording: Boolean,
     isSignalInfoVisible: Boolean,
     isDualDisplayMode: Boolean,
+    isLCropEnabled: Boolean,
+    onLCropToggle: () -> Unit,
     onDualDisplayToggle: () -> Unit,
-    onSwapScreens: () -> Unit, // ★ 追加: 左右入れ替え用のコールバック
+    onSwapScreens: () -> Unit,
     onSignalInfoToggle: () -> Unit,
     onRecordToggle: () -> Unit,
     focusRequester: FocusRequester,
@@ -104,10 +106,7 @@ fun TopSubMenuUI(
             .wrapContentHeight()
             .background(
                 Brush.verticalGradient(
-                    listOf(
-                        colors.background.copy(0.9f),
-                        Color.Transparent
-                    )
+                    listOf(colors.background.copy(0.9f), Color.Transparent)
                 )
             )
             .padding(top = 24.dp, bottom = 60.dp)
@@ -145,7 +144,6 @@ fun TopSubMenuUI(
                 horizontalArrangement = Arrangement.Center
             ) {
                 if (isDualDisplayMode) {
-                    // 二画面ボタン (終了)
                     MenuTileItem(
                         title = "二画面", icon = Icons.Default.PictureInPicture,
                         subtitle = "終了",
@@ -157,7 +155,6 @@ fun TopSubMenuUI(
                     )
                     Spacer(Modifier.width(16.dp))
 
-                    // ★ 追加: 左右入替ボタン
                     MenuTileItem(
                         title = "左右入替", icon = Icons.Default.SwapHoriz,
                         subtitle = "画面を交換",
@@ -167,7 +164,6 @@ fun TopSubMenuUI(
                     )
                     Spacer(Modifier.width(16.dp))
 
-                    // 字幕切り替え
                     MenuTileItem(
                         title = AppStrings.MENU_SUBTITLE, icon = Icons.Default.ClosedCaption,
                         subtitle = if (isSubtitleEnabled) "表示" else "非表示",
@@ -178,7 +174,6 @@ fun TopSubMenuUI(
                     )
                     Spacer(Modifier.width(16.dp))
 
-                    // 画質切り替え
                     MenuTileItem(
                         title = AppStrings.MENU_QUALITY, icon = Icons.Default.Settings,
                         subtitle = effectiveQuality.label,
@@ -192,7 +187,6 @@ fun TopSubMenuUI(
                         contentColor = colors.textPrimary
                     )
                 } else {
-                    // --- 通常モード時のフルメニュー ---
                     MenuTileItem(
                         title = if (isRecording) "録画停止" else "録画開始",
                         icon = if (isRecording) Icons.Default.StopCircle else Icons.Default.RadioButtonChecked,
@@ -211,6 +205,15 @@ fun TopSubMenuUI(
                         onClick = { onDualDisplayToggle(); onCloseMenu() },
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
+
+                    MenuTileItem(
+                        title = "L字クロップ", icon = Icons.Default.Crop,
+                        subtitle = if (isLCropEnabled) "有効" else "設定",
+                        onClick = onLCropToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary
                     )
                     Spacer(Modifier.width(16.dp))
 
@@ -265,11 +268,16 @@ fun TopSubMenuUI(
                     )
                     Spacer(Modifier.width(16.dp))
 
+                    // ★ 修正: 常にトグル可能にする
                     MenuTileItem(
                         title = AppStrings.MENU_SOURCE, icon = Icons.Default.Build,
-                        subtitle = if (currentSource == StreamSource.MIRAKURUN) "Mirakurun" else "KonomiTV",
+                        subtitle = when (currentSource) {
+                            StreamSource.MIRAKURUN -> "Mirakurun"
+                            StreamSource.EDCB -> "EDCB"
+                            else -> "KonomiTV"
+                        },
                         onClick = { onSourceToggle(); onCloseMenu() },
-                        enabled = isMirakurunAvailable,
+                        enabled = true,
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
                     )

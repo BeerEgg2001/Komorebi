@@ -9,6 +9,12 @@ import com.google.gson.reflect.TypeToken
 
 @Stable
 class SettingPreferences(
+    val backendType: String,
+    val edcbIp: String,
+    val edcbPort: String,
+    val epgStationIp: String,
+    val epgStationPort: String,
+
     val konomiIp: String,
     val konomiPort: String,
     val mirakurunIp: String,
@@ -38,9 +44,12 @@ class SettingPreferences(
     val pickupTime: String,
     val startupTab: String,
     val startupChannel: String,
-    val timeFormat: String, // ★ 追加: 時間表記フォーマット
+    val timeFormat: String,
     val currentThemeName: String,
-    val defaultRecordListView: String
+    val defaultRecordListView: String,
+    val hideSubChannels: Boolean,
+    // ★ 追加: EDCB録画再生方式の設定値 ("API" または "DIRECT")
+    val edcbRecordPlayMethod: String
 )
 
 @Composable
@@ -66,6 +75,12 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
     }
 
     return SettingPreferences(
+        backendType = repository.backendType.collectAsState(initial = "KONOMITV").value,
+        edcbIp = repository.edcbIp.collectAsState(initial = "").value,
+        edcbPort = repository.edcbPort.collectAsState(initial = "5510").value,
+        epgStationIp = repository.epgStationIp.collectAsState(initial = "").value,
+        epgStationPort = repository.epgStationPort.collectAsState(initial = "8888").value,
+
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "7000").value,
         mirakurunIp = repository.mirakurunIp.collectAsState(initial = "").value,
@@ -95,9 +110,12 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         pickupTime = repository.homePickupTime.collectAsState(initial = "自動").value,
         startupTab = repository.startupTab.collectAsState(initial = "ホーム").value,
         startupChannel = repository.startupChannel.collectAsState(initial = "OFF").value,
-        timeFormat = repository.timeFormat.collectAsState(initial = "24H").value, // ★ 追加
+        timeFormat = repository.timeFormat.collectAsState(initial = "24H").value,
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
-        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value
+        defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
+        hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value,
+        // ★ 追加: Flowから収集
+        edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value
     )
 }
 
