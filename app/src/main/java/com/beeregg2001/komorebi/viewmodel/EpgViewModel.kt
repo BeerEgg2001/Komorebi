@@ -131,7 +131,7 @@ class EpgViewModel @OptIn(UnstableApi::class)
 
     init {
         loadSearchHistory() // アプリ起動時に履歴を読み込む
-//        loadInitialData()
+        loadInitialData()
         // ★ 追加: EDCBのバックグラウンドEPG取得完了を検知して、自分(ViewModel)のキャッシュを更新する
         viewModelScope.launch {
             com.beeregg2001.komorebi.data.repository.EdcbRepository.epgBackgroundUpdateEvent.collect {
@@ -141,7 +141,7 @@ class EpgViewModel @OptIn(UnstableApi::class)
                 // 例: fetchEpgData() や loadPrograms() など
                 // この関数を呼ぶことで、最新の1週間分のデータが cachedAllPrograms に上書きされます。
 //                loadSearchHistory() // アプリ起動時に履歴を読み込む
-                loadInitialData()
+                refreshEpgData()
             }
         }
     }
