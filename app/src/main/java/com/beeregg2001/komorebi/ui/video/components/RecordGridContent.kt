@@ -2,6 +2,9 @@ package com.beeregg2001.komorebi.ui.video.components
 
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -16,9 +19,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.components.RecordedCard
@@ -35,7 +35,7 @@ fun RecordGridContent(
     konomiIp: String,
     konomiPort: String,
     settingViewModel: SettingsViewModel = hiltViewModel(),
-    gridState: TvLazyGridState,
+    gridState: LazyGridState,
     isSearchBarVisible: Boolean,
     isKeyboardActive: Boolean,
     firstItemFocusRequester: FocusRequester,
@@ -94,9 +94,9 @@ fun RecordGridContent(
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
 
-    TvLazyVerticalGrid(
+    LazyVerticalGrid(
         state = gridState,
-        columns = TvGridCells.Fixed(4),
+        columns = GridCells.Fixed(4),
         contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),

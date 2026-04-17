@@ -134,6 +134,8 @@ class HomeViewModel @Inject constructor(
 
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
+            // ★ 修正: 盛り上がっているチャンネル一覧では、設定に関わらずサブチャンネルを除外する（メインチャンネルのみ表示）
+            .filter { !it.channel.is_subchannel }
             .filter { (it.jikkyoForce ?: 0) > 0 }
             .sortedByDescending { it.jikkyoForce }
             .take(5)
@@ -364,7 +366,6 @@ class HomeViewModel @Inject constructor(
         appUpdater.resetState()
     }
 
-    // ★ 修正: KonomiTVへのアクセスを try-catch で囲み、最後に必ずローディングを解除してフリーズを防ぐ
     fun refreshHomeData() {
         viewModelScope.launch {
             _isLoading.value = true

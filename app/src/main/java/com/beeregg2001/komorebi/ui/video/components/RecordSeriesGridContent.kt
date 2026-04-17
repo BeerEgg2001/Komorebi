@@ -5,6 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -26,10 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
-import androidx.tv.foundation.lazy.grid.itemsIndexed
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -57,7 +57,7 @@ fun RecordSeriesGridContent(
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
     onBackPress: () -> Unit,
-    gridState: TvLazyGridState,
+    gridState: LazyGridState,
     ticketManager: FocusTicketManager,
     onFirstItemBound: (Boolean) -> Unit = {},
     onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
@@ -87,9 +87,9 @@ fun RecordSeriesGridContent(
         }
     }
 
-    TvLazyVerticalGrid(
+    LazyVerticalGrid(
         state = gridState,
-        columns = TvGridCells.Fixed(4),
+        columns = GridCells.Fixed(4),
         contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),

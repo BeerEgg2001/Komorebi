@@ -7,6 +7,10 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
+// ★ 変更: TvLazy系のインポートを削除し、標準のLazy系のインポートに変更
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
@@ -23,9 +27,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.itemsIndexed
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
@@ -94,7 +95,8 @@ fun LastWatchedSection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -109,7 +111,8 @@ fun LastWatchedSection(
             Icons.Default.History,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
             modifier = modifier,
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
@@ -189,7 +192,8 @@ fun HotChannelSection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -204,7 +208,8 @@ fun HotChannelSection(
             Icons.Default.TrendingUp,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
             modifier = modifier,
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
@@ -278,7 +283,8 @@ fun WatchHistorySection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -294,7 +300,8 @@ fun WatchHistorySection(
             Icons.Default.PlayCircle,
             Modifier.padding(start = 48.dp, bottom = 12.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
             modifier = modifier,
             contentPadding = PaddingValues(horizontal = 48.dp),
@@ -378,7 +385,8 @@ fun UpcomingReserveSection(
     sectionId: String,
     timeFormat: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -394,7 +402,8 @@ fun UpcomingReserveSection(
             Icons.Default.RadioButtonChecked,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
             modifier = modifier,
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
@@ -475,7 +484,8 @@ fun GenrePickupSection(
     sectionId: String,
     timeFormat: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -493,7 +503,8 @@ fun GenrePickupSection(
             Icons.Default.Star,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
             modifier = modifier,
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),

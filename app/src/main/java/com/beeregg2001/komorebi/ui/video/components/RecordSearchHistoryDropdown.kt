@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
@@ -20,8 +22,6 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -59,7 +59,7 @@ fun RecordSearchHistoryDropdown(
                 RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
             )
     ) {
-        TvLazyColumn(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
                 .focusGroup() // ★重要：グループ化してフォーカスを逃がさないようにする

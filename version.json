@@ -6,8 +6,8 @@
 
   "beta": {
     "versionCode": 11,
-    "versionName": "1.1.0-beta1",
-    "releaseNotes": "・メインバックエンドをKonomiTV、EDCBから選択可能に変更（EPGStation、Mirakurunのみについては後日対応予定）\n・優先するソースにEDCBを追加\n・ライブ視聴でL字クロップ機能に対応\n・ライブタブ、番組表でサブチャンネルの表示非表示切り替えに対応\n※現在、EDCBをバックエンドに選択時はライブ視聴と番組表のみに対応しています\n",
-    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta1/Komorebi-1.1.0-beta1.apk"
+    "versionName": "1.1.0-beta",
+    "releaseNotes": "・メインバックエンドをKonomiTV、EDCBから選択可能に変更（EPGStation、Mirakurunのみについては後日対応予定）\n・優先するソースにEDCBを追加\n・ライブ視聴でL字クロップ機能に対応\n・ライブタブ、番組表でサブチャンネルの表示非表示切り替えに対応\n",
+    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta/Komorebi-1.1.0-beta.apk"
   }
 }

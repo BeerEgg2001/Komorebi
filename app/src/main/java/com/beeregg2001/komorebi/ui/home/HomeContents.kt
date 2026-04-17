@@ -10,6 +10,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +22,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.foundation.lazy.list.*
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -64,7 +65,7 @@ fun HomeContents(
     recordViewModel: RecordViewModel = hiltViewModel(),
     timeFormat: String,
 ) {
-    val lazyListState = rememberTvLazyListState()
+    val lazyListState = rememberLazyListState()
     val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val isFirstItemRendered =
         remember { derivedStateOf { lazyListState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
@@ -197,7 +198,7 @@ fun HomeContents(
                 .weight(0.55f)
                 .fillMaxWidth()
         ) {
-            TvLazyColumn(
+            LazyColumn(
                 state = lazyListState,
                 modifier = Modifier
                     .fillMaxSize()

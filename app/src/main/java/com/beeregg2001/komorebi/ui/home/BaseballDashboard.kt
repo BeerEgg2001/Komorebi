@@ -27,9 +27,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.itemsIndexed
+// ★ 変更: TvLazy 系のインポートを削除し、標準の Lazy 系パッケージに変更しました
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.data.model.Channel
@@ -166,7 +167,8 @@ fun BaseballDashboardScreen(
                 }
             }
         } else {
-            TvLazyColumn(
+            // ★ 変更: LazyColumn -> LazyColumn に置換
+            LazyColumn(
                 contentPadding = PaddingValues(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(40.dp),
                 modifier = Modifier.fillMaxSize()
@@ -180,7 +182,8 @@ fun BaseballDashboardScreen(
                             color = colors.textPrimary
                         )
 
-                        TvLazyRow(
+                        // ★ 変更: LazyRow -> LazyRow に置換
+                        LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
                             itemsIndexed(teamGames) { gameIndex, game ->

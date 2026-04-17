@@ -15,7 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,8 +40,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.rememberTvLazyGridState
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -216,7 +214,7 @@ fun RecordListScreen(
     }
 
     val listState = remember(stateKey) { LazyListState() }
-    val gridState = remember(stateKey) { TvLazyGridState() }
+    val gridState = remember(stateKey) { LazyGridState() }
     val seriesListState = remember(stateKey) { LazyListState() }
 
     val isListFirstItemReady by remember(
