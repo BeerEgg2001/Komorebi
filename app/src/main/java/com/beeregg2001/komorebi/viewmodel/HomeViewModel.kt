@@ -21,6 +21,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
@@ -38,6 +39,7 @@ data class BaseballGameInfo(
 )
 
 @RequiresApi(Build.VERSION_CODES.O)
+@OptIn(FlowPreview::class) // ★ 追加: debounceを使用するためのオプトイン
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
@@ -52,7 +54,6 @@ class HomeViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    // ★ 追加: 現在のバックエンドタイプを公開 (RootUIでのタブ制御やロゴクロップ判定用)
     val backendType: StateFlow<String> = settingsRepository.backendType
         .stateIn(viewModelScope, SharingStarted.Eagerly, "KONOMITV")
 
@@ -134,7 +135,6 @@ class HomeViewModel @Inject constructor(
 
     fun getHotChannels(liveRows: List<LiveRowState>): List<UiChannelState> {
         return liveRows.flatMap { it.channels }
-            // ★ 修正: 盛り上がっているチャンネル一覧では、設定に関わらずサブチャンネルを除外する（メインチャンネルのみ表示）
             .filter { !it.channel.is_subchannel }
             .filter { (it.jikkyoForce ?: 0) > 0 }
             .sortedByDescending { it.jikkyoForce }
@@ -334,14 +334,18 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // ★ 最適化: FlowPreview を使用し、起動時の値のバタつきによるAPI多重呼び出しをブロック
             combine(
                 pickupGenreLabel,
                 pickupTimeSetting,
                 excludePaidBroadcasts,
                 favoriteBaseballTeams
-            ) { _, _, _, _ -> Unit }
+            ) { genre, time, excludePaid, baseballTeams ->
+                listOf(genre, time, excludePaid, baseballTeams.toString())
+            }
+                .distinctUntilChanged() // 値が本当に変わった時だけ下へ流す
+                .debounce(1500L)        // 最後の変更から1.5秒間待機してから実行（連続発火防止）
                 .collectLatest {
-                    delay(1000)
                     fetchAllTypeGenrePickup()
                 }
         }
