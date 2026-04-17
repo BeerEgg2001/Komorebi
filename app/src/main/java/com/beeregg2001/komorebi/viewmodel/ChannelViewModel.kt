@@ -238,8 +238,16 @@ class ChannelViewModel @Inject constructor(
 
                 filteredChannels.filter { it.isDisplay }.groupBy { it.type }
             }
-            _groupedChannels.value = processed
-            _liveRows.value = transformToUiState(processed)
+
+            // ★ 最適化: データが完全に同一の場合は更新（UIの再描画）をスキップする
+            if (_groupedChannels.value != processed) {
+                _groupedChannels.value = processed
+            }
+
+            val newRows = transformToUiState(processed)
+            if (_liveRows.value != newRows) {
+                _liveRows.value = newRows
+            }
 
             lastFetchedTimeMillis = System.currentTimeMillis()
         } catch (e: CancellationException) {
@@ -260,7 +268,11 @@ class ChannelViewModel @Inject constructor(
             while (isActive) {
                 delay(15_000L)
                 if (_groupedChannels.value.isNotEmpty() && !isPollingPaused) {
-                    _liveRows.value = transformToUiState(_groupedChannels.value)
+                    val newRows = transformToUiState(_groupedChannels.value)
+                    // ★ 最適化: プログレスが進行した時のみUIに反映させる
+                    if (_liveRows.value != newRows) {
+                        _liveRows.value = newRows
+                    }
                 }
             }
         }

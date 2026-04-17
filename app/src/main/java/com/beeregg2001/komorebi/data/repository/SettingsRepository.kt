@@ -46,7 +46,6 @@ class SettingsRepository @Inject constructor(
         val SUBTITLE_COMMENT_LAYER = stringPreferencesKey("subtitle_comment_layer")
         val AUDIO_OUTPUT_MODE = stringPreferencesKey("audio_output_mode")
 
-        // ★ 追加: プレイヤーUIモードの設定キー
         val PLAYER_UI_MODE = stringPreferencesKey("player_ui_mode")
 
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
@@ -68,13 +67,24 @@ class SettingsRepository @Inject constructor(
         val DEFAULT_RECORD_LIST_VIEW = stringPreferencesKey("default_record_list_view")
 
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
-
         val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
     }
 
+    // ★ 修正: 初期化の判定を「バックエンドが選ばれたか」ではなく「IPが正しく設定されたか」に変更
     val isInitialized: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
-            preferences[BACKEND_TYPE] != null
+            val backend = preferences[BACKEND_TYPE] ?: "KONOMITV"
+            when (backend) {
+                "KONOMITV" -> {
+                    val ip = preferences[KONOMI_IP]
+                    !ip.isNullOrBlank() && ip != "https://192-168-xxx-xxx.local.konomi.tv"
+                }
+
+                "EDCB" -> !preferences[EDCB_IP].isNullOrBlank()
+                "EPGSTATION" -> !preferences[EPGSTATION_IP].isNullOrBlank()
+                "MIRAKURUN_ONLY" -> !preferences[MIRAKURUN_IP].isNullOrBlank()
+                else -> false
+            }
         }
 
     val backendType: Flow<String> = context.dataStore.data
@@ -143,7 +153,6 @@ class SettingsRepository @Inject constructor(
     val audioOutputMode: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[AUDIO_OUTPUT_MODE] ?: "DOWNMIX" }
 
-    // ★ 追加: プレイヤーUIモードのFlow (デフォルトは新機能の MODERN)
     val playerUiMode: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[PLAYER_UI_MODE] ?: "MODERN" }
 
