@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:KomorebiConfigurator.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="650"
+        x:Class="KomorebiConfigurator.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="Komorebi Server Configurator"
+        Width="900" Height="650"
+        WindowStartupLocation="CenterScreen">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Border Padding="25">
+        <Grid RowDefinitions="Auto, Auto, *, Auto">
+
+            <StackPanel Grid.Row="0" Spacing="5" Margin="0,0,0,25">
+                <TextBlock Text="1. 基本設定" FontWeight="Bold" FontSize="18"/>
+                <TextBlock Text="EDCBの HttpPublic フォルダの絶対パスを指定してください。" Foreground="Gray" FontSize="12"/>
+                
+                <Grid ColumnDefinitions="*, Auto" Margin="0,5,0,0">
+                    <TextBox Grid.Column="0" Text="{Binding HttpPublicPath}" Watermark="例: C:\EDCB\HttpPublic" FontSize="14" Padding="10" Margin="0,0,10,0"/>
+                    <Button Grid.Column="1" Content="参照..." Click="BrowseHttpPublic_Click" Padding="20,10"/>
+                </Grid>
+            </StackPanel>
+
+            <StackPanel Grid.Row="1" Spacing="5" Margin="0,0,0,15">
+                <TextBlock Text="2. マッピング管理" FontWeight="Bold" FontSize="18"/>
+                <TextBlock Text="録画フォルダの実体と、公開用のエイリアス名をペアで登録します。" Foreground="Gray" FontSize="12"/>
+                
+                <Grid ColumnDefinitions="*, Auto, 180, Auto" Margin="0,10,0,0">
+                    <TextBox Grid.Column="0" Text="{Binding NewPhysicalPath}" Watermark="録画フォルダ実体 (例: D:\TV)" Margin="0,0,5,0" Padding="10"/>
+                    <Button Grid.Column="1" Content="参照..." Click="BrowsePhysicalPath_Click" Margin="0,0,15,0" Padding="15,10"/>
+                    
+                    <TextBox Grid.Column="2" Text="{Binding NewAlias}" Watermark="エイリアス名 (例: rec)" Margin="0,0,10,0" Padding="10"/>
+                    
+                    <Button Grid.Column="3" Content="{Binding AddUpdateButtonText}" Command="{Binding AddOrUpdateMappingCommand}" HorizontalContentAlignment="Center" Padding="20,10"/>
+                </Grid>
+            </StackPanel>
+
+            <ListBox Grid.Row="2" ItemsSource="{Binding Mappings}" SelectedItem="{Binding SelectedMapping}" Margin="0,10,0,20" CornerRadius="4">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnDefinitions="150, Auto, *">
+                            <TextBlock Grid.Column="0" Text="{Binding Alias}" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="→" Margin="15,0" VerticalAlignment="Center" Foreground="Gray"/>
+                            <TextBlock Grid.Column="2" Text="{Binding PhysicalPath}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <Grid Grid.Row="3" ColumnDefinitions="Auto, *, Auto" Margin="0,10,0,0">
+                <Button Grid.Column="0" Content="選択した項目を削除" Command="{Binding RemoveMappingCommand}" Foreground="IndianRed" Padding="15,10"/>
+                
+                <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" Foreground="#4CAF50"/>
+                
+                <Button Grid.Column="2" Content="セットアップ実行" Command="{Binding ExecuteSetupCommand}" 
+                        Background="#0078D7" Foreground="White" FontSize="16" FontWeight="Bold" Padding="25,12" CornerRadius="4"/>
+            </Grid>
+
+        </Grid>
+    </Border>
+</Window>
