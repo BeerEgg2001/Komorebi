@@ -238,7 +238,6 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 FileName = "cmd.exe",
                 Arguments = cmd,
-                Verb = "runas", // UAC昇格のトリガー
                 UseShellExecute = true,
                 WindowStyle = ProcessWindowStyle.Hidden
             };
