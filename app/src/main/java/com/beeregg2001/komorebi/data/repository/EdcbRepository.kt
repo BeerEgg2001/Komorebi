@@ -53,6 +53,16 @@ class EdcbRepository @Inject constructor(
         )
     }
 
+    // ★追加: Luaスクリプトから受け取るURL群のデータクラス
+    private data class KomorebiResolverUrls(
+        val videoUrl: String,
+        val thumbnailUrl: String,
+        val chapterUrl: String,
+        val chapterAltUrl: String,
+        val tileImageUrl: String,
+        val tileJsonUrl: String
+    )
+
     private var httpPortCache: Int? = null
     private var enableHttpCache: Boolean? = null
     private var logoDataIniAttempted = false
@@ -77,6 +87,44 @@ class EdcbRepository @Inject constructor(
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
     private var fullEpgFetchJob: kotlinx.coroutines.Job? = null
     private var isFullEpgFetched = false
+
+    // ★追加: Luaスクリプトを叩いてURLを一式取得する関数
+    private suspend fun fetchResolverUrls(
+        ip: String,
+        port: Int,
+        videoId: Int
+    ): KomorebiResolverUrls? = withContext(Dispatchers.IO) {
+        try {
+            // legacyフォルダに配置したluaを叩く
+            val url = java.net.URL("http://$ip:$port/legacy/komorebi_resolver.lua?id=$videoId")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 3000
+            connection.readTimeout = 3000
+
+            if (connection.responseCode == 200) {
+                val jsonStr = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = org.json.JSONObject(jsonStr)
+
+                if (json.has("error")) {
+                    Log.w(TAG, "Resolver Lua error: ${json.optString("error")}")
+                    return@withContext null
+                }
+
+                return@withContext KomorebiResolverUrls(
+                    videoUrl = json.optString("video_url"),
+                    thumbnailUrl = json.optString("thumbnail_url"),
+                    chapterUrl = json.optString("chapter_url"),
+                    chapterAltUrl = json.optString("chapter_alt_url"),
+                    tileImageUrl = json.optString("tile_image_url"),
+                    tileJsonUrl = json.optString("tile_json_url")
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch resolver urls for id=$videoId", e)
+        }
+        return@withContext null
+    }
 
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchEpgDataIfNeeded() = withContext(Dispatchers.IO) {
@@ -799,32 +847,28 @@ class EdcbRepository @Inject constructor(
         val playMethod = settingsRepository.edcbRecordPlayMethod.first()
 
         if (playMethod == "DIRECT") {
-            val filePath = info?.recFilePath ?: return ""
-            val relativePath = filePath
-                .replace(Regex("^[a-zA-Z]:\\\\"), "")
-                .replace("\\", "/")
-
-            val videoUri = android.net.Uri.Builder()
-                .scheme("http")
-                .encodedAuthority("$ip:$safeHttpPort")
-                .appendPath("rec")
-                .appendEncodedPath(android.net.Uri.encode(relativePath, "/"))
-                .build()
-
-            Log.i(TAG, "Generated HTTP Stream URL (DIRECT): $videoUri")
-            return videoUri.toString()
-        } else {
-            val videoUri = android.net.Uri.Builder()
-                .scheme("http")
-                .encodedAuthority("$ip:$safeHttpPort")
-                .appendPath("api")
-                .appendPath("Movie")
-                .appendQueryParameter("id", videoId.toString())
-                .build()
-
-            Log.i(TAG, "Generated HTTP Stream URL (API): $videoUri")
-            return videoUri.toString()
+            // ★修正: パス置換をやめ、LuaからVideoURLを取得する
+            val resolverUrls = fetchResolverUrls(ip, safeHttpPort, videoId)
+            if (resolverUrls != null) {
+                val videoUri = "http://$ip:$safeHttpPort${resolverUrls.videoUrl}"
+                Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
+                return videoUri
+            } else {
+                Log.w(TAG, "Failed to resolve DIRECT url via Lua, falling back to API.")
+            }
         }
+
+        // フォールバック（API経由）
+        val videoUri = android.net.Uri.Builder()
+            .scheme("http")
+            .encodedAuthority("$ip:$safeHttpPort")
+            .appendPath("api")
+            .appendPath("Movie")
+            .appendQueryParameter("id", videoId.toString())
+            .build()
+
+        Log.i(TAG, "Generated HTTP Stream URL (API): $videoUri")
+        return videoUri.toString()
     }
 
     private fun parseChapterTextToCmSections(
@@ -934,14 +978,6 @@ class EdcbRepository @Inject constructor(
             "Path" to info.recFilePath
         )
 
-        val relativePath = info.recFilePath
-            .replace(Regex("^[a-zA-Z]:\\\\"), "")
-            .replace("\\", "/")
-        val encodedPath = android.net.Uri.encode(relativePath, "/")
-
-        val primaryUrl = "http://$ip:$httpPort/rec/$encodedPath.jpg"
-        val fallbackUrl = "http://$ip:$httpPort/api/Thumbnail?id=${info.id}"
-
         if (detailStartIdx != -1 && genreStartIdx > detailStartIdx) {
             val extText = info.programInfo.substring(detailStartIdx + 4, genreStartIdx).trim()
 
@@ -953,81 +989,96 @@ class EdcbRepository @Inject constructor(
             }
         }
 
+        val fallbackUrl = "http://$ip:$httpPort/api/Thumbnail?id=${info.id}"
+
+        // ★修正: ローカルのパス置換ロジックを削除し、LuaからURL一式を取得する
+        val resolverUrls = fetchResolverUrls(ip, httpPort, info.id)
+
+        val primaryUrl = if (resolverUrls != null) {
+            "http://$ip:$httpPort${resolverUrls.thumbnailUrl}"
+        } else fallbackUrl
+
         var cmSections: List<CmSection>? = null
-        try {
-            val urlsToTry = listOf(
-                "http://$ip:$httpPort/rec/$encodedPath.chapter.txt",
-                "http://$ip:$httpPort/rec/${encodedPath.replace(Regex("\\.ts$"), "")}.chapter.txt"
-            )
+        if (resolverUrls != null) {
+            try {
+                // ★修正: Luaから取得したチャプターURLを使用する
+                val urlsToTry = listOf(
+                    "http://$ip:$httpPort${resolverUrls.chapterUrl}",
+                    "http://$ip:$httpPort${resolverUrls.chapterAltUrl}"
+                )
 
-            var chapterText: String? = null
-            for (urlStr in urlsToTry) {
-                try {
-                    val url = java.net.URL(urlStr)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 1500
-                    connection.readTimeout = 1500
+                var chapterText: String? = null
+                for (urlStr in urlsToTry) {
+                    try {
+                        val url = java.net.URL(urlStr)
+                        val connection = url.openConnection() as java.net.HttpURLConnection
+                        connection.requestMethod = "GET"
+                        connection.connectTimeout = 1500
+                        connection.readTimeout = 1500
 
-                    if (connection.responseCode == 200) {
-                        val bytes = connection.inputStream.readBytes()
-                        chapterText = decodeEdcbString(bytes)
-                        break
+                        if (connection.responseCode == 200) {
+                            val bytes = connection.inputStream.readBytes()
+                            chapterText = decodeEdcbString(bytes)
+                            break
+                        }
+                    } catch (e: Exception) {
                     }
-                } catch (e: Exception) {
                 }
-            }
 
-            if (chapterText != null) {
-                val parsed = parseChapterTextToCmSections(chapterText, info.durationSec.toDouble())
-                if (parsed.isNotEmpty()) {
-                    cmSections = parsed
+                if (chapterText != null) {
+                    val parsed =
+                        parseChapterTextToCmSections(chapterText, info.durationSec.toDouble())
+                    if (parsed.isNotEmpty()) {
+                        cmSections = parsed
+                    }
                 }
+            } catch (e: Exception) {
             }
-        } catch (e: Exception) {
         }
 
-        // ★ 追加: .tile.json を取得してサムネイル情報を構築する
         var thumbnailInfo: ThumbnailInfo? = null
-        try {
-            val jsonUrlsToTry = listOf(
-                "http://$ip:$httpPort/rec/$encodedPath.tile.json"
-            )
-
-            var jsonText: String? = null
-            for (urlStr in jsonUrlsToTry) {
-                try {
-                    val url = java.net.URL(urlStr)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 1500
-                    connection.readTimeout = 1500
-
-                    if (connection.responseCode == 200) {
-                        val bytes = connection.inputStream.readBytes()
-                        jsonText = String(bytes, Charsets.UTF_8)
-                        break
-                    }
-                } catch (e: Exception) {
-                }
-            }
-
-            if (jsonText != null) {
-                val jsonObj = org.json.JSONObject(jsonText)
-                val tileInfo = TileInfo(
-                    imageWidth = jsonObj.optInt("image_width", 0),
-                    imageHeight = jsonObj.optInt("image_height", 0),
-                    tileWidth = jsonObj.optInt("tile_width", 320),
-                    tileHeight = jsonObj.optInt("tile_height", 180),
-                    columnCount = jsonObj.optInt("column_count", 1),
-                    rowCount = jsonObj.optInt("row_count", 1),
-                    intervalSec = jsonObj.optDouble("interval_sec", 10.0),
-                    totalTiles = jsonObj.optInt("total_tiles", 1)
+        if (resolverUrls != null) {
+            try {
+                // ★修正: Luaから取得した tile.json URLを使用する
+                val jsonUrlsToTry = listOf(
+                    "http://$ip:$httpPort${resolverUrls.tileJsonUrl}"
                 )
-                thumbnailInfo = ThumbnailInfo(version = 1, tile = tileInfo)
+
+                var jsonText: String? = null
+                for (urlStr in jsonUrlsToTry) {
+                    try {
+                        val url = java.net.URL(urlStr)
+                        val connection = url.openConnection() as java.net.HttpURLConnection
+                        connection.requestMethod = "GET"
+                        connection.connectTimeout = 1500
+                        connection.readTimeout = 1500
+
+                        if (connection.responseCode == 200) {
+                            val bytes = connection.inputStream.readBytes()
+                            jsonText = String(bytes, Charsets.UTF_8)
+                            break
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+
+                if (jsonText != null) {
+                    val jsonObj = org.json.JSONObject(jsonText)
+                    val tileInfo = TileInfo(
+                        imageWidth = jsonObj.optInt("image_width", 0),
+                        imageHeight = jsonObj.optInt("image_height", 0),
+                        tileWidth = jsonObj.optInt("tile_width", 320),
+                        tileHeight = jsonObj.optInt("tile_height", 180),
+                        columnCount = jsonObj.optInt("column_count", 1),
+                        rowCount = jsonObj.optInt("row_count", 1),
+                        intervalSec = jsonObj.optDouble("interval_sec", 10.0),
+                        totalTiles = jsonObj.optInt("total_tiles", 1)
+                    )
+                    thumbnailInfo = ThumbnailInfo(version = 1, tile = tileInfo)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse tile.json", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse tile.json", e)
         }
 
         return@withContext RecordedProgram(
@@ -1242,7 +1293,7 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    // ★ 修正: EDCB環境におけるタイル画像への直接URLを生成 (.tile.webp)
+    // ★ 修正: 泥臭いパス変換をすべて削除し、Luaに問い合わせるだけにする
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
         withContext(Dispatchers.IO) {
             val ip = settingsRepository.edcbIp.first()
@@ -1263,20 +1314,13 @@ class EdcbRepository @Inject constructor(
                 }
             }
 
-            // キャッシュまたはAPIから録画情報を取得
-            val info = cachedRecInfos?.find { it.id == videoId }
-                ?: EdcbApi(ip, port).getRecInfo(videoId).getOrNull()
+            // ★修正: Luaに問い合わせて解決する
+            val resolverUrls = fetchResolverUrls(ip, safeHttpPort, videoId)
+            if (resolverUrls != null) {
+                return@withContext "http://$ip:$safeHttpPort${resolverUrls.tileImageUrl}"
+            }
 
-            if (info == null) return@withContext null
-
-            // EDCBの録画ファイルパスからURLパスへの変換
-            val relativePath = info.recFilePath
-                .replace(Regex("^[a-zA-Z]:\\\\"), "")
-                .replace("\\", "/")
-            val encodedPath = android.net.Uri.encode(relativePath, "/")
-
-            // Komorebi互換バッチが生成するファイル名 (.tile.webp) を想定したURLを返す
-            return@withContext "http://$ip:$safeHttpPort/rec/${encodedPath}.tile.webp"
+            return@withContext null
         }
 
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse =

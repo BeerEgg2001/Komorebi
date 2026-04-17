@@ -105,7 +105,7 @@ object UrlBuilder {
     }
 
     // アーカイブ実況コメントAPIのURL
-    fun getArchivedJikkyoUrl(ip: String, port: String, videoId: Int): String {
+    fun getArchivedJikkyoUrl(ip: String, port:  String, videoId: Int): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/videos/$videoId/jikkyo"
     }
