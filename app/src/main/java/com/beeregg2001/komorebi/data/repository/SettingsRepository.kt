@@ -23,7 +23,8 @@ class SettingsRepository @Inject constructor(
     companion object {
         val BACKEND_TYPE = stringPreferencesKey("backend_type")
         val EDCB_IP = stringPreferencesKey("edcb_ip")
-        val EDCB_PORT = stringPreferencesKey("edcb_port")
+        val EDCB_PORT = stringPreferencesKey("edcb_port") // これはTCP用(4510)として維持
+        val EDCB_HTTP_PORT = stringPreferencesKey("edcb_http_port") // ★追加: HTTP用ポート
 
         val EDCB_RECORD_PLAY_METHOD = stringPreferencesKey("edcb_record_play_method")
         val EPGSTATION_IP = stringPreferencesKey("epgstation_ip")
@@ -95,6 +96,9 @@ class SettingsRepository @Inject constructor(
 
     val edcbPort: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[EDCB_PORT] ?: "4510" }
+
+    val edcbHttpPort: Flow<String> =
+        context.dataStore.data.map { it[EDCB_HTTP_PORT] ?: "5510" } // ★追加
 
     val edcbRecordPlayMethod: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[EDCB_RECORD_PLAY_METHOD] ?: "API" }
@@ -243,6 +247,24 @@ class SettingsRepository @Inject constructor(
             ip = "http://$ip"
         }
         return "$ip:$port"
+    }
+
+    suspend fun getEdcbFullUrl(): String {
+        val prefs = context.dataStore.data.first()
+        var ip = prefs[EDCB_IP] ?: ""
+        // ★ 修正: HTTP通信時は HTTP_PORT を優先して使用する
+        val port = prefs[EDCB_HTTP_PORT] ?: "5510"
+        if (ip.isEmpty()) return ""
+
+        if (ip.startsWith("http://") || ip.startsWith("https://")) {
+            return "$ip:$port"
+        }
+
+        // ★ 修正: ポート番号が 5511 または 末尾に s がつく場合は https と判定
+        val isSsl = port == "5511" || port.endsWith("s")
+        val scheme = if (isSsl) "https://" else "http://"
+
+        return "$scheme$ip:$port"
     }
 
     suspend fun getStartupTabOnce(): String {

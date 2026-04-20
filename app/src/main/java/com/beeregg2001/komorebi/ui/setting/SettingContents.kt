@@ -222,6 +222,7 @@ fun ConnectionSettingsContent(
     backendType: String,
     edcbIp: String,
     edcbPort: String,
+    edcbHttpPort: String, // ★追加
     epgStationIp: String,
     epgStationPort: String,
     kIp: String,
@@ -238,6 +239,7 @@ fun ConnectionSettingsContent(
     backendTypeR: FocusRequester,
     backendIpR: FocusRequester,
     backendPortR: FocusRequester,
+    edcbHttpPortR: FocusRequester,
     prefSrcR: FocusRequester,
     overrideIpR: FocusRequester,
     overridePortR: FocusRequester,
@@ -255,7 +257,7 @@ fun ConnectionSettingsContent(
         SettingsSection("メインシステム設定") {
             val backendLabel = when (backendType) {
                 "EDCB" -> "EDCB (EpgTimerSrv)"
-                "EPGSTATION" -> "EPGStation"
+//                "EPGSTATION" -> "EPGStation"
                 "MIRAKURUN_ONLY" -> "Mirakurun (録画なし)"
                 else -> "KonomiTV"
             }
@@ -276,28 +278,29 @@ fun ConnectionSettingsContent(
 
             val currentIp = when (backendType) {
                 "EDCB" -> edcbIp
-                "EPGSTATION" -> epgStationIp
+//                "EPGSTATION" -> epgStationIp
                 "MIRAKURUN_ONLY" -> mIp
                 else -> kIp
             }
             val currentPort = when (backendType) {
                 "EDCB" -> edcbPort
-                "EPGSTATION" -> epgStationPort
+//                "EPGSTATION" -> epgStationPort
                 "MIRAKURUN_ONLY" -> mPort
                 else -> kPort
             }
             val ipTitle = when (backendType) {
                 "EDCB" -> "EDCB (IPアドレス)"
-                "EPGSTATION" -> "EPGStation (IPアドレス)"
+//                "EPGSTATION" -> "EPGStation (IPアドレス)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (IPアドレス)"
                 else -> "KonomiTV (IPアドレス)"
             }
             val portTitle = when (backendType) {
-                "EDCB" -> "EDCB (ポート)"
-                "EPGSTATION" -> "EPGStation (ポート)"
+                "EDCB" -> "EDCB (TCPポート)"
+//                "EPGSTATION" -> "EPGStation (ポート)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (ポート)"
                 else -> "KonomiTV (ポート)"
             }
+            val edcbHttpPortTitle = "EDCB (HTTP/HTTPSポート)"
 
             SettingItem(
                 title = ipTitle,
@@ -317,10 +320,25 @@ fun ConnectionSettingsContent(
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
                         down =
-                            if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                            if (backendType == "EDCB") edcbHttpPortR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
+            if (backendType == "EDCB") {
+                SettingItem(
+                    title = edcbHttpPortTitle,
+                    value = edcbHttpPort,
+                    icon = Icons.Default.Numbers,
+                    modifier = Modifier
+                        .focusRequester(edcbHttpPortR)
+                        .focusProperties {
+                            left = sidebarR
+                            up = backendPortR
+                            down = if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                        },
+                    onClick = { onClick(edcbHttpPortR); onEdit(portTitle, currentPort) }
+                )
+            }
 
             if (currentIp.isBlank() || currentPort.isBlank()) {
                 ValidationErrorText("メインシステムのIPアドレスまたはポート番号が未設定です。\n番組情報の取得や録画機能が正常に動作しません。")
@@ -337,7 +355,7 @@ fun ConnectionSettingsContent(
                         .focusRequester(edcbPlayMethodR)
                         .focusProperties {
                             left = sidebarR
-                            up = backendPortR
+                            up = edcbHttpPortR
                             down = prefSrcR
                         },
                     onClick = { onClick(edcbPlayMethodR); onSelectEdcbPlayMethod() }

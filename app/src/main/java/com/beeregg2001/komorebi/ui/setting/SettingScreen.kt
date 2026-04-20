@@ -100,7 +100,8 @@ fun SettingsScreen(
                 FocusRequester(), // BackendType
                 FocusRequester(), FocusRequester(), // Backend IP, Port
                 FocusRequester(), // Stream Priority
-                FocusRequester(), FocusRequester()  // Override IP, Port
+                FocusRequester(), FocusRequester(),  // Override IP, Port
+                FocusRequester()  // 追加: EDCBHttp/Httpsポート用のFocusRequester
             ), // 1: Connection
             listOf(
                 FocusRequester(),
@@ -305,6 +306,7 @@ fun SettingsScreen(
                         backendType = prefs.backendType,
                         edcbIp = prefs.edcbIp,
                         edcbPort = prefs.edcbPort,
+                        edcbHttpPort = prefs.edcbHttpPort,
                         epgStationIp = prefs.epgStationIp,
                         epgStationPort = prefs.epgStationPort,
                         kIp = prefs.konomiIp,
@@ -334,8 +336,8 @@ fun SettingsScreen(
                                     "KonomiTV (ポート)" -> viewModel.updateKonomiPort(it)
                                     "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(it)
                                     "EDCB (ポート)" -> viewModel.updateEdcbPort(it)
-                                    "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(it)
-                                    "EPGStation (ポート)" -> viewModel.updateEpgStationPort(it)
+//                                    "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(it)
+//                                    "EPGStation (ポート)" -> viewModel.updateEpgStationPort(it)
                                     "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(it)
                                     "Mirakurun (ポート)" -> scope.launch {
                                         repository.saveString(SettingsRepository.MIRAKURUN_PORT, it)
@@ -347,7 +349,7 @@ fun SettingsScreen(
                             val options = listOf(
                                 "KonomiTV" to "KONOMITV",
                                 "EDCB (EpgTimerSrv)" to "EDCB",
-                                "EPGStation" to "EPGSTATION",
+//                                "EPGStation" to "EPGSTATION",
                                 "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
                             )
                             val safeCurrent =
@@ -393,9 +395,10 @@ fun SettingsScreen(
                         backendTypeR = itemFocusRequesters[1][0],
                         backendIpR = itemFocusRequesters[1][1],
                         backendPortR = itemFocusRequesters[1][2],
-                        prefSrcR = itemFocusRequesters[1][3],
-                        overrideIpR = itemFocusRequesters[1][4],
-                        overridePortR = itemFocusRequesters[1][5],
+                        edcbHttpPortR = itemFocusRequesters[1][3],
+                        prefSrcR = itemFocusRequesters[1][4],
+                        overrideIpR = itemFocusRequesters[1][5],
+                        overridePortR = itemFocusRequesters[1][6],
                         sidebarR = categoryFocusRequesters[1],
                         onClick = {
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1
