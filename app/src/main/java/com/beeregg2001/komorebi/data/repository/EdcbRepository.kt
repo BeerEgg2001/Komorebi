@@ -837,7 +837,7 @@ class EdcbRepository @Inject constructor(
                 try {
                     val chapterName = line.substringAfter("=")
                     if (pendingTime != null) {
-                        if (pendingTime <= durationSec + 5.0) {
+                        if (pendingTime <= durationSec  + 5.0) {
                             chapters.add(Triple(0, chapterName, pendingTime))
                         } else {
                             Log.w(
@@ -855,11 +855,15 @@ class EdcbRepository @Inject constructor(
 
         var currentCmStart: Double? = null
         for ((_, name, ctime) in chapters) {
-            if (name.startsWith("CM") && currentCmStart == null) {
-                currentCmStart = ctime
-            } else if (!name.startsWith("CM") && currentCmStart != null) {
-                cmSections.add(CmSection(currentCmStart, ctime))
-                currentCmStart = null
+            val lowerName = name.lowercase()
+            // TvtPlayの仕様: 'o' はCM開始、'i' は本編(CM終了)
+            if (lowerName.startsWith("o") || lowerName.startsWith("cm")) {
+                if (currentCmStart == null) currentCmStart = ctime
+            } else if (lowerName.startsWith("i") || lowerName.isNotBlank()) {
+                if (currentCmStart != null) {
+                    cmSections.add(CmSection(currentCmStart, ctime))
+                    currentCmStart = null
+                }
             }
         }
 

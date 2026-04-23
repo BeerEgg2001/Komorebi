@@ -42,7 +42,9 @@ import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
@@ -196,7 +198,18 @@ fun VideoPlayerScreen(
             setConnectTimeoutMs(90000); setReadTimeoutMs(90000)
         }
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
+        // ★ 追加：TS抽出器（TsExtractor）の許容度を上げ、CBRシークを強制するファクトリー
+        val extractorsFactory = DefaultExtractorsFactory().apply {
+            setTsExtractorFlags(
+                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+            )
+            // タイムラインが壊れていてもファイルサイズから強引にシークさせる特効薬
+            setConstantBitrateSeekingEnabled(true)
+        }
+
+        // ★ 変更：httpDataSourceFactory に加えて、カスタマイズした extractorsFactory を渡す
+        val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
+
         val loadControl =
             DefaultLoadControl.Builder().setBufferDurationsMs(30000, 30000, 1500, 3000)
                 .setPrioritizeTimeOverSizeThresholds(true).build()
