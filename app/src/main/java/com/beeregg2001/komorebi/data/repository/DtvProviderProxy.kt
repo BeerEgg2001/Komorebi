@@ -31,8 +31,6 @@ class DtvProviderProxy @Inject constructor(
 
     // ========================================================================
     // LiveProvider (ライブ視聴関連)
-    // EDCB構築中につき、未実装(NotImplementedError)や通信エラー時は
-    // 他のバックエンドに頼らず、空のデータを返してスキップする。
     // ========================================================================
 
     override suspend fun getChannels(): ChannelApiResponse {
@@ -67,8 +65,6 @@ class DtvProviderProxy @Inject constructor(
 
     // ========================================================================
     // RecordProvider, ReserveProvider, EpgProvider
-    // ※以下は現在開発対象外のため、呼び出されたらそのままエラーを投げる
-    // （アプリ開発時に実装漏れに気づけるようにするため）
     // ========================================================================
 
     override suspend fun getRecordedPrograms(page: Int) =
@@ -80,8 +76,19 @@ class DtvProviderProxy @Inject constructor(
     override suspend fun searchRecordedPrograms(keyword: String, page: Int) =
         (getActiveProvider() as RecordProvider).searchRecordedPrograms(keyword, page)
 
-    override suspend fun getRecordStreamUrl(videoId: Int, quality: String, sessionId: String) =
-        (getActiveProvider() as RecordProvider).getRecordStreamUrl(videoId, quality, sessionId)
+    // ★ 修正: offsetSeconds を追加し、実際のプロバイダへ委譲
+    override suspend fun getRecordStreamUrl(
+        videoId: Int,
+        quality: String,
+        sessionId: String,
+        offsetSeconds: Double
+    ) =
+        (getActiveProvider() as RecordProvider).getRecordStreamUrl(
+            videoId,
+            quality,
+            sessionId,
+            offsetSeconds
+        )
 
     override suspend fun getArchivedJikkyo(videoId: Int) =
         (getActiveProvider() as RecordProvider).getArchivedJikkyo(videoId)
@@ -91,9 +98,11 @@ class DtvProviderProxy @Inject constructor(
         (getActiveProvider() as RecordProvider).keepAlive(videoId, quality, sessionId)
     }
 
-    // ★ 追加: アクティブなプロバイダにタイル画像URLの取得を委譲
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
         (getActiveProvider() as RecordProvider).getTiledThumbnailUrl(videoId)
+
+    override suspend fun getStreamQualities(): List<StreamQuality> =
+        (getActiveProvider() as RecordProvider).getStreamQualities()
 
     override suspend fun getReserves() =
         (getActiveProvider() as ReserveProvider).getReserves()

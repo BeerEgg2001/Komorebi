@@ -27,7 +27,8 @@ class EpgStationRepository @Inject constructor(
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSec: Double
     ): String = ""
 
     override suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> =

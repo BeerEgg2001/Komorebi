@@ -254,7 +254,8 @@ class KonomiRepository @Inject constructor(
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSec: Double
     ): String {
         val ip = settingsRepository.konomiIp.first()
         val port = settingsRepository.konomiPort.first()

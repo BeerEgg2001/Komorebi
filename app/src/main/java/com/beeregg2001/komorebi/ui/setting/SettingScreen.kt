@@ -63,8 +63,12 @@ fun SettingsScreen(
 
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
 
-    // ★ 追加: 新しく作成したUIモードのStateを取得
     val playerUiMode by viewModel.playerUiMode.collectAsState()
+
+    // ★ 追加: 自動CMスキップの状態を取得
+    val autoCmSkip by viewModel.autoCmSkip.collectAsState()
+
+    val availableQualities by viewModel.availableQualities.collectAsState()
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
@@ -101,7 +105,7 @@ fun SettingsScreen(
                 FocusRequester(), FocusRequester(), // Backend IP, Port
                 FocusRequester(), // Stream Priority
                 FocusRequester(), FocusRequester(),  // Override IP, Port
-                FocusRequester()  // 追加: EDCBHttp/Httpsポート用のFocusRequester
+                FocusRequester()  // EDCBHttp/Httpsポート用のFocusRequester
             ), // 1: Connection
             listOf(
                 FocusRequester(),
@@ -110,7 +114,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
-                FocusRequester() // ★ 追加: プレイヤーUIモード用のFocusRequester
+                FocusRequester(), // プレイヤーUIモード用
+                FocusRequester()  // ★ 追加: 自動CMスキップ用 FocusRequester
             ), // 2: Playback
             listOf(FocusRequester()), // 3: Recording
             listOf(
@@ -317,7 +322,7 @@ fun SettingsScreen(
                         edcbPlayMethod = prefs.edcbRecordPlayMethod,
                         onSelectEdcbPlayMethod = {
                             val options = listOf(
-                                "API経由 (api/Movie)" to "API",
+                                "API経由 (api/xcode)" to "API",
                                 "直接アクセス (高速シーク可)" to "DIRECT"
                             )
                             uiState.activeDialog = SettingDialogState.Selection(
@@ -412,19 +417,25 @@ fun SettingsScreen(
                         videoSub = prefs.videoSubtitleDefault,
                         layerOrder = prefs.subtitleCommentLayer,
                         audioMode = prefs.audioOutputMode,
-                        uiMode = playerUiMode, // ★ 追加
+                        uiMode = playerUiMode,
+                        autoCmSkip = autoCmSkip, // ★ 追加: CMスキップ設定値を渡す
+                        availableQualities = availableQualities,
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
                         liveSubR = itemFocusRequesters[2][2],
                         videoSubR = itemFocusRequesters[2][3],
                         audioR = itemFocusRequesters[2][4],
                         layerR = itemFocusRequesters[2][5],
-                        uiModeR = itemFocusRequesters[2][6], // ★ 追加
+                        uiModeR = itemFocusRequesters[2][6],
+                        autoCmSkipR = itemFocusRequesters[2][7], // ★ 追加
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
-                            val options = StreamQuality.entries.map { it.label to it.value }
+                            val options = availableQualities.map { it.label to it.value }
                             val safeCurrent =
-                                if (options.any { it.second == prefs.liveQuality }) prefs.liveQuality else StreamQuality.Q1080P_60.value
+                                if (options.any { it.second == prefs.liveQuality }) prefs.liveQuality
+                                else availableQualities.firstOrNull()?.value
+                                    ?: StreamQuality.DEFAULT_QUALITIES.first().value
+
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_QUALITY_TITLE,
                                 options,
@@ -439,9 +450,12 @@ fun SettingsScreen(
                             }
                         },
                         onV = {
-                            val options = StreamQuality.entries.map { it.label to it.value }
+                            val options = availableQualities.map { it.label to it.value }
                             val safeCurrent =
-                                if (options.any { it.second == prefs.videoQuality }) prefs.videoQuality else StreamQuality.Q1080P_60.value
+                                if (options.any { it.second == prefs.videoQuality }) prefs.videoQuality
+                                else availableQualities.firstOrNull()?.value
+                                    ?: StreamQuality.DEFAULT_QUALITIES.first().value
+
                             uiState.activeDialog = SettingDialogState.Selection(
                                 AppStrings.DIALOG_QUALITY_TITLE,
                                 options,
@@ -511,7 +525,6 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        // ★ 追加: プレイヤーUIモードの変更イベント
                         onUiMode = {
                             val options = listOf(
                                 "モダン (オンスクリーン操作)" to "MODERN",
@@ -529,6 +542,23 @@ fun SettingsScreen(
                                         SettingsRepository.PLAYER_UI_MODE,
                                         it
                                     )
+                                }
+                            }
+                        },
+                        // ★ 追加: 自動CMスキップの変更イベント
+                        onAutoCmSkip = {
+                            val options = listOf(
+                                "有効" to "ON",
+                                "無効" to "OFF"
+                            )
+                            val safeCurrent = if (autoCmSkip == "ON") "ON" else "OFF"
+                            uiState.activeDialog = SettingDialogState.Selection(
+                                "自動CMスキップ",
+                                options,
+                                safeCurrent
+                            ) {
+                                scope.launch {
+                                    repository.saveString(SettingsRepository.AUTO_CM_SKIP, it)
                                 }
                             }
                         },

@@ -26,21 +26,25 @@ class VideoPlayerState(
     var currentSpeed by mutableFloatStateOf(1.0f)
     var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
 
+    // ★ 追加: API経由の擬似シーク時に使用する仮想的なオフセット時間（ミリ秒）
+    var playbackOffsetMs by mutableLongStateOf(0L)
+
     // UI状態
     var indicatorState by mutableStateOf<IndicatorState?>(null)
     var isPlayerPlaying by mutableStateOf(false)
     var wasPlayingBeforeSceneSearch by mutableStateOf(false)
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
-    // 字幕・実況の表示フラグ
+    // 字幕・実況・機能の表示フラグ
     var isCommentEnabled by mutableStateOf(true)
     var isSubtitleEnabled by mutableStateOf(false)
+    var isAutoCmSkipEnabled by mutableStateOf(false)
 
     // 戻るキー長押し判定用
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
 
-    // ★ 追加: モダンUI時のシークバーフォーカス状態
+    // モダンUI時のシークバーフォーカス状態
     var isSeekBarFocused by mutableStateOf(false)
 
     // L字クロップ関連の状態変数

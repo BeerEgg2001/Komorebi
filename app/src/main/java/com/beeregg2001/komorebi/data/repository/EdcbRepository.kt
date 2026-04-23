@@ -21,6 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -32,7 +33,7 @@ import javax.inject.Singleton
 class EdcbRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
-    private val okHttpClient: OkHttpClient // NetworkModuleから注入されたクライアント
+    private val okHttpClient: OkHttpClient
 ) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider {
 
     companion object {
@@ -57,10 +58,9 @@ class EdcbRepository @Inject constructor(
         )
     }
 
-    // ★ 追加: SSLバイパスの恩恵は残しつつ、NetworkModuleの「KonomiTVへのURL書き換え」を無効化したクリーンなクライアント
     private val baseEdcbHttpClient: OkHttpClient by lazy {
         okHttpClient.newBuilder().apply {
-            interceptors().clear() // KonomiTV用の強制URL書き換えInterceptorを削除！
+            interceptors().clear()
         }.build()
     }
 
@@ -105,6 +105,56 @@ class EdcbRepository @Inject constructor(
         return settingsRepository.getEdcbFullUrl()
     }
 
+    private suspend fun fetchCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/epg.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""name="ctok"\s+value="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch ctok", e)
+            null
+        }
+    }
+
+    override suspend fun getStreamQualities(): List<StreamQuality> = withContext(Dispatchers.IO) {
+        try {
+            val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+            if (playMethod == "DIRECT") {
+                return@withContext listOf(
+                    StreamQuality(label = "オリジナル (Direct)", value = "direct", isRawTs = true)
+                )
+            }
+
+            val baseUrl = getHttpBaseUrl()
+            val request = Request.Builder().url("$baseUrl/EMWUI/library.html").build()
+
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext emptyList()
+
+                val regex =
+                    Regex("""name="quality"[^>]*value="(\d+)"[^>]*>.*?<label[^>]*>.*?<i[^>]*>check</i>.*?</label>\s*<label[^>]*>([^<]+)</label>""")
+                val matches = regex.findAll(html)
+
+                val qualities = matches.mapNotNull { matchResult ->
+                    val optionId = matchResult.groupValues[1]
+                    val label = matchResult.groupValues[2]
+                    val isRawTs = label.contains("TS-Live!", ignoreCase = true)
+
+                    StreamQuality(label = label, value = optionId, isRawTs = isRawTs)
+                }.toList()
+
+                return@use qualities
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch stream qualities from EDCB", e)
+            emptyList()
+        }
+    }
+
     private suspend fun fetchResolverUrls(
         baseUrl: String,
         videoId: Int
@@ -113,7 +163,6 @@ class EdcbRepository @Inject constructor(
             val url = "$baseUrl/komorebi/resolver.lua?id=$videoId"
             val request = Request.Builder().url(url).build()
 
-            // ★ 修正: タイムアウトを旧仕様（3秒）に設定してリクエスト
             val client = baseEdcbHttpClient.newBuilder()
                 .connectTimeout(3, TimeUnit.SECONDS)
                 .readTimeout(3, TimeUnit.SECONDS)
@@ -231,7 +280,6 @@ class EdcbRepository @Inject constructor(
                 .url("https://nx-jikkyo.tsukumijima.net/api/v1/channels")
                 .build()
 
-            // ★ 修正: 旧仕様と同様に2秒でタイムアウトさせ、番組表の描画をブロックさせない
             val client = baseEdcbHttpClient.newBuilder()
                 .connectTimeout(2, TimeUnit.SECONDS)
                 .readTimeout(2, TimeUnit.SECONDS)
@@ -614,7 +662,6 @@ class EdcbRepository @Inject constructor(
             try {
                 val request = Request.Builder().url(targetUrl).build()
 
-                // ★ 修正: 旧仕様と同様に5秒でタイムアウトさせ、番組表の描画をブロックさせない
                 val client = baseEdcbHttpClient.newBuilder()
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(5, TimeUnit.SECONDS)
@@ -784,35 +831,108 @@ class EdcbRepository @Inject constructor(
             }
         }
 
+    // ★ 修正: offset -> ofssec に修正
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSeconds: Double
     ): String {
         val baseUrl = getHttpBaseUrl()
         val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+        val optionIdStr = quality.toIntOrNull()?.toString() ?: "2"
+
+        val resolverUrls = fetchResolverUrls(baseUrl, videoId)
+        val videoPath = resolverUrls?.videoUrl
 
         if (playMethod == "DIRECT") {
-            val resolverUrls = fetchResolverUrls(baseUrl, videoId)
-            if (resolverUrls != null) {
-                val videoUri = "$baseUrl${resolverUrls.videoUrl}"
+            if (!videoPath.isNullOrEmpty()) {
+                val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
+                val videoUri = "$baseUrl/$safePath"
                 Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
                 return videoUri
             } else {
-                Log.w(TAG, "Failed to resolve DIRECT url via Lua, falling back to API.")
+                try {
+                    val (ip, port) = getTcpIpAndPort()
+                    val info =
+                        cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
+                            videoId
+                        ).getOrNull()
+
+                    if (info != null && info.recFilePath.isNotBlank()) {
+                        val fileName =
+                            info.recFilePath.substringAfterLast("\\").substringAfterLast("/")
+                        val encodedFileName =
+                            URLEncoder.encode("video/rec/$fileName", "UTF-8").replace("+", "%20")
+                        val ctok = fetchCtok(baseUrl) ?: ""
+
+                        val builder = android.net.Uri.parse(baseUrl).buildUpon()
+                            .appendPath("api")
+                            .appendPath("xcode")
+                            .appendQueryParameter("fname", encodedFileName)
+                            .appendQueryParameter("option", "10")
+                            .appendQueryParameter("ctok", ctok)
+
+                        if (offsetSeconds > 0) {
+                            builder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+                        }
+
+                        val fallbackDirectUri = builder.build().toString()
+
+                        Log.i(
+                            TAG,
+                            "Generated HTTP Stream URL (DIRECT Fallback via Xcode TS-Live, offset=$offsetSeconds): $fallbackDirectUri"
+                        )
+                        return fallbackDirectUri
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to generate DIRECT fallback URI", e)
+                }
             }
         }
 
-        // フォールバック（API経由）
-        val videoUri = android.net.Uri.parse(baseUrl).buildUpon()
-            .appendPath("api")
-            .appendPath("Movie")
-            .appendQueryParameter("recid", videoId.toString())
-            .appendQueryParameter("id", videoId.toString())
-            .build()
+        if (!videoPath.isNullOrEmpty()) {
+            val fnameRaw = videoPath.trimStart('/')
+            val decodedFname = java.net.URLDecoder.decode(fnameRaw, "UTF-8")
+            val ctok = fetchCtok(baseUrl) ?: ""
 
-        Log.i(TAG, "Generated HTTP Stream URL (API): $videoUri")
-        return videoUri.toString()
+            val builder = android.net.Uri.parse(baseUrl).buildUpon()
+                .appendPath("api")
+                .appendPath("xcode")
+                .appendQueryParameter("fname", decodedFname)
+                .appendQueryParameter("option", optionIdStr)
+                .appendQueryParameter("ctok", ctok)
+
+            if (offsetSeconds > 0) {
+                builder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+            }
+
+            val videoUri = builder.build().toString()
+
+            Log.i(
+                TAG,
+                "Generated HTTP Stream URL (API / option=$optionIdStr, offset=$offsetSeconds): $videoUri"
+            )
+            return videoUri
+        }
+
+        val fallbackBuilder = android.net.Uri.parse(baseUrl).buildUpon()
+            .appendPath("api")
+            .appendPath("xcode")
+            .appendQueryParameter("id", videoId.toString())
+            .appendQueryParameter("option", optionIdStr)
+
+        if (offsetSeconds > 0) {
+            fallbackBuilder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+        }
+
+        val fallbackUri = fallbackBuilder.build().toString()
+
+        Log.i(
+            TAG,
+            "Generated HTTP Stream URL (Legacy API fallback, offset=$offsetSeconds): $fallbackUri"
+        )
+        return fallbackUri
     }
 
     private fun parseChapterTextToCmSections(
@@ -837,7 +957,7 @@ class EdcbRepository @Inject constructor(
                 try {
                     val chapterName = line.substringAfter("=")
                     if (pendingTime != null) {
-                        if (pendingTime <= durationSec  + 5.0) {
+                        if (pendingTime <= durationSec + 5.0) {
                             chapters.add(Triple(0, chapterName, pendingTime))
                         } else {
                             Log.w(
@@ -856,7 +976,6 @@ class EdcbRepository @Inject constructor(
         var currentCmStart: Double? = null
         for ((_, name, ctime) in chapters) {
             val lowerName = name.lowercase()
-            // TvtPlayの仕様: 'o' はCM開始、'i' は本編(CM終了)
             if (lowerName.startsWith("o") || lowerName.startsWith("cm")) {
                 if (currentCmStart == null) currentCmStart = ctime
             } else if (lowerName.startsWith("i") || lowerName.isNotBlank()) {
@@ -953,7 +1072,6 @@ class EdcbRepository @Inject constructor(
                     "$baseUrl${resolverUrls.chapterAltUrl}"
                 )
 
-                // ★ 修正: バックグラウンドの大量のサムネ・チャプター取得が詰まらないよう、タイムアウトを短めに設定
                 val client = baseEdcbHttpClient.newBuilder()
                     .connectTimeout(1500, TimeUnit.MILLISECONDS)
                     .readTimeout(1500, TimeUnit.MILLISECONDS)
@@ -1173,7 +1291,6 @@ class EdcbRepository @Inject constructor(
 
                 val request = Request.Builder().url(urlStr).build()
 
-                // ★ 修正: 過去ログの取得は少し時間がかかるため長めに設定
                 val client = baseEdcbHttpClient.newBuilder()
                     .connectTimeout(10, TimeUnit.SECONDS)
                     .readTimeout(30, TimeUnit.SECONDS)

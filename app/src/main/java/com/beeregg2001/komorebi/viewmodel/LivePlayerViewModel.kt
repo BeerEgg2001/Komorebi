@@ -38,6 +38,8 @@ import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
+// ★ 追加: RecordProvider をインポート (StreamQualities の取得に必要)
+import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -78,8 +80,10 @@ data class LiveComment(
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class LivePlayerViewModel @Inject constructor(
-    @ApplicationContext private val context: Context, // ★追加: jikkyo_channels.json 読み込み用
+    @ApplicationContext private val context: Context, // jikkyo_channels.json 読み込み用
     private val liveProvider: LiveProvider,
+    // ★ 追加: 動的画質取得のために recordProvider をインジェクト
+    private val recordProvider: RecordProvider,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
@@ -87,7 +91,7 @@ class LivePlayerViewModel @Inject constructor(
         private const val TAG = "LivePlayerViewModel"
         private const val MAX_AUTO_RETRY = 2
 
-        // ★ 追加: KonomiTV準拠の実況チャンネルマッピング
+        // KonomiTV準拠の実況チャンネルマッピング
         private val JIKKYO_CHANNEL_ID_MAP = mapOf(
             "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
             "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
@@ -135,6 +139,11 @@ class LivePlayerViewModel @Inject constructor(
     private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
     val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
 
+    // ★ 追加: バックエンドから取得した動的画質リストを保持するStateFlow
+    private val _availableQualities =
+        MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
+    val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
+
     private val _currentLogoUrl = MutableStateFlow<String>("")
     val currentLogoUrl: StateFlow<String> = _currentLogoUrl.asStateFlow()
 
@@ -177,7 +186,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private var jikkyoClient: JikkyoClient? = null
     private val processedCommentIds = Collections.synchronizedSet(LinkedHashSet<String>())
-    private var jikkyoChannelsCache: JSONArray? = null // ★追加: jsonキャッシュ用
+    private var jikkyoChannelsCache: JSONArray? = null // jsonキャッシュ用
 
     init {
         viewModelScope.launch {
@@ -185,6 +194,24 @@ class LivePlayerViewModel @Inject constructor(
             _shouldCropLogo.value = backendType == "KONOMITV"
         }
         startSignalPolling()
+    }
+
+    // ★ 追加: バックエンドから利用可能な画質リストを取得する
+    fun fetchAvailableQualities() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val qualities = recordProvider.getStreamQualities()
+                if (qualities.isNotEmpty()) {
+                    _availableQualities.value = qualities
+                    Log.i(TAG, "Loaded dynamic stream qualities: ${qualities.size} options")
+                } else {
+                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load stream qualities", e)
+                _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+            }
+        }
     }
 
     suspend fun getInitialStreamSource(): StreamSource {
@@ -633,7 +660,6 @@ class LivePlayerViewModel @Inject constructor(
             val json = JSONObject(jsonText)
             val chat = json.optJSONObject("chat")
             if (chat == null) {
-                // Log.i(TAG, "[Jikkyo] 'chat' object not found in JSON. Skipping. JSON: $jsonText")
                 return
             }
 
@@ -658,7 +684,6 @@ class LivePlayerViewModel @Inject constructor(
             val commentId = chat.optString("no", "") + "_" + content
             // 重複排除
             if (!processedCommentIds.add(commentId)) {
-                // Log.i(TAG, "[Jikkyo] Duplicate comment skipped: $commentId")
                 return
             }
             // メモリ節約のため一定数でキャッシュクリア

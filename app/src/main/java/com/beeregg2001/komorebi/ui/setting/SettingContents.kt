@@ -222,7 +222,7 @@ fun ConnectionSettingsContent(
     backendType: String,
     edcbIp: String,
     edcbPort: String,
-    edcbHttpPort: String, // ★追加
+    edcbHttpPort: String,
     epgStationIp: String,
     epgStationPort: String,
     kIp: String,
@@ -257,7 +257,6 @@ fun ConnectionSettingsContent(
         SettingsSection("メインシステム設定") {
             val backendLabel = when (backendType) {
                 "EDCB" -> "EDCB (EpgTimerSrv)"
-//                "EPGSTATION" -> "EPGStation"
                 "MIRAKURUN_ONLY" -> "Mirakurun (録画なし)"
                 else -> "KonomiTV"
             }
@@ -278,25 +277,21 @@ fun ConnectionSettingsContent(
 
             val currentIp = when (backendType) {
                 "EDCB" -> edcbIp
-//                "EPGSTATION" -> epgStationIp
                 "MIRAKURUN_ONLY" -> mIp
                 else -> kIp
             }
             val currentPort = when (backendType) {
                 "EDCB" -> edcbPort
-//                "EPGSTATION" -> epgStationPort
                 "MIRAKURUN_ONLY" -> mPort
                 else -> kPort
             }
             val ipTitle = when (backendType) {
                 "EDCB" -> "EDCB (IPアドレス)"
-//                "EPGSTATION" -> "EPGStation (IPアドレス)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (IPアドレス)"
                 else -> "KonomiTV (IPアドレス)"
             }
             val portTitle = when (backendType) {
                 "EDCB" -> "EDCB (TCPポート)"
-//                "EPGSTATION" -> "EPGStation (ポート)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (ポート)"
                 else -> "KonomiTV (ポート)"
             }
@@ -334,7 +329,8 @@ fun ConnectionSettingsContent(
                         .focusProperties {
                             left = sidebarR
                             up = backendPortR
-                            down = if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                            down =
+                                if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                         },
                     onClick = { onClick(edcbHttpPortR); onEdit(portTitle, currentPort) }
                 )
@@ -349,7 +345,7 @@ fun ConnectionSettingsContent(
             SettingsSection("EDCB 録画再生設定") {
                 SettingItem(
                     title = "録画ファイルの再生方式",
-                    value = if (edcbPlayMethod == "DIRECT") "直接アクセス (高速シーク可)" else "API経由 (api/Movie)",
+                    value = if (edcbPlayMethod == "DIRECT") "直接アクセス (高速シーク可)" else "API経由 (api/xcode)",
                     icon = Icons.Default.PlayCircleOutline,
                     modifier = Modifier
                         .focusRequester(edcbPlayMethodR)
@@ -458,14 +454,17 @@ fun PlaybackSettingsContent(
     videoSub: String,
     layerOrder: String,
     audioMode: String,
-    uiMode: String, // ★ 追加: プレイヤーUIモード
+    uiMode: String,
+    autoCmSkip: String, // ★ 追加
+    availableQualities: List<StreamQuality>,
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
     audioR: FocusRequester,
     layerR: FocusRequester,
-    uiModeR: FocusRequester, // ★ 追加: UIモード設定用のFocusRequester
+    uiModeR: FocusRequester,
+    autoCmSkipR: FocusRequester, // ★ 追加
     sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
@@ -473,7 +472,8 @@ fun PlaybackSettingsContent(
     onVideoSub: () -> Unit,
     onAudioMode: () -> Unit,
     onLayer: () -> Unit,
-    onUiMode: () -> Unit, // ★ 追加: 変更時のコールバック
+    onUiMode: () -> Unit,
+    onAutoCmSkip: () -> Unit, // ★ 追加
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -486,7 +486,8 @@ fun PlaybackSettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_QUALITY) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_LIVE_QUALITY,
-                StreamQuality.fromValue(liveQ).label,
+                availableQualities.find { it.value == liveQ }?.label
+                    ?: availableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(liveR)
@@ -498,7 +499,8 @@ fun PlaybackSettingsContent(
                 onClick = { onClick(liveR); onL() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_VIDEO_QUALITY,
-                StreamQuality.fromValue(videoQ).label,
+                availableQualities.find { it.value == videoQ }?.label
+                    ?: availableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.VideoFile,
                 modifier = Modifier
                     .focusRequester(videoR)
@@ -557,25 +559,39 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = audioR
-                        down = uiModeR // ★ 変更: 下のフォーカスをuiModeRへ
+                        down = uiModeR
                     },
                 onClick = { onClick(layerR); onLayer() })
         }
 
-        // ★ 追加: プレイヤー操作・UI設定セクション
         SettingsSection("プレイヤー操作・UI設定") {
             SettingItem(
                 title = "プレイヤーUIモード",
                 value = if (uiMode == "CLASSIC") "クラシック (D-Pad完結)" else "モダン (オンスクリーン操作)",
-                icon = Icons.Default.SettingsRemote, // アイコンはリモコンのイメージ
+                icon = Icons.Default.SettingsRemote,
                 modifier = Modifier
                     .focusRequester(uiModeR)
                     .focusProperties {
                         left = sidebarR
                         up = layerR
-                        down = FocusRequester.Cancel
+                        down = autoCmSkipR // ★ 修正: 下へのフォーカス移動先を更新
                     },
                 onClick = { onClick(uiModeR); onUiMode() }
+            )
+
+            // ★ 追加: 自動CMスキップ設定トグル
+            SettingItem(
+                title = "自動CMスキップ",
+                value = if (autoCmSkip == "ON") "有効" else "無効",
+                icon = Icons.Default.FastForward,
+                modifier = Modifier
+                    .focusRequester(autoCmSkipR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = uiModeR
+                        down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(autoCmSkipR); onAutoCmSkip() }
             )
         }
     }

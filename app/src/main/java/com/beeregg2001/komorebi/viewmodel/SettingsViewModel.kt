@@ -9,6 +9,8 @@ import coil.imageLoader
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -31,6 +33,9 @@ import io.ktor.server.request.receiveParameters
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 @Keep
 data class PostRecordingBatch(
@@ -43,10 +48,15 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
+    private val recordProvider: RecordProvider,
     private val db: AppDatabase
 ) : ViewModel() {
 
     private val gson = Gson()
+
+    private val _availableQualities =
+        MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
+    val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
 
     val totalRecordCount: StateFlow<Int> = db.recordedProgramDao().getTotalCountFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -110,9 +120,11 @@ class SettingsViewModel @Inject constructor(
     val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
 
-    // ★ 追加: プレイヤーUIモードを公開
     val playerUiMode: StateFlow<String> = settingsRepository.playerUiMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MODERN")
+
+    val autoCmSkip: StateFlow<String> = settingsRepository.autoCmSkip
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
 
     val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
@@ -130,6 +142,35 @@ class SettingsViewModel @Inject constructor(
     val timeFormat: StateFlow<String> = settingsRepository.timeFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
 
+    init {
+        fetchAvailableQualities()
+    }
+
+    private fun fetchAvailableQualities() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val backend = settingsRepository.backendType.first()
+                if (backend == "EDCB") {
+                    val qualities = recordProvider.getStreamQualities()
+                    if (qualities.isNotEmpty()) {
+                        _availableQualities.value = qualities
+                        Log.i(
+                            "SettingsViewModel",
+                            "Loaded dynamic stream qualities: ${qualities.size} options"
+                        )
+                    } else {
+                        _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                    }
+                } else {
+                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                }
+            } catch (e: Exception) {
+                Log.e("SettingsViewModel", "Failed to load stream qualities", e)
+                _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+            }
+        }
+    }
+
     fun updateBackendType(newType: String) = viewModelScope.launch {
         val oldType = backendType.value
 
@@ -137,17 +178,17 @@ class SettingsViewModel @Inject constructor(
 
         settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, newType)
 
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             try {
                 db.clearAllTables()
                 context.imageLoader.memoryCache?.clear()
                 context.imageLoader.diskCache?.clear()
-                android.util.Log.i(
+                Log.i(
                     "SettingsViewModel",
                     "Backend changed to $newType. Cleared AppDatabase and Image Caches."
                 )
             } catch (e: Exception) {
-                android.util.Log.e(
+                Log.e(
                     "SettingsViewModel",
                     "Failed to clear DB/Caches on backend change",
                     e
@@ -156,18 +197,23 @@ class SettingsViewModel @Inject constructor(
         }
 
         syncEngine.launchSyncAllRecords(forceFullSync = true)
+        fetchAvailableQualities()
     }
 
     fun updateEdcbIp(ip: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_IP, ip)
+        fetchAvailableQualities()
     }
 
     fun updateEdcbPort(port: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
     }
 
+    // ★ 修正: 再生方式（DIRECT/API）が変更された際に画質リストを再取得してUIを更新する
     fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
+        // DataStoreへの保存がトリガーされた直後にリストを再フェッチし、_availableQualities を更新
+        fetchAvailableQualities()
     }
 
     fun updateEpgStationIp(ip: String) = viewModelScope.launch {
@@ -365,9 +411,10 @@ class SettingsViewModel @Inject constructor(
 
     fun toggleHideSubChannels() {
         viewModelScope.launch {
+            val current = settingsRepository.hideSubChannels.first()
             settingsRepository.saveBoolean(
                 SettingsRepository.HIDE_SUB_CHANNELS,
-                !hideSubChannels.value
+                !current
             )
         }
     }

@@ -37,11 +37,11 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
-// ★ JikkyoClient のインポートを削除
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -119,6 +119,10 @@ fun LivePlayerScreen(
     val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
     val allowMirakurunDual by settingsViewModel.labAllowMirakurunDual.collectAsState()
 
+    // ★ 追加: モダンUIモードの判定用フラグ
+    val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
+    val isModern = playerUiMode == "MODERN"
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -145,7 +149,6 @@ fun LivePlayerScreen(
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
 
-    // ★ 不要なコメント履歴管理をViewModelへ移譲したためSetを削除
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
 
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -166,6 +169,10 @@ fun LivePlayerScreen(
     val dualStatus by livePlayerViewModel.dualSseStatus.collectAsState()
     val dualDetail by livePlayerViewModel.dualSseDetail.collectAsState()
 
+    // ★ 追加: 動的画質リストをViewModelから取得 (LivePlayerViewModel側に実装が必要な場合は別途追加)
+    // ここでは安全にフォールバックするために、空の場合はデフォルトリストを使用します
+    val availableQualities by livePlayerViewModel.availableQualities.collectAsState(initial = StreamQuality.DEFAULT_QUALITIES)
+
     LaunchedEffect(mainError, mainStatus, mainDetail, mainSignal) {
         ps.playerError = mainError
         ps.sseStatus = mainStatus
@@ -185,6 +192,8 @@ fun LivePlayerScreen(
             ps.currentStreamSource = livePlayerViewModel.getInitialStreamSource()
             isSourceInitialized = true
         }
+        // ★ 追加: ライブ視聴でも動的リストを取得する
+        livePlayerViewModel.fetchAvailableQualities()
     }
 
     LaunchedEffect(isPiPMode) {
@@ -282,7 +291,7 @@ fun LivePlayerScreen(
             uiContext = uiContext,
             channel = currentChannelItem,
             source = ps.currentStreamSource,
-            quality = ps.currentQuality
+            quality = ps.currentQuality// ★ 修正: valueを渡す
         )
         delay(300); mainFocusRequester.safeRequestFocus(TAG)
     }
@@ -304,7 +313,7 @@ fun LivePlayerScreen(
                 uiContext = uiContext,
                 channel = rightChannel,
                 source = ps.currentStreamSource,
-                quality = ps.currentQuality
+                quality = ps.currentQuality // ★ 修正: valueを渡す
             )
         } else {
             livePlayerViewModel.stopDualPlayer()
@@ -353,14 +362,12 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★追加: チャンネル切替等で画面の古いコメントを全クリアする指令を受信
     LaunchedEffect(Unit) {
         livePlayerViewModel.clearCommentsEvent.collect {
             danmakuViewRef.value?.removeAllDanmakus(true)
         }
     }
 
-    // ★追加: ViewModelから流れてくるコメントを受信して描画するだけ
     LaunchedEffect(Unit) {
         livePlayerViewModel.liveComments.collect { comment ->
             if (!isCommentEnabled || !isHeavyUiReady || ps.isDualDisplayMode) return@collect
@@ -721,139 +728,150 @@ fun LivePlayerScreen(
             )
         }
 
-        androidx.compose.animation.AnimatedVisibility(
+        // ★ 修正: LiveTopSubMenuUI と ModernLiveSettingsOverlay を呼び分ける
+        AnimatedVisibility(
             visible = !isPiPMode && isSubMenuOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
         ) {
-            TopSubMenuUI(
-                currentAudioMode = ps.currentAudioMode,
-                currentSource = ps.currentStreamSource,
-                currentQuality = ps.currentQuality,
-                isMirakurunAvailable = availableSources.size > 1,
-                isSubtitleEnabled = isSubtitleEnabled,
-                isSubtitleSupported = true,
-                isCommentEnabled = isCommentEnabled,
-                isRecording = isRecording,
-                isSignalInfoVisible = ps.isSignalInfoVisible,
-                isDualDisplayMode = ps.isDualDisplayMode,
-                isLCropEnabled = ps.lCropEnabled,
-                onLCropToggle = {
-                    ps.lCropEnabled = !ps.lCropEnabled; if (ps.lCropEnabled) {
-                    ps.lCropMode = LCropMode.MENU; onSubMenuToggle(false)
-                } else {
-                    ps.lCropMode = LCropMode.HIDDEN; ps.lCropZoom = 100f; ps.lCropX =
-                        0f; ps.lCropY = 0f; ps.lCropOrigin = ZoomOrigin.TopRight
-                }
-                },
-                onDualDisplayToggle = {
-                    if (!ps.isDualDisplayMode && (ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
-                        ps.previousStreamSource = ps.currentStreamSource
-                        if (availableSources.contains(StreamSource.KONOMITV)) {
-                            ps.currentStreamSource = StreamSource.KONOMITV
-                            onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
-                        }
-                        ps.isDualDisplayMode =
-                            true; onMiniListToggle(true); ps.activeDualPlayerIndex = 1
-                    } else {
-                        if (!ps.isDualDisplayMode) ps.previousStreamSource =
-                            ps.currentStreamSource; ps.isDualDisplayMode =
-                            !ps.isDualDisplayMode; if (ps.isDualDisplayMode) {
-                            onMiniListToggle(true); ps.activeDualPlayerIndex = 1
-                        } else {
-                            ps.previousStreamSource?.let {
-                                if (availableSources.contains(it)) {
-                                    ps.currentStreamSource = it
-                                }
-                                ps.previousStreamSource = null
+            if (isModern) {
+                ModernLiveSettingsOverlay(
+                    currentAudioMode = ps.currentAudioMode,
+                    isSubtitleEnabled = isSubtitleEnabled,
+                    currentQuality = ps.currentQuality,
+                    isCommentEnabled = isCommentEnabled,
+                    isLCropEnabled = ps.lCropEnabled,
+                    isQualityEnabled = ps.currentStreamSource != StreamSource.EDCB, // EDCB以外は画質変更可能と仮定
+                    availableQualities = availableQualities,
+                    onAudioToggle = {
+                        ps.currentAudioMode =
+                            if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        mainPlayer?.let { player ->
+                            val tracks =
+                                player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                            if (tracks.size >= 2) {
+                                player.trackSelectionParameters =
+                                    player.trackSelectionParameters.buildUpon()
+                                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                        .addOverride(
+                                            TrackSelectionOverride(
+                                                tracks[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                                0
+                                            )
+                                        )
+                                        .build()
                             }
                         }
-                    }
-                },
-                onSwapScreens = {
-                    if (ps.isDualDisplayMode && ps.dualRightChannel != null) {
-                        val oldLeft = currentChannelItem;
-                        val oldRight =
-                            ps.dualRightChannel!!; onChannelSelect(oldRight); ps.dualRightChannel =
-                            oldLeft; onShowToast(AppStrings.TOAST_DUAL_SCREEN_SWAPPED)
-                    }
-                },
-                onSignalInfoToggle = { ps.isSignalInfoVisible = !ps.isSignalInfoVisible },
-                onRecordToggle = {
-                    if (isRecording) activeReserve?.let {
-                        reserveViewModel.deleteReservation(
-                            it.id
-                        ) { onShowToast(AppStrings.TOAST_RECORDING_STOPPED) }
-                    } else currentChannelItem.programPresent?.id?.let {
-                        reserveViewModel.addReserve(it) {
-                            onShowToast(
-                                AppStrings.TOAST_RECORDING_STARTING
-                            )
-                        }
-                    }; onSubMenuToggle(false)
-                },
-                focusRequester = subMenuFocusRequester,
-                onAudioToggle = {
-                    ps.currentAudioMode =
-                        if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                    mainPlayer?.let { player ->
-                        val tracks =
-                            player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                        if (tracks.size >= 2) {
-                            player.trackSelectionParameters =
-                                player.trackSelectionParameters.buildUpon()
-                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                    .addOverride(
-                                        TrackSelectionOverride(
-                                            tracks[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                            0
-                                        )
-                                    )
-                                    .build()
-                        }
-                    }
-                    onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
-                },
-                onSourceToggle = {
-                    if (availableSources.size > 1) {
-                        val currentIndex = availableSources.indexOf(ps.currentStreamSource)
-                        val safeIndex = if (currentIndex != -1) currentIndex else 0
-                        val nextIndex = (safeIndex + 1) % availableSources.size
-                        ps.currentStreamSource = availableSources[nextIndex]
-                        onShowToast("ソースを ${ps.currentStreamSource.name} に変更しました")
-                    } else {
-                        onShowToast("他に有効なソースがありません")
-                    }
-                    onSubMenuToggle(false)
-                },
-                onSubtitleToggle = {
-                    subtitleEnabledState.value = !subtitleEnabledState.value; onShowToast(
-                    String.format(
-                        AppStrings.TOAST_SUBTITLE_CHANGED,
-                        if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
-                    )
-                )
-                },
-                onCommentToggle = {
-                    isCommentEnabled = !isCommentEnabled; onShowToast(
-                    String.format(
-                        AppStrings.TOAST_COMMENT_CHANGED,
-                        if (isCommentEnabled) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
-                    )
-                )
-                },
-                onQualitySelect = {
-                    if (ps.currentQuality != it) {
-                        ps.currentQuality = it; ps.retryKey++; onShowToast(
+                        onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                    },
+                    onSubtitleToggle = {
+                        subtitleEnabledState.value = !subtitleEnabledState.value
+                        onShowToast(
                             String.format(
-                                AppStrings.TOAST_QUALITY_CHANGED,
-                                it.label
+                                AppStrings.TOAST_SUBTITLE_CHANGED,
+                                if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
                             )
                         )
-                    }; onSubMenuToggle(false)
-                },
-                onCloseMenu = { onSubMenuToggle(false) }
-            )
+                    },
+                    onQualitySelect = {
+                        if (ps.currentQuality != it) {
+                            ps.currentQuality = it
+                            ps.retryKey++
+                            onShowToast(String.format(AppStrings.TOAST_QUALITY_CHANGED, it.label))
+                        }
+                        onSubMenuToggle(false)
+                    },
+                    onCommentToggle = {
+                        isCommentEnabled = !isCommentEnabled
+                        onShowToast(
+                            String.format(
+                                AppStrings.TOAST_COMMENT_CHANGED,
+                                if (isCommentEnabled) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                            )
+                        )
+                    },
+                    onLCropToggle = {
+                        ps.lCropEnabled = !ps.lCropEnabled
+                        if (ps.lCropEnabled) {
+                            ps.lCropMode = LCropMode.MENU
+                            onSubMenuToggle(false)
+                        } else {
+                            ps.lCropMode = LCropMode.HIDDEN
+                            ps.lCropZoom = 100f; ps.lCropX = 0f; ps.lCropY = 0f; ps.lCropOrigin =
+                                ZoomOrigin.TopRight
+                        }
+                    },
+                    onClose = { onSubMenuToggle(false) }
+                )
+            } else {
+                LiveTopSubMenuUI(
+                    currentAudioMode = ps.currentAudioMode,
+                    isSubtitleEnabled = isSubtitleEnabled,
+                    currentQuality = ps.currentQuality,
+                    isCommentEnabled = isCommentEnabled,
+                    isLCropEnabled = ps.lCropEnabled,
+                    availableQualities = availableQualities,
+                    focusRequester = subMenuFocusRequester,
+                    onAudioToggle = {
+                        ps.currentAudioMode =
+                            if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        mainPlayer?.let { player ->
+                            val tracks =
+                                player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                            if (tracks.size >= 2) {
+                                player.trackSelectionParameters =
+                                    player.trackSelectionParameters.buildUpon()
+                                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                        .addOverride(
+                                            TrackSelectionOverride(
+                                                tracks[if (ps.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                                0
+                                            )
+                                        )
+                                        .build()
+                            }
+                        }
+                        onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                    },
+                    onSubtitleToggle = {
+                        subtitleEnabledState.value = !subtitleEnabledState.value
+                        onShowToast(
+                            String.format(
+                                AppStrings.TOAST_SUBTITLE_CHANGED,
+                                if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                            )
+                        )
+                    },
+                    onQualitySelect = {
+                        if (ps.currentQuality != it) {
+                            ps.currentQuality = it
+                            ps.retryKey++
+                            onShowToast(String.format(AppStrings.TOAST_QUALITY_CHANGED, it.label))
+                        }
+                        onSubMenuToggle(false)
+                    },
+                    onCommentToggle = {
+                        isCommentEnabled = !isCommentEnabled
+                        onShowToast(
+                            String.format(
+                                AppStrings.TOAST_COMMENT_CHANGED,
+                                if (isCommentEnabled) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                            )
+                        )
+                    },
+                    onLCropToggle = {
+                        ps.lCropEnabled = !ps.lCropEnabled
+                        if (ps.lCropEnabled) {
+                            ps.lCropMode = LCropMode.MENU
+                            onSubMenuToggle(false)
+                        } else {
+                            ps.lCropMode = LCropMode.HIDDEN
+                            ps.lCropZoom = 100f; ps.lCropX = 0f; ps.lCropY = 0f; ps.lCropOrigin =
+                                ZoomOrigin.TopRight
+                        }
+                    }
+                )
+            }
         }
 
         if (!isPiPMode && ps.playerError != null) {
