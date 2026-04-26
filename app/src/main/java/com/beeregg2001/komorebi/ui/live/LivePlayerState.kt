@@ -35,8 +35,19 @@ class LivePlayerState(
     initialQuality: String
 ) {
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
-    var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
+
+    // ★ 修正: 勝手なフォーマット変換を排除し、初期値のまま確実に保持する
+    var currentQuality by mutableStateOf(
+        StreamQuality(
+            label = "読み込み中...",
+            value = initialQuality,
+            isRawTs = initialQuality == "direct"
+        )
+    )
     var currentStreamSource by mutableStateOf(StreamSource.KONOMITV)
+
+    // EDCBのダイレクトストリーミング(TCP)か、トランスコード(HLS)かを判定するフラグ
+    var isEdcbDirect by mutableStateOf(false)
 
     // ViewModelから同期されるステータス群
     var playerError by mutableStateOf<String?>(null)
@@ -125,7 +136,6 @@ class LivePlayerState(
         onPiPRequested: () -> Unit,
         onBackPressed: () -> Unit
     ): Boolean {
-        // L字クロップ ダイレクト調整モード時のキーイベント
         if (lCropMode == LCropMode.DIRECT_ADJUST) {
             val keyCode = keyEvent.nativeKeyEvent.keyCode
             val isTargetKey = keyCode in listOf(
@@ -140,22 +150,10 @@ class LivePlayerState(
                 if (!isActionDown) return true
 
                 when (keyCode) {
-                    android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                        lCropY -= 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        lCropY += 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        lCropX -= 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        lCropX += 2f
-                    }
-
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> lCropY -= 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> lCropY += 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> lCropX -= 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> lCropX += 2f
                     android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
                         lCropZoom = when {
                             lCropZoom < 125f -> 125f
@@ -166,9 +164,8 @@ class LivePlayerState(
                         }
                     }
 
-                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> {
-                        lCropMode = LCropMode.MENU
-                    }
+                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> lCropMode =
+                        LCropMode.MENU
                 }
                 return true
             }
@@ -335,7 +332,8 @@ fun rememberLivePlayerState(
     context: Context,
     initialQuality: String
 ): LivePlayerState {
-    return remember(initialQuality) {
+    // ★ 修正: initialQuality をキーから外すことで、画質変更時に画面が初期化されるのを防ぐ
+    return remember {
         LivePlayerState(context, initialQuality)
     }
 }

@@ -49,7 +49,7 @@ fun VideoTopSubMenuUI(
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
-    isAutoCmSkipEnabled: Boolean, // ★ 追加
+    isAutoCmSkipEnabled: Boolean,
     availableQualities: List<StreamQuality>,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
@@ -58,7 +58,7 @@ fun VideoTopSubMenuUI(
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
-    onAutoCmSkipToggle: () -> Unit // ★ 追加
+    onAutoCmSkipToggle: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
@@ -155,7 +155,6 @@ fun VideoTopSubMenuUI(
                     contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary
                 )
 
-                // ★ 追加: 自動CMスキップ設定タイル
                 VideoMenuTileItem(
                     title = "自動CMスキップ",
                     icon = Icons.Default.FastForward,
@@ -319,7 +318,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
-    isAutoCmSkipEnabled: Boolean, // ★ 追加
+    isAutoCmSkipEnabled: Boolean,
     availableQualities: List<StreamQuality>,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
@@ -327,7 +326,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
-    onAutoCmSkipToggle: () -> Unit, // ★ 追加
+    onAutoCmSkipToggle: () -> Unit,
     onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
@@ -403,7 +402,11 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
 
             AnimatedContent(targetState = selectedCategory, label = "SettingsMenu") { category ->
                 if (category == null) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // ★ 修正: メニュー項目が入りきらない場合に備えてスクロールを可能にする
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         ModernSettingRow(
                             title = "音声切替",
                             value = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
@@ -429,7 +432,6 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             icon = Icons.Default.HighQuality,
                             onClick = { selectedCategory = SubMenuCategory.QUALITY }
                         )
-                        // ★ 追加: 自動CMスキップ
                         ModernSettingRow(
                             title = "自動CMスキップ",
                             value = if (isAutoCmSkipEnabled) "有効" else "無効",

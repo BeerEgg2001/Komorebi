@@ -332,7 +332,8 @@ fun ConnectionSettingsContent(
                             down =
                                 if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                         },
-                    onClick = { onClick(edcbHttpPortR); onEdit(portTitle, currentPort) }
+                    // ★ 修正: TCPポートの編集画面が開いてしまうバグを修正
+                    onClick = { onClick(edcbHttpPortR); onEdit(edcbHttpPortTitle, edcbHttpPort) }
                 )
             }
 
@@ -365,6 +366,7 @@ fun ConnectionSettingsContent(
                 val srcLabel = when {
                     prefSrc == "MIRAKURUN" -> "Mirakurun を優先"
                     prefSrc == "EDCB" && backendType != "EDCB" -> "EDCB (TCP) を優先"
+                    prefSrc == "EDCB" && backendType == "EDCB" -> "EDCB (ダイレクトストリーミング)"
                     else -> "メインシステムに従う"
                 }
 
@@ -455,7 +457,7 @@ fun PlaybackSettingsContent(
     layerOrder: String,
     audioMode: String,
     uiMode: String,
-    autoCmSkip: String, // ★ 追加
+    autoCmSkip: String,
     availableQualities: List<StreamQuality>,
     liveR: FocusRequester,
     videoR: FocusRequester,
@@ -464,7 +466,7 @@ fun PlaybackSettingsContent(
     audioR: FocusRequester,
     layerR: FocusRequester,
     uiModeR: FocusRequester,
-    autoCmSkipR: FocusRequester, // ★ 追加
+    autoCmSkipR: FocusRequester,
     sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
@@ -473,7 +475,7 @@ fun PlaybackSettingsContent(
     onAudioMode: () -> Unit,
     onLayer: () -> Unit,
     onUiMode: () -> Unit,
-    onAutoCmSkip: () -> Unit, // ★ 追加
+    onAutoCmSkip: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -574,12 +576,11 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = layerR
-                        down = autoCmSkipR // ★ 修正: 下へのフォーカス移動先を更新
+                        down = autoCmSkipR
                     },
                 onClick = { onClick(uiModeR); onUiMode() }
             )
 
-            // ★ 追加: 自動CMスキップ設定トグル
             SettingItem(
                 title = "自動CMスキップ",
                 value = if (autoCmSkip == "ON") "有効" else "無効",

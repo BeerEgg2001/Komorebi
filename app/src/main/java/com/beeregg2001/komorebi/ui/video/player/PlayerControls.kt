@@ -163,7 +163,7 @@ fun PlayerControls(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 AnimatedVisibility(
-                    visible = isSeekingPreviewVisible && !tiledThumbnailUrl.isNullOrBlank() && isModernUi,
+                    visible = isSeekingPreviewVisible && isModernUi, // URLの有無に関わらず表示試行
                     enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
                     exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
                 ) {
@@ -198,34 +198,54 @@ fun PlayerControls(
                             }
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
-                                .size(144.dp, 81.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color.DarkGray.copy(alpha = 0.8f))
-                                .border(2.dp, colors.accent, RoundedCornerShape(6.dp))
-                        ) {
-                            if (bitmap != null) {
+                        // ★ 修正: サムネイル画像がない場合は、時間だけを表示する小さな枠にする
+                        if (bitmap != null) {
+                            Box(
+                                modifier = Modifier
+                                    .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
+                                    .size(144.dp, 81.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .border(2.dp, colors.accent, RoundedCornerShape(6.dp))
+                            ) {
                                 Image(
                                     bitmap = bitmap!!.asImageBitmap(),
                                     contentDescription = "Seek Preview",
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                Text(
+                                    text = formatMillisToTime(displayPositionMs),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .background(
+                                            Color.Black.copy(alpha = 0.7f),
+                                            RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
                             }
+                        } else {
                             Text(
                                 text = formatMillisToTime(displayPositionMs),
                                 color = Color.White,
-                                fontSize = 11.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier
-                                    .align(Alignment.BottomCenter)
+                                    .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
                                     .background(
-                                        Color.Black.copy(alpha = 0.7f),
-                                        RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
+                                        Color.Black.copy(alpha = 0.8f),
+                                        RoundedCornerShape(4.dp)
                                     )
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    .border(
+                                        1.dp,
+                                        colors.accent.copy(alpha = 0.5f),
+                                        RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
                     }
@@ -252,7 +272,6 @@ fun PlayerControls(
                                 isSeekBarFocused = it.isFocused
                                 onSeekBarFocusChanged(it.isFocused)
                             }
-                            // ★ 修正: シークバー上で左右キーのフォーカス移動を完全にブロックする
                             .focusProperties {
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
@@ -412,13 +431,12 @@ fun OsdIconButton(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.15f),
+        // ★ 修正: isPrimary (再生ボタン等) のフォーカス時・非フォーカス時の色を改善
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isPrimary) Color.White.copy(alpha = 0.2f) else Color.White.copy(
-                alpha = 0.1f
-            ),
-            focusedContainerColor = if (isPrimary) colors.accent else Color.White,
+            containerColor = if (isPrimary) colors.accent else Color.White.copy(alpha = 0.1f),
+            focusedContainerColor = Color.White,
             contentColor = Color.White,
-            focusedContentColor = if (isPrimary) (if (colors.isDark) Color.White else Color.Black) else Color.Black
+            focusedContentColor = Color.Black
         ),
         modifier = modifier.size(buttonSize)
     ) {

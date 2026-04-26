@@ -3,6 +3,7 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -15,6 +16,7 @@ import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -22,6 +24,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.ExtractorsFactory
@@ -38,7 +41,6 @@ import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
-// ★ 追加: RecordProvider をインポート (StreamQualities の取得に必要)
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -57,12 +59,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -80,9 +85,8 @@ data class LiveComment(
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
 class LivePlayerViewModel @Inject constructor(
-    @ApplicationContext private val context: Context, // jikkyo_channels.json 読み込み用
+    @ApplicationContext private val context: Context,
     private val liveProvider: LiveProvider,
-    // ★ 追加: 動的画質取得のために recordProvider をインジェクト
     private val recordProvider: RecordProvider,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
@@ -91,7 +95,6 @@ class LivePlayerViewModel @Inject constructor(
         private const val TAG = "LivePlayerViewModel"
         private const val MAX_AUTO_RETRY = 2
 
-        // KonomiTV準拠の実況チャンネルマッピング
         private val JIKKYO_CHANNEL_ID_MAP = mapOf(
             "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
             "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
@@ -105,6 +108,8 @@ class LivePlayerViewModel @Inject constructor(
             "jk265" to null, "jk333" to null
         )
     }
+
+    private val gson = Gson()
 
     private val _mainPlayer = MutableStateFlow<ExoPlayer?>(null)
     val mainPlayer: StateFlow<ExoPlayer?> = _mainPlayer.asStateFlow()
@@ -139,10 +144,12 @@ class LivePlayerViewModel @Inject constructor(
     private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
     val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
 
-    // ★ 追加: バックエンドから取得した動的画質リストを保持するStateFlow
     private val _availableQualities =
         MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
     val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
+
+    private val _isQualitiesLoaded = MutableStateFlow(false)
+    val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
 
     private val _currentLogoUrl = MutableStateFlow<String>("")
     val currentLogoUrl: StateFlow<String> = _currentLogoUrl.asStateFlow()
@@ -155,6 +162,9 @@ class LivePlayerViewModel @Inject constructor(
 
     private val _clearCommentsEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val clearCommentsEvent: SharedFlow<Unit> = _clearCommentsEvent.asSharedFlow()
+
+    private val _mainBackendType = MutableStateFlow("KONOMITV")
+    val mainBackendType: StateFlow<String> = _mainBackendType.asStateFlow()
 
     private var isSubtitleEnabled = false
     private var signalPollJob: Job? = null
@@ -174,48 +184,121 @@ class LivePlayerViewModel @Inject constructor(
     private var dualEventSource: EventSource? = null
 
     private var mainCurrentSource = StreamSource.KONOMITV
-    private var dualCurrentSource = StreamSource.KONOMITV
-
+    private var mainIsEdcbDirect = false
     private var mainCurrentChannel: Channel? = null
     private var mainCurrentQuality: StreamQuality? = null
     private var mainAutoRetryCount = 0
 
+    private var dualCurrentSource = StreamSource.KONOMITV
+    private var dualIsEdcbDirect = false
     private var dualCurrentChannel: Channel? = null
     private var dualCurrentQuality: StreamQuality? = null
     private var dualAutoRetryCount = 0
 
     private var jikkyoClient: JikkyoClient? = null
     private val processedCommentIds = Collections.synchronizedSet(LinkedHashSet<String>())
-    private var jikkyoChannelsCache: JSONArray? = null // jsonキャッシュ用
+    private var jikkyoChannelsCache: JSONArray? = null
 
     init {
         viewModelScope.launch {
-            val backendType = settingsRepository.backendType.first()
-            _shouldCropLogo.value = backendType == "KONOMITV"
+            settingsRepository.backendType.collect { type ->
+                _mainBackendType.value = type
+                _shouldCropLogo.value = type == "KONOMITV"
+            }
         }
         startSignalPolling()
     }
 
-    // ★ 追加: バックエンドから利用可能な画質リストを取得する
-    fun fetchAvailableQualities() {
+    suspend fun getInitialEdcbDirect(): Boolean {
+        val backendStr = settingsRepository.backendType.first()
+        val prefStr = settingsRepository.preferredStreamSource.first()
+        if (backendStr == "EDCB") {
+            if (prefStr == "EDCB") return true
+            if (prefStr == "KONOMITV") return false
+        } else if (backendStr == "KONOMITV" || backendStr == "MIRAKURUN_ONLY") {
+            if (prefStr == "EDCB") return true
+        }
+        return false
+    }
+
+    // ★ 修正: EPG取得とのデッドロックを避けるためAPIは一切叩かず、DataStoreのJSONキャッシュから即座に復元する
+    fun fetchAvailableQualities(source: StreamSource, isEdcbDirect: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
+            _isQualitiesLoaded.value = false
             try {
-                val qualities = recordProvider.getStreamQualities()
-                if (qualities.isNotEmpty()) {
-                    _availableQualities.value = qualities
-                    Log.i(TAG, "Loaded dynamic stream qualities: ${qualities.size} options")
-                } else {
+                if (source == StreamSource.EDCB) {
+                    if (isEdcbDirect) {
+                        _availableQualities.value = listOf(
+                            StreamQuality(
+                                label = "オリジナル (Direct)",
+                                value = "direct",
+                                isRawTs = true
+                            )
+                        )
+                    } else {
+                        val json = settingsRepository.availableStreamQualities.first()
+                        if (json.isNotBlank()) {
+                            try {
+                                val type = object : TypeToken<List<StreamQuality>>() {}.type
+                                val list = gson.fromJson<List<StreamQuality>>(json, type)
+                                _availableQualities.value = list ?: StreamQuality.DEFAULT_QUALITIES
+                            } catch (e: Exception) {
+                                // 万が一JSONパースに失敗した場合はダミーリストを返す
+                                val currentLive = settingsRepository.liveQuality.first()
+                                _availableQualities.value = listOf(
+                                    StreamQuality(
+                                        label = "設定値 ($currentLive)",
+                                        value = currentLive,
+                                        isRawTs = false
+                                    )
+                                )
+                            }
+                        } else {
+                            // キャッシュがない場合でも絶対にAPIを叩かず、とりあえず設定値をダミーとして返してUI破壊を防ぐ
+                            val currentLive = settingsRepository.liveQuality.first()
+                            _availableQualities.value = listOf(
+                                StreamQuality(
+                                    label = "設定値 ($currentLive)",
+                                    value = currentLive,
+                                    isRawTs = false
+                                )
+                            )
+                        }
+                    }
+                } else if (source == StreamSource.KONOMITV) {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                } else {
+                    _availableQualities.value = listOf(
+                        StreamQuality(
+                            label = "オリジナル (Direct)",
+                            value = "direct",
+                            isRawTs = true
+                        )
+                    )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load stream qualities", e)
-                _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                Log.e(TAG, "Failed to load stream qualities from cache", e)
+                val currentLive = settingsRepository.liveQuality.first()
+                _availableQualities.value = listOf(
+                    StreamQuality(
+                        label = "設定値 ($currentLive)",
+                        value = currentLive,
+                        isRawTs = false
+                    )
+                )
+            } finally {
+                _isQualitiesLoaded.value = true
             }
         }
     }
 
+    fun saveLiveQuality(qualityValue: String) {
+        viewModelScope.launch {
+            settingsRepository.saveString(SettingsRepository.LIVE_QUALITY, qualityValue)
+        }
+    }
+
     suspend fun getInitialStreamSource(): StreamSource {
-        Log.d(TAG, "getInitialStreamSource() started - Fetching from DataStore")
         val backendStr = settingsRepository.backendType.first()
         val prefStr = settingsRepository.preferredStreamSource.first()
 
@@ -247,12 +330,10 @@ class LivePlayerViewModel @Inject constructor(
         }
 
         _availableSources.value = sources
-        Log.d(TAG, "Available sources: $sources. Selected initial: ${sources.first()}")
         return sources.first()
     }
 
     private fun stopMainPlaybackSafely() {
-        Log.d(TAG, "stopMainPlaybackSafely() called. Destroying ExoPlayer instance...")
         mainEventSource?.cancel()
         mainEventSource = null
 
@@ -267,7 +348,6 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     private fun stopDualPlaybackSafely() {
-        Log.d(TAG, "stopDualPlaybackSafely() called. Destroying ExoPlayer instance...")
         dualEventSource?.cancel()
         dualEventSource = null
 
@@ -280,7 +360,6 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun releasePlayers() {
-        Log.d(TAG, "releasePlayers() called. Completely freeing hardware decoders.")
         mainPlaybackJob?.cancel()
         dualPlaybackJob?.cancel()
         mainEventSource?.cancel()
@@ -297,8 +376,24 @@ class LivePlayerViewModel @Inject constructor(
         stopJikkyo()
     }
 
-    private fun handleMainError(uiContext: Context, errorMsg: String) {
+    private fun handleMainError(uiContext: Context, error: PlaybackException) {
         viewModelScope.launch {
+            val cause = error.cause
+            val is404 =
+                cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode == 404
+            val isEdcbTranscode = mainCurrentSource == StreamSource.EDCB && !mainIsEdcbDirect
+
+            if (isEdcbTranscode && is404 && mainAutoRetryCount < 5) {
+                mainAutoRetryCount++
+                Log.w(TAG, "EDCB HLS 404: Retrying prepare... ($mainAutoRetryCount/5)")
+                _mainSseDetail.value = "セグメント生成待機中... ($mainAutoRetryCount/5)"
+                delay(2500)
+                _mainPlayer.value?.prepare()
+                _mainPlayer.value?.play()
+                return@launch
+            }
+
+            val errorMsg = analyzePlayerError(error)
             if (mainAutoRetryCount < MAX_AUTO_RETRY) {
                 mainAutoRetryCount++
                 Log.w(
@@ -308,14 +403,14 @@ class LivePlayerViewModel @Inject constructor(
                 _mainSseDetail.value = "通信復旧中... ($mainAutoRetryCount/$MAX_AUTO_RETRY)"
 
                 stopMainPlaybackSafely()
-
                 delay(2000)
 
                 val channel = mainCurrentChannel
                 val source = mainCurrentSource
                 val quality = mainCurrentQuality
+                val direct = mainIsEdcbDirect
                 if (channel != null && quality != null) {
-                    playMainChannel(uiContext, channel, source, quality, isAutoRetry = true)
+                    playMainChannel(uiContext, channel, source, direct, quality, isAutoRetry = true)
                 }
             } else {
                 Log.e(TAG, "Max auto-retry reached. Showing error dialog.")
@@ -325,8 +420,24 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
-    private fun handleDualError(uiContext: Context, errorMsg: String) {
+    private fun handleDualError(uiContext: Context, error: PlaybackException) {
         viewModelScope.launch {
+            val cause = error.cause
+            val is404 =
+                cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode == 404
+            val isEdcbTranscode = dualCurrentSource == StreamSource.EDCB && !dualIsEdcbDirect
+
+            if (isEdcbTranscode && is404 && dualAutoRetryCount < 5) {
+                dualAutoRetryCount++
+                Log.w(TAG, "EDCB HLS 404 (Dual): Retrying prepare... ($dualAutoRetryCount/5)")
+                _dualSseDetail.value = "セグメント生成待機中... ($dualAutoRetryCount/5)"
+                delay(2500)
+                _dualPlayer.value?.prepare()
+                _dualPlayer.value?.play()
+                return@launch
+            }
+
+            val errorMsg = analyzePlayerError(error)
             if (dualAutoRetryCount < MAX_AUTO_RETRY) {
                 dualAutoRetryCount++
                 Log.w(
@@ -341,8 +452,9 @@ class LivePlayerViewModel @Inject constructor(
                 val channel = dualCurrentChannel
                 val source = dualCurrentSource
                 val quality = dualCurrentQuality
+                val direct = dualIsEdcbDirect
                 if (channel != null && quality != null) {
-                    playDualChannel(uiContext, channel, source, quality, isAutoRetry = true)
+                    playDualChannel(uiContext, channel, source, direct, quality, isAutoRetry = true)
                 }
             } else {
                 Log.e(TAG, "Max auto-retry reached on dual player.")
@@ -357,6 +469,7 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channel: Channel,
         source: StreamSource,
+        isEdcbDirect: Boolean,
         quality: StreamQuality,
         isAutoRetry: Boolean = false
     ) {
@@ -369,6 +482,7 @@ class LivePlayerViewModel @Inject constructor(
         }
         mainCurrentChannel = channel
         mainCurrentSource = source
+        mainIsEdcbDirect = isEdcbDirect
         mainCurrentQuality = quality
 
         viewModelScope.launch {
@@ -376,42 +490,85 @@ class LivePlayerViewModel @Inject constructor(
         }
 
         mainPlaybackJob?.cancel()
-        mainPlaybackJob = viewModelScope.launch {
+        mainPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 mainPlaybackMutex.withLock {
-                    stopMainPlaybackSafely()
+                    withContext(Dispatchers.Main) {
+                        stopMainPlaybackSafely()
+                        _mainSseStatus.value = "Standby"
+                        _mainSseDetail.value = "ストリームを準備中..."
+                    }
 
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
-                    val newPlayer = createExoPlayer(
-                        uiContext,
-                        audioOutputMode,
-                        { mainCurrentSource == StreamSource.KONOMITV }) { error ->
-                        Log.e(TAG, "ExoPlayer (Main) Error: ${error.message}", error)
-                        handleMainError(uiContext, analyzePlayerError(error))
+                    val newPlayer = withContext(Dispatchers.Main) {
+                        createExoPlayer(
+                            uiContext,
+                            audioOutputMode,
+                            { mainCurrentSource == StreamSource.KONOMITV }) { error ->
+                            Log.e(TAG, "ExoPlayer (Main) Error: ${error.message}", error)
+                            handleMainError(uiContext, error)
+                        }
                     }
                     _mainPlayer.value = newPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl =
-                        buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
 
-                    if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
-                        _mainSseStatus.value = "ONAir"
-                        _mainSseDetail.value = ""
-                    } else {
-                        if (config is BackendConfig.KonomiTv) {
-                            startMainSse(uiContext, channel.displayChannelId, quality.value, config)
+                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                        withContext(Dispatchers.Main) {
+                            _mainSseDetail.value = "トランスコード開始を待機中..."
                         }
+                        Log.i(TAG, "[Main] Calling getLiveStreamUrl for EDCB HLS...")
+                        val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 0)
+                        Log.i(TAG, "[Main] getLiveStreamUrl returned: $hlsUrl")
+
+                        if (hlsUrl.isBlank()) {
+                            throw Exception("HLSトランスコードの開始に失敗しました")
+                        }
+                        hlsUrl
+                    } else {
+                        buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
                     }
 
-                    startPlayback(uiContext, newPlayer, streamUrl, source, mainTsDataSourceFactory)
+                    withContext(Dispatchers.Main) {
+                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect)) {
+                            _mainSseStatus.value = "ONAir"
+                            _mainSseDetail.value = ""
+                        } else if (source == StreamSource.EDCB && !isEdcbDirect) {
+                            _mainSseStatus.value = "ONAir"
+                            _mainSseDetail.value = ""
+                        } else {
+                            if (config is BackendConfig.KonomiTv) {
+                                startMainSse(
+                                    uiContext,
+                                    channel.displayChannelId,
+                                    quality.value,
+                                    config
+                                )
+                            }
+                        }
 
-                    startJikkyo(channel, source)
+                        startPlayback(
+                            uiContext,
+                            newPlayer,
+                            streamUrl,
+                            source,
+                            isEdcbDirect,
+                            mainTsDataSourceFactory
+                        )
+                        startJikkyo(channel, source)
+                    }
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "playMainChannel: Job cancelled.")
+            } catch (e: Exception) {
+                Log.e(TAG, "playMainChannel: Failed", e)
+                withContext(Dispatchers.Main) {
+                    val fallbackError =
+                        PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+                    handleMainError(uiContext, fallbackError)
+                }
             }
         }
     }
@@ -420,6 +577,7 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channel: Channel,
         source: StreamSource,
+        isEdcbDirect: Boolean,
         quality: StreamQuality,
         isAutoRetry: Boolean = false
     ) {
@@ -430,54 +588,90 @@ class LivePlayerViewModel @Inject constructor(
         }
         dualCurrentChannel = channel
         dualCurrentSource = source
+        dualIsEdcbDirect = isEdcbDirect
         dualCurrentQuality = quality
 
         dualPlaybackJob?.cancel()
-        dualPlaybackJob = viewModelScope.launch {
+        dualPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 dualPlaybackMutex.withLock {
-                    stopDualPlaybackSafely()
+                    withContext(Dispatchers.Main) {
+                        stopDualPlaybackSafely()
+                        _dualSseStatus.value = "Standby"
+                        _dualSseDetail.value = "ストリームを準備中..."
+                    }
 
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
-                    val newDualPlayer = createExoPlayer(
-                        uiContext,
-                        audioOutputMode,
-                        { dualCurrentSource == StreamSource.KONOMITV }) { error ->
-                        handleDualError(uiContext, analyzePlayerError(error))
+                    val newDualPlayer = withContext(Dispatchers.Main) {
+                        createExoPlayer(
+                            uiContext,
+                            audioOutputMode,
+                            { dualCurrentSource == StreamSource.KONOMITV }) { error ->
+                            handleDualError(uiContext, error)
+                        }
                     }
                     _dualPlayer.value = newDualPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl =
-                        buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
 
-                    if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
-                        _dualSseStatus.value = "ONAir"
-                        _dualSseDetail.value = ""
-                    } else {
-                        if (config is BackendConfig.KonomiTv) {
-                            startDualSse(uiContext, channel.displayChannelId, quality.value, config)
+                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                        withContext(Dispatchers.Main) {
+                            _dualSseDetail.value = "トランスコード開始を待機中..."
                         }
+                        // ★ 修正: EDCB トランスコード時に streamNumber = 1 を指定し、メインとパイプを分ける
+                        val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 1)
+                        if (hlsUrl.isBlank()) {
+                            throw Exception("HLSトランスコードの開始に失敗しました")
+                        }
+                        hlsUrl
+                    } else {
+                        buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
                     }
 
-                    startPlayback(
-                        uiContext,
-                        newDualPlayer,
-                        streamUrl,
-                        source,
-                        dualTsDataSourceFactory
-                    )
+                    withContext(Dispatchers.Main) {
+                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect)) {
+                            _dualSseStatus.value = "ONAir"
+                            _dualSseDetail.value = ""
+                        } else if (source == StreamSource.EDCB && !isEdcbDirect) {
+                            _dualSseStatus.value = "ONAir"
+                            _dualSseDetail.value = ""
+                        } else {
+                            if (config is BackendConfig.KonomiTv) {
+                                startDualSse(
+                                    uiContext,
+                                    channel.displayChannelId,
+                                    quality.value,
+                                    config
+                                )
+                            }
+                        }
+
+                        startPlayback(
+                            uiContext,
+                            newDualPlayer,
+                            streamUrl,
+                            source,
+                            isEdcbDirect,
+                            dualTsDataSourceFactory
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "playDualChannel: Job cancelled.")
+            } catch (e: Exception) {
+                Log.e(TAG, "playDualChannel: Failed", e)
+                withContext(Dispatchers.Main) {
+                    val fallbackError =
+                        PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+                    handleDualError(uiContext, fallbackError)
+                }
             }
         }
     }
 
     fun stopAllPlayers() {
-        Log.d(TAG, "stopAllPlayers() invoked. Releasing tuners...")
         mainPlaybackJob?.cancel()
         dualPlaybackJob?.cancel()
 
@@ -508,10 +702,6 @@ class LivePlayerViewModel @Inject constructor(
         _mainPlayerError.value = null
     }
 
-    // ==========================================
-    // ★ 実況（ニコニコ実況）制御関連
-    // ==========================================
-
     private fun getJikkyoChannels(): JSONArray {
         if (jikkyoChannelsCache != null) return jikkyoChannelsCache!!
         return try {
@@ -521,11 +711,6 @@ class LivePlayerViewModel @Inject constructor(
             jikkyoChannelsCache = array
             array
         } catch (e: Exception) {
-            Log.e(
-                TAG,
-                "jikkyo_channels.json not found in assets! Please put it in src/main/assets/",
-                e
-            )
             JSONArray()
         }
     }
@@ -548,7 +733,6 @@ class LivePlayerViewModel @Inject constructor(
             if (networkId == jcNid && serviceId == jcSid) {
                 matched = true
             } else if (networkId in 0x7880..0x7FEF && jcNid == 15) {
-                // サブチャンネルのオフセット考慮
                 if (serviceId == jcSid || serviceId - 1 == jcSid || serviceId - 2 == jcSid) {
                     matched = true
                 }
@@ -565,92 +749,52 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     private fun startJikkyo(channel: Channel, source: StreamSource) {
-        Log.i(TAG, "[Jikkyo] === startJikkyo() called ===")
-        Log.i(
-            TAG,
-            "[Jikkyo] Channel: ${channel.name} (${channel.displayChannelId}), Source: $source"
-        )
         stopJikkyo()
 
         viewModelScope.launch(Dispatchers.IO) {
             _clearCommentsEvent.emit(Unit)
-            Log.i(TAG, "[Jikkyo] Cleared old comments on UI.")
-
             val watchUrl = getJikkyoWatchSessionUrl(channel, source)
-            if (watchUrl.isNullOrEmpty()) {
-                Log.w(
-                    TAG,
-                    "[Jikkyo] Watch URL not found or empty for ${channel.name}. Aborting Jikkyo start."
-                )
-                return@launch
-            }
+            if (watchUrl.isNullOrEmpty()) return@launch
 
-            Log.i(TAG, "[Jikkyo] Initializing JikkyoClient with URL: $watchUrl")
             jikkyoClient = JikkyoClient(watchUrl)
             jikkyoClient?.start { jsonText ->
                 parseAndEmitComment(jsonText)
             }
-            Log.i(TAG, "[Jikkyo] JikkyoClient started successfully.")
         }
     }
 
     private fun stopJikkyo() {
-        Log.i(TAG, "[Jikkyo] stopJikkyo() called. Clearing connections and cache.")
         jikkyoClient?.stop()
         jikkyoClient = null
         processedCommentIds.clear()
     }
 
     private suspend fun getJikkyoWatchSessionUrl(channel: Channel, source: StreamSource): String? {
-        Log.i(TAG, "[Jikkyo] getJikkyoWatchSessionUrl() called. Source: $source")
-
         if (source == StreamSource.KONOMITV) {
             val config = settingsRepository.getBackendConfig(source) as? BackendConfig.KonomiTv
-            if (config == null) {
-                Log.i(TAG, "[Jikkyo] KonomiTv config is null. Aborting.")
-                return null
-            }
+            if (config == null) return null
             try {
-                // KonomiTVの API/channels/{id}/jikkyo からWebSocket URLを取得
                 val apiUrl =
                     "${config.ip}:${config.port}/api/channels/${channel.displayChannelId}/jikkyo"
-                Log.i(TAG, "[Jikkyo] Requesting KonomiTV API: $apiUrl")
-
                 val request = Request.Builder().url(apiUrl).build()
                 val response = okHttpClient.newCall(request).execute()
 
                 val bodyString = response.body?.string() ?: "{}"
-                Log.i(TAG, "[Jikkyo] API Response Code: ${response.code}")
-                Log.i(TAG, "[Jikkyo] API Response Body: $bodyString")
-
                 if (response.isSuccessful) {
                     val json = JSONObject(bodyString)
-                    val watchUrl = json.optString("watch_session_url").takeIf { it.isNotEmpty() }
-                    Log.i(TAG, "[Jikkyo] Extracted watch_session_url: $watchUrl")
-                    return watchUrl
-                } else {
-                    Log.w(TAG, "[Jikkyo] API Request failed. Code: ${response.code}")
+                    return json.optString("watch_session_url").takeIf { it.isNotEmpty() }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "[Jikkyo] Failed to get KonomiTV jikkyo url", e)
             }
             return null
         } else {
-            Log.i(TAG, "[Jikkyo] Using EDCB/MIRAKURUN fallback inference logic.")
-
             val networkId = channel.networkId.toInt()
             val serviceId = channel.serviceId.toInt()
 
-            Log.i(TAG, "[Jikkyo] Target NID: $networkId, SID: $serviceId")
             val jkId = getJikkyoId(networkId, serviceId)
-            Log.i(TAG, "[Jikkyo] Inferred jkId: $jkId")
-
             if (jkId != null) {
-                val watchUrl = "wss://nx-jikkyo.tsukumijima.net/api/v1/channels/$jkId/ws/watch"
-                Log.i(TAG, "[Jikkyo] Generated fallback watch URL: $watchUrl")
-                return watchUrl
+                return "wss://nx-jikkyo.tsukumijima.net/api/v1/channels/$jkId/ws/watch"
             }
-            Log.w(TAG, "[Jikkyo] jkId could not be inferred. Returning null.")
             return null
         }
     }
@@ -658,38 +802,19 @@ class LivePlayerViewModel @Inject constructor(
     private fun parseAndEmitComment(jsonText: String) {
         try {
             val json = JSONObject(jsonText)
-            val chat = json.optJSONObject("chat")
-            if (chat == null) {
-                return
-            }
-
+            val chat = json.optJSONObject("chat") ?: return
             val content = chat.optString("content", "")
-            if (content.isBlank()) {
-                return
-            }
+            if (content.isBlank()) return
+            if (chat.optString("deleted") == "1") return
 
-            if (chat.optString("deleted") == "1") {
-                Log.i(TAG, "[Jikkyo] Comment is deleted. Skipping: $content")
-                return
-            }
-
-            // 運営の特殊コマンドコメントを除外
             if (content.startsWith("/") && content.matches(Regex("^/[a-z][a-z0-9_-]*(?:\\s|$).*"))) {
-                if (chat.optString("premium") == "3") {
-                    Log.i(TAG, "[Jikkyo] Premium special command skipped: $content")
-                    return
-                }
+                if (chat.optString("premium") == "3") return
             }
 
             val commentId = chat.optString("no", "") + "_" + content
-            // 重複排除
-            if (!processedCommentIds.add(commentId)) {
-                return
-            }
-            // メモリ節約のため一定数でキャッシュクリア
+            if (!processedCommentIds.add(commentId)) return
             if (processedCommentIds.size > 2000) processedCommentIds.clear()
 
-            // コマンド解析 (色, 位置, サイズ)
             var color = "#FFEAEA"
             var position = "right"
             var size = "medium"
@@ -701,18 +826,11 @@ class LivePlayerViewModel @Inject constructor(
                 getCommentSize(cmd)?.let { size = it }
             }
 
-            Log.i(
-                TAG,
-                "[Jikkyo] Emitting comment -> text: $content, color: $color, pos: $position, size: $size"
-            )
-
-            // UI描画用にFlowへ流す
             viewModelScope.launch(Dispatchers.Main) {
                 _liveComments.emit(LiveComment(content, color, position, size))
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "[Jikkyo] JSON parse error. JSON: $jsonText", e)
         }
     }
 
@@ -741,10 +859,6 @@ class LivePlayerViewModel @Inject constructor(
         val map = mapOf("big" to "big", "medium" to "medium", "small" to "small")
         return map[size]
     }
-
-    // ==========================================
-    // ★ 映像再生処理本体
-    // ==========================================
 
     private fun buildStreamUrl(
         channel: Channel,
@@ -806,43 +920,57 @@ class LivePlayerViewModel @Inject constructor(
         player: ExoPlayer?,
         streamUrl: String,
         source: StreamSource,
+        isEdcbDirect: Boolean,
         factory: TsReadExDataSourceFactory
     ) {
-        Log.d(TAG, "startPlayback() invoked. source=$source, streamUrl=$streamUrl")
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
 
-            val mediaSource = if (source == StreamSource.MIRAKURUN || source == StreamSource.EDCB) {
-                val extractorsFactory = ExtractorsFactory {
-                    arrayOf(
-                        TsExtractor(
-                            TsExtractor.MODE_SINGLE_PMT,
-                            TimestampAdjuster(C.TIME_UNSET),
-                            DirectSubtitlePayloadReaderFactory(
-                                onSubtitleDataReceived = { pts, base64 ->
-                                    viewModelScope.launch(Dispatchers.Main) {
-                                        _subtitleEvents.emit(
-                                            Pair(pts, base64)
-                                        )
-                                    }
-                                },
-                                isSubtitleEnabled = { isSubtitleEnabled }
-                            ),
-                            TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES))
+            val mediaSource =
+                if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect)) {
+                    val extractorsFactory = ExtractorsFactory {
+                        arrayOf(
+                            TsExtractor(
+                                TsExtractor.MODE_SINGLE_PMT,
+                                TimestampAdjuster(C.TIME_UNSET),
+                                DirectSubtitlePayloadReaderFactory(
+                                    onSubtitleDataReceived = { pts, base64 ->
+                                        viewModelScope.launch(Dispatchers.Main) {
+                                            _subtitleEvents.emit(Pair(pts, base64))
+                                        }
+                                    },
+                                    isSubtitleEnabled = { isSubtitleEnabled }
+                                ),
+                                TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES))
+                    }
+                    ProgressiveMediaSource.Factory(factory, extractorsFactory)
+                        .createMediaSource(mediaItem)
+                } else {
+                    if (source == StreamSource.EDCB && !isEdcbDirect) {
+                        val uri = Uri.parse(streamUrl)
+                        val ctok = uri.getQueryParameter("ctok") ?: ""
+                        Log.i(TAG, "[Playback] Extracted ctok from URL: $ctok")
+
+                        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                            .setDefaultRequestProperties(mapOf("Cookie" to "ctok=$ctok"))
+                            .setAllowCrossProtocolRedirects(true)
+
+                        HlsMediaSource.Factory(httpDataSourceFactory)
+                            .setAllowChunklessPreparation(false)
+                            .createMediaSource(mediaItem)
+                    } else {
+                        DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
+                    }
                 }
-                ProgressiveMediaSource.Factory(factory, extractorsFactory)
-                    .createMediaSource(mediaItem)
-            } else {
-                DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
-            }
 
             player?.setMediaSource(mediaSource)
             player?.prepare()
             player?.play()
-            Log.d(TAG, "startPlayback: ExoPlayer configured and play() called.")
         } catch (e: Exception) {
             Log.e(TAG, "startPlayback: Exception thrown", e)
-            handleMainError(uiContext, AppStrings.LIVE_PLAYER_INIT_ERROR)
+            val fallbackError =
+                PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+            handleMainError(uiContext, fallbackError)
         }
     }
 
@@ -869,10 +997,9 @@ class LivePlayerViewModel @Inject constructor(
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         if (response != null && response.code !in 200..299) {
-                            handleMainError(
-                                uiContext,
-                                "KonomiTVサーバーエラー (HTTP ${response.code})"
-                            )
+                            val error =
+                                PlaybackException("KonomiTV HTTP Error", null, response.code)
+                            handleMainError(uiContext, error)
                         }
                     }
                 }
@@ -898,7 +1025,12 @@ class LivePlayerViewModel @Inject constructor(
                             ) {
                                 val errMsg =
                                     _mainSseDetail.value.ifEmpty { AppStrings.ERR_TUNER_START_FAILED }
-                                handleMainError(uiContext, errMsg)
+                                val error = PlaybackException(
+                                    errMsg,
+                                    null,
+                                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                                )
+                                handleMainError(uiContext, error)
                                 return@launch
                             }
 
@@ -943,7 +1075,8 @@ class LivePlayerViewModel @Inject constructor(
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         if (response != null && response.code !in 200..299) {
-                            handleDualError(uiContext, "接続失敗: HTTP ${response.code}")
+                            val error = PlaybackException("HTTP Error", null, response.code)
+                            handleDualError(uiContext, error)
                         }
                     }
                 }
@@ -966,9 +1099,13 @@ class LivePlayerViewModel @Inject constructor(
                                     "失敗"
                                 ) || dualSseDetail.value.contains("エラー")))
                             ) {
-                                handleDualError(
-                                    uiContext,
-                                    dualSseDetail.value.ifEmpty { "エラーが発生しました" })
+                                val errMsg = dualSseDetail.value.ifEmpty { "エラーが発生しました" }
+                                val error = PlaybackException(
+                                    errMsg,
+                                    null,
+                                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                                )
+                                handleDualError(uiContext, error)
                                 return@launch
                             }
 
@@ -1121,6 +1258,7 @@ class LivePlayerViewModel @Inject constructor(
             cause is HttpDataSource.InvalidResponseCodeException -> when (cause.responseCode) {
                 404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
                 503 -> AppStrings.ERR_TUNER_FULL
+                422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
                 else -> String.format(AppStrings.ERR_SERVER_HTTP, cause.responseCode)
             }
 

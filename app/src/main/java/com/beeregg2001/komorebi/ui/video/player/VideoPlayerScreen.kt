@@ -93,6 +93,7 @@ fun VideoPlayerScreen(
     val isLiveStream by videoPlayerViewModel.isLiveStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
+    val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
 
     LaunchedEffect(tiledThumbnailUrl) {
         Log.i(TAG, "[DataCheck] Screen received tiledThumbnailUrl update: $tiledThumbnailUrl")
@@ -105,7 +106,6 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(program.id) {
         videoPlayerViewModel.fetchProgramDetail(program.id)
-        videoPlayerViewModel.fetchAvailableQualities()
     }
 
     LaunchedEffect(fetchedDetail) {
@@ -122,28 +122,12 @@ fun VideoPlayerScreen(
         Log.i(TAG, "Auto CM Skip globally synced: ${vs.isAutoCmSkipEnabled}")
     }
 
-    LaunchedEffect(availableQualities) {
-        if (availableQualities.isNotEmpty() && availableQualities != StreamQuality.DEFAULT_QUALITIES) {
-
-            val matchedCurrent = availableQualities.find { it.value == vs.currentQuality.value }
-
-            if (matchedCurrent != null) {
-                vs.currentQuality = matchedCurrent
-            } else {
-                val matchedInitial = availableQualities.find { it.value == initialQuality }
-
-                if (matchedInitial != null) {
-                    vs.currentQuality = matchedInitial
-                } else {
-                    val fallback =
-                        if (initialQuality.contains("1080") || vs.currentQuality.value.contains("1080")) {
-                            availableQualities.find { it.isRawTs } ?: availableQualities.first()
-                        } else {
-                            availableQualities.firstOrNull { !it.isRawTs }
-                                ?: availableQualities.first()
-                        }
-                    vs.currentQuality = fallback
-                }
+    // ★ 修正: リスト取得完了時に勝手な上書き(フォールバック)をせず、安全にラベルだけを合わせる
+    LaunchedEffect(availableQualities, isQualitiesLoaded) {
+        if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
+            val matched = availableQualities.find { it.value == vs.currentQuality.value }
+            if (matched != null) {
+                vs.currentQuality = matched
             }
         }
     }
@@ -198,6 +182,9 @@ fun VideoPlayerScreen(
 
     var isSeekingPreviewVisible by remember { mutableStateOf(false) }
     var seekingPreviewJob by remember { mutableStateOf<Job?>(null) }
+
+    var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
+    var lastSeekUpdateTime by remember { mutableStateOf(0L) }
 
     val isSubOverlayOpen =
         isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
@@ -304,12 +291,21 @@ fun VideoPlayerScreen(
             }
     }
 
+    // ★ 修正: backendType の Unresolved reference エラーを解消
+    val backendType by settingsViewModel.backendType.collectAsState()
+    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
+    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+
     val getCurrentPositionMs = {
         if (isLiveStream) {
             vs.playbackOffsetMs + exoPlayer.currentPosition
         } else {
             exoPlayer.currentPosition
         }
+    }
+
+    val getEffectivePositionMs = {
+        pendingSeekPositionMs ?: getCurrentPositionMs()
     }
 
     val performSeek = { targetMs: Long ->
@@ -388,6 +384,8 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(currentProgram.id, vs.currentQuality, availableQualities) {
         if (currentProgram.id == 0) return@LaunchedEffect
+
+        if (!isQualitiesLoaded) return@LaunchedEffect
 
         if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) {
             Log.w(
@@ -512,8 +510,8 @@ fun VideoPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onKeyEvent { keyEvent ->
-                if (isPiPMode) return@onKeyEvent false
+            .onPreviewKeyEvent { keyEvent ->
+                if (isPiPMode) return@onPreviewKeyEvent false
 
                 val keyCode = keyEvent.nativeKeyEvent.keyCode
                 val repeatCount = keyEvent.nativeKeyEvent.repeatCount
@@ -542,11 +540,11 @@ fun VideoPlayerScreen(
                             }
                         }
                     }
-                    return@onKeyEvent true
+                    return@onPreviewKeyEvent true
                 }
 
-                if (vs.lCropMode == LCropMode.MENU) return@onKeyEvent false
-                if (isSubOverlayOpen) return@onKeyEvent false
+                if (vs.lCropMode == LCropMode.MENU) return@onPreviewKeyEvent false
+                if (isSubOverlayOpen) return@onPreviewKeyEvent false
 
                 if (isActionDown) {
                     vs.lastInteractionTime = System.currentTimeMillis()
@@ -563,7 +561,7 @@ fun VideoPlayerScreen(
                                 onPiPRequested()
                             }
                         }
-                        return@onKeyEvent true
+                        return@onPreviewKeyEvent true
                     } else if (isActionUp) {
                         if (!vs.isBackKeyLongPressed && System.currentTimeMillis() - vs.backKeyDownTime < 500) {
                             if (showControls && isModern) {
@@ -574,9 +572,9 @@ fun VideoPlayerScreen(
                         }
                         vs.backKeyDownTime = 0L
                         vs.isBackKeyLongPressed = false
-                        return@onKeyEvent true
+                        return@onPreviewKeyEvent true
                     }
-                    return@onKeyEvent false
+                    return@onPreviewKeyEvent false
                 }
 
                 if (isModern) {
@@ -589,321 +587,211 @@ fun VideoPlayerScreen(
                             )
                         ) {
                             if (isActionDown) {
-                                onShowControlsChange(true)
-                                return@onKeyEvent true
+                                onShowControlsChange(true); return@onPreviewKeyEvent true
                             }
-                            return@onKeyEvent false
+                            return@onPreviewKeyEvent false
                         }
+                    } else if (vs.isSeekBarFocused) {
+                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) return@onPreviewKeyEvent false
+                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
+                            if (isActionDown) onShowControlsChange(false)
+                            return@onPreviewKeyEvent true
+                        }
+                    } else {
+                        // ボタンフォーカス時はキーを奪わない
+                        return@onPreviewKeyEvent false
+                    }
+                }
 
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
-                            if (isActionDown) {
-                                if (repeatCount == 0) {
-                                    rightKeyDownTime = System.currentTimeMillis()
-                                    isRightKeyLongPressed = false
-                                } else {
-                                    if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
-                                        isRightKeyLongPressed = true
-                                        onShowControlsChange(true)
-                                        val totalDuration =
-                                            (currentProgram.recordedVideo.duration * 1000).toLong()
+                // --- 共通シーク処理 (RIGHT / LEFT) ---
+                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
+                    val isChapterMode = !isModern || !showControls
+                    if (isActionDown) {
+                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
+
+                        if (repeatCount == 0) {
+                            rightKeyDownTime = System.currentTimeMillis()
+                            isRightKeyLongPressed = false
+                            pendingSeekPositionMs = getCurrentPositionMs()
+                        } else {
+                            if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
+                                isRightKeyLongPressed = true
+                                onShowControlsChange(true)
+                            }
+                            if (isRightKeyLongPressed) {
+                                val now = System.currentTimeMillis()
+                                if (now - lastSeekUpdateTime > 150) { // 150ms間隔でスロットリング
+                                    lastSeekUpdateTime = now
+                                    val totalDuration =
+                                        (currentProgram.recordedVideo.duration * 1000).toLong()
+                                    val currentTarget =
+                                        pendingSeekPositionMs ?: getCurrentPositionMs()
+
+                                    if (isChapterMode) {
                                         val boundaries = listOf(0L) + chapters.flatMap {
-                                            listOf(it.startTimeMs, it.endTimeMs)
+                                            listOf(
+                                                it.startTimeMs,
+                                                it.endTimeMs
+                                            )
                                         }.distinct() + totalDuration
                                         if (boundaries.size <= 2) {
-                                            performSeek(
-                                                (getCurrentPositionMs() + 180_000).coerceAtMost(
-                                                    totalDuration
-                                                )
-                                            )
+                                            pendingSeekPositionMs =
+                                                (currentTarget + 180_000).coerceAtMost(totalDuration)
                                             vs.updateIndicator(Icons.Default.FastForward, "+3m")
                                         } else {
                                             val next =
-                                                boundaries.firstOrNull { it > getCurrentPositionMs() + 1000 }
-                                            performSeek(next ?: totalDuration)
+                                                boundaries.firstOrNull { it > currentTarget + 1000 }
+                                                    ?: totalDuration
+                                            pendingSeekPositionMs = next
                                             vs.updateIndicator(
                                                 Icons.Default.SkipNext,
                                                 "次チャプター"
                                             )
                                         }
+                                    } else {
+                                        // 15秒プレビューシーク（オーバーレイ非表示）
+                                        pendingSeekPositionMs =
+                                            (currentTarget + 15_000).coerceAtMost(totalDuration)
                                     }
                                 }
-                            } else if (isActionUp) {
-                                if (!isRightKeyLongPressed) {
-                                    onShowControlsChange(true)
-                                }
-                                rightKeyDownTime = 0L
-                                isRightKeyLongPressed = false
                             }
-                            return@onKeyEvent true
                         }
+                    } else if (isActionUp) {
+                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
 
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
-                            if (isActionDown) {
-                                if (repeatCount == 0) {
-                                    leftKeyDownTime = System.currentTimeMillis()
-                                    isLeftKeyLongPressed = false
-                                } else {
-                                    if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
-                                        isLeftKeyLongPressed = true
-                                        onShowControlsChange(true)
+                        if (!isRightKeyLongPressed) {
+                            onShowControlsChange(true)
+                            val totalDuration =
+                                (currentProgram.recordedVideo.duration * 1000).toLong()
+                            performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration))
+                            if (isChapterMode) vs.updateIndicator(Icons.Default.FastForward, "+30s")
+                        } else {
+                            // 長押し終了時に一括で確定シークを実行
+                            pendingSeekPositionMs?.let { performSeek(it) }
+                        }
+                        pendingSeekPositionMs = null
+                        rightKeyDownTime = 0L
+                        isRightKeyLongPressed = false
+                    }
+                    return@onPreviewKeyEvent true
+                }
+
+                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
+                    val isChapterMode = !isModern || !showControls
+                    if (isActionDown) {
+                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
+
+                        if (repeatCount == 0) {
+                            leftKeyDownTime = System.currentTimeMillis()
+                            isLeftKeyLongPressed = false
+                            pendingSeekPositionMs = getCurrentPositionMs()
+                        } else {
+                            if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
+                                isLeftKeyLongPressed = true
+                                onShowControlsChange(true)
+                            }
+                            if (isLeftKeyLongPressed) {
+                                val now = System.currentTimeMillis()
+                                if (now - lastSeekUpdateTime > 150) {
+                                    lastSeekUpdateTime = now
+                                    val currentTarget =
+                                        pendingSeekPositionMs ?: getCurrentPositionMs()
+
+                                    if (isChapterMode) {
                                         val totalDuration =
                                             (currentProgram.recordedVideo.duration * 1000).toLong()
                                         val boundaries = listOf(0L) + chapters.flatMap {
-                                            listOf(it.startTimeMs, it.endTimeMs)
+                                            listOf(
+                                                it.startTimeMs,
+                                                it.endTimeMs
+                                            )
                                         }.distinct() + totalDuration
                                         if (boundaries.size <= 2) {
-                                            performSeek(
-                                                (getCurrentPositionMs() - 60_000).coerceAtLeast(
-                                                    0L
-                                                )
-                                            )
+                                            pendingSeekPositionMs =
+                                                (currentTarget - 60_000).coerceAtLeast(0L)
                                             vs.updateIndicator(Icons.Default.FastRewind, "-1m")
                                         } else {
                                             val prev =
-                                                boundaries.lastOrNull { it < getCurrentPositionMs() - 1000 }
-                                            performSeek(prev ?: 0L)
+                                                boundaries.lastOrNull { it < currentTarget - 1000 }
+                                                    ?: 0L
+                                            pendingSeekPositionMs = prev
                                             vs.updateIndicator(
                                                 Icons.Default.SkipPrevious,
                                                 "前チャプター"
                                             )
                                         }
+                                    } else {
+                                        // 15秒プレビュー巻き戻し（オーバーレイ非表示）
+                                        pendingSeekPositionMs =
+                                            (currentTarget - 15_000).coerceAtLeast(0L)
                                     }
                                 }
-                            } else if (isActionUp) {
-                                if (!isLeftKeyLongPressed) {
-                                    onShowControlsChange(true)
-                                }
-                                leftKeyDownTime = 0L
-                                isLeftKeyLongPressed = false
                             }
-                            return@onKeyEvent true
                         }
-                        return@onKeyEvent false
+                    } else if (isActionUp) {
+                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
+
+                        if (!isLeftKeyLongPressed) {
+                            onShowControlsChange(true)
+                            performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
+                            if (isChapterMode) vs.updateIndicator(Icons.Default.FastRewind, "-10s")
+                        } else {
+                            // 長押し終了時に一括で確定シークを実行
+                            pendingSeekPositionMs?.let { performSeek(it) }
+                        }
+                        pendingSeekPositionMs = null
+                        leftKeyDownTime = 0L
+                        isLeftKeyLongPressed = false
                     }
-
-                    if (vs.isSeekBarFocused) {
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) {
-                            return@onKeyEvent false
-                        }
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
-                            if (isActionDown) onShowControlsChange(false)
-                            return@onKeyEvent true
-                        }
-
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
-                            if (isActionDown) {
-                                triggerSeekingPreview()
-                                if (repeatCount == 0) {
-                                    rightKeyDownTime = System.currentTimeMillis()
-                                    isRightKeyLongPressed = false
-                                } else {
-                                    if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
-                                        isRightKeyLongPressed = true
-                                    }
-                                    if (isRightKeyLongPressed) {
-                                        val totalDuration =
-                                            (currentProgram.recordedVideo.duration * 1000).toLong()
-                                        performSeek(
-                                            (getCurrentPositionMs() + 15_000).coerceAtMost(
-                                                totalDuration
-                                            )
-                                        )
-                                    }
-                                }
-                            } else if (isActionUp) {
-                                triggerSeekingPreview()
-                                if (!isRightKeyLongPressed) {
-                                    val totalDuration =
-                                        (currentProgram.recordedVideo.duration * 1000).toLong()
-                                    performSeek(
-                                        (getCurrentPositionMs() + 30_000).coerceAtMost(
-                                            totalDuration
-                                        )
-                                    )
-                                }
-                                rightKeyDownTime = 0L
-                                isRightKeyLongPressed = false
-                            }
-                            return@onKeyEvent true
-                        }
-
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
-                            if (isActionDown) {
-                                triggerSeekingPreview()
-                                if (repeatCount == 0) {
-                                    leftKeyDownTime = System.currentTimeMillis()
-                                    isLeftKeyLongPressed = false
-                                } else {
-                                    if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
-                                        isLeftKeyLongPressed = true
-                                    }
-                                    if (isLeftKeyLongPressed) {
-                                        performSeek(
-                                            (getCurrentPositionMs() - 15_000).coerceAtLeast(
-                                                0L
-                                            )
-                                        )
-                                    }
-                                }
-                            } else if (isActionUp) {
-                                triggerSeekingPreview()
-                                if (!isLeftKeyLongPressed) {
-                                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                                }
-                                leftKeyDownTime = 0L
-                                isLeftKeyLongPressed = false
-                            }
-                            return@onKeyEvent true
-                        }
-
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER) {
-                            if (isActionDown) {
-                                vs.togglePlayPause(exoPlayer.isPlaying)
-                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                            }
-                            return@onKeyEvent true
-                        }
-                        return@onKeyEvent false
-                    } else {
-                        return@onKeyEvent false
-                    }
+                    return@onPreviewKeyEvent true
                 }
 
-                // --- クラシックUI ---
-                when (keyCode) {
-                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                        if (isActionDown) {
-                            onShowControlsChange(true)
-                            vs.togglePlayPause(exoPlayer.isPlaying)
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                rightKeyDownTime = System.currentTimeMillis()
-                                isRightKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - rightKeyDownTime
-                                if (!isRightKeyLongPressed && elapsed > 500) {
-                                    isRightKeyLongPressed = true
-                                    onShowControlsChange(true)
-                                    val totalDuration =
-                                        (currentProgram.recordedVideo.duration * 1000).toLong()
-                                    val boundaries = listOf(0L) + chapters.flatMap {
-                                        listOf(it.startTimeMs, it.endTimeMs)
-                                    }.distinct() + totalDuration
-                                    if (boundaries.size <= 2) {
-                                        performSeek(
-                                            (getCurrentPositionMs() + 180_000).coerceAtMost(
-                                                totalDuration
-                                            )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastForward, "+3m")
-                                    } else {
-                                        val next =
-                                            boundaries.firstOrNull { it > getCurrentPositionMs() + 1000 }
-                                        performSeek(next ?: totalDuration)
-                                        vs.updateIndicator(Icons.Default.SkipNext, "次チャプター")
-                                    }
+                // --- 共通アクション処理 ---
+                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) {
+                    val isChapterMode = !isModern || !showControls
+                    if (!isChapterMode) return@onPreviewKeyEvent false
+                    if (isActionDown) {
+                        if (repeatCount == 0) {
+                            downKeyDownTime = System.currentTimeMillis(); isDownKeyLongPressed =
+                                false
+                        } else {
+                            val elapsed = System.currentTimeMillis() - downKeyDownTime
+                            if (!isDownKeyLongPressed && elapsed > 500) {
+                                isDownKeyLongPressed = true
+                                if (chapters.size > 1) {
+                                    isChapterListOpen = true; onShowControlsChange(true)
                                 }
                             }
-                        } else if (isActionUp) {
-                            if (!isRightKeyLongPressed) {
-                                onShowControlsChange(true)
-                                val totalDuration =
-                                    (currentProgram.recordedVideo.duration * 1000).toLong()
-                                performSeek(
-                                    (getCurrentPositionMs() + 30_000).coerceAtMost(
-                                        totalDuration
-                                    )
-                                )
-                                vs.updateIndicator(Icons.Default.FastForward, "+30s")
-                            }
-                            rightKeyDownTime = 0L; isRightKeyLongPressed = false
                         }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                leftKeyDownTime = System.currentTimeMillis()
-                                isLeftKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - leftKeyDownTime
-                                if (!isLeftKeyLongPressed && elapsed > 500) {
-                                    isLeftKeyLongPressed = true
-                                    onShowControlsChange(true)
-                                    val totalDuration =
-                                        (currentProgram.recordedVideo.duration * 1000).toLong()
-                                    val boundaries = listOf(0L) + chapters.flatMap {
-                                        listOf(it.startTimeMs, it.endTimeMs)
-                                    }.distinct() + totalDuration
-                                    if (boundaries.size <= 2) {
-                                        performSeek(
-                                            (getCurrentPositionMs() - 60_000).coerceAtLeast(
-                                                0L
-                                            )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastRewind, "-1m")
-                                    } else {
-                                        val prev =
-                                            boundaries.lastOrNull { it < getCurrentPositionMs() - 1000 }
-                                        performSeek(prev ?: 0L)
-                                        vs.updateIndicator(
-                                            Icons.Default.SkipPrevious,
-                                            "前チャプター"
-                                        )
-                                    }
-                                }
-                            }
-                        } else if (isActionUp) {
-                            if (!isLeftKeyLongPressed) {
-                                onShowControlsChange(true)
-                                performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                                vs.updateIndicator(Icons.Default.FastRewind, "-10s")
-                            }
-                            leftKeyDownTime = 0L; isLeftKeyLongPressed = false
+                    } else if (isActionUp) {
+                        if (!isDownKeyLongPressed) {
+                            onShowControlsChange(true); onSceneSearchToggle(true)
                         }
-                        true
+                        downKeyDownTime = 0L; isDownKeyLongPressed = false
                     }
-
-                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                downKeyDownTime = System.currentTimeMillis(); isDownKeyLongPressed =
-                                    false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - downKeyDownTime
-                                if (!isDownKeyLongPressed && elapsed > 500) {
-                                    isDownKeyLongPressed = true
-                                    if (chapters.size > 1) {
-                                        isChapterListOpen = true; onShowControlsChange(true)
-                                    }
-                                }
-                            }
-                        } else if (isActionUp) {
-                            if (!isDownKeyLongPressed) {
-                                onShowControlsChange(true); onSceneSearchToggle(true)
-                            }
-                            downKeyDownTime = 0L; isDownKeyLongPressed = false
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (isActionDown) {
-                            onShowControlsChange(true)
-                            if (!isModern) onSubMenuToggle(true)
-                        }
-                        true
-                    }
-
-                    else -> false
+                    return@onPreviewKeyEvent true
                 }
+
+                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
+                    val isChapterMode = !isModern || !showControls
+                    if (!isChapterMode) return@onPreviewKeyEvent false
+                    if (isActionDown) {
+                        onShowControlsChange(true)
+                        if (!isModern) onSubMenuToggle(true)
+                    }
+                    return@onPreviewKeyEvent true
+                }
+
+                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER) {
+                    if (isActionDown) {
+                        onShowControlsChange(true)
+                        vs.togglePlayPause(exoPlayer.isPlaying)
+                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                    }
+                    return@onPreviewKeyEvent true
+                }
+
+                return@onPreviewKeyEvent false
             }) {
 
         AndroidView(
@@ -1005,7 +893,7 @@ fun VideoPlayerScreen(
                 isModernUi = isModern,
                 isPlaying = exoPlayer.isPlaying,
                 hasChapters = chapters.size > 1,
-                currentPositionMs = getCurrentPositionMs(),
+                currentPositionMs = getEffectivePositionMs(),
                 totalDurationMs = (currentProgram.recordedVideo.duration * 1000).toLong(),
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
@@ -1079,8 +967,41 @@ fun VideoPlayerScreen(
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it
-                            onShowToast("画質: ${it.label}")
+                            // ★ ユーザーが手動で設定を変更したときだけ保存する
+                            videoPlayerViewModel.saveVideoQuality(it.value)
+                            val player = exoPlayer
+                            if (player != null) {
+                                val currentPos = getCurrentPositionMs()
+                                if (isEdcbDirect) {
+                                    scope.launch {
+                                        isBuffering = true
+                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                            program.id, it.value, currentSessionId, 0.0
+                                        )
+                                        player.setMediaItem(MediaItem.fromUri(newUrl))
+                                        player.prepare()
+                                        player.seekTo(currentPos)
+                                        player.play()
+                                    }
+                                } else {
+                                    vs.playbackOffsetMs =
+                                        currentPos - (initialPositionMs * 1000).toLong()
+                                    scope.launch {
+                                        isBuffering = true
+                                        val offsetSec = currentPos / 1000.0
+                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                            program.id, it.value, currentSessionId, offsetSec
+                                        )
+                                        player.setMediaItem(MediaItem.fromUri(newUrl))
+                                        player.prepare()
+                                        player.play()
+                                    }
+                                }
+                            }
+                            onShowToast("画質を ${it.label} に変更しました")
                         }
+                        isModernSettingsOpen = false
+                        vs.lastInteractionTime = System.currentTimeMillis()
                     },
                     onCommentToggle = {
                         vs.isCommentEnabled =
@@ -1117,7 +1038,7 @@ fun VideoPlayerScreen(
                 SceneSearchOverlay(
                     program = currentProgram,
                     tiledThumbnailUrl = tiledThumbnailUrl,
-                    currentPositionMs = getCurrentPositionMs(),
+                    currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = {
                         performSeek(it)
                         onSceneSearchToggle(false);
@@ -1136,7 +1057,7 @@ fun VideoPlayerScreen(
                     program = currentProgram,
                     chapters = chapters,
                     tiledThumbnailUrl = tiledThumbnailUrl,
-                    currentPositionMs = getCurrentPositionMs(),
+                    currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = {
                         performSeek(it)
                         isChapterListOpen = false
@@ -1200,12 +1121,47 @@ fun VideoPlayerScreen(
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it
-                            onShowToast("画質: ${it.label}")
+                            // ★ 手動で変更した画質をDataStoreに保存
+                            videoPlayerViewModel.saveVideoQuality(it.value)
+                            val player = exoPlayer
+                            if (player != null) {
+                                val currentPos = getCurrentPositionMs()
+                                if (isEdcbDirect) {
+                                    scope.launch {
+                                        isBuffering = true
+                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                            program.id, it.value, currentSessionId, 0.0
+                                        )
+                                        player.setMediaItem(MediaItem.fromUri(newUrl))
+                                        player.prepare()
+                                        player.seekTo(currentPos)
+                                        player.play()
+                                    }
+                                } else {
+                                    vs.playbackOffsetMs =
+                                        currentPos - (initialPositionMs * 1000).toLong()
+                                    scope.launch {
+                                        isBuffering = true
+                                        val offsetSec = currentPos / 1000.0
+                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                            program.id, it.value, currentSessionId, offsetSec
+                                        )
+                                        player.setMediaItem(MediaItem.fromUri(newUrl))
+                                        player.prepare()
+                                        player.play()
+                                    }
+                                }
+                            }
+                            onShowToast("画質を ${it.label} に変更しました")
                         }
+                        // ★ 修正: valへの代入エラーを解決
+                        onSubMenuToggle(false)
+                        vs.lastInteractionTime = System.currentTimeMillis()
                     },
+                    // ★ 修正: 足りていなかった引数を補完
                     onCommentToggle = {
-                        vs.isCommentEnabled =
-                            !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
+                        vs.isCommentEnabled = !vs.isCommentEnabled
+                        onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
                     },
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled

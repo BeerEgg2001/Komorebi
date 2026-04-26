@@ -72,6 +72,9 @@ class SettingsRepository @Inject constructor(
 
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
         val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
+
+        // ★ 追加: APIから取得した画質リストをDBにキャッシュ保存するためのキー
+        val AVAILABLE_STREAM_QUALITIES = stringPreferencesKey("available_stream_qualities")
     }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data
@@ -219,6 +222,10 @@ class SettingsRepository @Inject constructor(
 
     val hideSubChannels: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[HIDE_SUB_CHANNELS] ?: false }
+
+    // ★ 追加: キャッシュされたリストを即座に読み出すFlow
+    val availableStreamQualities: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[AVAILABLE_STREAM_QUALITIES] ?: "" }
 
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,

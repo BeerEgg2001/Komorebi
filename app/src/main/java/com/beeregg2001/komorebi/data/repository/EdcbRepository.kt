@@ -120,6 +120,36 @@ class EdcbRepository @Inject constructor(
         }
     }
 
+    private suspend fun fetchMainCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""data-ctok="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch main ctok from tvcast.html", e)
+            null
+        }
+    }
+
+    private suspend fun fetchVideoCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""<video[^>]*ctok="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch video ctok from tvcast.html", e)
+            null
+        }
+    }
+
     override suspend fun getStreamQualities(): List<StreamQuality> = withContext(Dispatchers.IO) {
         try {
             val playMethod = settingsRepository.edcbRecordPlayMethod.first()
@@ -142,9 +172,12 @@ class EdcbRepository @Inject constructor(
                 val qualities = matches.mapNotNull { matchResult ->
                     val optionId = matchResult.groupValues[1]
                     val label = matchResult.groupValues[2]
-                    val isRawTs = label.contains("TS-Live!", ignoreCase = true)
 
-                    StreamQuality(label = label, value = optionId, isRawTs = isRawTs)
+                    if (label.contains("TS-Live!", ignoreCase = true)) {
+                        null
+                    } else {
+                        StreamQuality(label = label, value = optionId, isRawTs = false)
+                    }
                 }.toList()
 
                 return@use qualities
@@ -706,7 +739,95 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
+    // ★ 修正: streamNumber (n) を引数で受け取り、同時トランスコードを可能にする
+    override suspend fun getLiveStreamUrl(
+        channelId: String,
+        quality: String,
+        streamNumber: Int
+    ): String =
+        withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = getHttpBaseUrl()
+                if (baseUrl.isBlank()) return@withContext ""
+
+                val parts = channelId.split("_")
+                if (parts.size < 4 || parts[0] != "edcb") {
+                    Log.e(TAG, "Invalid channelId format: $channelId")
+                    return@withContext ""
+                }
+                val onid = parts[1]
+                val tsid = parts[2]
+                val sid = parts[3]
+                val edcbId = "$onid-$tsid-$sid"
+
+                val mainCtok = fetchMainCtok(baseUrl) ?: ""
+                Log.i(TAG, "[Live/Dual] 0. Main Ctok: $mainCtok")
+
+                // ★ n=$streamNumber でリクエストを投げる
+                val tvCastUrl =
+                    "$baseUrl/api/TvCast?id=$edcbId&n=$streamNumber&json=1&ctok=$mainCtok"
+                val tvCastRequest = Request.Builder()
+                    .url(tvCastUrl)
+                    .get()
+                    .build()
+
+                Log.i(TAG, "[Live/Dual] 1. TvCast リクエスト(n=$streamNumber) 送信中...")
+                baseEdcbHttpClient.newCall(tvCastRequest).execute().use { response ->
+                    val responseBody = response.body?.string()
+                    Log.i(
+                        TAG,
+                        "[Live/Dual] TvCast レスポンス: HTTP ${response.code}, body: $responseBody"
+                    )
+                    if (!response.isSuccessful) {
+                        Log.e(TAG, "TvCastによるチューナーの起動に失敗しました。")
+                        return@withContext ""
+                    }
+                }
+
+                val videoCtok = fetchVideoCtok(baseUrl) ?: mainCtok
+                val hlsKey = "komorebi_live_${streamNumber}_${System.currentTimeMillis()}"
+
+                // ★ n=$streamNumber で HLS セッションを開始
+                val postUrl =
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("ctok", videoCtok)
+                    .add("open", "1")
+                    .build()
+
+                val postRequest = Request.Builder()
+                    .url(postUrl)
+                    .post(formBody)
+                    .header("Cookie", "ctok=$videoCtok")
+                    .build()
+
+                Log.i(
+                    TAG,
+                    "[Live/Dual] 2. HLSトランスコード開始(n=$streamNumber) (option=$quality)"
+                )
+                baseEdcbHttpClient.newCall(postRequest).execute().use { response ->
+                    Log.i(TAG, "[Live/Dual] POST レスポンス: HTTP ${response.code}")
+                    if (!response.isSuccessful) {
+                        Log.e(TAG, "トランスコードの開始に失敗しました。")
+                        return@withContext ""
+                    }
+                }
+
+                Log.i(TAG, "[Live/Dual] セグメント生成待ち...")
+                kotlinx.coroutines.delay(4000)
+
+                // ★ n=$streamNumber の M3U8 URLを返す
+                val m3u8Url =
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                Log.i(TAG, "[Live/Dual] 3. 生成された m3u8 プレイリストURL: $m3u8Url")
+
+                return@withContext m3u8Url
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start live streaming", e)
+                return@withContext ""
+            }
+        }
 
     private fun extractGenresFromProgramInfo(programInfo: String): List<EpgGenre> {
         if (programInfo.isBlank()) return emptyList()
@@ -831,7 +952,6 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-    // ★ 修正: offset -> ofssec に修正
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,

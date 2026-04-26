@@ -33,7 +33,7 @@ import io.ktor.server.request.receiveParameters
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
@@ -54,9 +54,60 @@ class SettingsViewModel @Inject constructor(
 
     private val gson = Gson()
 
-    private val _availableQualities =
-        MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
-    val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
+    // ★ 追加: APIから動的に取得したリストを保持するStateFlow
+    private val _dynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
+
+    // ★ 修正: 動的リスト、キャッシュ、ライブ設定値、ビデオ設定値の4つを監視し、
+    // API取得が完了次第、リアルタイムでUIのリストを最新化する設計に変更
+    val availableQualities: StateFlow<List<StreamQuality>> = combine(
+        _dynamicQualities,
+        settingsRepository.availableStreamQualities,
+        settingsRepository.backendType,
+        settingsRepository.liveQuality,
+        settingsRepository.videoQuality
+    ) { dynamicList, json, backend, currentLive, currentVideo ->
+        if (backend == "EDCB") {
+            // 1. 動的取得が成功していれば最優先で返す
+            if (dynamicList != null && dynamicList.isNotEmpty()) {
+                return@combine dynamicList
+            }
+
+            // 2. キャッシュがあればそれを返す
+            if (json.isNotBlank()) {
+                try {
+                    val type = object : TypeToken<List<StreamQuality>>() {}.type
+                    val list = gson.fromJson<List<StreamQuality>>(json, type) ?: emptyList()
+                    if (list.isNotEmpty()) return@combine list
+                } catch (e: Exception) {
+                }
+            }
+
+            // 3. どちらも無い(または取得中)場合は、設定値を保護するダミーリストを返す
+            val dummyList = mutableListOf<StreamQuality>()
+            if (currentLive.isNotBlank()) {
+                dummyList.add(
+                    StreamQuality(
+                        label = "設定値 ($currentLive)",
+                        value = currentLive,
+                        isRawTs = false
+                    )
+                )
+            }
+            if (currentVideo.isNotBlank() && currentVideo != currentLive) {
+                dummyList.add(
+                    StreamQuality(
+                        label = "設定値 ($currentVideo)",
+                        value = currentVideo,
+                        isRawTs = false
+                    )
+                )
+            }
+
+            if (dummyList.isEmpty()) StreamQuality.DEFAULT_QUALITIES else dummyList
+        } else {
+            StreamQuality.DEFAULT_QUALITIES
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreamQuality.DEFAULT_QUALITIES)
 
     val totalRecordCount: StateFlow<Int> = db.recordedProgramDao().getTotalCountFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -143,30 +194,31 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
 
     init {
-        fetchAvailableQualities()
+        // 設定画面が開かれたタイミングで取得を開始する
+        forceSyncStreamQualities()
     }
 
-    private fun fetchAvailableQualities() {
+    private fun forceSyncStreamQualities() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val backend = settingsRepository.backendType.first()
                 if (backend == "EDCB") {
-                    val qualities = recordProvider.getStreamQualities()
-                    if (qualities.isNotEmpty()) {
-                        _availableQualities.value = qualities
-                        Log.i(
-                            "SettingsViewModel",
-                            "Loaded dynamic stream qualities: ${qualities.size} options"
+                    val fetched = recordProvider.getStreamQualities()
+                    if (fetched.isNotEmpty()) {
+                        _dynamicQualities.value = fetched
+                        settingsRepository.saveString(
+                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                            gson.toJson(fetched)
                         )
                     } else {
-                        _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                        _dynamicQualities.value = emptyList()
                     }
                 } else {
-                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                    settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")
                 }
             } catch (e: Exception) {
-                Log.e("SettingsViewModel", "Failed to load stream qualities", e)
-                _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                Log.e("SettingsViewModel", "Failed to sync stream qualities to cache", e)
+                _dynamicQualities.value = emptyList()
             }
         }
     }
@@ -183,37 +235,27 @@ class SettingsViewModel @Inject constructor(
                 db.clearAllTables()
                 context.imageLoader.memoryCache?.clear()
                 context.imageLoader.diskCache?.clear()
-                Log.i(
-                    "SettingsViewModel",
-                    "Backend changed to $newType. Cleared AppDatabase and Image Caches."
-                )
             } catch (e: Exception) {
-                Log.e(
-                    "SettingsViewModel",
-                    "Failed to clear DB/Caches on backend change",
-                    e
-                )
+                Log.e("SettingsViewModel", "Failed to clear DB/Caches on backend change", e)
             }
         }
 
         syncEngine.launchSyncAllRecords(forceFullSync = true)
-        fetchAvailableQualities()
+        forceSyncStreamQualities()
     }
 
     fun updateEdcbIp(ip: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_IP, ip)
-        fetchAvailableQualities()
+        forceSyncStreamQualities()
     }
 
     fun updateEdcbPort(port: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_PORT, port)
     }
 
-    // ★ 修正: 再生方式（DIRECT/API）が変更された際に画質リストを再取得してUIを更新する
     fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
-        // DataStoreへの保存がトリガーされた直後にリストを再フェッチし、_availableQualities を更新
-        fetchAvailableQualities()
+        forceSyncStreamQualities()
     }
 
     fun updateEpgStationIp(ip: String) = viewModelScope.launch {

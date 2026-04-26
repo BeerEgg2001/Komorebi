@@ -24,9 +24,17 @@ class VideoPlayerState(
     // 再生設定
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
     var currentSpeed by mutableFloatStateOf(1.0f)
-    var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
 
-    // ★ 追加: API経由の擬似シーク時に使用する仮想的なオフセット時間（ミリ秒）
+    // ★ 修正: 勝手なフォーマット変換を排除し、初期値のまま確実に保持する
+    var currentQuality by mutableStateOf(
+        StreamQuality(
+            label = "読み込み中...",
+            value = initialQuality,
+            isRawTs = initialQuality == "direct"
+        )
+    )
+
+    // API経由の擬似シーク時に使用する仮想的なオフセット時間（ミリ秒）
     var playbackOffsetMs by mutableLongStateOf(0L)
 
     // UI状態
@@ -70,7 +78,8 @@ class VideoPlayerState(
 
 @Composable
 fun rememberVideoPlayerState(initialQuality: String): VideoPlayerState {
-    return remember(initialQuality) {
+    // ★ 修正: initialQuality をキーから外すことで、画質変更時に画面状態が初期化されるのを防ぐ
+    return remember {
         VideoPlayerState(initialQuality)
     }
 }

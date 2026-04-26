@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.data.SettingsRepository // ★ 追加: キャッシュを読み込むため
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.CmSection
 import com.beeregg2001.komorebi.data.model.RecordedProgram
@@ -11,6 +12,8 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.ui.video.player.ChapterInfo
+import com.google.gson.Gson // ★ 追加
+import com.google.gson.reflect.TypeToken // ★ 追加
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first // ★ 追加
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,12 +31,15 @@ import kotlinx.coroutines.CancellationException
 @HiltViewModel
 class VideoPlayerViewModel @Inject constructor(
     private val recordProvider: RecordProvider,
-    private val historyRepository: WatchHistoryRepository
+    private val historyRepository: WatchHistoryRepository,
+    private val settingsRepository: SettingsRepository // ★ 追加
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "VideoPlayerViewModel"
     }
+
+    private val gson = Gson() // ★ 追加
 
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
@@ -50,23 +57,90 @@ class VideoPlayerViewModel @Inject constructor(
         MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
     val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
 
+    // ★ 追加: UI側でリストがロードされたかを判定するためのフラグ
+    private val _isQualitiesLoaded = MutableStateFlow(false)
+    val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
+
     private var detailFetchJob: Job? = null
     private var streamMaintenanceJob: Job? = null
 
+    // ★ 修正: 毎回APIを叩くのをやめ、DataStore(DB)のキャッシュから瞬間的にリストを展開する
     fun fetchAvailableQualities() {
         viewModelScope.launch(Dispatchers.IO) {
+            _isQualitiesLoaded.value = false
             try {
-                val qualities = recordProvider.getStreamQualities()
-                if (qualities.isNotEmpty()) {
-                    _availableQualities.value = qualities
-                    Log.i(TAG, "Loaded dynamic stream qualities: ${qualities.size} options")
-                } else {
+                val backend = settingsRepository.backendType.first()
+                if (backend == "EDCB") {
+                    val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+                    if (playMethod == "DIRECT") {
+                        _availableQualities.value = listOf(
+                            StreamQuality(
+                                label = "オリジナル (Direct)",
+                                value = "direct",
+                                isRawTs = true
+                            )
+                        )
+                    } else {
+                        val json = settingsRepository.availableStreamQualities.first()
+                        if (json.isNotBlank()) {
+                            try {
+                                val type = object : TypeToken<List<StreamQuality>>() {}.type
+                                val list = gson.fromJson<List<StreamQuality>>(json, type)
+                                _availableQualities.value = list ?: StreamQuality.DEFAULT_QUALITIES
+                            } catch (e: Exception) {
+                                // 万が一JSONパースに失敗した場合はダミーリストを返す
+                                val currentVideo = settingsRepository.videoQuality.first()
+                                _availableQualities.value = listOf(
+                                    StreamQuality(
+                                        label = "設定値 ($currentVideo)",
+                                        value = currentVideo,
+                                        isRawTs = false
+                                    )
+                                )
+                            }
+                        } else {
+                            // キャッシュがない場合でも絶対にAPIを叩かず、とりあえず設定値をダミーとして返してUI破壊を防ぐ
+                            val currentVideo = settingsRepository.videoQuality.first()
+                            _availableQualities.value = listOf(
+                                StreamQuality(
+                                    label = "設定値 ($currentVideo)",
+                                    value = currentVideo,
+                                    isRawTs = false
+                                )
+                            )
+                        }
+                    }
+                } else if (backend == "KONOMITV") {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                } else {
+                    _availableQualities.value = listOf(
+                        StreamQuality(
+                            label = "オリジナル (Direct)",
+                            value = "direct",
+                            isRawTs = true
+                        )
+                    )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load stream qualities", e)
-                _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                Log.e(TAG, "Failed to load stream qualities from cache", e)
+                val currentVideo = settingsRepository.videoQuality.first()
+                _availableQualities.value = listOf(
+                    StreamQuality(
+                        label = "設定値 ($currentVideo)",
+                        value = currentVideo,
+                        isRawTs = false
+                    )
+                )
+            } finally {
+                _isQualitiesLoaded.value = true
             }
+        }
+    }
+
+    // ★ 修正(復活): UIで手動で画質変更した際にDataStoreに保存するメソッド
+    fun saveVideoQuality(qualityValue: String) {
+        viewModelScope.launch {
+            settingsRepository.saveString(SettingsRepository.VIDEO_QUALITY, qualityValue)
         }
     }
 

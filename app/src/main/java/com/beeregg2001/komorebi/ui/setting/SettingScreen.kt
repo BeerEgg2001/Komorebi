@@ -34,6 +34,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -64,10 +65,7 @@ fun SettingsScreen(
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
 
     val playerUiMode by viewModel.playerUiMode.collectAsState()
-
-    // ★ 追加: 自動CMスキップの状態を取得
     val autoCmSkip by viewModel.autoCmSkip.collectAsState()
-
     val availableQualities by viewModel.availableQualities.collectAsState()
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
@@ -115,7 +113,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(), // プレイヤーUIモード用
-                FocusRequester()  // ★ 追加: 自動CMスキップ用 FocusRequester
+                FocusRequester()  // 自動CMスキップ用 FocusRequester
             ), // 2: Playback
             listOf(FocusRequester()), // 3: Recording
             listOf(
@@ -325,28 +323,80 @@ fun SettingsScreen(
                                 "API経由 (api/xcode)" to "API",
                                 "直接アクセス (高速シーク可)" to "DIRECT"
                             )
+                            // ★ 修正: ダイアログのフォーカスバグを防ぐための安全装置を追加
+                            val safeCurrent =
+                                if (options.any { it.second == prefs.edcbRecordPlayMethod }) prefs.edcbRecordPlayMethod else "API"
+
                             uiState.activeDialog = SettingDialogState.Selection(
                                 "録画ファイルの再生方式",
                                 options,
-                                prefs.edcbRecordPlayMethod
+                                safeCurrent
                             ) { newValue ->
-                                viewModel.updateEdcbRecordPlayMethod(newValue)
+                                scope.launch(Dispatchers.IO) {
+                                    repository.saveString(
+                                        SettingsRepository.EDCB_RECORD_PLAY_METHOD,
+                                        newValue
+                                    )
+                                }
+                                try {
+                                    viewModel.updateEdcbRecordPlayMethod(newValue)
+                                } catch (e: Exception) {
+                                }
                             }
                         },
                         edcbPlayMethodR = edcbPlayMethodR,
                         onEdit = { t, v ->
-                            uiState.activeDialog = SettingDialogState.Input(t, v) {
-                                when (t) {
-                                    "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(it)
-                                    "KonomiTV (ポート)" -> viewModel.updateKonomiPort(it)
-                                    "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(it)
-                                    "EDCB (ポート)" -> viewModel.updateEdcbPort(it)
-//                                    "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(it)
-//                                    "EPGStation (ポート)" -> viewModel.updateEpgStationPort(it)
-                                    "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(it)
-                                    "Mirakurun (ポート)" -> scope.launch {
-                                        repository.saveString(SettingsRepository.MIRAKURUN_PORT, it)
+                            uiState.activeDialog = SettingDialogState.Input(t, v) { input ->
+                                scope.launch(Dispatchers.IO) {
+                                    when (t) {
+                                        "KonomiTV (IPアドレス)" -> repository.saveString(
+                                            SettingsRepository.KONOMI_IP,
+                                            input
+                                        )
+
+                                        "KonomiTV (ポート)" -> repository.saveString(
+                                            SettingsRepository.KONOMI_PORT,
+                                            input
+                                        )
+
+                                        "EDCB (IPアドレス)" -> repository.saveString(
+                                            SettingsRepository.EDCB_IP,
+                                            input
+                                        )
+
+                                        "EDCB (TCPポート)" -> repository.saveString(
+                                            SettingsRepository.EDCB_PORT,
+                                            input
+                                        )
+
+                                        // ★ 追加: HTTPポートの保存処理を追加
+                                        "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
+                                            SettingsRepository.EDCB_HTTP_PORT,
+                                            input
+                                        )
+
+                                        "Mirakurun (IPアドレス)" -> repository.saveString(
+                                            SettingsRepository.MIRAKURUN_IP,
+                                            input
+                                        )
+
+                                        "Mirakurun (ポート)" -> repository.saveString(
+                                            SettingsRepository.MIRAKURUN_PORT,
+                                            input
+                                        )
                                     }
+                                }
+                                try {
+                                    when (t) {
+                                        "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(input)
+                                        "KonomiTV (ポート)" -> viewModel.updateKonomiPort(input)
+                                        "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(input)
+                                        "EDCB (TCPポート)" -> viewModel.updateEdcbPort(input)
+                                        "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(
+                                            input
+                                        )
+                                    }
+                                } catch (e: Exception) {
                                 }
                             }
                         },
@@ -354,7 +404,6 @@ fun SettingsScreen(
                             val options = listOf(
                                 "KonomiTV" to "KONOMITV",
                                 "EDCB (EpgTimerSrv)" to "EDCB",
-//                                "EPGStation" to "EPGSTATION",
                                 "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
                             )
                             val safeCurrent =
@@ -364,8 +413,17 @@ fun SettingsScreen(
                                 "バックエンドシステムの選択",
                                 options,
                                 safeCurrent
-                            ) {
-                                viewModel.updateBackendType(it)
+                            ) { selectedType ->
+                                scope.launch(Dispatchers.IO) {
+                                    repository.saveString(
+                                        SettingsRepository.BACKEND_TYPE,
+                                        selectedType
+                                    )
+                                }
+                                try {
+                                    viewModel.updateBackendType(selectedType)
+                                } catch (e: Exception) {
+                                }
                             }
                         },
                         onSelectSrc = {
@@ -375,6 +433,8 @@ fun SettingsScreen(
                             )
                             if (prefs.backendType != "EDCB") {
                                 options.add("EDCB (TCP) を優先" to "EDCB")
+                            } else {
+                                options.add("EDCB (ダイレクトストリーミング)" to "EDCB")
                             }
 
                             val safeCurrent =
@@ -389,7 +449,7 @@ fun SettingsScreen(
                                 options,
                                 safeCurrent
                             ) {
-                                scope.launch {
+                                scope.launch(Dispatchers.IO) {
                                     repository.saveString(
                                         SettingsRepository.PREFERRED_STREAM_SOURCE,
                                         it
@@ -418,7 +478,7 @@ fun SettingsScreen(
                         layerOrder = prefs.subtitleCommentLayer,
                         audioMode = prefs.audioOutputMode,
                         uiMode = playerUiMode,
-                        autoCmSkip = autoCmSkip, // ★ 追加: CMスキップ設定値を渡す
+                        autoCmSkip = autoCmSkip,
                         availableQualities = availableQualities,
                         liveR = itemFocusRequesters[2][0],
                         videoR = itemFocusRequesters[2][1],
@@ -427,7 +487,7 @@ fun SettingsScreen(
                         audioR = itemFocusRequesters[2][4],
                         layerR = itemFocusRequesters[2][5],
                         uiModeR = itemFocusRequesters[2][6],
-                        autoCmSkipR = itemFocusRequesters[2][7], // ★ 追加
+                        autoCmSkipR = itemFocusRequesters[2][7],
                         sidebarR = categoryFocusRequesters[2],
                         onL = {
                             val options = availableQualities.map { it.label to it.value }
@@ -545,7 +605,6 @@ fun SettingsScreen(
                                 }
                             }
                         },
-                        // ★ 追加: 自動CMスキップの変更イベント
                         onAutoCmSkip = {
                             val options = listOf(
                                 "有効" to "ON",

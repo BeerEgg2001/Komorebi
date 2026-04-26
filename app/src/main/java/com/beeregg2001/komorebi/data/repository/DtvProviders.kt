@@ -9,7 +9,8 @@ import com.beeregg2001.komorebi.data.model.*
 interface LiveProvider {
     suspend fun getChannels(): ChannelApiResponse
 
-    suspend fun getLiveStreamUrl(channelId: String, quality: String): String
+    // ★ 修正: 2画面モードなどで複数のストリームを同時に開くため、streamNumber（n=0,1...）を追加
+    suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int = 0): String
     suspend fun getChannelLogoUrl(channelId: String): String
 }
 
@@ -21,7 +22,6 @@ interface RecordProvider {
     suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram>
     suspend fun searchRecordedPrograms(keyword: String, page: Int = 1): RecordedApiResponse
 
-    // ★ 修正: offsetSeconds を追加し、途中からストリームを取得できるようにする
     suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
@@ -34,10 +34,8 @@ interface RecordProvider {
     @androidx.annotation.OptIn(UnstableApi::class)
     suspend fun keepAlive(videoId: Int, quality: String, sessionId: String)
 
-    // シークバー・シーンサーチ用のタイル画像(スプライト)URLを取得する
     suspend fun getTiledThumbnailUrl(videoId: Int): String?
 
-    // バックエンドから利用可能な画質（トランスコード設定）のリストを取得する
     suspend fun getStreamQualities(): List<StreamQuality> = emptyList()
 }
 

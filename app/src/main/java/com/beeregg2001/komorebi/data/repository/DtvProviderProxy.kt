@@ -45,9 +45,10 @@ class DtvProviderProxy @Inject constructor(
         }
     }
 
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String {
+    // ★ 修正: streamNumber を委譲
+    override suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int): String {
         return try {
-            (getActiveProvider() as LiveProvider).getLiveStreamUrl(channelId, quality)
+            (getActiveProvider() as LiveProvider).getLiveStreamUrl(channelId, quality, streamNumber)
         } catch (e: Exception) {
             Log.w("DtvProviderProxy", "getLiveStreamUrl failed or not implemented. Skipping.")
             "" // 空文字を返してスキップ
@@ -76,7 +77,6 @@ class DtvProviderProxy @Inject constructor(
     override suspend fun searchRecordedPrograms(keyword: String, page: Int) =
         (getActiveProvider() as RecordProvider).searchRecordedPrograms(keyword, page)
 
-    // ★ 修正: offsetSeconds を追加し、実際のプロバイダへ委譲
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
