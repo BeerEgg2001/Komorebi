@@ -7,7 +7,7 @@
   "beta": {
     "versionCode": 13,
     "versionName": "1.1.0-beta3",
-    "releaseNotes": "・メインバックエンドをKonomiTV、EDCBから選択可能に変更（EPGStation、Mirakurunのみについては後日対応予定）\n・優先するソースにEDCBを追加\n・ライブ視聴でL字クロップ機能に対応\n・ライブタブ、番組表でサブチャンネルの表示非表示切り替えに対応\n",
+    "releaseNotes": "・チャプターが認識できる際にCM自動スキップする機能を追加\n・EDCB環境でトランスコード再生に対応\n・TvtPlayのチャプターファイルに対応\n詳細はGithubのリリースノートをご覧ください\n",
     "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta3/Komorebi-1.1.0-beta3.apk"
   }
 }
