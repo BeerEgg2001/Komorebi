@@ -48,24 +48,21 @@ fun VideoTopSubMenuUI(
     isSubtitleEnabled: Boolean,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
-    // ★ 追加: L字クロップ状態のパラメータ
     isLCropEnabled: Boolean,
+    isAutoCmSkipEnabled: Boolean,
+    availableQualities: List<StreamQuality>,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
-    // ★ 追加: L字クロップのトグル用コールバック
-    onLCropToggle: () -> Unit
+    onLCropToggle: () -> Unit,
+    onAutoCmSkipToggle: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    // 展開中のカテゴリ管理
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
-
-    // 画質ボタン（親）へのフォーカス復帰用
     val qualityButtonRequester = remember { FocusRequester() }
-    // 画質リスト（子）へのフォーカス移動用
     val qualityListRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -76,7 +73,6 @@ fun VideoTopSubMenuUI(
         }
     }
 
-    // 画質選択モードが開いた時にリストへフォーカスを移す
     LaunchedEffect(selectedCategory) {
         if (selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
@@ -90,14 +86,13 @@ fun VideoTopSubMenuUI(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .wrapContentHeight() // コンテンツに合わせて高さを可変に
+            .wrapContentHeight()
             .background(
                 Brush.verticalGradient(
                     colors = listOf(colors.background.copy(alpha = 0.9f), Color.Transparent)
                 )
             )
             .padding(top = 24.dp, bottom = 48.dp)
-            // Backキーで展開を閉じる制御
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK ||
@@ -105,18 +100,13 @@ fun VideoTopSubMenuUI(
                 ) {
                     if (selectedCategory != null) {
                         selectedCategory = null
-                        // 閉じた時は画質ボタンにフォーカスを戻す
                         try {
                             qualityButtonRequester.requestFocus()
                         } catch (e: Exception) {
                         }
                         true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                    } else false
+                } else false
             },
         contentAlignment = Alignment.TopCenter
     ) {
@@ -124,9 +114,7 @@ fun VideoTopSubMenuUI(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // --- 第一階層 (メインメニュー) ---
             Row(
-                // 中央揃えかつ間隔を指定
                 horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
                 modifier = Modifier
                     .horizontalScroll(rememberScrollState())
@@ -158,8 +146,6 @@ fun VideoTopSubMenuUI(
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                     contentColor = colors.textPrimary
                 )
-
-                // ★ 追加: L字クロップボタン
                 VideoMenuTileItem(
                     title = "L字クロップ",
                     icon = Icons.Default.Crop,
@@ -170,6 +156,15 @@ fun VideoTopSubMenuUI(
                 )
 
                 VideoMenuTileItem(
+                    title = "自動CMスキップ",
+                    icon = Icons.Default.FastForward,
+                    subtitle = if (isAutoCmSkipEnabled) "有効" else "無効",
+                    onClick = onAutoCmSkipToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = if (isAutoCmSkipEnabled) colors.accent else colors.textPrimary
+                )
+
+                VideoMenuTileItem(
                     title = "実況コメント",
                     icon = Icons.Default.Chat,
                     subtitle = if (isCommentEnabled) "表示" else "非表示",
@@ -177,7 +172,6 @@ fun VideoTopSubMenuUI(
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                     contentColor = colors.textPrimary
                 )
-                // 画質ボタン（トグル動作）
                 VideoMenuTileItem(
                     title = "画質",
                     icon = Icons.Default.HighQuality,
@@ -189,7 +183,6 @@ fun VideoTopSubMenuUI(
                     modifier = Modifier
                         .focusRequester(qualityButtonRequester)
                         .focusProperties {
-                            // 展開中なら下キーでリストへ、そうでなければキャンセル
                             if (selectedCategory != SubMenuCategory.QUALITY) down =
                                 FocusRequester.Cancel
                         },
@@ -197,14 +190,12 @@ fun VideoTopSubMenuUI(
                 )
             }
 
-            // --- 第二階層 (画質選択) ---
             AnimatedVisibility(
                 visible = selectedCategory == SubMenuCategory.QUALITY,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 区切り線
                     Spacer(Modifier.height(16.dp))
                     Box(
                         modifier = Modifier
@@ -221,8 +212,8 @@ fun VideoTopSubMenuUI(
                             .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 32.dp, vertical = 8.dp)
                     ) {
-                        StreamQuality.entries.forEachIndexed { index, quality ->
-                            val isSelected = currentQuality == quality
+                        availableQualities.forEach { quality ->
+                            val isSelected = currentQuality.value == quality.value
 
                             VideoMenuTileItem(
                                 title = quality.label,
@@ -230,7 +221,7 @@ fun VideoTopSubMenuUI(
                                 subtitle = if (isSelected) "選択中" else "",
                                 onClick = {
                                     onQualitySelect(quality)
-                                    selectedCategory = null // 選択したら閉じる
+                                    selectedCategory = null
                                     try {
                                         qualityButtonRequester.requestFocus()
                                     } catch (e: Exception) {
@@ -245,7 +236,7 @@ fun VideoTopSubMenuUI(
                                         ) else Modifier
                                     )
                                     .focusProperties {
-                                        up = qualityButtonRequester // 上キーで親に戻る
+                                        up = qualityButtonRequester
                                         down = FocusRequester.Cancel
                                     },
                                 contentColor = colors.textPrimary
@@ -258,9 +249,6 @@ fun VideoTopSubMenuUI(
     }
 }
 
-/**
- * ライブ視聴画面 (LivePlayerSubMenu.kt) の MenuTileItem とデザインを統一したタイルコンポーネント
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun VideoMenuTileItem(
@@ -317,25 +305,28 @@ fun VideoMenuTileItem(
     }
 }
 
-/**
- * ★ 修正: 背景はフェード、パネルはスライドインするモダンUI専用設定メニュー
- */
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class, ExperimentalAnimationApi::class)
+@OptIn(
+    ExperimentalTvMaterial3Api::class,
+    ExperimentalComposeUiApi::class,
+    ExperimentalAnimationApi::class
+)
 @Composable
-fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedVisibilityScopeの拡張関数にする
+fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     currentAudioMode: AudioMode,
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
-    isQualityEnabled: Boolean = true,
+    isAutoCmSkipEnabled: Boolean,
+    availableQualities: List<StreamQuality>,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
+    onAutoCmSkipToggle: () -> Unit,
     onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
@@ -345,17 +336,22 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
 
     LaunchedEffect(Unit) {
         delay(150)
-        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
+        try {
+            initialFocusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
     }
 
     LaunchedEffect(selectedCategory) {
         if (selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
-            try { qualityListRequester.requestFocus() } catch (e: Exception) {}
+            try {
+                qualityListRequester.requestFocus()
+            } catch (e: Exception) {
+            }
         }
     }
 
-    // 全体の背景
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -363,10 +359,14 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown &&
                     (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
-                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)) {
+                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                ) {
                     if (selectedCategory != null) {
                         selectedCategory = null
-                        try { initialFocusRequester.requestFocus() } catch (e: Exception) {}
+                        try {
+                            initialFocusRequester.requestFocus()
+                        } catch (e: Exception) {
+                        }
                         true
                     } else {
                         onClose()
@@ -374,12 +374,10 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
                     }
                 } else false
             },
-        contentAlignment = Alignment.CenterEnd // ★ 修正: CenterEndで右寄せ
+        contentAlignment = Alignment.CenterEnd
     ) {
-        // メニューパネル本体
         Column(
             modifier = Modifier
-                // ★ 追加: パネル部分だけ右からスライドイン・アウトさせる
                 .animateEnterExit(
                     enter = slideInHorizontally { fullWidth -> fullWidth },
                     exit = slideOutHorizontally { fullWidth -> fullWidth }
@@ -404,7 +402,11 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
 
             AnimatedContent(targetState = selectedCategory, label = "SettingsMenu") { category ->
                 if (category == null) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // ★ 修正: メニュー項目が入りきらない場合に備えてスクロールを可能にする
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         ModernSettingRow(
                             title = "音声切替",
                             value = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
@@ -426,10 +428,16 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
                         )
                         ModernSettingRow(
                             title = "画質",
-                            value = if (isQualityEnabled) currentQuality.label else "オリジナル (生TS)",
+                            value = currentQuality.label,
                             icon = Icons.Default.HighQuality,
-                            onClick = { if (isQualityEnabled) selectedCategory = SubMenuCategory.QUALITY },
-                            enabled = isQualityEnabled
+                            onClick = { selectedCategory = SubMenuCategory.QUALITY }
+                        )
+                        ModernSettingRow(
+                            title = "自動CMスキップ",
+                            value = if (isAutoCmSkipEnabled) "有効" else "無効",
+                            icon = Icons.Default.FastForward,
+                            onClick = onAutoCmSkipToggle,
+                            highlight = isAutoCmSkipEnabled
                         )
                         ModernSettingRow(
                             title = "実況コメント",
@@ -450,8 +458,8 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
                         modifier = Modifier.verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        StreamQuality.entries.forEachIndexed { index, quality ->
-                            val isSelected = currentQuality == quality
+                        availableQualities.forEach { quality ->
+                            val isSelected = currentQuality.value == quality.value
                             ModernSettingRow(
                                 title = quality.label,
                                 value = if (isSelected) "✓" else "",
@@ -459,10 +467,15 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay( // ★ 修正: AnimatedV
                                 onClick = {
                                     onQualitySelect(quality)
                                     selectedCategory = null
-                                    try { initialFocusRequester.requestFocus() } catch(e: Exception) {}
+                                    try {
+                                        initialFocusRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
                                 },
                                 highlight = isSelected,
-                                modifier = if (isSelected) Modifier.focusRequester(qualityListRequester) else Modifier
+                                modifier = if (isSelected) Modifier.focusRequester(
+                                    qualityListRequester
+                                ) else Modifier
                             )
                         }
                     }
@@ -481,7 +494,7 @@ fun ModernSettingRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     highlight: Boolean = false,
-    enabled: Boolean = true // ★ 追加: 無効化フラグ
+    enabled: Boolean = true
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
@@ -489,13 +502,11 @@ fun ModernSettingRow(
     Surface(
         onClick = { if (enabled) onClick() },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        // ★ 無効時はフォーカス時の拡大アニメーションを止める
         scale = if (enabled) ClickableSurfaceDefaults.scale(focusedScale = 1.05f) else ClickableSurfaceDefaults.scale(
             focusedScale = 1f
         ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (highlight && enabled) colors.accent.copy(alpha = 0.1f) else Color.Transparent,
-            // ★ 無効時はフォーカスが当たっても薄いハイライトにする
             focusedContainerColor = if (enabled) colors.accent else Color.White.copy(alpha = 0.1f),
             contentColor = if (enabled) colors.textPrimary else colors.textSecondary.copy(alpha = 0.5f),
             focusedContentColor = if (enabled) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary.copy(
@@ -505,7 +516,7 @@ fun ModernSettingRow(
         modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
-            .alpha(if (enabled) 1f else 0.5f) // ★ 無効時は全体を半透明に
+            .alpha(if (enabled) 1f else 0.5f)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(

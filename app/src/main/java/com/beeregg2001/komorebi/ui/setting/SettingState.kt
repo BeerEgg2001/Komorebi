@@ -12,6 +12,7 @@ class SettingPreferences(
     val backendType: String,
     val edcbIp: String,
     val edcbPort: String,
+    val edcbHttpPort: String, // ★追加
     val epgStationIp: String,
     val epgStationPort: String,
 
@@ -78,6 +79,7 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         backendType = repository.backendType.collectAsState(initial = "KONOMITV").value,
         edcbIp = repository.edcbIp.collectAsState(initial = "").value,
         edcbPort = repository.edcbPort.collectAsState(initial = "5510").value,
+        edcbHttpPort = repository.edcbHttpPort.collectAsState(initial = "5510").value, // ★追加
         epgStationIp = repository.epgStationIp.collectAsState(initial = "").value,
         epgStationPort = repository.epgStationPort.collectAsState(initial = "8888").value,
 

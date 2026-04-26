@@ -184,17 +184,19 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    // --- 内部ロジック ---
+    // --- 内部ロジック（修正版） ---
 
     private void GenerateLuaScript()
     {
-        string legacyDir = Path.Combine(HttpPublicPath, "legacy");
-        if (!Directory.Exists(legacyDir))
+        // legacy ではなく komorebi フォルダに配置
+        string komorebiDir = Path.Combine(HttpPublicPath, "komorebi");
+        if (!Directory.Exists(komorebiDir))
         {
-            Directory.CreateDirectory(legacyDir);
+            Directory.CreateDirectory(komorebiDir);
         }
 
-        string luaPath = Path.Combine(legacyDir, "komorebi_resolver.lua");
+        // ファイル名もスッキリと resolver.lua に
+        string luaPath = Path.Combine(komorebiDir, "resolver.lua");
         StringBuilder sb = new StringBuilder();
 
         sb.AppendLine("-- ==========================================");
@@ -202,36 +204,39 @@ public partial class MainWindowViewModel : ViewModelBase
         sb.AppendLine("-- ==========================================");
         sb.AppendLine("local MAPPING = {");
 
-        // リストからマッピングをLuaのテーブル形式で書き出す
         foreach (var map in Mappings)
         {
-            // パスのエスケープ処理 (\ を \\ に)
             string safePhysicalPath = map.PhysicalPath.Replace("\\", "\\\\");
             sb.AppendLine($"    [\"{safePhysicalPath}\"] = \"{map.Alias}\",");
         }
 
         sb.AppendLine("}");
         
-        // Luaの後半のロジック（固定部分）を追記
         sb.Append(GetLuaLogicPart());
 
-        File.WriteAllText(luaPath, sb.ToString(), new UTF8Encoding(false)); // BOMなしUTF-8
+        File.WriteAllText(luaPath, sb.ToString(), new UTF8Encoding(false));
     }
 
     private void CreateSymbolicLinksOnWindows()
     {
+        // リンクを配置する video フォルダを特定（なければ作成）
+        string videoDir = Path.Combine(HttpPublicPath, "video");
+        if (!Directory.Exists(videoDir))
+        {
+            Directory.CreateDirectory(videoDir);
+        }
+
         foreach (var map in Mappings)
         {
-            string linkPath = Path.Combine(HttpPublicPath, map.Alias);
+            // HttpPublic 直下ではなく video フォルダの中に作成
+            string linkPath = Path.Combine(videoDir, map.Alias);
             string targetPath = map.PhysicalPath;
 
-            // すでに存在する場合はスキップ
             if (Directory.Exists(linkPath) || File.Exists(linkPath))
             {
                 continue;
             }
 
-            // mklinkコマンドの組み立て
             string cmd = $"/c mklink /D \"{linkPath}\" \"{targetPath}\"";
 
             ProcessStartInfo psi = new ProcessStartInfo
@@ -246,36 +251,46 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    // Luaスクリプトのロジック部分（固定文字列）を返すヘルパーメソッド
     private string GetLuaLogicPart()
-    {
-        return @"
--- HTTPヘッダの出力
+   {
+        var mappings = string.Join(",\n", Mappings.Select(m =>
+        {
+            // Windowsのパス区切り \ を Lua の文字列リテラルとして安全にするために \\ に置換
+            string escapedPath = m.PhysicalPath.Replace("\\", "\\\\");
+            return $"    [\"{escapedPath}\"] = \"{m.Alias}\"";
+        }));
+
+        var luaTemplate = @"-- ==========================================
+-- Komorebi File Resolver (Cross-Platform)
+-- ==========================================
+local scriptDir = mg.script_name:gsub('[^\\/]*$', '')
+dofile(scriptDir .. '../legacy/util.lua')
+
+local MAPPING = {
+" + mappings + @"
+}
+
 mg.write(""HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\r\n"")
 
--- URLクエリパラメータからIDを取得
 local id = tonumber(mg.get_var(mg.request_info.query_string, ""id""))
 if not id then
-    mg.write('{\""error\"":\""Missing or invalid video id\""}')
+    mg.write('{""error"":""Missing or invalid video id""}')
     return
 end
 
--- EDCBから録画情報を取得
 local recInfo = edcb.GetRecFileInfo(id)
 if not recInfo then
-    mg.write('{\""error\"":\""RecInfo not found for ID: ' .. tostring(id) .. '\""}')
+    mg.write('{""error"":""RecInfo not found for ID: ' .. tostring(id) .. '""}')
     return
 end
 
 local filePath = recInfo.recFilePath
+local normalizedFilePath = filePath:gsub(""\\"", ""/"")
 local matchedAlias = nil
 local relativePath = nil
 
--- マッピングの探索
 for localPath, alias in pairs(MAPPING) do
-    local normalizedFilePath = filePath:gsub(""\\"", ""/"")
     local normalizedLocalPath = localPath:gsub(""\\"", ""/"")
-    
     if string.sub(normalizedFilePath, 1, string.len(normalizedLocalPath)) == normalizedLocalPath then
         matchedAlias = alias
         local remainder = string.sub(normalizedFilePath, string.len(normalizedLocalPath) + 1)
@@ -286,13 +301,12 @@ end
 
 if not matchedAlias then
     local safePath = filePath:gsub(""\\"", ""\\\\"")
-    mg.write('{\""error\"":\""Path not mapped in komorebi_resolver.lua\"", \""detected_path\"":\""' .. safePath .. '\""}')
+    mg.write(string.format('{""error"":""Path not mapped"", ""detected_path"":""%s""}', safePath))
     return
 end
 
 local function urlencode(str)
     if str then
-        str = string.gsub(str, ""\n"", ""\r\n"")
         str = string.gsub(str, ""([^%w %-%_%.%~])"", function(c)
             return string.format(""%%%02X"", string.byte(c))
         end)
@@ -304,18 +318,32 @@ end
 local encodedPath = urlencode(relativePath)
 local baseUrl = ""/"" .. matchedAlias .. ""/"" .. encodedPath
 
+local thumbnailUrl = """"
+local ff = EdcbFindFilePlain(filePath .. "".jpg"")
+if not ff and not WIN32 then
+    ff = EdcbFindFilePlain(filePath .. "".JPG"")
+end
+
+if ff then
+    thumbnailUrl = baseUrl .. "".jpg""
+else
+    local thumbHash = mg.md5(string.lower(filePath))
+    thumbnailUrl = ""/video/thumbs/"" .. thumbHash .. "".jpg""
+end
+
 local json = string.format([[
 {
     ""video_url"": ""%s"",
-    ""thumbnail_url"": ""%s.jpg"",
+    ""thumbnail_url"": ""%s"",
     ""chapter_url"": ""%s.chapter.txt"",
     ""chapter_alt_url"": ""%s"",
     ""tile_image_url"": ""%s.tile.webp"",
     ""tile_json_url"": ""%s.tile.json""
 }
-]], baseUrl, baseUrl, baseUrl, string.gsub(baseUrl, ""%.ts$"", """") .. "".chapter.txt"", baseUrl, baseUrl)
+]], baseUrl, thumbnailUrl, baseUrl, string.gsub(baseUrl, ""%.ts$"", """") .. "".chapter.txt"", baseUrl, baseUrl)
 
 mg.write(json)
 ";
+        return luaTemplate;
     }
 }

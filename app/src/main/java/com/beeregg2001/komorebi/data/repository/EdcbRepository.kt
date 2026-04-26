@@ -17,18 +17,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class EdcbRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val okHttpClient: OkHttpClient
 ) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider {
 
     companion object {
@@ -53,7 +58,12 @@ class EdcbRepository @Inject constructor(
         )
     }
 
-    // ★追加: Luaスクリプトから受け取るURL群のデータクラス
+    private val baseEdcbHttpClient: OkHttpClient by lazy {
+        okHttpClient.newBuilder().apply {
+            interceptors().clear()
+        }.build()
+    }
+
     private data class KomorebiResolverUrls(
         val videoUrl: String,
         val thumbnailUrl: String,
@@ -63,10 +73,6 @@ class EdcbRepository @Inject constructor(
         val tileJsonUrl: String
     )
 
-    private var httpPortCache: Int? = null
-    private var enableHttpCache: Boolean? = null
-    private var logoDataIniAttempted = false
-    private val logoMutex = Mutex()
     private val failedLogoIds = mutableSetOf<String>()
 
     private val epgMutex = Mutex()
@@ -88,37 +94,132 @@ class EdcbRepository @Inject constructor(
     private var fullEpgFetchJob: kotlinx.coroutines.Job? = null
     private var isFullEpgFetched = false
 
-    // ★追加: Luaスクリプトを叩いてURLを一式取得する関数
+    private suspend fun getTcpIpAndPort(): Pair<String, Int> {
+        val rawIp = settingsRepository.edcbIp.first()
+        val cleanIp = rawIp.replace(Regex("^https?://"), "")
+        val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+        return Pair(cleanIp, port)
+    }
+
+    private suspend fun getHttpBaseUrl(): String {
+        return settingsRepository.getEdcbFullUrl()
+    }
+
+    private suspend fun fetchCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/epg.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""name="ctok"\s+value="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch ctok", e)
+            null
+        }
+    }
+
+    private suspend fun fetchMainCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""data-ctok="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch main ctok from tvcast.html", e)
+            null
+        }
+    }
+
+    private suspend fun fetchVideoCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext null
+                val regex = Regex("""<video[^>]*ctok="([^"]+)"""")
+                val match = regex.find(html)
+                match?.groupValues?.get(1)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch video ctok from tvcast.html", e)
+            null
+        }
+    }
+
+    override suspend fun getStreamQualities(): List<StreamQuality> = withContext(Dispatchers.IO) {
+        try {
+            val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+            if (playMethod == "DIRECT") {
+                return@withContext listOf(
+                    StreamQuality(label = "オリジナル (Direct)", value = "direct", isRawTs = true)
+                )
+            }
+
+            val baseUrl = getHttpBaseUrl()
+            val request = Request.Builder().url("$baseUrl/EMWUI/library.html").build()
+
+            baseEdcbHttpClient.newCall(request).execute().use { response ->
+                val html = response.body?.string() ?: return@withContext emptyList()
+
+                val regex =
+                    Regex("""name="quality"[^>]*value="(\d+)"[^>]*>.*?<label[^>]*>.*?<i[^>]*>check</i>.*?</label>\s*<label[^>]*>([^<]+)</label>""")
+                val matches = regex.findAll(html)
+
+                val qualities = matches.mapNotNull { matchResult ->
+                    val optionId = matchResult.groupValues[1]
+                    val label = matchResult.groupValues[2]
+
+                    if (label.contains("TS-Live!", ignoreCase = true)) {
+                        null
+                    } else {
+                        StreamQuality(label = label, value = optionId, isRawTs = false)
+                    }
+                }.toList()
+
+                return@use qualities
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch stream qualities from EDCB", e)
+            emptyList()
+        }
+    }
+
     private suspend fun fetchResolverUrls(
-        ip: String,
-        port: Int,
+        baseUrl: String,
         videoId: Int
     ): KomorebiResolverUrls? = withContext(Dispatchers.IO) {
         try {
-            // legacyフォルダに配置したluaを叩く
-            val url = java.net.URL("http://$ip:$port/legacy/komorebi_resolver.lua?id=$videoId")
-            val connection = url.openConnection() as java.net.HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 3000
-            connection.readTimeout = 3000
+            val url = "$baseUrl/komorebi/resolver.lua?id=$videoId"
+            val request = Request.Builder().url(url).build()
 
-            if (connection.responseCode == 200) {
-                val jsonStr = connection.inputStream.bufferedReader().use { it.readText() }
-                val json = org.json.JSONObject(jsonStr)
+            val client = baseEdcbHttpClient.newBuilder()
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(3, TimeUnit.SECONDS)
+                .build()
 
-                if (json.has("error")) {
-                    Log.w(TAG, "Resolver Lua error: ${json.optString("error")}")
-                    return@withContext null
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val jsonStr = response.body?.string() ?: return@withContext null
+                    val json = org.json.JSONObject(jsonStr)
+
+                    if (json.has("error")) {
+                        Log.w(TAG, "Resolver Lua error: ${json.optString("error")}")
+                        return@withContext null
+                    }
+
+                    return@withContext KomorebiResolverUrls(
+                        videoUrl = json.optString("video_url"),
+                        thumbnailUrl = json.optString("thumbnail_url"),
+                        chapterUrl = json.optString("chapter_url"),
+                        chapterAltUrl = json.optString("chapter_alt_url"),
+                        tileImageUrl = json.optString("tile_image_url"),
+                        tileJsonUrl = json.optString("tile_json_url")
+                    )
                 }
-
-                return@withContext KomorebiResolverUrls(
-                    videoUrl = json.optString("video_url"),
-                    thumbnailUrl = json.optString("thumbnail_url"),
-                    chapterUrl = json.optString("chapter_url"),
-                    chapterAltUrl = json.optString("chapter_alt_url"),
-                    tileImageUrl = json.optString("tile_image_url"),
-                    tileJsonUrl = json.optString("tile_json_url")
-                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch resolver urls for id=$videoId", e)
@@ -133,8 +234,7 @@ class EdcbRepository @Inject constructor(
             epgMutex.withLock {
                 if (cachedServices.isEmpty() || cachedEvents.isEmpty() || (System.currentTimeMillis() - lastEpgFetchTime) > CACHE_EXPIRATION_MS) {
                     Log.i(TAG, "🔄 Fetching fresh EPG data from EDCB (Quick Load)...")
-                    val ip = settingsRepository.edcbIp.first()
-                    val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                    val (ip, port) = getTcpIpAndPort()
                     if (ip.isBlank()) throw Exception("EDCB IP is not set")
 
                     val edcbApi = EdcbApi(ip, port)
@@ -206,35 +306,36 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    // ==========================================
-    // ★ リアルタイム実況勢い (NX-Jikkyo) 取得
-    // ==========================================
     private fun fetchNxJikkyoForce(): Map<String, Int> {
         val forceMap = mutableMapOf<String, Int>()
         try {
-            val url = java.net.URL("https://nx-jikkyo.tsukumijima.net/api/v1/channels")
-            val connection = url.openConnection() as java.net.HttpURLConnection
-            connection.requestMethod = "GET"
-            // UIの読み込みをブロックしないようタイムアウトは極力短く設定
-            connection.connectTimeout = 2000
-            connection.readTimeout = 2000
+            val request = Request.Builder()
+                .url("https://nx-jikkyo.tsukumijima.net/api/v1/channels")
+                .build()
 
-            if (connection.responseCode == 200) {
-                val responseJson = connection.inputStream.bufferedReader().use { it.readText() }
-                val jsonArray = JSONArray(responseJson)
-                for (i in 0 until jsonArray.length()) {
-                    val channelObj = jsonArray.optJSONObject(i) ?: continue
-                    val jkId = channelObj.optString("id", "")
-                    if (jkId.isBlank()) continue
+            val client = baseEdcbHttpClient.newBuilder()
+                .connectTimeout(2, TimeUnit.SECONDS)
+                .readTimeout(2, TimeUnit.SECONDS)
+                .build()
 
-                    val threads = channelObj.optJSONArray("threads") ?: continue
-                    var maxForce = 0
-                    for (j in 0 until threads.length()) {
-                        val thread = threads.optJSONObject(j) ?: continue
-                        val force = thread.optInt("jikkyo_force", 0)
-                        if (force > maxForce) maxForce = force
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseJson = response.body?.string() ?: return forceMap
+                    val jsonArray = JSONArray(responseJson)
+                    for (i in 0 until jsonArray.length()) {
+                        val channelObj = jsonArray.optJSONObject(i) ?: continue
+                        val jkId = channelObj.optString("id", "")
+                        if (jkId.isBlank()) continue
+
+                        val threads = channelObj.optJSONArray("threads") ?: continue
+                        var maxForce = 0
+                        for (j in 0 until threads.length()) {
+                            val thread = threads.optJSONObject(j) ?: continue
+                            val force = thread.optInt("jikkyo_force", 0)
+                            if (force > maxForce) maxForce = force
+                        }
+                        forceMap[jkId] = maxForce
                     }
-                    forceMap[jkId] = maxForce
                 }
             }
         } catch (e: Exception) {
@@ -245,7 +346,6 @@ class EdcbRepository @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getChannels(): ChannelApiResponse = withContext(Dispatchers.Default) {
-        // ★ 実況の勢いデータを並行取得してUI表示速度の低下を防ぐ
         val forceJob = async(Dispatchers.IO) { fetchNxJikkyoForce() }
 
         fetchEpgDataIfNeeded()
@@ -298,7 +398,6 @@ class EdcbRepository @Inject constructor(
 
             val isSub = isSubChannelInternal(type, svc.sid, svc.tsid)
 
-            // ★ 実況ID(jk〇〇)を推論し、取得した勢いをセットする
             val jkId = getJikkyoId(svc.onid, svc.sid)
             val jikkyoForce = if (jkId != null) forceMap[jkId] ?: 0 else 0
 
@@ -322,7 +421,7 @@ class EdcbRepository @Inject constructor(
                 programPresent = presentEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 programFollowing = followingEvent?.toProgram("edcb_${svc.onid}_${svc.tsid}_${svc.sid}"),
                 remocon_Id = svc.remoteControlKeyId,
-                jikkyoForce = jikkyoForce // ★ ここに注入！
+                jikkyoForce = jikkyoForce
             )
 
             when (type) {
@@ -588,46 +687,22 @@ class EdcbRepository @Inject constructor(
             val tsid = parts[2].toIntOrNull() ?: return@withContext ""
             val sid = parts[3].toIntOrNull() ?: return@withContext ""
 
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
-            if (ip.isBlank()) return@withContext ""
+            val baseUrl = getHttpBaseUrl()
+            if (baseUrl.isBlank()) return@withContext ""
 
-            val edcbApi = EdcbApi(ip, port)
+            val targetUrl = "$baseUrl/legacy/logo.lua?onid=$onid&sid=$sid"
 
-            logoMutex.withLock {
-                if (!logoDataIniAttempted) {
-                    logoDataIniAttempted = true
-                    httpPortCache = 5510
-                    enableHttpCache = true
+            try {
+                val request = Request.Builder().url(targetUrl).build()
 
-                    val srvIni = edcbApi.fetchFiles(listOf("EpgTimerSrv.ini"))
-                        ?.firstOrNull { it.data.isNotEmpty() }
-                    if (srvIni != null) {
-                        val iniText = decodeEdcbString(srvIni.data)
-                        val portMatch = Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-                        if (portMatch != null) {
-                            httpPortCache = portMatch.groupValues[1].toInt()
-                        }
-                        val enableMatch = Regex("EnableHttpSrv\\s*=\\s*(\\d+)").find(iniText)
-                        if (enableMatch != null) {
-                            enableHttpCache = enableMatch.groupValues[1] != "0"
-                        }
-                    }
-                }
-            }
+                val client = baseEdcbHttpClient.newBuilder()
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .build()
 
-            if (enableHttpCache == true) {
-                val targetUrl = "http://$ip:$httpPortCache/legacy/logo.lua?onid=$onid&sid=$sid"
-
-                try {
-                    val url = java.net.URL(targetUrl)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 5000
-
-                    if (connection.responseCode == 200) {
-                        connection.inputStream.use { input ->
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        response.body?.byteStream()?.use { input ->
                             java.io.FileOutputStream(cachedFile).use { output ->
                                 input.copyTo(output)
                             }
@@ -636,9 +711,9 @@ class EdcbRepository @Inject constructor(
                             return@withContext android.net.Uri.fromFile(cachedFile).toString()
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to download and cache logo for $channelId", e)
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to download and cache logo for $channelId", e)
             }
 
             failedLogoIds.add(channelId)
@@ -664,7 +739,95 @@ class EdcbRepository @Inject constructor(
         }
     }
 
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
+    // ★ 修正: streamNumber (n) を引数で受け取り、同時トランスコードを可能にする
+    override suspend fun getLiveStreamUrl(
+        channelId: String,
+        quality: String,
+        streamNumber: Int
+    ): String =
+        withContext(Dispatchers.IO) {
+            try {
+                val baseUrl = getHttpBaseUrl()
+                if (baseUrl.isBlank()) return@withContext ""
+
+                val parts = channelId.split("_")
+                if (parts.size < 4 || parts[0] != "edcb") {
+                    Log.e(TAG, "Invalid channelId format: $channelId")
+                    return@withContext ""
+                }
+                val onid = parts[1]
+                val tsid = parts[2]
+                val sid = parts[3]
+                val edcbId = "$onid-$tsid-$sid"
+
+                val mainCtok = fetchMainCtok(baseUrl) ?: ""
+                Log.i(TAG, "[Live/Dual] 0. Main Ctok: $mainCtok")
+
+                // ★ n=$streamNumber でリクエストを投げる
+                val tvCastUrl =
+                    "$baseUrl/api/TvCast?id=$edcbId&n=$streamNumber&json=1&ctok=$mainCtok"
+                val tvCastRequest = Request.Builder()
+                    .url(tvCastUrl)
+                    .get()
+                    .build()
+
+                Log.i(TAG, "[Live/Dual] 1. TvCast リクエスト(n=$streamNumber) 送信中...")
+                baseEdcbHttpClient.newCall(tvCastRequest).execute().use { response ->
+                    val responseBody = response.body?.string()
+                    Log.i(
+                        TAG,
+                        "[Live/Dual] TvCast レスポンス: HTTP ${response.code}, body: $responseBody"
+                    )
+                    if (!response.isSuccessful) {
+                        Log.e(TAG, "TvCastによるチューナーの起動に失敗しました。")
+                        return@withContext ""
+                    }
+                }
+
+                val videoCtok = fetchVideoCtok(baseUrl) ?: mainCtok
+                val hlsKey = "komorebi_live_${streamNumber}_${System.currentTimeMillis()}"
+
+                // ★ n=$streamNumber で HLS セッションを開始
+                val postUrl =
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("ctok", videoCtok)
+                    .add("open", "1")
+                    .build()
+
+                val postRequest = Request.Builder()
+                    .url(postUrl)
+                    .post(formBody)
+                    .header("Cookie", "ctok=$videoCtok")
+                    .build()
+
+                Log.i(
+                    TAG,
+                    "[Live/Dual] 2. HLSトランスコード開始(n=$streamNumber) (option=$quality)"
+                )
+                baseEdcbHttpClient.newCall(postRequest).execute().use { response ->
+                    Log.i(TAG, "[Live/Dual] POST レスポンス: HTTP ${response.code}")
+                    if (!response.isSuccessful) {
+                        Log.e(TAG, "トランスコードの開始に失敗しました。")
+                        return@withContext ""
+                    }
+                }
+
+                Log.i(TAG, "[Live/Dual] セグメント生成待ち...")
+                kotlinx.coroutines.delay(4000)
+
+                // ★ n=$streamNumber の M3U8 URLを返す
+                val m3u8Url =
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                Log.i(TAG, "[Live/Dual] 3. 生成された m3u8 プレイリストURL: $m3u8Url")
+
+                return@withContext m3u8Url
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start live streaming", e)
+                return@withContext ""
+            }
+        }
 
     private fun extractGenresFromProgramInfo(programInfo: String): List<EpgGenre> {
         if (programInfo.isBlank()) return emptyList()
@@ -725,8 +888,7 @@ class EdcbRepository @Inject constructor(
             recordMutex.withLock {
                 try {
                     if (page == 1) Log.i(TAG, "[getRecordedPrograms] 録画同期を開始します")
-                    val ip = settingsRepository.edcbIp.first()
-                    val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                    val (ip, port) = getTcpIpAndPort()
                     if (ip.isBlank()) return@withContext RecordedApiResponse(0, emptyList())
 
                     if (cachedRecInfos == null || (System.currentTimeMillis() - lastRecFetchTime) > 30_000L) {
@@ -747,23 +909,10 @@ class EdcbRepository @Inject constructor(
                     if (from >= total) return@withContext RecordedApiResponse(total, emptyList())
 
                     val to = (from + 50).coerceAtMost(total)
-
-                    var safeHttpPort = httpPortCache ?: 5510
-                    if (httpPortCache == null && !logoDataIniAttempted) {
-                        try {
-                            val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
-                                ?.firstOrNull { it.data.isNotEmpty() }
-                            if (srvIni != null) {
-                                val iniText = decodeEdcbString(srvIni.data)
-                                Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-                                    ?.let { safeHttpPort = it.groupValues[1].toInt() }
-                            }
-                        } catch (e: Exception) {
-                        }
-                    }
+                    val baseUrl = getHttpBaseUrl()
 
                     val programs = all.subList(from, to).map { info ->
-                        async { mapToRecordedProgram(info, ip, safeHttpPort) }
+                        async { mapToRecordedProgram(info, ip, baseUrl) }
                     }.awaitAll()
 
                     Log.i(TAG, "[getRecordedPrograms] Page $page 返却完了 (件数: ${programs.size})")
@@ -778,8 +927,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
 
                 val info =
                     cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
@@ -790,25 +938,13 @@ class EdcbRepository @Inject constructor(
                     return@withContext Result.failure(Exception("Not found or invalid record"))
                 }
 
-                var safeHttpPort = httpPortCache ?: 5510
-                if (httpPortCache == null && !logoDataIniAttempted) {
-                    try {
-                        val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
-                            ?.firstOrNull { it.data.isNotEmpty() }
-                        if (srvIni != null) {
-                            val iniText = decodeEdcbString(srvIni.data)
-                            Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-                                ?.let { safeHttpPort = it.groupValues[1].toInt() }
-                        }
-                    } catch (e: Exception) {
-                    }
-                }
+                val baseUrl = getHttpBaseUrl()
 
                 Result.success(
                     mapToRecordedProgram(
                         info,
                         ip,
-                        safeHttpPort
+                        baseUrl
                     )
                 )
             } catch (e: Exception) {
@@ -819,56 +955,104 @@ class EdcbRepository @Inject constructor(
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSeconds: Double
     ): String {
-        val ip = settingsRepository.edcbIp.first()
-        val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
-
-        val info = cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(
-            ip,
-            port
-        ).getRecInfo(videoId).getOrNull()
-
-        var safeHttpPort = httpPortCache ?: 5510
-        if (httpPortCache == null && !logoDataIniAttempted) {
-            try {
-                val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
-                    ?.firstOrNull { it.data.isNotEmpty() }
-                if (srvIni != null) {
-                    val iniText = decodeEdcbString(srvIni.data)
-                    Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-                        ?.let { safeHttpPort = it.groupValues[1].toInt() }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get HttpPort from EpgTimerSrv.ini", e)
-            }
-        }
-
+        val baseUrl = getHttpBaseUrl()
         val playMethod = settingsRepository.edcbRecordPlayMethod.first()
+        val optionIdStr = quality.toIntOrNull()?.toString() ?: "2"
+
+        val resolverUrls = fetchResolverUrls(baseUrl, videoId)
+        val videoPath = resolverUrls?.videoUrl
 
         if (playMethod == "DIRECT") {
-            // ★修正: パス置換をやめ、LuaからVideoURLを取得する
-            val resolverUrls = fetchResolverUrls(ip, safeHttpPort, videoId)
-            if (resolverUrls != null) {
-                val videoUri = "http://$ip:$safeHttpPort${resolverUrls.videoUrl}"
+            if (!videoPath.isNullOrEmpty()) {
+                val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
+                val videoUri = "$baseUrl/$safePath"
                 Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
                 return videoUri
             } else {
-                Log.w(TAG, "Failed to resolve DIRECT url via Lua, falling back to API.")
+                try {
+                    val (ip, port) = getTcpIpAndPort()
+                    val info =
+                        cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
+                            videoId
+                        ).getOrNull()
+
+                    if (info != null && info.recFilePath.isNotBlank()) {
+                        val fileName =
+                            info.recFilePath.substringAfterLast("\\").substringAfterLast("/")
+                        val encodedFileName =
+                            URLEncoder.encode("video/rec/$fileName", "UTF-8").replace("+", "%20")
+                        val ctok = fetchCtok(baseUrl) ?: ""
+
+                        val builder = android.net.Uri.parse(baseUrl).buildUpon()
+                            .appendPath("api")
+                            .appendPath("xcode")
+                            .appendQueryParameter("fname", encodedFileName)
+                            .appendQueryParameter("option", "10")
+                            .appendQueryParameter("ctok", ctok)
+
+                        if (offsetSeconds > 0) {
+                            builder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+                        }
+
+                        val fallbackDirectUri = builder.build().toString()
+
+                        Log.i(
+                            TAG,
+                            "Generated HTTP Stream URL (DIRECT Fallback via Xcode TS-Live, offset=$offsetSeconds): $fallbackDirectUri"
+                        )
+                        return fallbackDirectUri
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to generate DIRECT fallback URI", e)
+                }
             }
         }
 
-        // フォールバック（API経由）
-        val videoUri = android.net.Uri.Builder()
-            .scheme("http")
-            .encodedAuthority("$ip:$safeHttpPort")
-            .appendPath("api")
-            .appendPath("Movie")
-            .appendQueryParameter("id", videoId.toString())
-            .build()
+        if (!videoPath.isNullOrEmpty()) {
+            val fnameRaw = videoPath.trimStart('/')
+            val decodedFname = java.net.URLDecoder.decode(fnameRaw, "UTF-8")
+            val ctok = fetchCtok(baseUrl) ?: ""
 
-        Log.i(TAG, "Generated HTTP Stream URL (API): $videoUri")
-        return videoUri.toString()
+            val builder = android.net.Uri.parse(baseUrl).buildUpon()
+                .appendPath("api")
+                .appendPath("xcode")
+                .appendQueryParameter("fname", decodedFname)
+                .appendQueryParameter("option", optionIdStr)
+                .appendQueryParameter("ctok", ctok)
+
+            if (offsetSeconds > 0) {
+                builder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+            }
+
+            val videoUri = builder.build().toString()
+
+            Log.i(
+                TAG,
+                "Generated HTTP Stream URL (API / option=$optionIdStr, offset=$offsetSeconds): $videoUri"
+            )
+            return videoUri
+        }
+
+        val fallbackBuilder = android.net.Uri.parse(baseUrl).buildUpon()
+            .appendPath("api")
+            .appendPath("xcode")
+            .appendQueryParameter("id", videoId.toString())
+            .appendQueryParameter("option", optionIdStr)
+
+        if (offsetSeconds > 0) {
+            fallbackBuilder.appendQueryParameter("ofssec", offsetSeconds.toInt().toString())
+        }
+
+        val fallbackUri = fallbackBuilder.build().toString()
+
+        Log.i(
+            TAG,
+            "Generated HTTP Stream URL (Legacy API fallback, offset=$offsetSeconds): $fallbackUri"
+        )
+        return fallbackUri
     }
 
     private fun parseChapterTextToCmSections(
@@ -911,11 +1095,14 @@ class EdcbRepository @Inject constructor(
 
         var currentCmStart: Double? = null
         for ((_, name, ctime) in chapters) {
-            if (name.startsWith("CM") && currentCmStart == null) {
-                currentCmStart = ctime
-            } else if (!name.startsWith("CM") && currentCmStart != null) {
-                cmSections.add(CmSection(currentCmStart, ctime))
-                currentCmStart = null
+            val lowerName = name.lowercase()
+            if (lowerName.startsWith("o") || lowerName.startsWith("cm")) {
+                if (currentCmStart == null) currentCmStart = ctime
+            } else if (lowerName.startsWith("i") || lowerName.isNotBlank()) {
+                if (currentCmStart != null) {
+                    cmSections.add(CmSection(currentCmStart, ctime))
+                    currentCmStart = null
+                }
             }
         }
 
@@ -938,8 +1125,8 @@ class EdcbRepository @Inject constructor(
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun mapToRecordedProgram(
         info: EdcbRecFileInfo,
-        ip: String,
-        httpPort: Int
+        tcpIp: String,
+        baseUrl: String
     ): RecordedProgram = withContext(Dispatchers.IO) {
         var isoStart = ""
         var isoEnd = ""
@@ -989,38 +1176,40 @@ class EdcbRepository @Inject constructor(
             }
         }
 
-        val fallbackUrl = "http://$ip:$httpPort/api/Thumbnail?id=${info.id}"
+        val fallbackUrl = "$baseUrl/api/Thumbnail?id=${info.id}"
 
-        // ★修正: ローカルのパス置換ロジックを削除し、LuaからURL一式を取得する
-        val resolverUrls = fetchResolverUrls(ip, httpPort, info.id)
+        val resolverUrls = fetchResolverUrls(baseUrl, info.id)
 
         val primaryUrl = if (resolverUrls != null) {
-            "http://$ip:$httpPort${resolverUrls.thumbnailUrl}"
+            "$baseUrl${resolverUrls.thumbnailUrl}"
         } else fallbackUrl
 
         var cmSections: List<CmSection>? = null
         if (resolverUrls != null) {
             try {
-                // ★修正: Luaから取得したチャプターURLを使用する
                 val urlsToTry = listOf(
-                    "http://$ip:$httpPort${resolverUrls.chapterUrl}",
-                    "http://$ip:$httpPort${resolverUrls.chapterAltUrl}"
+                    "$baseUrl${resolverUrls.chapterUrl}",
+                    "$baseUrl${resolverUrls.chapterAltUrl}"
                 )
+
+                val client = baseEdcbHttpClient.newBuilder()
+                    .connectTimeout(1500, TimeUnit.MILLISECONDS)
+                    .readTimeout(1500, TimeUnit.MILLISECONDS)
+                    .build()
 
                 var chapterText: String? = null
                 for (urlStr in urlsToTry) {
                     try {
-                        val url = java.net.URL(urlStr)
-                        val connection = url.openConnection() as java.net.HttpURLConnection
-                        connection.requestMethod = "GET"
-                        connection.connectTimeout = 1500
-                        connection.readTimeout = 1500
-
-                        if (connection.responseCode == 200) {
-                            val bytes = connection.inputStream.readBytes()
-                            chapterText = decodeEdcbString(bytes)
-                            break
+                        val request = Request.Builder().url(urlStr).build()
+                        client.newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                val bytes = response.body?.bytes()
+                                if (bytes != null) {
+                                    chapterText = decodeEdcbString(bytes)
+                                }
+                            }
                         }
+                        if (chapterText != null) break
                     } catch (e: Exception) {
                     }
                 }
@@ -1039,25 +1228,28 @@ class EdcbRepository @Inject constructor(
         var thumbnailInfo: ThumbnailInfo? = null
         if (resolverUrls != null) {
             try {
-                // ★修正: Luaから取得した tile.json URLを使用する
                 val jsonUrlsToTry = listOf(
-                    "http://$ip:$httpPort${resolverUrls.tileJsonUrl}"
+                    "$baseUrl${resolverUrls.tileJsonUrl}"
                 )
+
+                val client = baseEdcbHttpClient.newBuilder()
+                    .connectTimeout(1500, TimeUnit.MILLISECONDS)
+                    .readTimeout(1500, TimeUnit.MILLISECONDS)
+                    .build()
 
                 var jsonText: String? = null
                 for (urlStr in jsonUrlsToTry) {
                     try {
-                        val url = java.net.URL(urlStr)
-                        val connection = url.openConnection() as java.net.HttpURLConnection
-                        connection.requestMethod = "GET"
-                        connection.connectTimeout = 1500
-                        connection.readTimeout = 1500
-
-                        if (connection.responseCode == 200) {
-                            val bytes = connection.inputStream.readBytes()
-                            jsonText = String(bytes, Charsets.UTF_8)
-                            break
+                        val request = Request.Builder().url(urlStr).build()
+                        client.newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                val bytes = response.body?.bytes()
+                                if (bytes != null) {
+                                    jsonText = String(bytes, Charsets.UTF_8)
+                                }
+                            }
                         }
+                        if (jsonText != null) break
                     } catch (e: Exception) {
                     }
                 }
@@ -1097,15 +1289,15 @@ class EdcbRepository @Inject constructor(
             RecordedVideo(
                 id = info.id,
                 status = if (isRecording) "Recording" else "Recorded",
-                filePath = "http://$ip:$httpPort/legacy/view.lua?id=${info.id}",
+                filePath = "$baseUrl/legacy/view.lua?id=${info.id}",
                 recordingStartTime = isoStart,
                 recordingEndTime = isoEnd,
                 duration = info.durationSec.toDouble(),
                 containerFormat = "mpegts",
                 videoCodec = "mpeg2",
                 audioCodec = "aac",
-                hasKeyFrames = true, // ★ 追加に伴う引数整理
-                thumbnailInfo = thumbnailInfo, // ★ Jsonから生成した情報をセット
+                hasKeyFrames = true,
+                thumbnailInfo = thumbnailInfo,
                 cmSections = cmSections
             ),
             extractedGenres,
@@ -1196,8 +1388,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun getArchivedJikkyo(v: Int): Result<List<ArchivedComment>> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
 
                 val info = cachedRecInfos?.find { it.id == v } ?: EdcbApi(ip, port).getRecInfo(v)
                     .getOrNull()
@@ -1217,107 +1408,93 @@ class EdcbRepository @Inject constructor(
 
                 val urlStr =
                     "https://jikkyo.tsukumijima.net/api/kakolog/$jikkyoId?starttime=$startUnix&endtime=$endUnix&format=json"
-                val url = java.net.URL(urlStr)
-                val connection = url.openConnection() as java.net.HttpURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 30000
 
-                if (connection.responseCode != 200) {
-                    return@withContext Result.failure(Exception("NX-Jikkyo APIエラー: HTTP ${connection.responseCode}"))
-                }
+                val request = Request.Builder().url(urlStr).build()
 
-                val responseJson = connection.inputStream.bufferedReader().use { it.readText() }
-                val jsonObject = JSONObject(responseJson)
+                val client = baseEdcbHttpClient.newBuilder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(30, TimeUnit.SECONDS)
+                    .build()
 
-                if (jsonObject.has("error")) {
-                    return@withContext Result.failure(
-                        Exception(
-                            "NX-Jikkyo APIエラー: ${
-                                jsonObject.getString(
-                                    "error"
-                                )
-                            }"
-                        )
-                    )
-                }
-
-                val packetArray = jsonObject.optJSONArray("packet") ?: org.json.JSONArray()
-                val comments = mutableListOf<ArchivedComment>()
-
-                for (i in 0 until packetArray.length()) {
-                    val packet = packetArray.optJSONObject(i) ?: continue
-                    val chat = packet.optJSONObject("chat") ?: continue
-
-                    val content = chat.optString("content", "")
-                    if (content.isBlank()) continue
-                    if (chat.optString("deleted") == "1") continue
-
-                    if (content.startsWith("/") && content.matches(Regex("^/[a-z][a-z0-9_-]*(?:\\s|$).*"))) {
-                        if (chat.optString("premium") == "3") continue
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        return@withContext Result.failure(Exception("NX-Jikkyo APIエラー: HTTP ${response.code}"))
                     }
 
-                    val mail = chat.optString("mail", "")
-                    var color = "#FFEAEA"
-                    var position = "right"
-                    var size = "medium"
+                    val responseJson = response.body?.string() ?: ""
+                    val jsonObject = JSONObject(responseJson)
 
-                    val commands = mail.replace("184", "").split(" ")
-                    for (cmd in commands) {
-                        getCommentColor(cmd)?.let { color = it }
-                        getCommentPosition(cmd)?.let { position = it }
-                        getCommentSize(cmd)?.let { size = it }
+                    if (jsonObject.has("error")) {
+                        return@withContext Result.failure(
+                            Exception(
+                                "NX-Jikkyo APIエラー: ${
+                                    jsonObject.getString(
+                                        "error"
+                                    )
+                                }"
+                            )
+                        )
                     }
 
-                    val chatDate = chat.optDouble("date", 0.0)
-                    val chatDateUsec = chat.optDouble("date_usec", 0.0)
-                    val commentTime = (chatDate - startUnix) + (chatDateUsec / 1000000.0)
+                    val packetArray = jsonObject.optJSONArray("packet") ?: org.json.JSONArray()
+                    val comments = mutableListOf<ArchivedComment>()
 
-                    comments.add(
-                        ArchivedComment(
-                            time = commentTime,
-                            type = position,
-                            size = size,
-                            color = color,
-                            author = chat.optString("user_id", ""),
-                            text = content
+                    for (i in 0 until packetArray.length()) {
+                        val packet = packetArray.optJSONObject(i) ?: continue
+                        val chat = packet.optJSONObject("chat") ?: continue
+
+                        val content = chat.optString("content", "")
+                        if (content.isBlank()) continue
+                        if (chat.optString("deleted") == "1") continue
+
+                        if (content.startsWith("/") && content.matches(Regex("^/[a-z][a-z0-9_-]*(?:\\s|$).*"))) {
+                            if (chat.optString("premium") == "3") continue
+                        }
+
+                        val mail = chat.optString("mail", "")
+                        var color = "#FFEAEA"
+                        var position = "right"
+                        var size = "medium"
+
+                        val commands = mail.replace("184", "").split(" ")
+                        for (cmd in commands) {
+                            getCommentColor(cmd)?.let { color = it }
+                            getCommentPosition(cmd)?.let { position = it }
+                            getCommentSize(cmd)?.let { size = it }
+                        }
+
+                        val chatDate = chat.optDouble("date", 0.0)
+                        val chatDateUsec = chat.optDouble("date_usec", 0.0)
+                        val commentTime = (chatDate - startUnix) + (chatDateUsec / 1000000.0)
+
+                        comments.add(
+                            ArchivedComment(
+                                time = commentTime,
+                                type = position,
+                                size = size,
+                                color = color,
+                                author = chat.optString("user_id", ""),
+                                text = content
+                            )
                         )
-                    )
-                }
+                    }
 
-                Log.i(TAG, "Successfully mapped ${comments.size} archived comments.")
-                Result.success(comments)
+                    Log.i(TAG, "Successfully mapped ${comments.size} archived comments.")
+                    return@withContext Result.success(comments)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch archived jikkyo", e)
                 Result.failure(e)
             }
         }
 
-    // ★ 修正: 泥臭いパス変換をすべて削除し、Luaに問い合わせるだけにする
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
         withContext(Dispatchers.IO) {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val baseUrl = getHttpBaseUrl()
 
-            var safeHttpPort = httpPortCache ?: 5510
-            if (httpPortCache == null && !logoDataIniAttempted) {
-                try {
-                    val srvIni = EdcbApi(ip, port).fetchFiles(listOf("EpgTimerSrv.ini"))
-                        ?.firstOrNull { it.data.isNotEmpty() }
-                    if (srvIni != null) {
-                        val iniText = decodeEdcbString(srvIni.data)
-                        Regex("HttpPort\\s*=\\s*(\\d+)").find(iniText)
-                            ?.let { safeHttpPort = it.groupValues[1].toInt() }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to get HttpPort from EpgTimerSrv.ini", e)
-                }
-            }
-
-            // ★修正: Luaに問い合わせて解決する
-            val resolverUrls = fetchResolverUrls(ip, safeHttpPort, videoId)
+            val resolverUrls = fetchResolverUrls(baseUrl, videoId)
             if (resolverUrls != null) {
-                return@withContext "http://$ip:$safeHttpPort${resolverUrls.tileImageUrl}"
+                return@withContext "$baseUrl${resolverUrls.tileImageUrl}"
             }
 
             return@withContext null
@@ -1333,8 +1510,7 @@ class EdcbRepository @Inject constructor(
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getReserves(): Result<List<ReserveItem>> = withContext(Dispatchers.IO) {
         try {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val (ip, port) = getTcpIpAndPort()
             val edcbApi = EdcbApi(ip, port)
 
             fetchEpgDataIfNeeded()
@@ -1467,8 +1643,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun getReservationConditions(): Result<List<ReservationCondition>> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
                 val edcbApi = EdcbApi(ip, port)
 
                 fetchEpgDataIfNeeded()
@@ -1575,8 +1750,7 @@ class EdcbRepository @Inject constructor(
 
     override suspend fun deleteReservation(i: Int): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val (ip, port) = getTcpIpAndPort()
             val edcbApi = EdcbApi(ip, port)
 
             val result = edcbApi.sendDelReserve(listOf(i))
@@ -1602,8 +1776,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun deleteReservationCondition(i: Int): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
                 val edcbApi = EdcbApi(ip, port)
 
                 val result = edcbApi.sendDelAutoAdd(listOf(i))
@@ -1693,8 +1866,7 @@ class EdcbRepository @Inject constructor(
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun addReserve(r: ReserveRequest): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val (ip, port) = getTcpIpAndPort()
             val edcbApi = EdcbApi(ip, port)
 
             fetchEpgDataIfNeeded()
@@ -1788,8 +1960,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun updateReserve(i: Int, r: ReserveRequest): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
                 val edcbApi = EdcbApi(ip, port)
 
                 val reserves = edcbApi.getReserves().getOrThrow()
@@ -1977,8 +2148,7 @@ class EdcbRepository @Inject constructor(
     override suspend fun addReservationCondition(r: ReservationConditionAddRequest): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
-                val ip = settingsRepository.edcbIp.first()
-                val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+                val (ip, port) = getTcpIpAndPort()
                 val edcbApi = EdcbApi(ip, port)
 
                 fetchEpgDataIfNeeded()
@@ -2018,8 +2188,7 @@ class EdcbRepository @Inject constructor(
         r: ReservationConditionUpdateRequest
     ): Result<ReservationCondition> = withContext(Dispatchers.IO) {
         try {
-            val ip = settingsRepository.edcbIp.first()
-            val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
+            val (ip, port) = getTcpIpAndPort()
             val edcbApi = EdcbApi(ip, port)
 
             val existingList = edcbApi.getAutoAddConditions().getOrThrow()

@@ -31,14 +31,22 @@ enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
 
 @Stable
 class LivePlayerState(
-    val context: Context,
-    initialQuality: String
+    val context: Context
 ) {
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
-    var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
+
+    // ★ 修正: initialQuality 引数に頼らず、空の状態で安全に初期化する
+    var currentQuality by mutableStateOf(
+        StreamQuality(
+            label = "読み込み中...",
+            value = "",
+            isRawTs = false
+        )
+    )
     var currentStreamSource by mutableStateOf(StreamSource.KONOMITV)
 
-    // ViewModelから同期されるステータス群
+    var isEdcbDirect by mutableStateOf(false)
+
     var playerError by mutableStateOf<String?>(null)
     var isPlayerPlaying by mutableStateOf(false)
     var signalInfo by mutableStateOf(SignalMetadata())
@@ -65,7 +73,6 @@ class LivePlayerState(
 
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
 
-    // L字クロップ状態
     var lCropEnabled by mutableStateOf(false)
     var lCropMode by mutableStateOf(LCropMode.HIDDEN)
     var lCropZoom by mutableFloatStateOf(100f)
@@ -125,7 +132,6 @@ class LivePlayerState(
         onPiPRequested: () -> Unit,
         onBackPressed: () -> Unit
     ): Boolean {
-        // L字クロップ ダイレクト調整モード時のキーイベント
         if (lCropMode == LCropMode.DIRECT_ADJUST) {
             val keyCode = keyEvent.nativeKeyEvent.keyCode
             val isTargetKey = keyCode in listOf(
@@ -140,22 +146,10 @@ class LivePlayerState(
                 if (!isActionDown) return true
 
                 when (keyCode) {
-                    android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                        lCropY -= 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        lCropY += 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        lCropX -= 2f
-                    }
-
-                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        lCropX += 2f
-                    }
-
+                    android.view.KeyEvent.KEYCODE_DPAD_UP -> lCropY -= 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> lCropY += 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> lCropX -= 2f
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> lCropX += 2f
                     android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER -> {
                         lCropZoom = when {
                             lCropZoom < 125f -> 125f
@@ -166,9 +160,8 @@ class LivePlayerState(
                         }
                     }
 
-                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> {
-                        lCropMode = LCropMode.MENU
-                    }
+                    android.view.KeyEvent.KEYCODE_BACK, android.view.KeyEvent.KEYCODE_ESCAPE -> lCropMode =
+                        LCropMode.MENU
                 }
                 return true
             }
@@ -332,10 +325,9 @@ class LivePlayerState(
 
 @Composable
 fun rememberLivePlayerState(
-    context: Context,
-    initialQuality: String
+    context: Context
 ): LivePlayerState {
-    return remember(initialQuality) {
-        LivePlayerState(context, initialQuality)
+    return remember {
+        LivePlayerState(context)
     }
 }

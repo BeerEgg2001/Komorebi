@@ -225,7 +225,7 @@ class KonomiRepository @Inject constructor(
     // ★ 追加: UrlBuilderへの依存をリポジトリ内に隠蔽
     // ==========================================
 
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String {
+    override suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int): String {
         val ip = settingsRepository.konomiIp.first()
         val port = settingsRepository.konomiPort.first()
         return UrlBuilder.getKonomiTvLiveStreamUrl(ip, port, channelId, quality)
@@ -254,7 +254,8 @@ class KonomiRepository @Inject constructor(
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSec: Double
     ): String {
         val ip = settingsRepository.konomiIp.first()
         val port = settingsRepository.konomiPort.first()

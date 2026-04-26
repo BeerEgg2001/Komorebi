@@ -23,7 +23,8 @@ class SettingsRepository @Inject constructor(
     companion object {
         val BACKEND_TYPE = stringPreferencesKey("backend_type")
         val EDCB_IP = stringPreferencesKey("edcb_ip")
-        val EDCB_PORT = stringPreferencesKey("edcb_port")
+        val EDCB_PORT = stringPreferencesKey("edcb_port") // これはTCP用(4510)として維持
+        val EDCB_HTTP_PORT = stringPreferencesKey("edcb_http_port") // HTTP用ポート
 
         val EDCB_RECORD_PLAY_METHOD = stringPreferencesKey("edcb_record_play_method")
         val EPGSTATION_IP = stringPreferencesKey("epgstation_ip")
@@ -48,6 +49,9 @@ class SettingsRepository @Inject constructor(
 
         val PLAYER_UI_MODE = stringPreferencesKey("player_ui_mode")
 
+        // ★ 追加: 自動CMスキップの設定キー
+        val AUTO_CM_SKIP = stringPreferencesKey("auto_cm_skip")
+
         val LAB_ANNICT_INTEGRATION = stringPreferencesKey("lab_annict_integration")
         val LAB_SHOBOCAL_INTEGRATION = stringPreferencesKey("lab_shobocal_integration")
         val LAB_ALLOW_MIRAKURUN_DUAL = stringPreferencesKey("lab_allow_mirakurun_dual")
@@ -68,9 +72,11 @@ class SettingsRepository @Inject constructor(
 
         val RECEIVE_BETA_UPDATES = booleanPreferencesKey("receive_beta_updates")
         val HIDE_SUB_CHANNELS = booleanPreferencesKey("hide_sub_channels")
+
+        // ★ 追加: APIから取得した画質リストをDBにキャッシュ保存するためのキー
+        val AVAILABLE_STREAM_QUALITIES = stringPreferencesKey("available_stream_qualities")
     }
 
-    // ★ 修正: 初期化の判定を「バックエンドが選ばれたか」ではなく「IPが正しく設定されたか」に変更
     val isInitialized: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
             val backend = preferences[BACKEND_TYPE] ?: "KONOMITV"
@@ -96,8 +102,11 @@ class SettingsRepository @Inject constructor(
     val edcbPort: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[EDCB_PORT] ?: "4510" }
 
+    val edcbHttpPort: Flow<String> =
+        context.dataStore.data.map { it[EDCB_HTTP_PORT] ?: "5510" }
+
     val edcbRecordPlayMethod: Flow<String> = context.dataStore.data
-        .map { preferences -> preferences[EDCB_RECORD_PLAY_METHOD] ?: "API" }
+        .map { preferences -> preferences[EDCB_RECORD_PLAY_METHOD] ?: "DIRECT" }
 
     val epgStationIp: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[EPGSTATION_IP] ?: "" }
@@ -156,6 +165,10 @@ class SettingsRepository @Inject constructor(
     val playerUiMode: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[PLAYER_UI_MODE] ?: "MODERN" }
 
+    // ★ 追加: 自動CMスキップ（デフォルトはOFF）
+    val autoCmSkip: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[AUTO_CM_SKIP] ?: "OFF" }
+
     val labAnnictIntegration: Flow<String> = context.dataStore.data
         .map { preferences -> preferences[LAB_ANNICT_INTEGRATION] ?: "OFF" }
 
@@ -210,6 +223,10 @@ class SettingsRepository @Inject constructor(
     val hideSubChannels: Flow<Boolean> = context.dataStore.data
         .map { preferences -> preferences[HIDE_SUB_CHANNELS] ?: false }
 
+    // ★ 追加: キャッシュされたリストを即座に読み出すFlow
+    val availableStreamQualities: Flow<String> = context.dataStore.data
+        .map { preferences -> preferences[AVAILABLE_STREAM_QUALITIES] ?: "" }
+
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,
         value: String
@@ -243,6 +260,22 @@ class SettingsRepository @Inject constructor(
             ip = "http://$ip"
         }
         return "$ip:$port"
+    }
+
+    suspend fun getEdcbFullUrl(): String {
+        val prefs = context.dataStore.data.first()
+        var ip = prefs[EDCB_IP] ?: ""
+        val port = prefs[EDCB_HTTP_PORT] ?: "5510"
+        if (ip.isEmpty()) return ""
+
+        if (ip.startsWith("http://") || ip.startsWith("https://")) {
+            return "$ip:$port"
+        }
+
+        val isSsl = port == "5511" || port.endsWith("s")
+        val scheme = if (isSsl) "https://" else "http://"
+
+        return "$scheme$ip:$port"
     }
 
     suspend fun getStartupTabOnce(): String {

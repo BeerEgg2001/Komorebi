@@ -9,6 +9,8 @@ import coil.imageLoader
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -31,6 +33,9 @@ import io.ktor.server.request.receiveParameters
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 @Keep
 data class PostRecordingBatch(
@@ -43,10 +48,60 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
+    private val recordProvider: RecordProvider,
     private val db: AppDatabase
 ) : ViewModel() {
 
     private val gson = Gson()
+
+    private val _dynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
+
+    val availableQualities: StateFlow<List<StreamQuality>> = combine(
+        _dynamicQualities,
+        settingsRepository.availableStreamQualities,
+        settingsRepository.backendType,
+        settingsRepository.liveQuality,
+        settingsRepository.videoQuality
+    ) { dynamicList, json, backend, currentLive, currentVideo ->
+        if (backend == "EDCB") {
+            if (dynamicList != null && dynamicList.isNotEmpty()) {
+                return@combine dynamicList
+            }
+
+            if (json.isNotBlank()) {
+                try {
+                    val type = object : TypeToken<List<StreamQuality>>() {}.type
+                    val list = gson.fromJson<List<StreamQuality>>(json, type) ?: emptyList()
+                    if (list.isNotEmpty()) return@combine list
+                } catch (e: Exception) {
+                }
+            }
+
+            val dummyList = mutableListOf<StreamQuality>()
+            if (currentLive.isNotBlank()) {
+                dummyList.add(
+                    StreamQuality(
+                        label = "設定値 ($currentLive)",
+                        value = currentLive,
+                        isRawTs = false
+                    )
+                )
+            }
+            if (currentVideo.isNotBlank() && currentVideo != currentLive) {
+                dummyList.add(
+                    StreamQuality(
+                        label = "設定値 ($currentVideo)",
+                        value = currentVideo,
+                        isRawTs = false
+                    )
+                )
+            }
+
+            if (dummyList.isEmpty()) StreamQuality.DEFAULT_QUALITIES else dummyList
+        } else {
+            StreamQuality.DEFAULT_QUALITIES
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreamQuality.DEFAULT_QUALITIES)
 
     val totalRecordCount: StateFlow<Int> = db.recordedProgramDao().getTotalCountFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -110,9 +165,11 @@ class SettingsViewModel @Inject constructor(
     val audioOutputMode: StateFlow<String> = settingsRepository.audioOutputMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "DOWNMIX")
 
-    // ★ 追加: プレイヤーUIモードを公開
     val playerUiMode: StateFlow<String> = settingsRepository.playerUiMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "MODERN")
+
+    val autoCmSkip: StateFlow<String> = settingsRepository.autoCmSkip
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
 
     val labAnnictIntegration: StateFlow<String> = settingsRepository.labAnnictIntegration
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "OFF")
@@ -130,6 +187,87 @@ class SettingsViewModel @Inject constructor(
     val timeFormat: StateFlow<String> = settingsRepository.timeFormat
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
 
+    init {
+        forceSyncStreamQualities()
+    }
+
+    private fun forceSyncStreamQualities() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val backend = settingsRepository.backendType.first()
+
+                // ★ ユーザー提案の神ロジック: API通信"前"の値を保存しておく
+                val preLive = settingsRepository.liveQuality.first()
+                val preVideo = settingsRepository.videoQuality.first()
+
+                if (backend == "EDCB") {
+                    val fetched = recordProvider.getStreamQualities()
+                    if (fetched.isNotEmpty()) {
+                        _dynamicQualities.value = fetched
+                        settingsRepository.saveString(
+                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                            gson.toJson(fetched)
+                        )
+
+                        // ★ API通信"後"の最新の値を再取得
+                        val postLive = settingsRepository.liveQuality.first()
+                        val postVideo = settingsRepository.videoQuality.first()
+
+                        // 通信中にユーザーが「爆速で」変更していなければ(preLive == postLive)、無効な値の場合のみ上書きする
+                        if (preLive == postLive) {
+                            if (fetched.none { it.value == postLive }) {
+                                settingsRepository.saveString(
+                                    SettingsRepository.LIVE_QUALITY,
+                                    fetched.first().value
+                                )
+                            }
+                        }
+                        if (preVideo == postVideo) {
+                            if (fetched.none { it.value == postVideo }) {
+                                settingsRepository.saveString(
+                                    SettingsRepository.VIDEO_QUALITY,
+                                    fetched.first().value
+                                )
+                            }
+                        }
+                    } else {
+                        _dynamicQualities.value = emptyList()
+                    }
+                } else if (backend == "KONOMITV") {
+                    settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")
+                    val defQualities = StreamQuality.DEFAULT_QUALITIES
+
+                    // ★ 同様に通信完了後の最新値を取得
+                    val postLive = settingsRepository.liveQuality.first()
+                    val postVideo = settingsRepository.videoQuality.first()
+
+                    // ユーザーが変更していなければフォールバック
+                    if (preLive == postLive) {
+                        if (defQualities.none { it.value == postLive }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.LIVE_QUALITY,
+                                defQualities.first().value
+                            )
+                        }
+                    }
+                    if (preVideo == postVideo) {
+                        if (defQualities.none { it.value == postVideo }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.VIDEO_QUALITY,
+                                defQualities.first().value
+                            )
+                        }
+                    }
+                } else {
+                    settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")
+                }
+            } catch (e: Exception) {
+                Log.e("SettingsViewModel", "Failed to sync stream qualities to cache", e)
+                _dynamicQualities.value = emptyList()
+            }
+        }
+    }
+
     fun updateBackendType(newType: String) = viewModelScope.launch {
         val oldType = backendType.value
 
@@ -137,29 +275,23 @@ class SettingsViewModel @Inject constructor(
 
         settingsRepository.saveString(SettingsRepository.BACKEND_TYPE, newType)
 
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             try {
                 db.clearAllTables()
                 context.imageLoader.memoryCache?.clear()
                 context.imageLoader.diskCache?.clear()
-                android.util.Log.i(
-                    "SettingsViewModel",
-                    "Backend changed to $newType. Cleared AppDatabase and Image Caches."
-                )
             } catch (e: Exception) {
-                android.util.Log.e(
-                    "SettingsViewModel",
-                    "Failed to clear DB/Caches on backend change",
-                    e
-                )
+                Log.e("SettingsViewModel", "Failed to clear DB/Caches on backend change", e)
             }
         }
 
         syncEngine.launchSyncAllRecords(forceFullSync = true)
+        forceSyncStreamQualities()
     }
 
     fun updateEdcbIp(ip: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_IP, ip)
+        forceSyncStreamQualities()
     }
 
     fun updateEdcbPort(port: String) = viewModelScope.launch {
@@ -168,6 +300,7 @@ class SettingsViewModel @Inject constructor(
 
     fun updateEdcbRecordPlayMethod(method: String) = viewModelScope.launch {
         settingsRepository.saveString(SettingsRepository.EDCB_RECORD_PLAY_METHOD, method)
+        forceSyncStreamQualities()
     }
 
     fun updateEpgStationIp(ip: String) = viewModelScope.launch {
@@ -365,9 +498,10 @@ class SettingsViewModel @Inject constructor(
 
     fun toggleHideSubChannels() {
         viewModelScope.launch {
+            val current = settingsRepository.hideSubChannels.first()
             settingsRepository.saveBoolean(
                 SettingsRepository.HIDE_SUB_CHANNELS,
-                !hideSubChannels.value
+                !current
             )
         }
     }

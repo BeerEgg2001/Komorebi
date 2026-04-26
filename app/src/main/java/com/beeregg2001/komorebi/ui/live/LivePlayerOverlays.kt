@@ -640,7 +640,6 @@ fun LCropOverlay(
                                     focusedContentColor = focusedContentColor
                                 )
                             ) {
-                                // ★ 修正: 表示用のラベルを日本語に変換
                                 val originLabel = when (state.lCropOrigin) {
                                     ZoomOrigin.TopLeft -> "左上"
                                     ZoomOrigin.TopRight -> "右上"

@@ -18,13 +18,22 @@ data class ChapterInfo(
 )
 
 @Stable
-class VideoPlayerState(
-    initialQuality: String
-) {
+class VideoPlayerState {
     // 再生設定
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
     var currentSpeed by mutableFloatStateOf(1.0f)
-    var currentQuality by mutableStateOf(StreamQuality.fromValue(initialQuality))
+
+    // ★ 修正: initialQuality 引数に頼らず、空の状態で安全に初期化する
+    var currentQuality by mutableStateOf(
+        StreamQuality(
+            label = "読み込み中...",
+            value = "",
+            isRawTs = false
+        )
+    )
+
+    // API経由の擬似シーク時に使用する仮想的なオフセット時間（ミリ秒）
+    var playbackOffsetMs by mutableLongStateOf(0L)
 
     // UI状態
     var indicatorState by mutableStateOf<IndicatorState?>(null)
@@ -32,15 +41,16 @@ class VideoPlayerState(
     var wasPlayingBeforeSceneSearch by mutableStateOf(false)
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
-    // 字幕・実況の表示フラグ
+    // 字幕・実況・機能の表示フラグ
     var isCommentEnabled by mutableStateOf(true)
     var isSubtitleEnabled by mutableStateOf(false)
+    var isAutoCmSkipEnabled by mutableStateOf(false)
 
     // 戻るキー長押し判定用
     var backKeyDownTime by mutableLongStateOf(0L)
     var isBackKeyLongPressed by mutableStateOf(false)
 
-    // ★ 追加: モダンUI時のシークバーフォーカス状態
+    // モダンUI時のシークバーフォーカス状態
     var isSeekBarFocused by mutableStateOf(false)
 
     // L字クロップ関連の状態変数
@@ -65,8 +75,9 @@ class VideoPlayerState(
 }
 
 @Composable
-fun rememberVideoPlayerState(initialQuality: String): VideoPlayerState {
-    return remember(initialQuality) {
-        VideoPlayerState(initialQuality)
+fun rememberVideoPlayerState(): VideoPlayerState {
+    // ★ 修正: initialQuality をキーから外すことで、画質変更時に画面状態が初期化されるのを防ぐ
+    return remember {
+        VideoPlayerState()
     }
 }

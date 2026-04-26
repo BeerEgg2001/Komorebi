@@ -222,6 +222,7 @@ fun ConnectionSettingsContent(
     backendType: String,
     edcbIp: String,
     edcbPort: String,
+    edcbHttpPort: String,
     epgStationIp: String,
     epgStationPort: String,
     kIp: String,
@@ -238,6 +239,7 @@ fun ConnectionSettingsContent(
     backendTypeR: FocusRequester,
     backendIpR: FocusRequester,
     backendPortR: FocusRequester,
+    edcbHttpPortR: FocusRequester,
     prefSrcR: FocusRequester,
     overrideIpR: FocusRequester,
     overridePortR: FocusRequester,
@@ -255,7 +257,6 @@ fun ConnectionSettingsContent(
         SettingsSection("メインシステム設定") {
             val backendLabel = when (backendType) {
                 "EDCB" -> "EDCB (EpgTimerSrv)"
-                "EPGSTATION" -> "EPGStation"
                 "MIRAKURUN_ONLY" -> "Mirakurun (録画なし)"
                 else -> "KonomiTV"
             }
@@ -276,28 +277,25 @@ fun ConnectionSettingsContent(
 
             val currentIp = when (backendType) {
                 "EDCB" -> edcbIp
-                "EPGSTATION" -> epgStationIp
                 "MIRAKURUN_ONLY" -> mIp
                 else -> kIp
             }
             val currentPort = when (backendType) {
                 "EDCB" -> edcbPort
-                "EPGSTATION" -> epgStationPort
                 "MIRAKURUN_ONLY" -> mPort
                 else -> kPort
             }
             val ipTitle = when (backendType) {
                 "EDCB" -> "EDCB (IPアドレス)"
-                "EPGSTATION" -> "EPGStation (IPアドレス)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (IPアドレス)"
                 else -> "KonomiTV (IPアドレス)"
             }
             val portTitle = when (backendType) {
-                "EDCB" -> "EDCB (ポート)"
-                "EPGSTATION" -> "EPGStation (ポート)"
+                "EDCB" -> "EDCB (TCPポート)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (ポート)"
                 else -> "KonomiTV (ポート)"
             }
+            val edcbHttpPortTitle = "EDCB (HTTP/HTTPSポート)"
 
             SettingItem(
                 title = ipTitle,
@@ -317,10 +315,27 @@ fun ConnectionSettingsContent(
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
                         down =
-                            if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                            if (backendType == "EDCB") edcbHttpPortR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
+            if (backendType == "EDCB") {
+                SettingItem(
+                    title = edcbHttpPortTitle,
+                    value = edcbHttpPort,
+                    icon = Icons.Default.Numbers,
+                    modifier = Modifier
+                        .focusRequester(edcbHttpPortR)
+                        .focusProperties {
+                            left = sidebarR
+                            up = backendPortR
+                            down =
+                                if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                        },
+                    // ★ 修正: TCPポートの編集画面が開いてしまうバグを修正
+                    onClick = { onClick(edcbHttpPortR); onEdit(edcbHttpPortTitle, edcbHttpPort) }
+                )
+            }
 
             if (currentIp.isBlank() || currentPort.isBlank()) {
                 ValidationErrorText("メインシステムのIPアドレスまたはポート番号が未設定です。\n番組情報の取得や録画機能が正常に動作しません。")
@@ -331,13 +346,13 @@ fun ConnectionSettingsContent(
             SettingsSection("EDCB 録画再生設定") {
                 SettingItem(
                     title = "録画ファイルの再生方式",
-                    value = if (edcbPlayMethod == "DIRECT") "直接アクセス (高速シーク可)" else "API経由 (api/Movie)",
+                    value = if (edcbPlayMethod == "DIRECT") "直接アクセス (高速シーク可)" else "API経由 (api/xcode)",
                     icon = Icons.Default.PlayCircleOutline,
                     modifier = Modifier
                         .focusRequester(edcbPlayMethodR)
                         .focusProperties {
                             left = sidebarR
-                            up = backendPortR
+                            up = edcbHttpPortR
                             down = prefSrcR
                         },
                     onClick = { onClick(edcbPlayMethodR); onSelectEdcbPlayMethod() }
@@ -351,6 +366,7 @@ fun ConnectionSettingsContent(
                 val srcLabel = when {
                     prefSrc == "MIRAKURUN" -> "Mirakurun を優先"
                     prefSrc == "EDCB" && backendType != "EDCB" -> "EDCB (TCP) を優先"
+                    prefSrc == "EDCB" && backendType == "EDCB" -> "EDCB (ダイレクトストリーミング)"
                     else -> "メインシステムに従う"
                 }
 
@@ -440,14 +456,17 @@ fun PlaybackSettingsContent(
     videoSub: String,
     layerOrder: String,
     audioMode: String,
-    uiMode: String, // ★ 追加: プレイヤーUIモード
+    uiMode: String,
+    autoCmSkip: String,
+    availableQualities: List<StreamQuality>,
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
     audioR: FocusRequester,
     layerR: FocusRequester,
-    uiModeR: FocusRequester, // ★ 追加: UIモード設定用のFocusRequester
+    uiModeR: FocusRequester,
+    autoCmSkipR: FocusRequester,
     sidebarR: FocusRequester,
     onL: () -> Unit,
     onV: () -> Unit,
@@ -455,7 +474,8 @@ fun PlaybackSettingsContent(
     onVideoSub: () -> Unit,
     onAudioMode: () -> Unit,
     onLayer: () -> Unit,
-    onUiMode: () -> Unit, // ★ 追加: 変更時のコールバック
+    onUiMode: () -> Unit,
+    onAutoCmSkip: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -468,7 +488,8 @@ fun PlaybackSettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_QUALITY) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_LIVE_QUALITY,
-                StreamQuality.fromValue(liveQ).label,
+                availableQualities.find { it.value == liveQ }?.label
+                    ?: availableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(liveR)
@@ -480,7 +501,8 @@ fun PlaybackSettingsContent(
                 onClick = { onClick(liveR); onL() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_VIDEO_QUALITY,
-                StreamQuality.fromValue(videoQ).label,
+                availableQualities.find { it.value == videoQ }?.label
+                    ?: availableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.VideoFile,
                 modifier = Modifier
                     .focusRequester(videoR)
@@ -539,25 +561,38 @@ fun PlaybackSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = audioR
-                        down = uiModeR // ★ 変更: 下のフォーカスをuiModeRへ
+                        down = uiModeR
                     },
                 onClick = { onClick(layerR); onLayer() })
         }
 
-        // ★ 追加: プレイヤー操作・UI設定セクション
         SettingsSection("プレイヤー操作・UI設定") {
             SettingItem(
                 title = "プレイヤーUIモード",
                 value = if (uiMode == "CLASSIC") "クラシック (D-Pad完結)" else "モダン (オンスクリーン操作)",
-                icon = Icons.Default.SettingsRemote, // アイコンはリモコンのイメージ
+                icon = Icons.Default.SettingsRemote,
                 modifier = Modifier
                     .focusRequester(uiModeR)
                     .focusProperties {
                         left = sidebarR
                         up = layerR
-                        down = FocusRequester.Cancel
+                        down = autoCmSkipR
                     },
                 onClick = { onClick(uiModeR); onUiMode() }
+            )
+
+            SettingItem(
+                title = "自動CMスキップ",
+                value = if (autoCmSkip == "ON") "有効" else "無効",
+                icon = Icons.Default.FastForward,
+                modifier = Modifier
+                    .focusRequester(autoCmSkipR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = uiModeR
+                        down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(autoCmSkipR); onAutoCmSkip() }
             )
         }
     }
@@ -946,7 +981,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0-beta2",
+            "Version 1.1.0-beta3",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

@@ -2,7 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.video.player
 
-import android.util.Log // ★ 追加: ログ用
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -54,7 +55,9 @@ fun PlayerControls(
     isSeekingPreviewVisible: Boolean,
     isModernUi: Boolean,
     isPlaying: Boolean,
-    hasChapters: Boolean, // ★ 追加: チャプターの有無を受け取る
+    hasChapters: Boolean,
+    currentPositionMs: Long,
+    totalDurationMs: Long,
     controlsFocusRequester: FocusRequester,
     onSeekBarFocusChanged: (Boolean) -> Unit,
     onPlayPauseToggle: () -> Unit,
@@ -70,20 +73,15 @@ fun PlayerControls(
 
     DisposableEffect(Unit) { onDispose { loader.release() } }
 
-    var currentPosition by remember { mutableStateOf(exoPlayer.currentPosition.coerceAtLeast(0L)) }
-    var duration by remember { mutableStateOf(exoPlayer.duration.coerceAtLeast(1L)) }
     var bufferedPosition by remember { mutableStateOf(exoPlayer.bufferedPosition.coerceAtLeast(0L)) }
+
+    var displayPositionMs by remember { mutableStateOf(currentPositionMs) }
 
     val tileInfo = program.recordedVideo.thumbnailInfo?.tile
     val tileColumns = tileInfo?.columnCount ?: 1
     val tileInterval = tileInfo?.intervalSec ?: 10.0
     val tileWidth = tileInfo?.tileWidth ?: 320
     val tileHeight = tileInfo?.tileHeight ?: 180
-
-    // ★ ログ仕込み: UI層で認識しているタイル情報
-    LaunchedEffect(tileInfo) {
-        Log.i("PlayerControls", "[Controls] Composed. TileInfo: $tileInfo, URL: $tiledThumbnailUrl")
-    }
 
     var isSeekBarFocused by remember { mutableStateOf(false) }
     val trackHeight by animateDpAsState(if (isSeekBarFocused) 8.dp else 6.dp, label = "trackHeight")
@@ -92,7 +90,13 @@ fun PlayerControls(
         label = "playHeadSize"
     )
 
-    LaunchedEffect(isVisible, isModernUi) {
+    LaunchedEffect(currentPositionMs) {
+        if (kotlin.math.abs(displayPositionMs - currentPositionMs) > 2000) {
+            displayPositionMs = currentPositionMs
+        }
+    }
+
+    LaunchedEffect(isVisible, isModernUi, isPlaying) {
         if (isVisible && isModernUi) {
             delay(100)
             try {
@@ -100,11 +104,19 @@ fun PlayerControls(
             } catch (e: Exception) {
             }
         }
+
+        var lastUpdate = System.currentTimeMillis()
         while (isVisible) {
-            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
-            duration = exoPlayer.duration.coerceAtLeast(1L)
+            val now = System.currentTimeMillis()
+
+            if (isPlaying) {
+                val elapsed = now - lastUpdate
+                displayPositionMs = (displayPositionMs + elapsed).coerceIn(0L, totalDurationMs)
+            }
+
             bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L)
-            delay(100)
+            lastUpdate = now
+            delay(50)
         }
     }
 
@@ -151,7 +163,7 @@ fun PlayerControls(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 AnimatedVisibility(
-                    visible = isSeekingPreviewVisible && !tiledThumbnailUrl.isNullOrBlank() && isModernUi,
+                    visible = isSeekingPreviewVisible && isModernUi, // URLの有無に関わらず表示試行
                     enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
                     exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom)
                 ) {
@@ -162,7 +174,7 @@ fun PlayerControls(
                             .padding(bottom = 12.dp)
                     ) {
                         val progress =
-                            if (duration > 0) (currentPosition.toFloat() / duration).coerceIn(
+                            if (totalDurationMs > 0) (displayPositionMs.toFloat() / totalDurationMs).coerceIn(
                                 0f,
                                 1f
                             ) else 0f
@@ -170,63 +182,70 @@ fun PlayerControls(
 
                         var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
-                        val timeSec = currentPosition / 1000
+                        val timeSec = displayPositionMs / 1000
                         val tileIndex = floor(timeSec / tileInterval).toInt()
                         val col = tileIndex % tileColumns
                         val row = tileIndex / tileColumns
 
                         LaunchedEffect(tiledThumbnailUrl, col, row) {
                             if (tiledThumbnailUrl.isNullOrBlank()) {
-                                Log.w(
-                                    "PlayerControls",
-                                    "[SeekPreview] Image URL is blank. Cannot load preview."
-                                )
                                 return@LaunchedEffect
                             }
-                            Log.i(
-                                "PlayerControls",
-                                "[SeekPreview] Requesting preview tile: col=$col, row=$row, url=$tiledThumbnailUrl"
-                            )
                             val res =
                                 loader.loadTile(tiledThumbnailUrl, col, row, tileWidth, tileHeight)
                             if (res != null) {
                                 bitmap = res
-                            } else {
-                                Log.w(
-                                    "PlayerControls",
-                                    "[SeekPreview] loadTile returned null for col=$col, row=$row"
-                                )
                             }
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
-                                .size(144.dp, 81.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color.DarkGray.copy(alpha = 0.8f))
-                                .border(2.dp, colors.accent, RoundedCornerShape(6.dp))
-                        ) {
-                            if (bitmap != null) {
+                        // ★ 修正: サムネイル画像がない場合は、時間だけを表示する小さな枠にする
+                        if (bitmap != null) {
+                            Box(
+                                modifier = Modifier
+                                    .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
+                                    .size(144.dp, 81.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .border(2.dp, colors.accent, RoundedCornerShape(6.dp))
+                            ) {
                                 Image(
                                     bitmap = bitmap!!.asImageBitmap(),
                                     contentDescription = "Seek Preview",
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
+                                Text(
+                                    text = formatMillisToTime(displayPositionMs),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .background(
+                                            Color.Black.copy(alpha = 0.7f),
+                                            RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
                             }
+                        } else {
                             Text(
-                                text = formatMillisToTime(currentPosition),
+                                text = formatMillisToTime(displayPositionMs),
                                 color = Color.White,
-                                fontSize = 11.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier
-                                    .align(Alignment.BottomCenter)
+                                    .align(androidx.compose.ui.BiasAlignment(horizontalBias, 1f))
                                     .background(
-                                        Color.Black.copy(alpha = 0.7f),
-                                        RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
+                                        Color.Black.copy(alpha = 0.8f),
+                                        RoundedCornerShape(4.dp)
                                     )
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    .border(
+                                        1.dp,
+                                        colors.accent.copy(alpha = 0.5f),
+                                        RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
                             )
                         }
                     }
@@ -237,7 +256,7 @@ fun PlayerControls(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = formatMillisToTime(currentPosition),
+                        text = formatMillisToTime(displayPositionMs),
                         color = Color.White.copy(alpha = 0.9f),
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.width(64.dp)
@@ -253,6 +272,10 @@ fun PlayerControls(
                                 isSeekBarFocused = it.isFocused
                                 onSeekBarFocusChanged(it.isFocused)
                             }
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
                             .focusable(isModernUi),
                         contentAlignment = Alignment.CenterStart
                     ) {
@@ -265,8 +288,11 @@ fun PlayerControls(
                                     RoundedCornerShape(4.dp)
                                 )
                         )
+
                         val bufferProgress =
-                            if (duration > 0) (bufferedPosition.toFloat() / duration).coerceIn(
+                            if (exoPlayer.duration.coerceAtLeast(1L) > 0) (bufferedPosition.toFloat() / exoPlayer.duration.coerceAtLeast(
+                                1L
+                            )).coerceIn(
                                 0f,
                                 1f
                             ) else 0f
@@ -282,7 +308,7 @@ fun PlayerControls(
                             )
                         }
                         val playProgress =
-                            if (duration > 0) (currentPosition.toFloat() / duration).coerceIn(
+                            if (totalDurationMs > 0) (displayPositionMs.toFloat() / totalDurationMs).coerceIn(
                                 0f,
                                 1f
                             ) else 0f
@@ -319,7 +345,7 @@ fun PlayerControls(
                     Spacer(modifier = Modifier.width(16.dp))
 
                     Text(
-                        text = formatMillisToTime(duration),
+                        text = formatMillisToTime(totalDurationMs),
                         color = Color.White.copy(alpha = 0.9f),
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.width(64.dp)
@@ -339,7 +365,6 @@ fun PlayerControls(
                                 label = "番組詳細",
                                 onClick = onInfoToggle
                             )
-                            // ★ 修正: チャプター情報がある場合のみボタンを表示する
                             if (hasChapters) {
                                 OsdIconButton(
                                     icon = Icons.Default.FormatListBulleted,
@@ -406,13 +431,12 @@ fun OsdIconButton(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.15f),
+        // ★ 修正: isPrimary (再生ボタン等) のフォーカス時・非フォーカス時の色を改善
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isPrimary) Color.White.copy(alpha = 0.2f) else Color.White.copy(
-                alpha = 0.1f
-            ),
-            focusedContainerColor = if (isPrimary) colors.accent else Color.White,
+            containerColor = if (isPrimary) colors.accent else Color.White.copy(alpha = 0.1f),
+            focusedContainerColor = Color.White,
             contentColor = Color.White,
-            focusedContentColor = if (isPrimary) (if (colors.isDark) Color.White else Color.Black) else Color.Black
+            focusedContentColor = Color.Black
         ),
         modifier = modifier.size(buttonSize)
     ) {

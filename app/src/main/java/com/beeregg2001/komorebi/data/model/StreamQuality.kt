@@ -1,32 +1,36 @@
 package com.beeregg2001.komorebi.data.model
 
 /**
- * プロジェクト全体で共通の画質定義
+ * プロジェクト全体で共通の画質定義（動的リスト対応のためData Classに変更）
  */
-enum class StreamQuality(val label: String, val value: String) {
-    Q1080P_60("1080p (60fps)", "1080p-60fps"),
-    Q1080P("1080p", "1080p"),
-    Q810P("810p", "810p"),
-    Q720P("720p", "720p"),
-    Q540P("540p", "540p"),
-    Q480P("480p", "480p"),
-    Q360P("360p", "360p"),
-    Q240P("240p", "240p");
-
+data class StreamQuality(
+    val label: String,
+    val value: String,
+    val isRawTs: Boolean = false // 生TS(TS-Live!)かどうかを判定するフラグ
+) {
     companion object {
-        /**
-         * 次の画質へ切り替える（トグル用）
-         */
-        fun next(current: StreamQuality): StreamQuality {
-            val values = entries.toTypedArray()
-            return values[(current.ordinal + 1) % values.size]
-        }
+        // KonomiTVなどのバックエンド用のデフォルト（固定）リスト
+        val DEFAULT_QUALITIES = listOf(
+            StreamQuality("1080p (60fps)", "1080p-60fps"),
+            StreamQuality("1080p", "1080p"),
+            StreamQuality("810p", "810p"),
+            StreamQuality("720p", "720p"),
+            StreamQuality("540p", "540p"),
+            StreamQuality("480p", "480p"),
+            StreamQuality("360p", "360p"),
+            StreamQuality("240p", "240p")
+        )
 
         /**
-         * 文字列から画質型を取得する
+         * 文字列から画質型を取得する（利用可能なリストから検索）
          */
-        fun fromValue(value: String): StreamQuality {
-            return entries.find { it.value == value } ?: Q1080P_60
+        fun fromValue(
+            value: String,
+            availableList: List<StreamQuality> = DEFAULT_QUALITIES
+        ): StreamQuality {
+            return availableList.find { it.value == value }
+                ?: availableList.firstOrNull()
+                ?: DEFAULT_QUALITIES.first()
         }
     }
 }

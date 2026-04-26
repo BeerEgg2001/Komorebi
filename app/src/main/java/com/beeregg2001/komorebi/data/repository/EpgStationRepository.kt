@@ -12,7 +12,7 @@ class EpgStationRepository @Inject constructor(
 ) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider {
 
     override suspend fun getChannels(): ChannelApiResponse = TODO("EPGStation: Not implemented yet")
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String): String = ""
+    override suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int): String = ""
     override suspend fun getChannelLogoUrl(channelId: String): String = ""
 
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
@@ -27,7 +27,8 @@ class EpgStationRepository @Inject constructor(
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
-        sessionId: String
+        sessionId: String,
+        offsetSec: Double
     ): String = ""
 
     override suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> =

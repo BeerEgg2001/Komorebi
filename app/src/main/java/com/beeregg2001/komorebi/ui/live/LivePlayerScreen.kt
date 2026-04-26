@@ -37,11 +37,11 @@ import androidx.media3.ui.PlayerView
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
-// ★ JikkyoClient のインポートを削除
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -58,7 +58,7 @@ private const val TAG = "LivePlayerScreen"
 @Composable
 fun LivePlayerScreen(
     channel: Channel,
-    initialQuality: String = "1080p-60fps",
+    initialQuality: String = "1080p-60fps", // Navigationから渡されるが、DataStoreからの復元までのフォールバックに使用するのみ
     isBaseballMode: Boolean = false,
     isMiniListOpen: Boolean,
     onMiniListToggle: (Boolean) -> Unit,
@@ -85,7 +85,7 @@ fun LivePlayerScreen(
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
 
-    val ps = rememberLivePlayerState(uiContext, initialQuality)
+    val ps = rememberLivePlayerState(uiContext)
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val baseballGroupedChannels by channelViewModel.baseballGroupedChannels.collectAsState()
@@ -109,6 +109,7 @@ fun LivePlayerScreen(
     val availableSources by livePlayerViewModel.availableSources.collectAsState()
     val currentLogoUrl by livePlayerViewModel.currentLogoUrl.collectAsState()
     val shouldCropLogo by livePlayerViewModel.shouldCropLogo.collectAsState()
+    val mainBackendType by livePlayerViewModel.mainBackendType.collectAsState()
 
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
@@ -118,6 +119,9 @@ fun LivePlayerScreen(
     val audioOutputMode by settingsViewModel.audioOutputMode.collectAsState()
     val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
     val allowMirakurunDual by settingsViewModel.labAllowMirakurunDual.collectAsState()
+
+    val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
+    val isModern = playerUiMode == "MODERN"
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
@@ -145,7 +149,6 @@ fun LivePlayerScreen(
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
 
-    // ★ 不要なコメント履歴管理をViewModelへ移譲したためSetを削除
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
 
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -166,6 +169,11 @@ fun LivePlayerScreen(
     val dualStatus by livePlayerViewModel.dualSseStatus.collectAsState()
     val dualDetail by livePlayerViewModel.dualSseDetail.collectAsState()
 
+    val availableQualities by livePlayerViewModel.availableQualities.collectAsState(initial = StreamQuality.DEFAULT_QUALITIES)
+    val isQualitiesLoaded by livePlayerViewModel.isQualitiesLoaded.collectAsState()
+
+    val currentLiveQualityStr by settingsViewModel.liveQuality.collectAsState()
+
     LaunchedEffect(mainError, mainStatus, mainDetail, mainSignal) {
         ps.playerError = mainError
         ps.sseStatus = mainStatus
@@ -183,7 +191,31 @@ fun LivePlayerScreen(
     LaunchedEffect(Unit) {
         if (!isSourceInitialized) {
             ps.currentStreamSource = livePlayerViewModel.getInitialStreamSource()
+            ps.isEdcbDirect = livePlayerViewModel.getInitialEdcbDirect()
             isSourceInitialized = true
+        }
+    }
+
+    LaunchedEffect(ps.currentStreamSource, ps.isEdcbDirect) {
+        livePlayerViewModel.fetchAvailableQualities(ps.currentStreamSource, ps.isEdcbDirect)
+    }
+
+    // ★ 修正: リストがロードされた時、ユーザーが爆速で設定した DataStore の値 (currentLiveQualityStr) を最優先で使う
+    // それがリストに存在しない場合（バックエンド切り替え直後など）にのみ、フォールバックして DataStore を上書きする
+    LaunchedEffect(availableQualities, isQualitiesLoaded, currentLiveQualityStr) {
+        if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
+            val matched = availableQualities.find { it.value == currentLiveQualityStr }
+            if (matched != null) {
+                ps.currentQuality = matched
+            } else {
+                Log.w(
+                    TAG,
+                    "User's liveQuality ($currentLiveQualityStr) is not in the list. Falling back to default."
+                )
+                val fallback = availableQualities.first()
+                ps.currentQuality = fallback
+                livePlayerViewModel.saveLiveQuality(fallback.value)
+            }
         }
     }
 
@@ -268,20 +300,26 @@ fun LivePlayerScreen(
     LaunchedEffect(
         currentChannelItem.id,
         ps.currentStreamSource,
+        ps.isEdcbDirect,
         ps.retryKey,
         ps.currentQuality,
-        ps.isDualDisplayMode,
-        isPiPMode,
-        isSourceInitialized
+        isSourceInitialized,
+        isQualitiesLoaded
     ) {
-        if (!isSourceInitialized) return@LaunchedEffect
-
+        if (!isSourceInitialized || !isQualitiesLoaded) return@LaunchedEffect
         if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") return@LaunchedEffect
+
+        if (ps.currentQuality.value.isBlank()) return@LaunchedEffect
+
+        if (availableQualities.isNotEmpty() && availableQualities.none { it.value == ps.currentQuality.value }) {
+            return@LaunchedEffect
+        }
 
         livePlayerViewModel.playMainChannel(
             uiContext = uiContext,
             channel = currentChannelItem,
             source = ps.currentStreamSource,
+            isEdcbDirect = ps.isEdcbDirect,
             quality = ps.currentQuality
         )
         delay(300); mainFocusRequester.safeRequestFocus(TAG)
@@ -290,20 +328,29 @@ fun LivePlayerScreen(
     LaunchedEffect(
         ps.dualRightChannel,
         ps.currentStreamSource,
+        ps.isEdcbDirect,
         ps.isDualDisplayMode,
         ps.retryKey,
         ps.currentQuality,
-        isSourceInitialized
+        isSourceInitialized,
+        isQualitiesLoaded
     ) {
-        if (!isSourceInitialized) return@LaunchedEffect
+        if (!isSourceInitialized || !isQualitiesLoaded) return@LaunchedEffect
 
         val rightChannel = ps.dualRightChannel
         if (ps.isDualDisplayMode && rightChannel != null) {
             if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") return@LaunchedEffect
+            if (ps.currentQuality.value.isBlank()) return@LaunchedEffect
+
+            if (availableQualities.isNotEmpty() && availableQualities.none { it.value == ps.currentQuality.value }) {
+                return@LaunchedEffect
+            }
+
             livePlayerViewModel.playDualChannel(
                 uiContext = uiContext,
                 channel = rightChannel,
                 source = ps.currentStreamSource,
+                isEdcbDirect = ps.isEdcbDirect,
                 quality = ps.currentQuality
             )
         } else {
@@ -353,14 +400,12 @@ fun LivePlayerScreen(
         }
     }
 
-    // ★追加: チャンネル切替等で画面の古いコメントを全クリアする指令を受信
     LaunchedEffect(Unit) {
         livePlayerViewModel.clearCommentsEvent.collect {
             danmakuViewRef.value?.removeAllDanmakus(true)
         }
     }
 
-    // ★追加: ViewModelから流れてくるコメントを受信して描画するだけ
     LaunchedEffect(Unit) {
         livePlayerViewModel.liveComments.collect { comment ->
             if (!isCommentEnabled || !isHeavyUiReady || ps.isDualDisplayMode) return@collect
@@ -612,6 +657,7 @@ fun LivePlayerScreen(
 
         val showMainLoading = remember(
             ps.currentStreamSource,
+            ps.isEdcbDirect,
             ps.sseStatus,
             ps.sseDetail,
             ps.playerError,
@@ -620,12 +666,16 @@ fun LivePlayerScreen(
             if (ps.playerError != null) return@remember false
             if (ps.currentStreamSource == StreamSource.KONOMITV) {
                 (ps.sseStatus == "Standby" || ps.sseStatus == "Offline") && ps.sseDetail.isNotEmpty()
+            } else if (ps.currentStreamSource == StreamSource.EDCB && !ps.isEdcbDirect) {
+                ps.sseStatus == "Standby" || isMainBuffering
             } else {
                 isMainBuffering
             }
         }
         val mainLoadingText =
-            if (ps.currentStreamSource == StreamSource.KONOMITV) ps.sseDetail else AppStrings.STATUS_LOADING
+            if (ps.currentStreamSource == StreamSource.KONOMITV) ps.sseDetail
+            else if (ps.currentStreamSource == StreamSource.EDCB && !ps.isEdcbDirect && ps.sseStatus == "Standby") ps.sseDetail
+            else AppStrings.STATUS_LOADING
 
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && !ps.isDualDisplayMode && showMainLoading,
@@ -721,78 +771,81 @@ fun LivePlayerScreen(
             )
         }
 
-        androidx.compose.animation.AnimatedVisibility(
+        AnimatedVisibility(
             visible = !isPiPMode && isSubMenuOpen && ps.playerError == null,
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
         ) {
-            TopSubMenuUI(
+            LiveTopSubMenuUI(
+                mainBackendType = mainBackendType,
+                currentStreamSource = ps.currentStreamSource,
+                isEdcbDirect = ps.isEdcbDirect,
+                availableSources = availableSources,
                 currentAudioMode = ps.currentAudioMode,
-                currentSource = ps.currentStreamSource,
-                currentQuality = ps.currentQuality,
-                isMirakurunAvailable = availableSources.size > 1,
                 isSubtitleEnabled = isSubtitleEnabled,
-                isSubtitleSupported = true,
+                currentQuality = ps.currentQuality,
                 isCommentEnabled = isCommentEnabled,
+                isLCropEnabled = ps.lCropEnabled,
                 isRecording = isRecording,
                 isSignalInfoVisible = ps.isSignalInfoVisible,
                 isDualDisplayMode = ps.isDualDisplayMode,
-                isLCropEnabled = ps.lCropEnabled,
-                onLCropToggle = {
-                    ps.lCropEnabled = !ps.lCropEnabled; if (ps.lCropEnabled) {
-                    ps.lCropMode = LCropMode.MENU; onSubMenuToggle(false)
-                } else {
-                    ps.lCropMode = LCropMode.HIDDEN; ps.lCropZoom = 100f; ps.lCropX =
-                        0f; ps.lCropY = 0f; ps.lCropOrigin = ZoomOrigin.TopRight
-                }
-                },
                 onDualDisplayToggle = {
-                    if (!ps.isDualDisplayMode && (ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
-                        ps.previousStreamSource = ps.currentStreamSource
-                        if (availableSources.contains(StreamSource.KONOMITV)) {
-                            ps.currentStreamSource = StreamSource.KONOMITV
-                            onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
-                        }
-                        ps.isDualDisplayMode =
-                            true; onMiniListToggle(true); ps.activeDualPlayerIndex = 1
-                    } else {
-                        if (!ps.isDualDisplayMode) ps.previousStreamSource =
-                            ps.currentStreamSource; ps.isDualDisplayMode =
-                            !ps.isDualDisplayMode; if (ps.isDualDisplayMode) {
-                            onMiniListToggle(true); ps.activeDualPlayerIndex = 1
-                        } else {
-                            ps.previousStreamSource?.let {
-                                if (availableSources.contains(it)) {
-                                    ps.currentStreamSource = it
-                                }
-                                ps.previousStreamSource = null
+                    ps.isDualDisplayMode = !ps.isDualDisplayMode
+                    if (ps.isDualDisplayMode) {
+                        ps.activeDualPlayerIndex = 1
+                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+                            ps.previousStreamSource = ps.currentStreamSource
+                            if (availableSources.contains(StreamSource.KONOMITV)) {
+                                ps.currentStreamSource = StreamSource.KONOMITV
+                                onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
                             }
+                        }
+                    } else {
+                        ps.activeDualPlayerIndex = 0
+                        ps.dualRightChannel = null
+                        ps.leftScreenWeight = 1f
+                        ps.rightScreenWeight = 1f
+                        if (ps.previousStreamSource != null) {
+                            if (availableSources.contains(ps.previousStreamSource!!)) {
+                                ps.currentStreamSource = ps.previousStreamSource!!
+                                onShowToast("元のストリーミングソースに復帰しました")
+                            }
+                            ps.previousStreamSource = null
                         }
                     }
                 },
                 onSwapScreens = {
-                    if (ps.isDualDisplayMode && ps.dualRightChannel != null) {
-                        val oldLeft = currentChannelItem;
-                        val oldRight =
-                            ps.dualRightChannel!!; onChannelSelect(oldRight); ps.dualRightChannel =
-                            oldLeft; onShowToast(AppStrings.TOAST_DUAL_SCREEN_SWAPPED)
+                    if (ps.dualRightChannel != null) {
+                        val temp = currentChannelItem
+                        onChannelSelect(ps.dualRightChannel!!)
+                        ps.dualRightChannel = temp
                     }
                 },
-                onSignalInfoToggle = { ps.isSignalInfoVisible = !ps.isSignalInfoVisible },
                 onRecordToggle = {
-                    if (isRecording) activeReserve?.let {
-                        reserveViewModel.deleteReservation(
-                            it.id
-                        ) { onShowToast(AppStrings.TOAST_RECORDING_STOPPED) }
-                    } else currentChannelItem.programPresent?.id?.let {
-                        reserveViewModel.addReserve(it) {
-                            onShowToast(
-                                AppStrings.TOAST_RECORDING_STARTING
-                            )
+                    if (isRecording) {
+                        if (activeReserve != null) {
+                            reserveViewModel.deleteReservation(activeReserve.id) {}
+                            onShowToast("録画を停止しました")
                         }
-                    }; onSubMenuToggle(false)
+                    } else {
+                        reserveViewModel.addReserve(currentChannelItem.id) {}
+                        onShowToast("録画を開始しました")
+                    }
+                    onSubMenuToggle(false)
                 },
+                onSignalInfoToggle = {
+                    ps.isSignalInfoVisible = !ps.isSignalInfoVisible
+                    if (ps.isSignalInfoVisible) {
+                        onShowToast("信号情報を表示します")
+                    }
+                },
+                availableQualities = availableQualities,
                 focusRequester = subMenuFocusRequester,
+                onSourceSelect = { source, isDirect ->
+                    ps.currentStreamSource = source
+                    ps.isEdcbDirect = isDirect
+                    onSubMenuToggle(false)
+                },
                 onAudioToggle = {
                     ps.currentAudioMode =
                         if (ps.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
@@ -814,45 +867,47 @@ fun LivePlayerScreen(
                     }
                     onShowToast("音声: ${if (ps.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                 },
-                onSourceToggle = {
-                    if (availableSources.size > 1) {
-                        val currentIndex = availableSources.indexOf(ps.currentStreamSource)
-                        val safeIndex = if (currentIndex != -1) currentIndex else 0
-                        val nextIndex = (safeIndex + 1) % availableSources.size
-                        ps.currentStreamSource = availableSources[nextIndex]
-                        onShowToast("ソースを ${ps.currentStreamSource.name} に変更しました")
-                    } else {
-                        onShowToast("他に有効なソースがありません")
-                    }
-                    onSubMenuToggle(false)
-                },
                 onSubtitleToggle = {
-                    subtitleEnabledState.value = !subtitleEnabledState.value; onShowToast(
-                    String.format(
-                        AppStrings.TOAST_SUBTITLE_CHANGED,
-                        if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                    subtitleEnabledState.value = !subtitleEnabledState.value
+                    onShowToast(
+                        String.format(
+                            AppStrings.TOAST_SUBTITLE_CHANGED,
+                            if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                        )
                     )
-                )
-                },
-                onCommentToggle = {
-                    isCommentEnabled = !isCommentEnabled; onShowToast(
-                    String.format(
-                        AppStrings.TOAST_COMMENT_CHANGED,
-                        if (isCommentEnabled) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
-                    )
-                )
                 },
                 onQualitySelect = {
                     if (ps.currentQuality != it) {
-                        ps.currentQuality = it; ps.retryKey++; onShowToast(
-                            String.format(
-                                AppStrings.TOAST_QUALITY_CHANGED,
-                                it.label
-                            )
-                        )
-                    }; onSubMenuToggle(false)
+                        ps.currentQuality = it
+                        livePlayerViewModel.saveLiveQuality(it.value)
+                        ps.retryKey++
+                        onShowToast(String.format(AppStrings.TOAST_QUALITY_CHANGED, it.label))
+                    }
+                    onSubMenuToggle(false)
                 },
-                onCloseMenu = { onSubMenuToggle(false) }
+                onCommentToggle = {
+                    isCommentEnabled = !isCommentEnabled
+                    onShowToast(
+                        String.format(
+                            AppStrings.TOAST_COMMENT_CHANGED,
+                            if (isCommentEnabled) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
+                        )
+                    )
+                },
+                onLCropToggle = {
+                    ps.lCropEnabled = !ps.lCropEnabled
+                    if (ps.lCropEnabled) {
+                        ps.lCropMode = LCropMode.MENU
+                        onSubMenuToggle(false)
+                    } else {
+                        ps.lCropMode = LCropMode.HIDDEN
+                        ps.lCropZoom = 100f; ps.lCropX = 0f; ps.lCropY = 0f; ps.lCropOrigin =
+                            ZoomOrigin.TopRight
+                    }
+                },
+                onCloseMenu = {
+                    onSubMenuToggle(false)
+                }
             )
         }
 

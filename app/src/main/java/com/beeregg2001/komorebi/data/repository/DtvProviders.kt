@@ -9,8 +9,8 @@ import com.beeregg2001.komorebi.data.model.*
 interface LiveProvider {
     suspend fun getChannels(): ChannelApiResponse
 
-    // ★ 修正: SettingsからIP等を取得するため suspend に変更
-    suspend fun getLiveStreamUrl(channelId: String, quality: String): String
+    // ★ 修正: 2画面モードなどで複数のストリームを同時に開くため、streamNumber（n=0,1...）を追加
+    suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int = 0): String
     suspend fun getChannelLogoUrl(channelId: String): String
 }
 
@@ -18,21 +18,25 @@ interface LiveProvider {
  * 2. 録画番組関連の機能を提供するインターフェース
  */
 interface RecordProvider {
-    // ★ エラーが出る場合は、ご自身のKonomiApiの戻り値のクラス名（VideoListResponseなど）に書き換えてください
     suspend fun getRecordedPrograms(page: Int = 1): RecordedApiResponse
     suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram>
     suspend fun searchRecordedPrograms(keyword: String, page: Int = 1): RecordedApiResponse
 
-    // ★ 修正: sessionIdを追加し、suspend に変更
-    suspend fun getRecordStreamUrl(videoId: Int, quality: String, sessionId: String): String
+    suspend fun getRecordStreamUrl(
+        videoId: Int,
+        quality: String,
+        sessionId: String,
+        offsetSeconds: Double = 0.0
+    ): String
 
     suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>>
 
     @androidx.annotation.OptIn(UnstableApi::class)
     suspend fun keepAlive(videoId: Int, quality: String, sessionId: String)
 
-    // ★ 追加: シークバー・シーンサーチ用のタイル画像(スプライト)URLを取得する
     suspend fun getTiledThumbnailUrl(videoId: Int): String?
+
+    suspend fun getStreamQualities(): List<StreamQuality> = emptyList()
 }
 
 /**
