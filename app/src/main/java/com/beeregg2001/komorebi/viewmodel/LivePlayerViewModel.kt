@@ -221,7 +221,7 @@ class LivePlayerViewModel @Inject constructor(
         return false
     }
 
-    // ★ 修正: EPG取得とのデッドロックを避けるためAPIは一切叩かず、DataStoreのJSONキャッシュから即座に復元する
+    // ★ 修正: ご提案の通り、キャッシュが空の場合はEPG取得に割り込んでAPIで取得する！
     fun fetchAvailableQualities(source: StreamSource, isEdcbDirect: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             _isQualitiesLoaded.value = false
@@ -241,28 +241,16 @@ class LivePlayerViewModel @Inject constructor(
                             try {
                                 val type = object : TypeToken<List<StreamQuality>>() {}.type
                                 val list = gson.fromJson<List<StreamQuality>>(json, type)
-                                _availableQualities.value = list ?: StreamQuality.DEFAULT_QUALITIES
+                                if (!list.isNullOrEmpty()) {
+                                    _availableQualities.value = list
+                                } else {
+                                    fetchFromApiAndSave()
+                                }
                             } catch (e: Exception) {
-                                // 万が一JSONパースに失敗した場合はダミーリストを返す
-                                val currentLive = settingsRepository.liveQuality.first()
-                                _availableQualities.value = listOf(
-                                    StreamQuality(
-                                        label = "設定値 ($currentLive)",
-                                        value = currentLive,
-                                        isRawTs = false
-                                    )
-                                )
+                                fetchFromApiAndSave()
                             }
                         } else {
-                            // キャッシュがない場合でも絶対にAPIを叩かず、とりあえず設定値をダミーとして返してUI破壊を防ぐ
-                            val currentLive = settingsRepository.liveQuality.first()
-                            _availableQualities.value = listOf(
-                                StreamQuality(
-                                    label = "設定値 ($currentLive)",
-                                    value = currentLive,
-                                    isRawTs = false
-                                )
-                            )
+                            fetchFromApiAndSave()
                         }
                     }
                 } else if (source == StreamSource.KONOMITV) {
@@ -277,7 +265,7 @@ class LivePlayerViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load stream qualities from cache", e)
+                Log.e(TAG, "Failed to load stream qualities", e)
                 val currentLive = settingsRepository.liveQuality.first()
                 _availableQualities.value = listOf(
                     StreamQuality(
@@ -289,6 +277,35 @@ class LivePlayerViewModel @Inject constructor(
             } finally {
                 _isQualitiesLoaded.value = true
             }
+        }
+    }
+
+    private suspend fun fetchFromApiAndSave() {
+        try {
+            Log.i(TAG, "Cache empty. Interrupting EPG to fetch qualities from API.")
+            val fetched = recordProvider.getStreamQualities()
+            if (fetched.isNotEmpty()) {
+                settingsRepository.saveString(
+                    SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                    gson.toJson(fetched)
+                )
+                _availableQualities.value = fetched
+            } else {
+                val currentLive = settingsRepository.liveQuality.first()
+                _availableQualities.value = listOf(
+                    StreamQuality(
+                        label = "設定値 ($currentLive)",
+                        value = currentLive,
+                        isRawTs = false
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch from API", e)
+            val currentLive = settingsRepository.liveQuality.first()
+            _availableQualities.value = listOf(
+                StreamQuality(label = "設定値 ($currentLive)", value = currentLive, isRawTs = false)
+            )
         }
     }
 
@@ -620,7 +637,6 @@ class LivePlayerViewModel @Inject constructor(
                         withContext(Dispatchers.Main) {
                             _dualSseDetail.value = "トランスコード開始を待機中..."
                         }
-                        // ★ 修正: EDCB トランスコード時に streamNumber = 1 を指定し、メインとパイプを分ける
                         val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 1)
                         if (hlsUrl.isBlank()) {
                             throw Exception("HLSトランスコードの開始に失敗しました")

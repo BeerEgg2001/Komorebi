@@ -54,11 +54,8 @@ class SettingsViewModel @Inject constructor(
 
     private val gson = Gson()
 
-    // ★ 追加: APIから動的に取得したリストを保持するStateFlow
     private val _dynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
 
-    // ★ 修正: 動的リスト、キャッシュ、ライブ設定値、ビデオ設定値の4つを監視し、
-    // API取得が完了次第、リアルタイムでUIのリストを最新化する設計に変更
     val availableQualities: StateFlow<List<StreamQuality>> = combine(
         _dynamicQualities,
         settingsRepository.availableStreamQualities,
@@ -67,12 +64,10 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.videoQuality
     ) { dynamicList, json, backend, currentLive, currentVideo ->
         if (backend == "EDCB") {
-            // 1. 動的取得が成功していれば最優先で返す
             if (dynamicList != null && dynamicList.isNotEmpty()) {
                 return@combine dynamicList
             }
 
-            // 2. キャッシュがあればそれを返す
             if (json.isNotBlank()) {
                 try {
                     val type = object : TypeToken<List<StreamQuality>>() {}.type
@@ -82,7 +77,6 @@ class SettingsViewModel @Inject constructor(
                 }
             }
 
-            // 3. どちらも無い(または取得中)場合は、設定値を保護するダミーリストを返す
             val dummyList = mutableListOf<StreamQuality>()
             if (currentLive.isNotBlank()) {
                 dummyList.add(
@@ -194,7 +188,6 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "24H")
 
     init {
-        // 設定画面が開かれたタイミングで取得を開始する
         forceSyncStreamQualities()
     }
 
@@ -202,6 +195,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val backend = settingsRepository.backendType.first()
+
+                // ★ ユーザー提案の神ロジック: API通信"前"の値を保存しておく
+                val preLive = settingsRepository.liveQuality.first()
+                val preVideo = settingsRepository.videoQuality.first()
+
                 if (backend == "EDCB") {
                     val fetched = recordProvider.getStreamQualities()
                     if (fetched.isNotEmpty()) {
@@ -210,8 +208,55 @@ class SettingsViewModel @Inject constructor(
                             SettingsRepository.AVAILABLE_STREAM_QUALITIES,
                             gson.toJson(fetched)
                         )
+
+                        // ★ API通信"後"の最新の値を再取得
+                        val postLive = settingsRepository.liveQuality.first()
+                        val postVideo = settingsRepository.videoQuality.first()
+
+                        // 通信中にユーザーが「爆速で」変更していなければ(preLive == postLive)、無効な値の場合のみ上書きする
+                        if (preLive == postLive) {
+                            if (fetched.none { it.value == postLive }) {
+                                settingsRepository.saveString(
+                                    SettingsRepository.LIVE_QUALITY,
+                                    fetched.first().value
+                                )
+                            }
+                        }
+                        if (preVideo == postVideo) {
+                            if (fetched.none { it.value == postVideo }) {
+                                settingsRepository.saveString(
+                                    SettingsRepository.VIDEO_QUALITY,
+                                    fetched.first().value
+                                )
+                            }
+                        }
                     } else {
                         _dynamicQualities.value = emptyList()
+                    }
+                } else if (backend == "KONOMITV") {
+                    settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")
+                    val defQualities = StreamQuality.DEFAULT_QUALITIES
+
+                    // ★ 同様に通信完了後の最新値を取得
+                    val postLive = settingsRepository.liveQuality.first()
+                    val postVideo = settingsRepository.videoQuality.first()
+
+                    // ユーザーが変更していなければフォールバック
+                    if (preLive == postLive) {
+                        if (defQualities.none { it.value == postLive }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.LIVE_QUALITY,
+                                defQualities.first().value
+                            )
+                        }
+                    }
+                    if (preVideo == postVideo) {
+                        if (defQualities.none { it.value == postVideo }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.VIDEO_QUALITY,
+                                defQualities.first().value
+                            )
+                        }
                     }
                 } else {
                     settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")

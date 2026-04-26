@@ -58,7 +58,7 @@ private const val TAG = "LivePlayerScreen"
 @Composable
 fun LivePlayerScreen(
     channel: Channel,
-    initialQuality: String = "1080p-60fps",
+    initialQuality: String = "1080p-60fps", // Navigationから渡されるが、DataStoreからの復元までのフォールバックに使用するのみ
     isBaseballMode: Boolean = false,
     isMiniListOpen: Boolean,
     onMiniListToggle: (Boolean) -> Unit,
@@ -85,7 +85,7 @@ fun LivePlayerScreen(
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
 
-    val ps = rememberLivePlayerState(uiContext, initialQuality)
+    val ps = rememberLivePlayerState(uiContext)
 
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val baseballGroupedChannels by channelViewModel.baseballGroupedChannels.collectAsState()
@@ -172,6 +172,8 @@ fun LivePlayerScreen(
     val availableQualities by livePlayerViewModel.availableQualities.collectAsState(initial = StreamQuality.DEFAULT_QUALITIES)
     val isQualitiesLoaded by livePlayerViewModel.isQualitiesLoaded.collectAsState()
 
+    val currentLiveQualityStr by settingsViewModel.liveQuality.collectAsState()
+
     LaunchedEffect(mainError, mainStatus, mainDetail, mainSignal) {
         ps.playerError = mainError
         ps.sseStatus = mainStatus
@@ -198,12 +200,21 @@ fun LivePlayerScreen(
         livePlayerViewModel.fetchAvailableQualities(ps.currentStreamSource, ps.isEdcbDirect)
     }
 
-    // ★ 修正: リスト取得完了時に勝手な上書き(フォールバック)をせず、安全にラベルだけを合わせる
-    LaunchedEffect(availableQualities, isQualitiesLoaded) {
+    // ★ 修正: リストがロードされた時、ユーザーが爆速で設定した DataStore の値 (currentLiveQualityStr) を最優先で使う
+    // それがリストに存在しない場合（バックエンド切り替え直後など）にのみ、フォールバックして DataStore を上書きする
+    LaunchedEffect(availableQualities, isQualitiesLoaded, currentLiveQualityStr) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
-            val matched = availableQualities.find { it.value == ps.currentQuality.value }
+            val matched = availableQualities.find { it.value == currentLiveQualityStr }
             if (matched != null) {
                 ps.currentQuality = matched
+            } else {
+                Log.w(
+                    TAG,
+                    "User's liveQuality ($currentLiveQualityStr) is not in the list. Falling back to default."
+                )
+                val fallback = availableQualities.first()
+                ps.currentQuality = fallback
+                livePlayerViewModel.saveLiveQuality(fallback.value)
             }
         }
     }
@@ -298,6 +309,12 @@ fun LivePlayerScreen(
         if (!isSourceInitialized || !isQualitiesLoaded) return@LaunchedEffect
         if (currentChannelItem.displayChannelId.isBlank() || currentChannelItem.displayChannelId == "null") return@LaunchedEffect
 
+        if (ps.currentQuality.value.isBlank()) return@LaunchedEffect
+
+        if (availableQualities.isNotEmpty() && availableQualities.none { it.value == ps.currentQuality.value }) {
+            return@LaunchedEffect
+        }
+
         livePlayerViewModel.playMainChannel(
             uiContext = uiContext,
             channel = currentChannelItem,
@@ -323,6 +340,11 @@ fun LivePlayerScreen(
         val rightChannel = ps.dualRightChannel
         if (ps.isDualDisplayMode && rightChannel != null) {
             if (rightChannel.displayChannelId.isBlank() || rightChannel.displayChannelId == "null") return@LaunchedEffect
+            if (ps.currentQuality.value.isBlank()) return@LaunchedEffect
+
+            if (availableQualities.isNotEmpty() && availableQualities.none { it.value == ps.currentQuality.value }) {
+                return@LaunchedEffect
+            }
 
             livePlayerViewModel.playDualChannel(
                 uiContext = uiContext,
@@ -857,7 +879,6 @@ fun LivePlayerScreen(
                 onQualitySelect = {
                     if (ps.currentQuality != it) {
                         ps.currentQuality = it
-                        // ★ 手動で変更した画質をDataStoreに保存
                         livePlayerViewModel.saveLiveQuality(it.value)
                         ps.retryKey++
                         onShowToast(String.format(AppStrings.TOAST_QUALITY_CHANGED, it.label))

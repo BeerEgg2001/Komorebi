@@ -68,7 +68,7 @@ private const val DEBUG_TAG = "ChapterDebug"
 fun VideoPlayerScreen(
     program: RecordedProgram,
     initialPositionMs: Long = 0,
-    initialQuality: String = "1080p-60fps",
+    initialQuality: String = "1080p-60fps", // Navigationから渡されるが、DataStoreからの復元までのフォールバックに使用するのみ
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -95,6 +95,9 @@ fun VideoPlayerScreen(
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
 
+    // ★ 追加: VideoPlayerの現在の設定画質をDataStore(ViewModel)から直接監視する
+    val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
+
     LaunchedEffect(tiledThumbnailUrl) {
         Log.i(TAG, "[DataCheck] Screen received tiledThumbnailUrl update: $tiledThumbnailUrl")
     }
@@ -106,6 +109,7 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(program.id) {
         videoPlayerViewModel.fetchProgramDetail(program.id)
+        videoPlayerViewModel.fetchAvailableQualities()
     }
 
     LaunchedEffect(fetchedDetail) {
@@ -114,7 +118,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    val vs = rememberVideoPlayerState(initialQuality)
+    val vs = rememberVideoPlayerState()
 
     val autoCmSkipStr by settingsViewModel.autoCmSkip.collectAsState()
     LaunchedEffect(autoCmSkipStr) {
@@ -122,12 +126,21 @@ fun VideoPlayerScreen(
         Log.i(TAG, "Auto CM Skip globally synced: ${vs.isAutoCmSkipEnabled}")
     }
 
-    // ★ 修正: リスト取得完了時に勝手な上書き(フォールバック)をせず、安全にラベルだけを合わせる
-    LaunchedEffect(availableQualities, isQualitiesLoaded) {
+    // ★ 修正: リストがロードされた時、ユーザーが爆速で設定した DataStore の値 (currentVideoQualityStr) を最優先で使う
+    // それがリストに存在しない場合（バックエンド切り替え直後など）にのみ、フォールバックして DataStore を上書きする
+    LaunchedEffect(availableQualities, isQualitiesLoaded, currentVideoQualityStr) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
-            val matched = availableQualities.find { it.value == vs.currentQuality.value }
+            val matched = availableQualities.find { it.value == currentVideoQualityStr }
             if (matched != null) {
                 vs.currentQuality = matched
+            } else {
+                Log.w(
+                    TAG,
+                    "User's videoQuality ($currentVideoQualityStr) is not in the list. Falling back to default."
+                )
+                val fallback = availableQualities.first()
+                vs.currentQuality = fallback
+                videoPlayerViewModel.saveVideoQuality(fallback.value)
             }
         }
     }
@@ -291,7 +304,6 @@ fun VideoPlayerScreen(
             }
     }
 
-    // ★ 修正: backendType の Unresolved reference エラーを解消
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
@@ -387,6 +399,10 @@ fun VideoPlayerScreen(
 
         if (!isQualitiesLoaded) return@LaunchedEffect
 
+        // ★ 修正: リストがロードされた直後、まだ画質値が確定（フォールバック）していない間は再生を待機する
+        if (vs.currentQuality.value.isBlank()) return@LaunchedEffect
+
+        // 無効な画質のままバックエンドにストリームを要求してクラッシュループに陥るのを防ぐ安全装置
         if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) {
             Log.w(
                 TAG,
@@ -967,7 +983,6 @@ fun VideoPlayerScreen(
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it
-                            // ★ ユーザーが手動で設定を変更したときだけ保存する
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             if (player != null) {
@@ -1121,7 +1136,6 @@ fun VideoPlayerScreen(
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it
-                            // ★ 手動で変更した画質をDataStoreに保存
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             if (player != null) {
@@ -1154,11 +1168,9 @@ fun VideoPlayerScreen(
                             }
                             onShowToast("画質を ${it.label} に変更しました")
                         }
-                        // ★ 修正: valへの代入エラーを解決
                         onSubMenuToggle(false)
                         vs.lastInteractionTime = System.currentTimeMillis()
                     },
-                    // ★ 修正: 足りていなかった引数を補完
                     onCommentToggle = {
                         vs.isCommentEnabled = !vs.isCommentEnabled
                         onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
@@ -1180,7 +1192,7 @@ fun VideoPlayerScreen(
                         } else {
                             onShowToast("自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}")
                         }
-                    }
+                    },
                 )
             }
             PlaybackIndicator(vs.indicatorState)

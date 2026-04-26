@@ -18,19 +18,17 @@ data class ChapterInfo(
 )
 
 @Stable
-class VideoPlayerState(
-    initialQuality: String
-) {
+class VideoPlayerState {
     // 再生設定
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
     var currentSpeed by mutableFloatStateOf(1.0f)
 
-    // ★ 修正: 勝手なフォーマット変換を排除し、初期値のまま確実に保持する
+    // ★ 修正: initialQuality 引数に頼らず、空の状態で安全に初期化する
     var currentQuality by mutableStateOf(
         StreamQuality(
             label = "読み込み中...",
-            value = initialQuality,
-            isRawTs = initialQuality == "direct"
+            value = "",
+            isRawTs = false
         )
     )
 
@@ -77,9 +75,9 @@ class VideoPlayerState(
 }
 
 @Composable
-fun rememberVideoPlayerState(initialQuality: String): VideoPlayerState {
+fun rememberVideoPlayerState(): VideoPlayerState {
     // ★ 修正: initialQuality をキーから外すことで、画質変更時に画面状態が初期化されるのを防ぐ
     return remember {
-        VideoPlayerState(initialQuality)
+        VideoPlayerState()
     }
 }

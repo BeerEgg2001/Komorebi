@@ -31,25 +31,22 @@ enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
 
 @Stable
 class LivePlayerState(
-    val context: Context,
-    initialQuality: String
+    val context: Context
 ) {
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
 
-    // ★ 修正: 勝手なフォーマット変換を排除し、初期値のまま確実に保持する
+    // ★ 修正: initialQuality 引数に頼らず、空の状態で安全に初期化する
     var currentQuality by mutableStateOf(
         StreamQuality(
             label = "読み込み中...",
-            value = initialQuality,
-            isRawTs = initialQuality == "direct"
+            value = "",
+            isRawTs = false
         )
     )
     var currentStreamSource by mutableStateOf(StreamSource.KONOMITV)
 
-    // EDCBのダイレクトストリーミング(TCP)か、トランスコード(HLS)かを判定するフラグ
     var isEdcbDirect by mutableStateOf(false)
 
-    // ViewModelから同期されるステータス群
     var playerError by mutableStateOf<String?>(null)
     var isPlayerPlaying by mutableStateOf(false)
     var signalInfo by mutableStateOf(SignalMetadata())
@@ -76,7 +73,6 @@ class LivePlayerState(
 
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
 
-    // L字クロップ状態
     var lCropEnabled by mutableStateOf(false)
     var lCropMode by mutableStateOf(LCropMode.HIDDEN)
     var lCropZoom by mutableFloatStateOf(100f)
@@ -329,11 +325,9 @@ class LivePlayerState(
 
 @Composable
 fun rememberLivePlayerState(
-    context: Context,
-    initialQuality: String
+    context: Context
 ): LivePlayerState {
-    // ★ 修正: initialQuality をキーから外すことで、画質変更時に画面が初期化されるのを防ぐ
     return remember {
-        LivePlayerState(context, initialQuality)
+        LivePlayerState(context)
     }
 }
