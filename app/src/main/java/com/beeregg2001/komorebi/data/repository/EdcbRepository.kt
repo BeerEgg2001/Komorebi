@@ -94,31 +94,6 @@ class EdcbRepository @Inject constructor(
     private var fullEpgFetchJob: kotlinx.coroutines.Job? = null
     private var isFullEpgFetched = false
 
-    // ★ 追加: Windows(Shift-JIS)とLinux(UTF-8)の違いによる文字化けを吸収する自動補正関数
-    private fun correctEncoding(text: String?): String {
-        if (text.isNullOrBlank()) return ""
-
-        // 既に日本語として正しく読めている場合（Linux等のUTF-8環境、またはEPGデータ等）はそのまま返す
-        if (text.matches(Regex(".*[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF].*"))) {
-            return text
-        }
-
-        try {
-            // WindowsのEDCB(RecInfo2.txt等)でShift-JISとして出力されたテキストが、
-            // API経由で誤ってUTF-8として読まれ文字化けしている場合、ISO-8859-1経由で元のバイト列を救出し、Shift-JISで再デコードする
-            val bytes = text.toByteArray(Charsets.ISO_8859_1)
-            val decoded = String(bytes, charset("Shift_JIS"))
-
-            // 変換結果に日本語が含まれていれば成功とみなして採用する
-            if (decoded.matches(Regex(".*[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF].*"))) {
-                return decoded
-            }
-        } catch (e: Exception) {
-            // 変換に失敗した場合やサポート外の場合は元のテキストをそのまま返す
-        }
-        return text
-    }
-
     private suspend fun getTcpIpAndPort(): Pair<String, Int> {
         val rawIp = settingsRepository.edcbIp.first()
         val cleanIp = rawIp.replace(Regex("^https?://"), "")
@@ -426,13 +401,10 @@ class EdcbRepository @Inject constructor(
             val jkId = getJikkyoId(svc.onid, svc.sid)
             val jikkyoForce = if (jkId != null) forceMap[jkId] ?: 0 else 0
 
-            // ★ チャンネル名は文字化けしないことが多いが一応補正
-            val safeServiceName = correctEncoding(svc.serviceName)
-
             val channel = Channel(
                 id = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
                 displayChannelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}",
-                name = safeServiceName,
+                name = svc.serviceName,
                 channelNumber = formatChannelNumber(
                     type,
                     svc.remoteControlKeyId,
@@ -492,7 +464,6 @@ class EdcbRepository @Inject constructor(
             val channelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}"
 
             val isSubChannel = isSubChannelInternal(type, svc.sid, svc.tsid)
-            val safeServiceName = correctEncoding(svc.serviceName)
 
             val epgChannel = EpgChannel(
                 id = channelId,
@@ -508,7 +479,7 @@ class EdcbRepository @Inject constructor(
                     svc.tsid
                 ),
                 type = type,
-                name = safeServiceName,
+                name = svc.serviceName,
                 jikkyo_force = 0,
                 is_subchannel = isSubChannel,
                 is_radiochannel = false,
@@ -629,16 +600,11 @@ class EdcbRepository @Inject constructor(
         val mappedGenres =
             mapEdcbGenre(this.contentList).map { Genre(major = it.major, middle = it.middle) }
 
-        // EPGデータにも補正をかける
-        val safeTitle = correctEncoding(this.eventName)
-        val safeDescription = correctEncoding(this.eventText)
-        val safeDetailMap = this.detailMap.mapValues { correctEncoding(it.value) }
-
         return Program(
             id = channelId + "_${this.eid}",
-            title = safeTitle,
-            description = safeDescription,
-            detail = safeDetailMap,
+            title = this.eventName,
+            description = this.eventText,
+            detail = this.detailMap,
             startTime = isoStartTime,
             endTime = isoEndTime,
             duration = this.durationSec,
@@ -668,21 +634,16 @@ class EdcbRepository @Inject constructor(
             }
         } else ""
 
-        val safeTitle = correctEncoding(this.eventName)
-        val safeDescription = correctEncoding(this.eventText)
-        val safeExtended = correctEncoding(this.extendedText)
-        val safeDetailMap = this.detailMap.mapValues { correctEncoding(it.value) }
-
         return EpgProgram(
             id = channelId + "_${this.eid}",
             channel_id = channelId,
             network_id = networkId,
             service_id = serviceId,
             event_id = this.eid,
-            title = safeTitle,
-            description = safeDescription,
-            extended = safeExtended,
-            detail = safeDetailMap,
+            title = this.eventName,
+            description = this.eventText,
+            extended = this.extendedText,
+            detail = this.detailMap,
             start_time = isoStartTime,
             end_time = isoEndTime,
             duration = this.durationSec,
@@ -778,6 +739,7 @@ class EdcbRepository @Inject constructor(
         }
     }
 
+    // ★ 修正: streamNumber (n) を引数で受け取り、同時トランスコードを可能にする
     override suspend fun getLiveStreamUrl(
         channelId: String,
         quality: String,
@@ -801,6 +763,7 @@ class EdcbRepository @Inject constructor(
                 val mainCtok = fetchMainCtok(baseUrl) ?: ""
                 Log.i(TAG, "[Live/Dual] 0. Main Ctok: $mainCtok")
 
+                // ★ n=$streamNumber でリクエストを投げる
                 val tvCastUrl =
                     "$baseUrl/api/TvCast?id=$edcbId&n=$streamNumber&json=1&ctok=$mainCtok"
                 val tvCastRequest = Request.Builder()
@@ -824,6 +787,7 @@ class EdcbRepository @Inject constructor(
                 val videoCtok = fetchVideoCtok(baseUrl) ?: mainCtok
                 val hlsKey = "komorebi_live_${streamNumber}_${System.currentTimeMillis()}"
 
+                // ★ n=$streamNumber で HLS セッションを開始
                 val postUrl =
                     "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
                 val formBody = okhttp3.FormBody.Builder()
@@ -852,6 +816,7 @@ class EdcbRepository @Inject constructor(
                 Log.i(TAG, "[Live/Dual] セグメント生成待ち...")
                 kotlinx.coroutines.delay(4000)
 
+                // ★ n=$streamNumber の M3U8 URLを返す
                 val m3u8Url =
                     "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
                 Log.i(TAG, "[Live/Dual] 3. 生成された m3u8 プレイリストURL: $m3u8Url")
@@ -1163,12 +1128,6 @@ class EdcbRepository @Inject constructor(
         tcpIp: String,
         baseUrl: String
     ): RecordedProgram = withContext(Dispatchers.IO) {
-        // ★ 自動補正（Shift-JISの文字化けをUTF-8へ復元）
-        val safeTitle = correctEncoding(info.title)
-        val safeProgramInfo = correctEncoding(info.programInfo)
-        val safeComment = correctEncoding(info.comment)
-        val safeServiceName = correctEncoding(info.serviceName)
-
         var isoStart = ""
         var isoEnd = ""
         if (!info.startTime.isNullOrBlank()) {
@@ -1188,18 +1147,17 @@ class EdcbRepository @Inject constructor(
         val isRecording = info.durationSec == 0 || info.recStatus == 0
         val channelId = "edcb_${info.onid}_${info.tsid}_${info.sid}"
 
-        // 補正済みのテキストを使用して解析
-        val extractedGenres = extractGenresFromProgramInfo(safeProgramInfo)
+        val extractedGenres = extractGenresFromProgramInfo(info.programInfo)
 
-        val detailStartIdx = safeProgramInfo.indexOf("詳細情報")
+        val detailStartIdx = info.programInfo.indexOf("詳細情報")
         val genreStartIdx =
-            safeProgramInfo.indexOf("ジャンル").takeIf { it != -1 } ?: safeProgramInfo.length
+            info.programInfo.indexOf("ジャンル").takeIf { it != -1 } ?: info.programInfo.length
 
-        val cleanDescription = if (safeProgramInfo.isNotBlank()) {
+        val cleanDescription = if (info.programInfo.isNotBlank()) {
             val endIdx = if (detailStartIdx != -1) detailStartIdx else genreStartIdx
-            safeProgramInfo.substring(0, endIdx).trim().ifBlank { safeComment }
+            info.programInfo.substring(0, endIdx).trim().ifBlank { info.comment }
         } else {
-            safeComment
+            info.comment
         }
 
         val detailMap = mutableMapOf<String, String>(
@@ -1208,7 +1166,7 @@ class EdcbRepository @Inject constructor(
         )
 
         if (detailStartIdx != -1 && genreStartIdx > detailStartIdx) {
-            val extText = safeProgramInfo.substring(detailStartIdx + 4, genreStartIdx).trim()
+            val extText = info.programInfo.substring(detailStartIdx + 4, genreStartIdx).trim()
 
             val parsedDetails = EdcbApi.parseProgramExtendedText(extText)
             if (parsedDetails.isNotEmpty() && parsedDetails.keys.any { it.isNotBlank() }) {
@@ -1316,7 +1274,7 @@ class EdcbRepository @Inject constructor(
         }
 
         return@withContext RecordedProgram(
-            info.id, safeTitle, null, false, // ★ 補正済みタイトルを使用
+            info.id, info.title, null, false,
             cleanDescription,
             detailMap,
             isoStart, isoEnd, info.durationSec.toDouble(), info.drops > 0,
@@ -1325,7 +1283,7 @@ class EdcbRepository @Inject constructor(
                 info.onid,
                 channelId,
                 getChannelType(info.onid),
-                safeServiceName, // ★ 補正済みサービス名を使用
+                info.serviceName,
                 String.format("%03d", info.sid % 1000)
             ),
             RecordedVideo(
@@ -1589,11 +1547,6 @@ class EdcbRepository @Inject constructor(
                     res.transportStreamID
                 )
 
-                // ★ 自動補正（Shift-JISの文字化けをUTF-8へ復元）
-                val safeTitle = correctEncoding(res.title)
-                val safeStationName = correctEncoding(stationName)
-                val safeComment = correctEncoding(res.comment)
-
                 val reserveChannel = ReserveChannel(
                     id = channelIdStr,
                     network_Id = res.originalNetworkID.toLong(),
@@ -1601,7 +1554,7 @@ class EdcbRepository @Inject constructor(
                     channelNumber = channelNumber,
                     displayChannelId = channelIdStr,
                     type = channelTypeStr,
-                    name = safeStationName // ★ 補正済みを使用
+                    name = stationName
                 )
 
                 val eventInfo = cachedEvents.find {
@@ -1611,16 +1564,15 @@ class EdcbRepository @Inject constructor(
                             it.eid == res.eventID
                 }
 
-                val description = eventInfo?.eventText?.let { correctEncoding(it) } ?: ""
-                val detail =
-                    eventInfo?.detailMap?.mapValues { correctEncoding(it.value) } ?: emptyMap()
+                val description = eventInfo?.eventText ?: ""
+                val detail = eventInfo?.detailMap ?: emptyMap()
                 val genres = eventInfo?.contentList?.let {
                     mapEdcbGenre(it).map { g -> ReserveGenre(major = g.major, middle = g.middle) }
                 } ?: emptyList()
 
                 val reserveProgram = ReserveProgramDetail(
                     id = channelIdStr + "_${res.eventID}",
-                    title = safeTitle, // ★ 補正済みを使用
+                    title = res.title,
                     description = description,
                     startTime = isoStart,
                     endTime = isoEnd,
@@ -1675,7 +1627,7 @@ class EdcbRepository @Inject constructor(
                     program = reserveProgram,
                     isRecordingInProgress = isRecording,
                     recordingAvailability = availability,
-                    comment = safeComment, // ★ 補正済みを使用
+                    comment = res.comment,
                     estimatedRecordingFileSize = estimatedSize,
                     recordSettings = recordSettings
                 )
@@ -1735,8 +1687,8 @@ class EdcbRepository @Inject constructor(
 
                     val searchCondition = ProgramSearchCondition(
                         isEnabled = cond.recSetting.recMode != 5,
-                        keyword = correctEncoding(cond.searchInfo.andKey), // ★ 補正
-                        excludeKeyword = correctEncoding(cond.searchInfo.notKey), // ★ 補正
+                        keyword = cond.searchInfo.andKey,
+                        excludeKeyword = cond.searchInfo.notKey,
                         note = "",
                         isTitleOnly = cond.searchInfo.titleOnlyFlag != 0,
                         isCaseSensitive = cond.searchInfo.caseSensitive,
