@@ -4,6 +4,11 @@ import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.*
+// ★ 追加: 分割された新しいEDCBリポジトリ群をインポート
+import com.beeregg2001.komorebi.data.repository.edcb.EdcbLiveRepository
+import com.beeregg2001.komorebi.data.repository.edcb.EdcbRecordRepository
+import com.beeregg2001.komorebi.data.repository.edcb.EdcbReserveRepository
+import com.beeregg2001.komorebi.data.repository.edcb.EdcbEpgRepository
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -16,14 +21,43 @@ import javax.inject.Singleton
 class DtvProviderProxy @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val konomiRepository: KonomiRepository,
-    private val edcbRepository: EdcbRepository,
-    private val epgStationRepository: EpgStationRepository
+    private val epgStationRepository: EpgStationRepository,
+    // ★ 修正: 旧 EdcbRepository を削除し、分割した4つのRepositoryをInjectする
+    private val edcbLiveRepository: EdcbLiveRepository,
+    private val edcbRecordRepository: EdcbRecordRepository,
+    private val edcbReserveRepository: EdcbReserveRepository,
+    private val edcbEpgRepository: EdcbEpgRepository
 ) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider {
 
-    // --- ルーティングロジック ---
-    private suspend fun getActiveProvider(): Any {
+    // --- ルーティングロジック（インターフェースごとに特化） ---
+
+    private suspend fun getLiveProvider(): LiveProvider {
         return when (settingsRepository.backendType.first()) {
-            "EDCB" -> edcbRepository
+            "EDCB" -> edcbLiveRepository
+            "EPGSTATION" -> epgStationRepository
+            else -> konomiRepository
+        }
+    }
+
+    private suspend fun getRecordProvider(): RecordProvider {
+        return when (settingsRepository.backendType.first()) {
+            "EDCB" -> edcbRecordRepository
+            "EPGSTATION" -> epgStationRepository
+            else -> konomiRepository
+        }
+    }
+
+    private suspend fun getReserveProvider(): ReserveProvider {
+        return when (settingsRepository.backendType.first()) {
+            "EDCB" -> edcbReserveRepository
+            "EPGSTATION" -> epgStationRepository
+            else -> konomiRepository
+        }
+    }
+
+    private suspend fun getEpgProvider(): EpgProvider {
+        return when (settingsRepository.backendType.first()) {
+            "EDCB" -> edcbEpgRepository
             "EPGSTATION" -> epgStationRepository
             else -> konomiRepository
         }
@@ -35,47 +69,50 @@ class DtvProviderProxy @Inject constructor(
 
     override suspend fun getChannels(): ChannelApiResponse {
         return try {
-            (getActiveProvider() as LiveProvider).getChannels()
+            getLiveProvider().getChannels()
         } catch (e: NotImplementedError) {
             Log.w("DtvProviderProxy", "getChannels is not implemented in active backend. Skipping.")
-            ChannelApiResponse() // 空のリストを返してスキップ
+            ChannelApiResponse()
         } catch (e: Exception) {
             Log.e("DtvProviderProxy", "Error fetching channels. Skipping.", e)
-            ChannelApiResponse() // 空のリストを返してスキップ
+            ChannelApiResponse()
         }
     }
 
-    // ★ 修正: streamNumber を委譲
-    override suspend fun getLiveStreamUrl(channelId: String, quality: String, streamNumber: Int): String {
+    override suspend fun getLiveStreamUrl(
+        channelId: String,
+        quality: String,
+        streamNumber: Int
+    ): String {
         return try {
-            (getActiveProvider() as LiveProvider).getLiveStreamUrl(channelId, quality, streamNumber)
+            getLiveProvider().getLiveStreamUrl(channelId, quality, streamNumber)
         } catch (e: Exception) {
             Log.w("DtvProviderProxy", "getLiveStreamUrl failed or not implemented. Skipping.")
-            "" // 空文字を返してスキップ
+            ""
         }
     }
 
     override suspend fun getChannelLogoUrl(channelId: String): String {
         return try {
-            (getActiveProvider() as LiveProvider).getChannelLogoUrl(channelId)
+            getLiveProvider().getChannelLogoUrl(channelId)
         } catch (e: Exception) {
             Log.w("DtvProviderProxy", "getChannelLogoUrl failed or not implemented. Skipping.")
-            "" // 空文字を返してスキップ（ロゴなしで表示）
+            ""
         }
     }
 
     // ========================================================================
-    // RecordProvider, ReserveProvider, EpgProvider
+    // RecordProvider (録画視聴関連)
     // ========================================================================
 
     override suspend fun getRecordedPrograms(page: Int) =
-        (getActiveProvider() as RecordProvider).getRecordedPrograms(page)
+        getRecordProvider().getRecordedPrograms(page)
 
     override suspend fun getRecordedProgram(videoId: Int) =
-        (getActiveProvider() as RecordProvider).getRecordedProgram(videoId)
+        getRecordProvider().getRecordedProgram(videoId)
 
     override suspend fun searchRecordedPrograms(keyword: String, page: Int) =
-        (getActiveProvider() as RecordProvider).searchRecordedPrograms(keyword, page)
+        getRecordProvider().searchRecordedPrograms(keyword, page)
 
     override suspend fun getRecordStreamUrl(
         videoId: Int,
@@ -83,61 +120,64 @@ class DtvProviderProxy @Inject constructor(
         sessionId: String,
         offsetSeconds: Double
     ) =
-        (getActiveProvider() as RecordProvider).getRecordStreamUrl(
-            videoId,
-            quality,
-            sessionId,
-            offsetSeconds
-        )
+        getRecordProvider().getRecordStreamUrl(videoId, quality, sessionId, offsetSeconds)
 
     override suspend fun getArchivedJikkyo(videoId: Int) =
-        (getActiveProvider() as RecordProvider).getArchivedJikkyo(videoId)
+        getRecordProvider().getArchivedJikkyo(videoId)
 
     @UnstableApi
     override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
-        (getActiveProvider() as RecordProvider).keepAlive(videoId, quality, sessionId)
+        getRecordProvider().keepAlive(videoId, quality, sessionId)
     }
 
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? =
-        (getActiveProvider() as RecordProvider).getTiledThumbnailUrl(videoId)
+        getRecordProvider().getTiledThumbnailUrl(videoId)
 
     override suspend fun getStreamQualities(): List<StreamQuality> =
-        (getActiveProvider() as RecordProvider).getStreamQualities()
+        getRecordProvider().getStreamQualities()
+
+    // ========================================================================
+    // ReserveProvider (録画予約関連)
+    // ========================================================================
 
     override suspend fun getReserves() =
-        (getActiveProvider() as ReserveProvider).getReserves()
+        getReserveProvider().getReserves()
 
     override suspend fun addReserve(request: ReserveRequest) =
-        (getActiveProvider() as ReserveProvider).addReserve(request)
+        getReserveProvider().addReserve(request)
 
     override suspend fun updateReserve(reservationId: Int, request: ReserveRequest) =
-        (getActiveProvider() as ReserveProvider).updateReserve(reservationId, request)
+        getReserveProvider().updateReserve(reservationId, request)
 
     override suspend fun deleteReservation(reservationId: Int) =
-        (getActiveProvider() as ReserveProvider).deleteReservation(reservationId)
+        getReserveProvider().deleteReservation(reservationId)
 
     override suspend fun getReservationConditions() =
-        (getActiveProvider() as ReserveProvider).getReservationConditions()
+        getReserveProvider().getReservationConditions()
 
     override suspend fun addReservationCondition(request: ReservationConditionAddRequest) =
-        (getActiveProvider() as ReserveProvider).addReservationCondition(request)
+        getReserveProvider().addReservationCondition(request)
 
     override suspend fun updateReservationCondition(
         conditionId: Int,
         request: ReservationConditionUpdateRequest
     ) =
-        (getActiveProvider() as ReserveProvider).updateReservationCondition(conditionId, request)
+        getReserveProvider().updateReservationCondition(conditionId, request)
 
     override suspend fun deleteReservationCondition(conditionId: Int) =
-        (getActiveProvider() as ReserveProvider).deleteReservationCondition(conditionId)
+        getReserveProvider().deleteReservationCondition(conditionId)
+
+    // ========================================================================
+    // EpgProvider (番組表関連)
+    // ========================================================================
 
     override suspend fun getEpgPrograms(
         startTime: String?,
         endTime: String?,
         channelType: String?
     ) =
-        (getActiveProvider() as EpgProvider).getEpgPrograms(startTime, endTime, channelType)
+        getEpgProvider().getEpgPrograms(startTime, endTime, channelType)
 
     override suspend fun getPinnedEpgPrograms(pinnedChannelIds: String) =
-        (getActiveProvider() as EpgProvider).getPinnedEpgPrograms(pinnedChannelIds)
+        getEpgProvider().getPinnedEpgPrograms(pinnedChannelIds)
 }

@@ -134,7 +134,7 @@ class EpgViewModel @OptIn(UnstableApi::class)
         loadInitialData()
         // ★ 追加: EDCBのバックグラウンドEPG取得完了を検知して、自分(ViewModel)のキャッシュを更新する
         viewModelScope.launch {
-            com.beeregg2001.komorebi.data.repository.EdcbRepository.epgBackgroundUpdateEvent.collect {
+            com.beeregg2001.komorebi.data.repository.edcb.EdcbEpgCacheManager.epgBackgroundUpdateEvent.collect {
                 Log.i("EpgViewModel", "Background EPG fetch completed! Refreshing ViewModel cache...")
 
                 // ★ 注意: 以下の関数名は、EpgViewModel内で「最初にEPGデータを取得している関数」の名前に書き換えてください。
