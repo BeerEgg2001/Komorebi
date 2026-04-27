@@ -2,13 +2,9 @@
 
 package com.beeregg2001.komorebi.ui.video.player
 
-import android.content.Context
 import android.os.Build
-import android.util.Base64
-import android.util.Log // ログ用
+import android.util.Log
 import android.view.SurfaceView
-import android.view.View
-import android.view.KeyEvent as NativeKeyEvent
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.annotation.OptIn
@@ -29,25 +25,10 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.*
-import androidx.media3.common.audio.*
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.metadata.id3.PrivFrame
-import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -60,7 +41,6 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
-private const val DEBUG_TAG = "ChapterDebug"
 
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
@@ -68,7 +48,7 @@ private const val DEBUG_TAG = "ChapterDebug"
 fun VideoPlayerScreen(
     program: RecordedProgram,
     initialPositionMs: Long = 0,
-    initialQuality: String = "1080p-60fps", // Navigationから渡されるが、DataStoreからの復元までのフォールバックに使用するのみ
+    initialQuality: String = "1080p-60fps",
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -82,7 +62,6 @@ fun VideoPlayerScreen(
     videoPlayerViewModel: VideoPlayerViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var currentProgram by remember { mutableStateOf(program) }
@@ -94,8 +73,6 @@ fun VideoPlayerScreen(
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
-
-    // ★ 追加: VideoPlayerの現在の設定画質をDataStore(ViewModel)から直接監視する
     val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
 
     LaunchedEffect(tiledThumbnailUrl) {
@@ -104,7 +81,6 @@ fun VideoPlayerScreen(
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
     val isModern = playerUiMode == "MODERN"
-
     var isBuffering by remember { mutableStateOf(true) }
 
     LaunchedEffect(program.id) {
@@ -126,8 +102,6 @@ fun VideoPlayerScreen(
         Log.i(TAG, "Auto CM Skip globally synced: ${vs.isAutoCmSkipEnabled}")
     }
 
-    // ★ 修正: リストがロードされた時、ユーザーが爆速で設定した DataStore の値 (currentVideoQualityStr) を最優先で使う
-    // それがリストに存在しない場合（バックエンド切り替え直後など）にのみ、フォールバックして DataStore を上書きする
     LaunchedEffect(availableQualities, isQualitiesLoaded, currentVideoQualityStr) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
             val matched = availableQualities.find { it.value == currentVideoQualityStr }
@@ -186,18 +160,8 @@ fun VideoPlayerScreen(
     var pixelWidthHeightRatio by remember { mutableStateOf(1f) }
 
     var isChapterListOpen by remember { mutableStateOf(false) }
-    var rightKeyDownTime by remember { mutableStateOf(0L) }
-    var isRightKeyLongPressed by remember { mutableStateOf(false) }
-    var leftKeyDownTime by remember { mutableStateOf(0L) }
-    var isLeftKeyLongPressed by remember { mutableStateOf(false) }
-    var downKeyDownTime by remember { mutableStateOf(0L) }
-    var isDownKeyLongPressed by remember { mutableStateOf(false) }
-
     var isSeekingPreviewVisible by remember { mutableStateOf(false) }
     var seekingPreviewJob by remember { mutableStateOf<Job?>(null) }
-
-    var pendingSeekPositionMs by remember { mutableStateOf<Long?>(null) }
-    var lastSeekUpdateTime by remember { mutableStateOf(0L) }
 
     val isSubOverlayOpen =
         isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
@@ -205,10 +169,7 @@ fun VideoPlayerScreen(
     val triggerSeekingPreview: () -> Unit = {
         isSeekingPreviewVisible = true
         seekingPreviewJob?.cancel()
-        seekingPreviewJob = scope.launch {
-            delay(2000)
-            isSeekingPreviewVisible = false
-        }
+        seekingPreviewJob = scope.launch { delay(2000); isSeekingPreviewVisible = false }
     }
 
     LaunchedEffect(program.recordedVideo.id) {
@@ -216,122 +177,45 @@ fun VideoPlayerScreen(
         allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
     }
 
-    val exoPlayer = remember {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(
-                ctx: Context,
-                enableFloat: Boolean,
-                enableParams: Boolean
-            ): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(ctx).setEnableAudioTrackPlaybackParams(false)
-                    .build()
-            }
-        }.apply {
-            setExtensionRendererMode(EXTENSION_RENDERER_MODE_OFF)
-            setEnableDecoderFallback(true)
+    val getCurrentPositionMs: () -> Long
+
+    // ★ 修正: ExoPlayerの生成・管理を外部ファイル(VideoPlayerManager)に委譲
+    val exoPlayer = rememberManagedExoPlayer(
+        vs = vs,
+        scope = scope,
+        webViewRef = webViewRef,
+        onVideoSizeChanged = { w, h, ratio ->
+            videoWidth = w
+            videoHeight = h
+            pixelWidthHeightRatio = ratio
+        },
+        onBufferingChanged = { isBuffering = it },
+        onStopOrDispose = { player ->
+            val posMs =
+                if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+            videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
         }
+    )
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory().apply {
-            setUserAgent("DTVClient/1.0"); setAllowCrossProtocolRedirects(true)
-            setConnectTimeoutMs(90000); setReadTimeoutMs(90000)
-        }
-
-        val extractorsFactory = DefaultExtractorsFactory().apply {
-            setTsExtractorFlags(
-                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
-            )
-            setConstantBitrateSeekingEnabled(true)
-        }
-
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
-
-        val loadControl =
-            DefaultLoadControl.Builder().setBufferDurationsMs(30000, 30000, 1500, 3000)
-                .setPrioritizeTimeOverSizeThresholds(true).build()
-
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build().apply {
-                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-                setAudioAttributes(
-                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .setUsage(C.USAGE_MEDIA).build(), true
-                )
-                addListener(object : Player.Listener {
-                    override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        videoWidth = videoSize.width; videoHeight =
-                            videoSize.height; pixelWidthHeightRatio =
-                            videoSize.pixelWidthHeightRatio
-                    }
-
-                    override fun onIsPlayingChanged(playing: Boolean) {
-                        vs.isPlayerPlaying = playing
-                    }
-
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        isBuffering = (playbackState == Player.STATE_BUFFERING)
-                    }
-
-                    override fun onPlayerError(error: PlaybackException) {
-                        Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
-                        scope.launch {
-                            isBuffering = true; delay(3000L); prepare(); playWhenReady = true
-                        }
-                    }
-
-                    override fun onMetadata(metadata: Metadata) {
-                        if (!vs.isSubtitleEnabled) return
-                        for (i in 0 until metadata.length()) {
-                            val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains(
-                                    "aribb24",
-                                    true
-                                ) || entry.owner.contains("B24", true))
-                            ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                                webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript(
-                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                        null
-                                    )
-                                }
-                            }
-                        }
-                    }
-                })
-            }
+    getCurrentPositionMs = {
+        if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition
     }
 
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
 
-    val getCurrentPositionMs = {
-        if (isLiveStream) {
-            vs.playbackOffsetMs + exoPlayer.currentPosition
-        } else {
-            exoPlayer.currentPosition
-        }
-    }
+    val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
-    val getEffectivePositionMs = {
-        pendingSeekPositionMs ?: getCurrentPositionMs()
-    }
-
-    val performSeek = { targetMs: Long ->
+    val performSeek: (Long) -> Unit = { targetMs: Long ->
         val safeTarget =
             targetMs.coerceIn(0L, (currentProgram.recordedVideo.duration * 1000).toLong())
         if (isLiveStream) {
             scope.launch {
-                isBuffering = true
-                exoPlayer.pause()
+                isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
-
                 val newOffsetSec = safeTarget / 1000.0
                 Log.i(TAG, "Performing Pseudo-Seek (API Offset Reconnect) to $newOffsetSec sec")
-
                 val newUrl = videoPlayerViewModel.resolveStreamUrl(
                     currentProgram.id,
                     vs.currentQuality.value,
@@ -350,14 +234,13 @@ fun VideoPlayerScreen(
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
                 } else {
-                    if (fetchedDetail != null) {
-                        onShowToast("シーク先ストリームの取得に失敗しました")
-                    }
+                    if (fetchedDetail != null) onShowToast("シーク先ストリームの取得に失敗しました")
                 }
             }
         } else {
             exoPlayer.seekTo(safeTarget)
         }
+        Unit
     }
 
     LaunchedEffect(vs.isAutoCmSkipEnabled, chapters) {
@@ -366,10 +249,8 @@ fun VideoPlayerScreen(
             if (vs.isAutoCmSkipEnabled && exoPlayer.isPlaying) {
                 if (chapters.isNotEmpty()) {
                     val currentPos = getCurrentPositionMs()
-                    val cmChapter = chapters.find {
-                        it.isCm && currentPos >= it.startTimeMs && currentPos < (it.endTimeMs - 1500)
-                    }
-
+                    val cmChapter =
+                        chapters.find { it.isCm && currentPos >= it.startTimeMs && currentPos < (it.endTimeMs - 1500) }
                     if (cmChapter != null) {
                         Log.i(
                             TAG,
@@ -395,31 +276,15 @@ fun VideoPlayerScreen(
     var isFirstLoad by remember { mutableStateOf(true) }
 
     LaunchedEffect(currentProgram.id, vs.currentQuality, availableQualities) {
-        if (currentProgram.id == 0) return@LaunchedEffect
-
-        if (!isQualitiesLoaded) return@LaunchedEffect
-
-        // ★ 修正: リストがロードされた直後、まだ画質値が確定（フォールバック）していない間は再生を待機する
-        if (vs.currentQuality.value.isBlank()) return@LaunchedEffect
-
-        // 無効な画質のままバックエンドにストリームを要求してクラッシュループに陥るのを防ぐ安全装置
-        if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) {
-            Log.w(
-                TAG,
-                "Quality ${vs.currentQuality.value} is invalid for current backend. Waiting for fallback correction..."
-            )
-            return@LaunchedEffect
-        }
+        if (currentProgram.id == 0 || !isQualitiesLoaded || vs.currentQuality.value.isBlank()) return@LaunchedEffect
+        if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) return@LaunchedEffect
 
         isBuffering = true
-
         val offsetSec = if (isFirstLoad && initialPositionMs > 0) {
-            vs.playbackOffsetMs = initialPositionMs
-            initialPositionMs / 1000.0
+            vs.playbackOffsetMs = initialPositionMs; initialPositionMs / 1000.0
         } else {
             val currentPos = getCurrentPositionMs()
-            vs.playbackOffsetMs = currentPos
-            currentPos / 1000.0
+            vs.playbackOffsetMs = currentPos; currentPos / 1000.0
         }
 
         val url = videoPlayerViewModel.resolveStreamUrl(
@@ -431,33 +296,22 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-
             if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
                     "m3u8"
                 )
             ) {
                 mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                Log.i(TAG, "Playing as HLS: $url")
-            } else if (url.contains("/api/xcode")) {
-                Log.i(TAG, "Playing as Raw TS via API (TS-Live!): $url")
-            } else if (url.endsWith(".ts", ignoreCase = true) || url.contains("/api/Movie")) {
-                Log.i(TAG, "Playing as Raw TS Direct (EDCB): $url")
             }
-
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-
             if (isFirstLoad && initialPositionMs > 0 && !isLiveStream) {
                 exoPlayer.seekTo(initialPositionMs)
             }
             isFirstLoad = false
-
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
         } else {
-            if (fetchedDetail != null) {
-                onShowToast("ストリームURLの取得に失敗しました")
-            }
+            if (fetchedDetail != null) onShowToast("ストリームURLの取得に失敗しました")
         }
     }
 
@@ -511,15 +365,13 @@ fun VideoPlayerScreen(
     ) {
         if (isPiPMode) return@LaunchedEffect
         delay(150)
-        if (isSubMenuOpen) {
-            subMenuFocusRequester.safeRequestFocus(TAG)
-        } else if (isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen) {
-            // オーバーレイ内で処理
-        } else if (showControls && isModern) {
-            playerControlsFocusRequester.safeRequestFocus(TAG)
-        } else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) {
-            mainFocusRequester.safeRequestFocus(TAG)
-        }
+        if (isSubMenuOpen) subMenuFocusRequester.safeRequestFocus(TAG)
+        else if (showControls && isModern && !isSubOverlayOpen) playerControlsFocusRequester.safeRequestFocus(
+            TAG
+        )
+        else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) mainFocusRequester.safeRequestFocus(
+            TAG
+        )
     }
 
     Box(
@@ -527,289 +379,29 @@ fun VideoPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onPreviewKeyEvent { keyEvent ->
-                if (isPiPMode) return@onPreviewKeyEvent false
-
-                val keyCode = keyEvent.nativeKeyEvent.keyCode
-                val repeatCount = keyEvent.nativeKeyEvent.repeatCount
-                val isActionDown = keyEvent.type == KeyEventType.KeyDown
-                val isActionUp = keyEvent.type == KeyEventType.KeyUp
-
-                if (vs.lCropMode == LCropMode.DIRECT_ADJUST) {
-                    if (isActionDown) {
-                        when (keyCode) {
-                            NativeKeyEvent.KEYCODE_DPAD_UP -> vs.lCropY -= 2f
-                            NativeKeyEvent.KEYCODE_DPAD_DOWN -> vs.lCropY += 2f
-                            NativeKeyEvent.KEYCODE_DPAD_LEFT -> vs.lCropX -= 2f
-                            NativeKeyEvent.KEYCODE_DPAD_RIGHT -> vs.lCropX += 2f
-                            NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                                vs.lCropZoom = when {
-                                    vs.lCropZoom < 125f -> 125f
-                                    vs.lCropZoom < 150f -> 150f
-                                    vs.lCropZoom < 175f -> 175f
-                                    vs.lCropZoom < 200f -> 200f
-                                    else -> 100f
-                                }
-                            }
-
-                            NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
-                                vs.lCropMode = LCropMode.MENU
-                            }
-                        }
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                if (vs.lCropMode == LCropMode.MENU) return@onPreviewKeyEvent false
-                if (isSubOverlayOpen) return@onPreviewKeyEvent false
-
-                if (isActionDown) {
-                    vs.lastInteractionTime = System.currentTimeMillis()
-                }
-
-                if (keyCode == NativeKeyEvent.KEYCODE_BACK || keyCode == NativeKeyEvent.KEYCODE_ESCAPE) {
-                    if (isActionDown) {
-                        if (repeatCount == 0) {
-                            vs.backKeyDownTime = System.currentTimeMillis()
-                            vs.isBackKeyLongPressed = false
-                        } else {
-                            if (!vs.isBackKeyLongPressed && System.currentTimeMillis() - vs.backKeyDownTime > 500) {
-                                vs.isBackKeyLongPressed = true
-                                onPiPRequested()
-                            }
-                        }
-                        return@onPreviewKeyEvent true
-                    } else if (isActionUp) {
-                        if (!vs.isBackKeyLongPressed && System.currentTimeMillis() - vs.backKeyDownTime < 500) {
-                            if (showControls && isModern) {
-                                onShowControlsChange(false)
-                            } else {
-                                onBackPressed()
-                            }
-                        }
-                        vs.backKeyDownTime = 0L
-                        vs.isBackKeyLongPressed = false
-                        return@onPreviewKeyEvent true
-                    }
-                    return@onPreviewKeyEvent false
-                }
-
-                if (isModern) {
-                    if (!showControls) {
-                        if (keyCode in listOf(
-                                NativeKeyEvent.KEYCODE_DPAD_UP,
-                                NativeKeyEvent.KEYCODE_DPAD_DOWN,
-                                NativeKeyEvent.KEYCODE_DPAD_CENTER,
-                                NativeKeyEvent.KEYCODE_ENTER
-                            )
-                        ) {
-                            if (isActionDown) {
-                                onShowControlsChange(true); return@onPreviewKeyEvent true
-                            }
-                            return@onPreviewKeyEvent false
-                        }
-                    } else if (vs.isSeekBarFocused) {
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) return@onPreviewKeyEvent false
-                        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
-                            if (isActionDown) onShowControlsChange(false)
-                            return@onPreviewKeyEvent true
-                        }
-                    } else {
-                        // ボタンフォーカス時はキーを奪わない
-                        return@onPreviewKeyEvent false
-                    }
-                }
-
-                // --- 共通シーク処理 (RIGHT / LEFT) ---
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
-                    val isChapterMode = !isModern || !showControls
-                    if (isActionDown) {
-                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
-
-                        if (repeatCount == 0) {
-                            rightKeyDownTime = System.currentTimeMillis()
-                            isRightKeyLongPressed = false
-                            pendingSeekPositionMs = getCurrentPositionMs()
-                        } else {
-                            if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
-                                isRightKeyLongPressed = true
-                                onShowControlsChange(true)
-                            }
-                            if (isRightKeyLongPressed) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastSeekUpdateTime > 150) { // 150ms間隔でスロットリング
-                                    lastSeekUpdateTime = now
-                                    val totalDuration =
-                                        (currentProgram.recordedVideo.duration * 1000).toLong()
-                                    val currentTarget =
-                                        pendingSeekPositionMs ?: getCurrentPositionMs()
-
-                                    if (isChapterMode) {
-                                        val boundaries = listOf(0L) + chapters.flatMap {
-                                            listOf(
-                                                it.startTimeMs,
-                                                it.endTimeMs
-                                            )
-                                        }.distinct() + totalDuration
-                                        if (boundaries.size <= 2) {
-                                            pendingSeekPositionMs =
-                                                (currentTarget + 180_000).coerceAtMost(totalDuration)
-                                            vs.updateIndicator(Icons.Default.FastForward, "+3m")
-                                        } else {
-                                            val next =
-                                                boundaries.firstOrNull { it > currentTarget + 1000 }
-                                                    ?: totalDuration
-                                            pendingSeekPositionMs = next
-                                            vs.updateIndicator(
-                                                Icons.Default.SkipNext,
-                                                "次チャプター"
-                                            )
-                                        }
-                                    } else {
-                                        // 15秒プレビューシーク（オーバーレイ非表示）
-                                        pendingSeekPositionMs =
-                                            (currentTarget + 15_000).coerceAtMost(totalDuration)
-                                    }
-                                }
-                            }
-                        }
-                    } else if (isActionUp) {
-                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
-
-                        if (!isRightKeyLongPressed) {
-                            onShowControlsChange(true)
-                            val totalDuration =
-                                (currentProgram.recordedVideo.duration * 1000).toLong()
-                            performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration))
-                            if (isChapterMode) vs.updateIndicator(Icons.Default.FastForward, "+30s")
-                        } else {
-                            // 長押し終了時に一括で確定シークを実行
-                            pendingSeekPositionMs?.let { performSeek(it) }
-                        }
-                        pendingSeekPositionMs = null
-                        rightKeyDownTime = 0L
-                        isRightKeyLongPressed = false
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
-                    val isChapterMode = !isModern || !showControls
-                    if (isActionDown) {
-                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
-
-                        if (repeatCount == 0) {
-                            leftKeyDownTime = System.currentTimeMillis()
-                            isLeftKeyLongPressed = false
-                            pendingSeekPositionMs = getCurrentPositionMs()
-                        } else {
-                            if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
-                                isLeftKeyLongPressed = true
-                                onShowControlsChange(true)
-                            }
-                            if (isLeftKeyLongPressed) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastSeekUpdateTime > 150) {
-                                    lastSeekUpdateTime = now
-                                    val currentTarget =
-                                        pendingSeekPositionMs ?: getCurrentPositionMs()
-
-                                    if (isChapterMode) {
-                                        val totalDuration =
-                                            (currentProgram.recordedVideo.duration * 1000).toLong()
-                                        val boundaries = listOf(0L) + chapters.flatMap {
-                                            listOf(
-                                                it.startTimeMs,
-                                                it.endTimeMs
-                                            )
-                                        }.distinct() + totalDuration
-                                        if (boundaries.size <= 2) {
-                                            pendingSeekPositionMs =
-                                                (currentTarget - 60_000).coerceAtLeast(0L)
-                                            vs.updateIndicator(Icons.Default.FastRewind, "-1m")
-                                        } else {
-                                            val prev =
-                                                boundaries.lastOrNull { it < currentTarget - 1000 }
-                                                    ?: 0L
-                                            pendingSeekPositionMs = prev
-                                            vs.updateIndicator(
-                                                Icons.Default.SkipPrevious,
-                                                "前チャプター"
-                                            )
-                                        }
-                                    } else {
-                                        // 15秒プレビュー巻き戻し（オーバーレイ非表示）
-                                        pendingSeekPositionMs =
-                                            (currentTarget - 15_000).coerceAtLeast(0L)
-                                    }
-                                }
-                            }
-                        }
-                    } else if (isActionUp) {
-                        if (isModern && vs.isSeekBarFocused) triggerSeekingPreview()
-
-                        if (!isLeftKeyLongPressed) {
-                            onShowControlsChange(true)
-                            performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                            if (isChapterMode) vs.updateIndicator(Icons.Default.FastRewind, "-10s")
-                        } else {
-                            // 長押し終了時に一括で確定シークを実行
-                            pendingSeekPositionMs?.let { performSeek(it) }
-                        }
-                        pendingSeekPositionMs = null
-                        leftKeyDownTime = 0L
-                        isLeftKeyLongPressed = false
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                // --- 共通アクション処理 ---
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) {
-                    val isChapterMode = !isModern || !showControls
-                    if (!isChapterMode) return@onPreviewKeyEvent false
-                    if (isActionDown) {
-                        if (repeatCount == 0) {
-                            downKeyDownTime = System.currentTimeMillis(); isDownKeyLongPressed =
-                                false
-                        } else {
-                            val elapsed = System.currentTimeMillis() - downKeyDownTime
-                            if (!isDownKeyLongPressed && elapsed > 500) {
-                                isDownKeyLongPressed = true
-                                if (chapters.size > 1) {
-                                    isChapterListOpen = true; onShowControlsChange(true)
-                                }
-                            }
-                        }
-                    } else if (isActionUp) {
-                        if (!isDownKeyLongPressed) {
-                            onShowControlsChange(true); onSceneSearchToggle(true)
-                        }
-                        downKeyDownTime = 0L; isDownKeyLongPressed = false
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
-                    val isChapterMode = !isModern || !showControls
-                    if (!isChapterMode) return@onPreviewKeyEvent false
-                    if (isActionDown) {
-                        onShowControlsChange(true)
-                        if (!isModern) onSubMenuToggle(true)
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER) {
-                    if (isActionDown) {
-                        onShowControlsChange(true)
-                        vs.togglePlayPause(exoPlayer.isPlaying)
-                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                    }
-                    return@onPreviewKeyEvent true
-                }
-
-                return@onPreviewKeyEvent false
-            }) {
-
+                vs.handleKeyEvent(
+                    keyEvent = keyEvent,
+                    isPiPMode = isPiPMode,
+                    isModern = isModern,
+                    showControls = showControls,
+                    isSubOverlayOpen = isSubOverlayOpen,
+                    chapters = chapters,
+                    totalDurationMs = (currentProgram.recordedVideo.duration * 1000).toLong(),
+                    getCurrentPositionMs = getCurrentPositionMs,
+                    performSeek = performSeek,
+                    triggerSeekingPreview = triggerSeekingPreview,
+                    onShowControlsChange = onShowControlsChange,
+                    onPiPRequested = onPiPRequested,
+                    onBackPressed = onBackPressed,
+                    onSceneSearchToggle = { onSceneSearchToggle(it) },
+                    onChapterListToggle = { isChapterListOpen = it },
+                    onSubMenuToggle = onSubMenuToggle,
+                    exoPlayerIsPlaying = exoPlayer.isPlaying,
+                    onPause = { exoPlayer.pause() },
+                    onPlay = { exoPlayer.play() }
+                )
+            }
+    ) {
         AndroidView(
             factory = { ctx ->
                 AspectRatioFrameLayout(ctx).apply {
@@ -822,7 +414,6 @@ fun VideoPlayerScreen(
             update = { view ->
                 val surfaceView = view.getChildAt(0) as SurfaceView
                 exoPlayer.setVideoSurfaceView(surfaceView)
-
                 if (videoWidth > 0 && videoHeight > 0) {
                     val ratio =
                         (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
@@ -882,10 +473,7 @@ fun VideoPlayerScreen(
                             view.visibility =
                                 if (vs.isSubtitleEnabled && !isSubOverlayOpen) android.view.View.VISIBLE else android.view.View.INVISIBLE
                         },
-                        onRelease = { view ->
-                            view.destroy()
-                            webViewRef.value = null
-                        },
+                        onRelease = { view -> view.destroy(); webViewRef.value = null },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -897,7 +485,8 @@ fun VideoPlayerScreen(
                 commentLayer(); subtitleLayer()
             }
             if (isBuffering) CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.Center), color = Color.White
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.White
             )
 
             PlayerControls(
@@ -913,46 +502,43 @@ fun VideoPlayerScreen(
                 totalDurationMs = (currentProgram.recordedVideo.duration * 1000).toLong(),
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
-                onPlayPauseToggle = {
-                    vs.togglePlayPause(exoPlayer.isPlaying)
-                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                },
+                onPlayPauseToggle = { vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play() },
                 onSeekBack = {
-                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                    vs.updateIndicator(Icons.Default.FastRewind, "-10s")
+                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L)); vs.updateIndicator(
+                    Icons.Default.FastRewind,
+                    "-10s"
+                )
                 },
                 onSeekForward = {
                     val totalDuration = (currentProgram.recordedVideo.duration * 1000).toLong()
-                    performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration))
-                    vs.updateIndicator(Icons.Default.FastForward, "+30s")
+                    performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration)); vs.updateIndicator(
+                    Icons.Default.FastForward,
+                    "+30s"
+                )
                 },
                 onChapterListToggle = { isChapterListOpen = true; onShowControlsChange(true) },
                 onInfoToggle = { isProgramInfoOpen = true; onShowControlsChange(true) },
                 onSettingsToggle = {
-                    if (isModern) isModernSettingsOpen = true else onSubMenuToggle(true)
+                    if (isModern) isModernSettingsOpen = true else onSubMenuToggle(
+                        true
+                    )
                 }
             )
 
-            AnimatedVisibility(
-                visible = isProgramInfoOpen,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
+            AnimatedVisibility(visible = isProgramInfoOpen, enter = fadeIn(), exit = fadeOut()) {
                 ProgramInfoOverlay(
                     program = currentProgram,
-                    onClose = { isProgramInfoOpen = false }
-                )
+                    onClose = { isProgramInfoOpen = false })
             }
 
-            AnimatedVisibility(
-                visible = isModernSettingsOpen,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
+            AnimatedVisibility(visible = isModernSettingsOpen, enter = fadeIn(), exit = fadeOut()) {
                 ModernVideoSettingsOverlay(
-                    currentAudioMode = vs.currentAudioMode, currentSpeed = vs.currentSpeed,
-                    isSubtitleEnabled = vs.isSubtitleEnabled, currentQuality = vs.currentQuality,
-                    isCommentEnabled = vs.isCommentEnabled, isLCropEnabled = vs.lCropEnabled,
+                    currentAudioMode = vs.currentAudioMode,
+                    currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled,
+                    currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled,
+                    isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
                     onAudioToggle = {
@@ -962,11 +548,11 @@ fun VideoPlayerScreen(
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
+                            TrackSelectionOverride(
+                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
                             )
+                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
@@ -985,38 +571,37 @@ fun VideoPlayerScreen(
                             vs.currentQuality = it
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
-                            if (player != null) {
-                                val currentPos = getCurrentPositionMs()
-                                if (isEdcbDirect) {
-                                    scope.launch {
-                                        isBuffering = true
-                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
-                                            program.id, it.value, currentSessionId, 0.0
-                                        )
-                                        player.setMediaItem(MediaItem.fromUri(newUrl))
-                                        player.prepare()
-                                        player.seekTo(currentPos)
-                                        player.play()
-                                    }
-                                } else {
-                                    vs.playbackOffsetMs =
-                                        currentPos - (initialPositionMs * 1000).toLong()
-                                    scope.launch {
-                                        isBuffering = true
-                                        val offsetSec = currentPos / 1000.0
-                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
-                                            program.id, it.value, currentSessionId, offsetSec
-                                        )
-                                        player.setMediaItem(MediaItem.fromUri(newUrl))
-                                        player.prepare()
-                                        player.play()
-                                    }
+                            val currentPos = getCurrentPositionMs()
+                            if (isEdcbDirect) {
+                                scope.launch {
+                                    isBuffering = true;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        0.0
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
+                                    currentPos
+                                ); player.play()
+                                }
+                            } else {
+                                vs.playbackOffsetMs =
+                                    currentPos - (initialPositionMs * 1000).toLong()
+                                scope.launch {
+                                    isBuffering = true;
+                                    val offsetSec = currentPos / 1000.0;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        offsetSec
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()
                                 }
                             }
                             onShowToast("画質を ${it.label} に変更しました")
                         }
-                        isModernSettingsOpen = false
-                        vs.lastInteractionTime = System.currentTimeMillis()
+                        isModernSettingsOpen = false; vs.lastInteractionTime =
+                        System.currentTimeMillis()
                     },
                     onCommentToggle = {
                         vs.isCommentEnabled =
@@ -1025,9 +610,8 @@ fun VideoPlayerScreen(
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
-                            vs.lCropMode = LCropMode.MENU
-                            isModernSettingsOpen = false
-                            onShowControlsChange(false)
+                            vs.lCropMode = LCropMode.MENU; isModernSettingsOpen =
+                                false; onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
@@ -1035,11 +619,9 @@ fun VideoPlayerScreen(
                     },
                     onAutoCmSkipToggle = {
                         vs.isAutoCmSkipEnabled = !vs.isAutoCmSkipEnabled
-                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) {
-                            onShowToast("チャプター情報がないためスキップできません")
-                        } else {
-                            onShowToast("自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}")
-                        }
+                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) onShowToast("チャプター情報がないためスキップできません") else onShowToast(
+                            "自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}"
+                        )
                     },
                     onClose = { isModernSettingsOpen = false }
                 )
@@ -1048,63 +630,54 @@ fun VideoPlayerScreen(
             AnimatedVisibility(
                 isSceneSearchOpen,
                 enter = slideInVertically { fullHeight -> fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()
-            ) {
+                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()) {
                 SceneSearchOverlay(
                     program = currentProgram,
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
-                    onSeekRequested = {
-                        performSeek(it)
-                        onSceneSearchToggle(false);
-                    },
-                    onClose = {
-                        onSceneSearchToggle(false);
-                    }
-                )
+                    onSeekRequested = { performSeek(it); onSceneSearchToggle(false); },
+                    onClose = { onSceneSearchToggle(false); })
             }
             AnimatedVisibility(
                 isChapterListOpen,
                 enter = slideInVertically { fullHeight -> fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()
-            ) {
+                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()) {
                 ChapterListOverlay(
                     program = currentProgram,
                     chapters = chapters,
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
-                    onSeekRequested = {
-                        performSeek(it)
-                        isChapterListOpen = false
-                    },
-                    onClose = {
-                        isChapterListOpen = false
-                    }
-                )
+                    onSeekRequested = { performSeek(it); isChapterListOpen = false },
+                    onClose = { isChapterListOpen = false })
             }
 
             androidx.compose.animation.AnimatedVisibility(
-                visible = vs.lCropMode != LCropMode.HIDDEN, enter = fadeIn(), exit = fadeOut()
+                visible = vs.lCropMode != LCropMode.HIDDEN,
+                enter = fadeIn(),
+                exit = fadeOut()
             ) {
                 VideoLCropOverlay(
                     state = vs,
                     onClose = {
                         vs.lCropMode = LCropMode.HIDDEN; scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
+                        delay(200); mainFocusRequester.safeRequestFocus(
+                        TAG
+                    )
                     }
-                    }
-                )
+                    })
             }
 
             AnimatedVisibility(
                 isSubMenuOpen,
                 enter = slideInVertically { fullHeight -> -fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> -fullHeight } + fadeOut()
-            ) {
+                exit = slideOutVertically { fullHeight -> -fullHeight } + fadeOut()) {
                 VideoTopSubMenuUI(
-                    currentAudioMode = vs.currentAudioMode, currentSpeed = vs.currentSpeed,
-                    isSubtitleEnabled = vs.isSubtitleEnabled, currentQuality = vs.currentQuality,
-                    isCommentEnabled = vs.isCommentEnabled, isLCropEnabled = vs.lCropEnabled,
+                    currentAudioMode = vs.currentAudioMode,
+                    currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled,
+                    currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled,
+                    isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
                     focusRequester = subMenuFocusRequester,
@@ -1115,11 +688,11 @@ fun VideoPlayerScreen(
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
+                            TrackSelectionOverride(
+                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                0
                             )
+                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
@@ -1138,48 +711,46 @@ fun VideoPlayerScreen(
                             vs.currentQuality = it
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
-                            if (player != null) {
-                                val currentPos = getCurrentPositionMs()
-                                if (isEdcbDirect) {
-                                    scope.launch {
-                                        isBuffering = true
-                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
-                                            program.id, it.value, currentSessionId, 0.0
-                                        )
-                                        player.setMediaItem(MediaItem.fromUri(newUrl))
-                                        player.prepare()
-                                        player.seekTo(currentPos)
-                                        player.play()
-                                    }
-                                } else {
-                                    vs.playbackOffsetMs =
-                                        currentPos - (initialPositionMs * 1000).toLong()
-                                    scope.launch {
-                                        isBuffering = true
-                                        val offsetSec = currentPos / 1000.0
-                                        val newUrl = videoPlayerViewModel.resolveStreamUrl(
-                                            program.id, it.value, currentSessionId, offsetSec
-                                        )
-                                        player.setMediaItem(MediaItem.fromUri(newUrl))
-                                        player.prepare()
-                                        player.play()
-                                    }
+                            val currentPos = getCurrentPositionMs()
+                            if (isEdcbDirect) {
+                                scope.launch {
+                                    isBuffering = true;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        0.0
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
+                                    currentPos
+                                ); player.play()
+                                }
+                            } else {
+                                vs.playbackOffsetMs =
+                                    currentPos - (initialPositionMs * 1000).toLong()
+                                scope.launch {
+                                    isBuffering = true;
+                                    val offsetSec = currentPos / 1000.0;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        offsetSec
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()
                                 }
                             }
                             onShowToast("画質を ${it.label} に変更しました")
                         }
-                        onSubMenuToggle(false)
-                        vs.lastInteractionTime = System.currentTimeMillis()
+                        onSubMenuToggle(false); vs.lastInteractionTime = System.currentTimeMillis()
                     },
                     onCommentToggle = {
-                        vs.isCommentEnabled = !vs.isCommentEnabled
-                        onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
+                        vs.isCommentEnabled =
+                            !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
                     },
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
-                            vs.lCropMode = LCropMode.MENU; onSubMenuToggle(false)
-                            onShowControlsChange(false)
+                            vs.lCropMode =
+                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
@@ -1187,37 +758,13 @@ fun VideoPlayerScreen(
                     },
                     onAutoCmSkipToggle = {
                         vs.isAutoCmSkipEnabled = !vs.isAutoCmSkipEnabled
-                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) {
-                            onShowToast("チャプター情報がないためスキップできません")
-                        } else {
-                            onShowToast("自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}")
-                        }
+                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) onShowToast("チャプター情報がないためスキップできません") else onShowToast(
+                            "自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}"
+                        )
                     },
                 )
             }
             PlaybackIndicator(vs.indicatorState)
-        }
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                exoPlayer.pause()
-                videoPlayerViewModel.updateWatchHistory(
-                    program,
-                    getCurrentPositionMs() / 1000.0
-                )
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            videoPlayerViewModel.updateWatchHistory(
-                program,
-                getCurrentPositionMs() / 1000.0
-            )
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            exoPlayer.release()
         }
     }
 }
