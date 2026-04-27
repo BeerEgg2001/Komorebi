@@ -16,8 +16,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13 // 数値を1つ上げる
-        versionName = "1.1.0-beta3"
+        versionCode = 15 // 数値を1つ上げる
+        versionName = "1.1.0 Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -128,6 +128,7 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.hilt.work)
     implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.runtime)
     "baselineProfile"(project(":baselineprofile"))
     ksp("com.google.dagger:hilt-compiler:2.59.2")
 

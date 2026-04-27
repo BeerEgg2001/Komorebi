@@ -177,8 +177,6 @@ fun VideoPlayerScreen(
         allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
     }
 
-    val getCurrentPositionMs: () -> Long
-
     // ★ 修正: ExoPlayerの生成・管理を外部ファイル(VideoPlayerManager)に委譲
     val exoPlayer = rememberManagedExoPlayer(
         vs = vs,
@@ -197,8 +195,9 @@ fun VideoPlayerScreen(
         }
     )
 
-    getCurrentPositionMs = {
-        if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition
+    // ★ 修正: ラムダを remember でキャッシュし、毎フレーム作り直されるのを防ぎます
+    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
+        { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     }
 
     val backendType by settingsViewModel.backendType.collectAsState()
@@ -470,8 +469,12 @@ fun VideoPlayerScreen(
                             }
                         },
                         update = { view ->
-                            view.visibility =
-                                if (vs.isSubtitleEnabled && !isSubOverlayOpen) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                            // ★ 修正: visibilityの変更は激重なので、alpha（透明度）の変更に留めます
+                            val targetAlpha =
+                                if (vs.isSubtitleEnabled && !isSubOverlayOpen) 1f else 0f
+                            if (view.alpha != targetAlpha) {
+                                view.alpha = targetAlpha
+                            }
                         },
                         onRelease = { view -> view.destroy(); webViewRef.value = null },
                         modifier = Modifier.fillMaxSize()
@@ -493,6 +496,7 @@ fun VideoPlayerScreen(
                 exoPlayer = exoPlayer,
                 program = currentProgram,
                 tiledThumbnailUrl = tiledThumbnailUrl,
+                allComments = allComments, // ★ これを追加！
                 isVisible = showControls && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN,
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
@@ -548,11 +552,11 @@ fun VideoPlayerScreen(
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                            TrackSelectionOverride(
-                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                0
+                                TrackSelectionOverride(
+                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                    0
+                                )
                             )
-                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
@@ -688,11 +692,11 @@ fun VideoPlayerScreen(
                             exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
                         exoPlayer.trackSelectionParameters.buildUpon()
                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                            TrackSelectionOverride(
-                                tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                0
+                                TrackSelectionOverride(
+                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                    0
+                                )
                             )
-                        )
                             .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {

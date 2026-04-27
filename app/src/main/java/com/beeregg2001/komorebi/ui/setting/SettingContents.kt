@@ -2,11 +2,12 @@
 
 package com.beeregg2001.komorebi.ui.setting
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -21,6 +22,9 @@ import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
+import java.time.LocalTime
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 private fun ValidationErrorText(message: String) {
@@ -332,7 +336,6 @@ fun ConnectionSettingsContent(
                             down =
                                 if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
                         },
-                    // ★ 修正: TCPポートの編集画面が開いてしまうバグを修正
                     onClick = { onClick(edcbHttpPortR); onEdit(edcbHttpPortTitle, edcbHttpPort) }
                 )
             }
@@ -598,6 +601,8 @@ fun PlaybackSettingsContent(
     }
 }
 
+// ★ 時間連動テーマ対応版
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HomeDisplaySettingsContent(
     isDarkMode: Boolean,
@@ -621,6 +626,64 @@ fun HomeDisplaySettingsContent(
     onExPaid: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
+    // 時間連動テーマかどうかの判定
+    val isTimeLinked = themeSeason == "KOMOREBI" || themeSeason == "KYLE"
+    val baseThemeLabel =
+        if (isTimeLinked) "時間連動テーマ" else if (isDarkMode) AppStrings.SETTINGS_VALUE_THEME_DARK else AppStrings.SETTINGS_VALUE_THEME_LIGHT
+
+    // 現在時刻を1分ごとに取得
+    var currentTime by remember { mutableStateOf(LocalTime.now()) }
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(60000)
+            currentTime = LocalTime.now()
+        }
+    }
+
+    // 時間帯の判定
+    val hour = currentTime.hour
+    val timeZoneName = when {
+        hour in 5..8 -> "MORNING"
+        hour in 9..15 -> "DAY"
+        hour in 16..18 -> "EVENING"
+        else -> "NIGHT"
+    }
+
+    // テーマ名・セット名の動的表示
+    val colorSettingTitle =
+        if (isTimeLinked) "時間連動セット" else AppStrings.SETTINGS_ITEM_THEME_COLOR
+    val detailThemeLabel = if (isTimeLinked) {
+        when (themeSeason) {
+            "KOMOREBI" -> when (timeZoneName) {
+                "MORNING" -> "朝焼け"
+                "DAY" -> "木漏れ日"
+                "EVENING" -> "夕焼け"
+                else -> "月光"
+            }
+
+            "KYLE" -> when (timeZoneName) {
+                "MORNING" -> "朝凪のカイル"
+                "DAY" -> "海辺のカイル"
+                "EVENING" -> "夕凪のカイル"
+                else -> "深海の夜のカイル"
+            }
+
+            else -> themeSeason
+        }
+    } else {
+        when (themeSeason) {
+            "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING
+            "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER
+            "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN
+            "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER
+            "KOMOREBI_DAY" -> "木漏れ日"
+            "KOMOREBI_NIGHT" -> "月光"
+            "KYLE_DAY" -> "海辺のカイル"
+            "KYLE_NIGHT" -> "深海のカイル"
+            else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
             AppStrings.SETTINGS_CATEGORY_HOME,
@@ -631,7 +694,7 @@ fun HomeDisplaySettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_UI_CUSTOM) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_BASE_THEME,
-                if (isDarkMode) AppStrings.SETTINGS_VALUE_THEME_DARK else AppStrings.SETTINGS_VALUE_THEME_LIGHT,
+                baseThemeLabel,
                 Icons.Default.Brightness4,
                 modifier = Modifier
                     .focusRequester(modeR)
@@ -641,12 +704,10 @@ fun HomeDisplaySettingsContent(
                         down = colorR
                     },
                 onClick = { onClick(modeR); onMode() })
-            val seasonLabel = when (themeSeason) {
-                "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING; "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER; "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN; "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER; else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
-            }
+
             SettingItem(
-                AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                seasonLabel,
+                colorSettingTitle, // ★ タイトルも切り替わる
+                detailThemeLabel,  // ★ 中身が時間で動的に変わる
                 Icons.Default.ColorLens,
                 modifier = Modifier
                     .focusRequester(colorR)
@@ -981,7 +1042,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0-beta3",
+            "Version 1.1.0 Stable",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

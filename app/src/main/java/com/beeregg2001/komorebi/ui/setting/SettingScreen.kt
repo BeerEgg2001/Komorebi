@@ -648,14 +648,20 @@ fun SettingsScreen(
                     )
 
                     4 -> {
-                        val isLightMode =
-                            prefs.currentThemeName.contains("LIGHT") || prefs.currentThemeName == "HIGHTONE"
+                        val isLightMode = prefs.currentThemeName.contains("LIGHT") ||
+                                prefs.currentThemeName == "HIGHTONE" ||
+                                prefs.currentThemeName == "KOMOREBI_DAY" ||
+                                prefs.currentThemeName == "KYLE_DAY"
                         val isDarkMode = !isLightMode
+
+                        // ★ 修正1: "KOMOREBI" や "KYLE" が選ばれた時に正しく処理するよう追加
                         val currentSeason = when (prefs.currentThemeName) {
                             "SPRING", "SPRING_LIGHT" -> "SPRING"
                             "SUMMER", "SUMMER_LIGHT" -> "SUMMER"
                             "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"
                             "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"
+                            "KOMOREBI", "KOMOREBI_DAY", "KOMOREBI_NIGHT" -> "KOMOREBI"
+                            "KYLE", "KYLE_DAY", "KYLE_NIGHT" -> "KYLE"
                             else -> "DEFAULT"
                         }
 
@@ -674,41 +680,75 @@ fun SettingsScreen(
                             exPaidR = itemFocusRequesters[4][5],
                             sidebarR = categoryFocusRequesters[4],
                             onMode = {
+                                // ★ 修正2: モード選択ダイアログの処理
+                                val options = listOf(
+                                    AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
+                                    AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT",
+                                    "時間連動テーマ" to "TIME_LINKED"
+                                )
+
+                                val currentMode =
+                                    if (currentSeason == "KOMOREBI" || currentSeason == "KYLE") "TIME_LINKED" else if (isLightMode) "LIGHT" else "DARK"
+
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_BASE_THEME,
-                                    listOf(
-                                        AppStrings.SETTINGS_VALUE_THEME_DARK to "DARK",
-                                        AppStrings.SETTINGS_VALUE_THEME_LIGHT to "LIGHT"
-                                    ),
-                                    if (isLightMode) "LIGHT" else "DARK"
-                                ) {
-                                    val nt = getThemeFromModeAndSeason(it == "DARK", currentSeason)
+                                    options,
+                                    currentMode
+                                ) { selectedMode ->
+                                    val nt = when (selectedMode) {
+                                        "TIME_LINKED" -> "KOMOREBI" // 時間連動を選んだらデフォルトで木漏れ日セットに
+                                        "DARK" -> getThemeFromModeAndSeason(
+                                            true,
+                                            if (currentSeason == "KOMOREBI" || currentSeason == "KYLE") "DEFAULT" else currentSeason
+                                        )
+
+                                        "LIGHT" -> getThemeFromModeAndSeason(
+                                            false,
+                                            if (currentSeason == "KOMOREBI" || currentSeason == "KYLE") "DEFAULT" else currentSeason
+                                        )
+
+                                        else -> "MONOTONE"
+                                    }
                                     scope.launch {
                                         repository.saveString(SettingsRepository.APP_THEME, nt)
                                     }
                                 }
                             },
                             onColor = {
-                                val options = listOf(
-                                    AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
-                                    AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
-                                    AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
-                                    AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
-                                )
+                                // ★ 修正3: 色・セット選択ダイアログの処理
+                                val isTimeLinked =
+                                    currentSeason == "KOMOREBI" || currentSeason == "KYLE"
+                                val options = if (isTimeLinked) {
+                                    listOf(
+                                        "木漏れ日セット (森の1日)" to "KOMOREBI",
+                                        "カイルセット (海の1日)" to "KYLE"
+                                    )
+                                } else {
+                                    listOf(
+                                        AppStrings.SETTINGS_VALUE_SEASON_DEFAULT to "DEFAULT",
+                                        AppStrings.SETTINGS_VALUE_SEASON_SPRING to "SPRING",
+                                        AppStrings.SETTINGS_VALUE_SEASON_SUMMER to "SUMMER",
+                                        AppStrings.SETTINGS_VALUE_SEASON_AUTUMN to "AUTUMN",
+                                        AppStrings.SETTINGS_VALUE_SEASON_WINTER to "WINTER"
+                                    )
+                                }
+
                                 val safeCurrent =
-                                    if (options.any { it.second == currentSeason }) currentSeason else "DEFAULT"
+                                    if (options.any { it.second == currentSeason }) currentSeason else options.first().second
+
                                 uiState.activeDialog = SettingDialogState.Selection(
-                                    AppStrings.SETTINGS_ITEM_THEME_COLOR,
+                                    if (isTimeLinked) "時間連動セットを選択" else AppStrings.SETTINGS_ITEM_THEME_COLOR,
                                     options,
                                     safeCurrent
-                                ) {
-                                    val nt = getThemeFromModeAndSeason(isDarkMode, it)
+                                ) { selectedTheme ->
+                                    val nt =
+                                        if (selectedTheme == "KOMOREBI" || selectedTheme == "KYLE") {
+                                            selectedTheme
+                                        } else {
+                                            getThemeFromModeAndSeason(isDarkMode, selectedTheme)
+                                        }
                                     scope.launch {
-                                        repository.saveString(
-                                            SettingsRepository.APP_THEME,
-                                            nt
-                                        )
+                                        repository.saveString(SettingsRepository.APP_THEME, nt)
                                     }
                                 }
                             },
@@ -731,10 +771,8 @@ fun SettingsScreen(
                                         AppStrings.SETTINGS_VALUE_TAB_RESERVE to "録画予約"
                                     )
                                 }
-
                                 val safeCurrent =
                                     if (options.any { it.second == prefs.startupTab }) prefs.startupTab else "ホーム"
-
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_STARTUP_TAB,
                                     options,
