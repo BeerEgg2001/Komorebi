@@ -292,41 +292,101 @@ object EdcbDataMapper {
     // ========================================================================
 
     /**
-     * TvtPlay形式のチャプターテキストをCMセクションのリストへ解析
+     * EDCBの各種チャプターフォーマットをパースし、CmSection（CM区間）のリストを返します。
      */
     fun parseChapterTextToCmSections(chapterText: String, durationSec: Double): List<CmSection> {
-        val lines = chapterText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val chapters = mutableListOf<Triple<Int, String, Double>>()
-        val cmSections = mutableListOf<CmSection>()
-        var pendingTime: Double? = null
+        return when {
+            chapterText.contains("CHAPTER01=") -> parseIniFormat(chapterText, durationSec)
+            chapterText.startsWith("c-") -> parseLuaFormat(chapterText, durationSec)
+            else -> emptyList()
+        }
+    }
 
-        for (line in lines) {
-            if (line.startsWith("CHAPTER") && !line.contains("NAME=")) {
-                pendingTime = line.substringAfter("=").split(":").let {
-                    if (it.size == 3) it[0].toDouble() * 3600 + it[1].toDouble() * 60 + it[2].toDouble() else null
-                }
-            } else if (line.startsWith("CHAPTER") && line.contains("NAME=")) {
-                val name = line.substringAfter("=")
-                if (pendingTime != null) {
-                    if (pendingTime <= durationSec + 5.0) chapters.add(Triple(0, name, pendingTime))
-                    pendingTime = null
+    private fun parseIniFormat(text: String, durationSec: Double): List<CmSection> {
+        val timeRegex = Regex("""CHAPTER(\d+)=(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})""")
+        val nameRegex = Regex("""CHAPTER(\d+)NAME=(.*)""")
+
+        val timeMap = mutableMapOf<Int, Long>()
+        val nameMap = mutableMapOf<Int, String>()
+
+        text.lines().forEach { line ->
+            timeRegex.find(line)?.let { match ->
+                val id = match.groupValues[1].toInt()
+                val h = match.groupValues[2].toLong()
+                val m = match.groupValues[3].toLong()
+                val s = match.groupValues[4].toLong()
+                val ms = match.groupValues[5].toLong()
+                timeMap[id] = (h * 3600 + m * 60 + s) * 1000 + ms
+            }
+            nameRegex.find(line)?.let { match ->
+                val id = match.groupValues[1].toInt()
+                nameMap[id] = match.groupValues[2].trim()
+            }
+        }
+
+        val sortedIds = timeMap.keys.sorted()
+        val sections = mutableListOf<CmSection>()
+        var cmStartTimeMs: Long? = null
+
+        for (id in sortedIds) {
+            val timeMs = timeMap[id] ?: continue
+            val name = nameMap[id] ?: ""
+
+            if (name.contains("CM", ignoreCase = true)) {
+                if (cmStartTimeMs == null) cmStartTimeMs = timeMs
+            } else {
+                if (cmStartTimeMs != null) {
+                    sections.add(CmSection(cmStartTimeMs / 1000.0, timeMs / 1000.0))
+                    cmStartTimeMs = null
                 }
             }
         }
 
-        var currentCmStart: Double? = null
-        for ((_, name, ctime) in chapters) {
-            val lowerName = name.lowercase()
-            if (lowerName.startsWith("o") || lowerName.startsWith("cm")) {
-                if (currentCmStart == null) currentCmStart = ctime
-            } else if (lowerName.startsWith("i") || lowerName.isNotBlank()) {
-                if (currentCmStart != null) {
-                    cmSections.add(CmSection(currentCmStart, ctime))
-                    currentCmStart = null
-                }
+        if (cmStartTimeMs != null && durationSec > 0) {
+            sections.add(CmSection(cmStartTimeMs / 1000.0, durationSec))
+        }
+        return sections
+    }
+
+    private fun parseLuaFormat(text: String, durationSec: Double): List<CmSection> {
+        val sections = mutableListOf<CmSection>()
+        if (!text.startsWith("c-") || !text.endsWith("-c")) return emptyList()
+
+        val coreContent = text.substring(2, text.length - 2)
+        val segments = coreContent.split("-").filter { it.isNotEmpty() }
+        val regex = Regex("""^(\d*)([cde])(.*)$""")
+
+        var cmStartTimeMs: Long? = null
+
+        for (segment in segments) {
+            val match = regex.find(segment) ?: continue
+            val posValue = match.groupValues[1]
+            val type = match.groupValues[2]
+            val name = match.groupValues[3]
+
+            val timeMs: Long = when (type) {
+                "c" -> posValue.toLongOrNull() ?: 0L
+                "d" -> (posValue.toLongOrNull() ?: 0L) * 100L
+                "e" -> (durationSec * 1000).toLong()
+                else -> continue
+            }
+
+            // TvtPlay仕様に完全準拠
+            // oxで始まるならスキップ(CM)開始、ixで始まるならスキップ終了(本編復帰)
+            val isCmStart = name.startsWith("ox", ignoreCase = true)
+            val isCmEnd = name.startsWith("ix", ignoreCase = true)
+
+            if (isCmStart && cmStartTimeMs == null) {
+                cmStartTimeMs = timeMs
+            } else if (isCmEnd && cmStartTimeMs != null) {
+                sections.add(CmSection(cmStartTimeMs / 1000.0, timeMs / 1000.0))
+                cmStartTimeMs = null
             }
         }
-        if (currentCmStart != null) cmSections.add(CmSection(currentCmStart, durationSec))
-        return cmSections
+
+        if (cmStartTimeMs != null && durationSec > 0) {
+            sections.add(CmSection(cmStartTimeMs / 1000.0, durationSec))
+        }
+        return sections
     }
 }

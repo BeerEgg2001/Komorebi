@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.LocalTime
+import androidx.compose.runtime.collectAsState
 
 private const val TAG = "MainRootScreen"
 
@@ -91,10 +92,10 @@ fun MainRootScreen(
                     val target = channelViewModel.groupedChannels.value.values.flatten()
                         .find { it.id == action.channelId }
                     if (target != null) {
-                        state.selectedProgram = null; state.isPlayerMiniListOpen =
-                            false; state.playerIsSubMenuOpen = false
-                        state.isPlayerSubMenuOpen = false; state.isPlayerSceneSearchOpen =
-                            false; state.isMiniPlayerMode = false
+                        state.selectedProgram = null; state.selectedSmbItem = null
+                        state.isPlayerMiniListOpen = false; state.playerIsSubMenuOpen = false
+                        state.isPlayerSubMenuOpen = false; state.isPlayerSceneSearchOpen = false
+                        state.isMiniPlayerMode = false
                         state.selectedChannel = target; state.lastSelectedChannelId = target.id
                         homeViewModel.saveLastChannel(target); state.isReturningFromPlayer = false
                     }
@@ -105,12 +106,12 @@ fun MainRootScreen(
                     val target =
                         recordViewModel.recentRecordings.value.find { it.id == action.videoId }
                     if (target != null) {
-                        state.selectedChannel = null; state.isPlayerMiniListOpen =
-                            false; state.playerIsSubMenuOpen = false
-                        state.isPlayerSubMenuOpen = false; state.isPlayerSceneSearchOpen =
-                            false; state.isMiniPlayerMode = false
-                        state.initialPlaybackPositionMs = 0L; state.selectedProgram =
-                            target; state.lastSelectedProgramId = target.id.toString()
+                        state.selectedChannel = null; state.selectedSmbItem = null
+                        state.isPlayerMiniListOpen = false; state.playerIsSubMenuOpen = false
+                        state.isPlayerSubMenuOpen = false; state.isPlayerSceneSearchOpen = false
+                        state.isMiniPlayerMode = false
+                        state.initialPlaybackPositionMs = 0L; state.selectedProgram = target
+                        state.lastSelectedProgramId = target.id.toString()
                         state.showPlayerControls = true; state.isReturningFromPlayer = false
                     }
                 }
@@ -240,14 +241,12 @@ fun MainRootScreen(
     val themeName by settingsViewModel.appTheme.collectAsState(initial = "MONOTONE")
     val currentTheme =
         remember(themeName) { runCatching { AppTheme.valueOf(themeName) }.getOrDefault(AppTheme.MONOTONE) }
-    // MainRootScreen.kt の 144行目付近
     val themeSeason = remember(themeName) {
         when (themeName) {
             "SPRING", "SPRING_LIGHT" -> "SPRING"
             "SUMMER", "SUMMER_LIGHT" -> "SUMMER"
             "AUTUMN", "AUTUMN_LIGHT" -> "AUTUMN"
             "WINTER_DARK", "WINTER_LIGHT" -> "WINTER"
-            // ★ 修正: 時間連動テーマ（KOMOREBI, KYLE）が来た時に、正しく文字を渡す
             "KOMOREBI", "KOMOREBI_DAY", "KOMOREBI_NIGHT" -> "KOMOREBI"
             "KYLE", "KYLE_DAY", "KYLE_NIGHT" -> "KYLE"
             else -> "DEFAULT"
@@ -274,7 +273,6 @@ fun MainRootScreen(
     val conditions by reserveViewModel.conditions.collectAsState()
     val reserves by reserveViewModel.reserves.collectAsState()
 
-    // ★ 修正: updateState を定義
     val updateState by homeViewModel.updateState.collectAsState()
 
     val autoReserveKeywords = remember(conditions) {
@@ -387,15 +385,21 @@ fun MainRootScreen(
                     true; state.isMiniPlayerMode = false
             }
 
-            state.selectedProgram != null -> {
-                state.selectedProgram = null; state.showPlayerControls =
-                    true; state.isReturningFromPlayer = true; state.isMiniPlayerMode = false
+            state.selectedProgram != null || state.selectedSmbItem != null -> {
+                state.selectedProgram = null
+                state.selectedSmbItem = null
+                state.showPlayerControls = true
+                state.isReturningFromPlayer = true
+                state.isMiniPlayerMode = false
             }
 
             state.isSettingsOpen -> closeSettingsAndRefresh()
             state.epgSelectedProgram != null -> state.epgSelectedProgram = null
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
+
+            state.isSmbLibraryOpen -> state.isSmbLibraryOpen = false
+
             state.isRecordListOpen -> {
                 state.isRecordListOpen = false
                 if (state.openedSeriesTitle != null) {
@@ -471,7 +475,7 @@ fun MainRootScreen(
                 .background(colors.background)
                 .background(backgroundBrush)
         ) {
-            if (state.selectedChannel == null && state.selectedProgram == null) {
+            if (state.selectedChannel == null && state.selectedProgram == null && state.selectedSmbItem == null) {
                 SeasonalDecor(
                     season = themeSeason,
                     isDark = colors.isDark,
@@ -485,7 +489,6 @@ fun MainRootScreen(
             if (showMainContent) {
                 Box(modifier = Modifier.fillMaxSize()) {
 
-                    // ★ 背面のホーム画面（Z-index: 0）を別ファイルに委譲
                     MainRootBackground(
                         state = state,
                         channelViewModel = channelViewModel,
@@ -511,7 +514,7 @@ fun MainRootScreen(
                     )
 
                     // ★ 前面のプレイヤー画面（Z-index: 1）
-                    if (state.selectedChannel != null || state.selectedProgram != null) {
+                    if (state.selectedChannel != null || state.selectedProgram != null || state.selectedSmbItem != null) {
                         val playerWidth by animateDpAsState(
                             targetValue = if (state.isMiniPlayerMode) 320.dp else 1920.dp,
                             label = "width",
@@ -578,6 +581,7 @@ fun MainRootScreen(
                                     timeFormat = timeFormat
                                 )
                             } else if (state.selectedProgram != null) {
+                                // ★ 既存の録画番組はそのまま ExoPlayer を使う
                                 VideoPlayerScreen(
                                     program = state.selectedProgram!!,
                                     initialPositionMs = state.initialPlaybackPositionMs,
@@ -589,16 +593,59 @@ fun MainRootScreen(
                                     isSceneSearchOpen = state.isPlayerSceneSearchOpen,
                                     onSceneSearchToggle = { state.isPlayerSceneSearchOpen = it },
                                     onBackPressed = {
-                                        state.selectedProgram = null; state.isReturningFromPlayer =
-                                        true; state.isMiniPlayerMode = false
+                                        state.selectedProgram = null
+                                        state.isReturningFromPlayer = true
+                                        state.isMiniPlayerMode = false
                                     },
                                     onShowToast = { state.toastMessage = it },
                                     isPiPMode = state.isMiniPlayerMode,
                                     onPiPRequested = {
-                                        state.isMiniPlayerMode = true; state.toastMessage =
-                                        "ミニプレイヤーに変更しました"
+                                        state.isMiniPlayerMode = true
+                                        state.toastMessage = "ミニプレイヤーに変更しました"
                                     }
                                 )
+                            } else if (state.selectedSmbItem != null) {
+                                // ★★★ 新規追加: SMB再生の場合は VLCエンジン×Komorebi UI を起動する！ ★★★
+                                val baseProgram =
+                                    recordViewModel.recentRecordings.collectAsState().value.firstOrNull()
+                                if (baseProgram != null) {
+                                    val dummyProgram = baseProgram.copy(
+                                        id = state.selectedSmbItem!!.path.hashCode(),
+                                        title = state.selectedSmbItem!!.name,
+                                        description = "SMBネットワーク再生: ${state.selectedSmbItem!!.path}"
+                                    )
+                                    com.beeregg2001.komorebi.ui.video.smb.player.SmbVlcPlayerScreen(
+                                        program = dummyProgram,
+                                        smbItem = state.selectedSmbItem!!,
+                                        initialPositionMs = state.initialPlaybackPositionMs,
+                                        showControls = state.showPlayerControls,
+                                        onShowControlsChange = { state.showPlayerControls = it },
+                                        isSubMenuOpen = state.isPlayerSubMenuOpen,
+                                        onSubMenuToggle = { state.isPlayerSubMenuOpen = it },
+                                        isSceneSearchOpen = state.isPlayerSceneSearchOpen,
+                                        onSceneSearchToggle = {
+                                            state.isPlayerSceneSearchOpen = it
+                                        },
+                                        onBackPressed = {
+                                            state.selectedSmbItem = null
+                                            state.isReturningFromPlayer = true
+                                            state.isMiniPlayerMode = false
+                                        },
+                                        onShowToast = { state.toastMessage = it },
+                                        isPiPMode = state.isMiniPlayerMode,
+                                        onPiPRequested = {
+                                            state.isMiniPlayerMode = true
+                                            state.toastMessage = "ミニプレイヤーに変更しました"
+                                        },
+                                        settingsViewModel = settingsViewModel
+                                    )
+                                } else {
+                                    LaunchedEffect(Unit) {
+                                        state.toastMessage =
+                                            "再生用のダミーデータを生成できませんでした"
+                                        state.selectedSmbItem = null
+                                    }
+                                }
                             }
                         }
                     }
@@ -618,7 +665,6 @@ fun MainRootScreen(
                 } else LoadingScreen()
             }
 
-            // ★ グローバルダイアログ群を別ファイルに委譲
             MainRootDialogs(
                 state = state,
                 channelViewModel = channelViewModel,

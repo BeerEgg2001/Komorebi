@@ -26,6 +26,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -44,6 +45,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.ArchivedComment
+import com.beeregg2001.komorebi.data.model.CmSection
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -54,7 +56,7 @@ import kotlin.math.pow
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerControls(
-    exoPlayer: ExoPlayer,
+    exoPlayer: ExoPlayer?, // VLC時はnull
     program: RecordedProgram,
     allComments: List<ArchivedComment>,
     tiledThumbnailUrl: String?,
@@ -63,6 +65,7 @@ fun PlayerControls(
     isModernUi: Boolean,
     isPlaying: Boolean,
     hasChapters: Boolean,
+    externalChapters: List<ChapterInfo> = emptyList(),
     currentPositionMs: Long,
     totalDurationMs: Long,
     controlsFocusRequester: FocusRequester,
@@ -80,7 +83,9 @@ fun PlayerControls(
 
     DisposableEffect(Unit) { onDispose { loader.release() } }
 
-    var bufferedPosition by remember { mutableStateOf(exoPlayer.bufferedPosition.coerceAtLeast(0L)) }
+    var bufferedPosition by remember {
+        mutableStateOf(exoPlayer?.bufferedPosition?.coerceAtLeast(0L) ?: 0L)
+    }
     var displayPositionMs by remember { mutableStateOf(currentPositionMs) }
 
     val tileInfo = program.recordedVideo.thumbnailInfo?.tile
@@ -95,15 +100,13 @@ fun PlayerControls(
         if (isSeekBarFocused) 16.dp else 12.dp,
         label = "playHeadSize"
     )
-
-    // ★ グラフの高さ（フォーカス時は80dpまで巨大化して飛び出させる）
     val graphHeight by animateDpAsState(
         if (isSeekBarFocused) 80.dp else 48.dp,
         label = "graphHeight"
     )
 
     LaunchedEffect(currentPositionMs) {
-        if (kotlin.math.abs(displayPositionMs - currentPositionMs) > 2000) {
+        if (kotlin.math.abs(displayPositionMs - currentPositionMs) > 1000) {
             displayPositionMs = currentPositionMs
         }
     }
@@ -120,13 +123,13 @@ fun PlayerControls(
         var lastUpdate = System.currentTimeMillis()
         while (isVisible) {
             val now = System.currentTimeMillis()
-
             if (isPlaying) {
                 val elapsed = now - lastUpdate
-                displayPositionMs = (displayPositionMs + elapsed).coerceIn(0L, totalDurationMs)
+                // ★ 修正: durationが0の時に強制的に0にリセット(coerceIn)されて点滅するバグを回避
+                val safeMax = if (totalDurationMs > 0L) totalDurationMs else Long.MAX_VALUE
+                displayPositionMs = (displayPositionMs + elapsed).coerceIn(0L, safeMax)
             }
-
-            bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L)
+            bufferedPosition = exoPlayer?.bufferedPosition?.coerceAtLeast(0L) ?: 0L
             lastUpdate = now
             delay(50)
         }
@@ -275,7 +278,6 @@ fun PlayerControls(
 
                     Spacer(modifier = Modifier.width(16.dp))
 
-                    // ★ 親のBox: 高さは32dpに固定し、テキストの横並びを崩さない
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -289,9 +291,8 @@ fun PlayerControls(
                                 right = FocusRequester.Cancel
                             }
                             .focusable(isModernUi),
-                        contentAlignment = Alignment.CenterStart // ★ CenterStartに戻す
+                        contentAlignment = Alignment.CenterStart
                     ) {
-                        // ★ 新機能: 実況コメント勢いグラフ
                         if (allComments.isNotEmpty() && totalDurationMs > 0) {
                             CommentMomentumGraph(
                                 comments = allComments,
@@ -301,15 +302,12 @@ fun PlayerControls(
                                 unplayedColor = Color.White.copy(alpha = 0.2f),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // ★ requiredHeight を使うことで、親(32dp)を無視して上にドカンと広がる
                                     .requiredHeight(graphHeight)
                                     .align(Alignment.BottomCenter)
-                                    // ★ シークバーの線（trackHeight）に被らず、線の上から生えるように浮かせる微調整
                                     .padding(bottom = 16.dp)
                             )
                         }
 
-                        // --- 以下は既存のシークバー描画ロジック ---
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -320,10 +318,68 @@ fun PlayerControls(
                                 )
                         )
 
+                        if (hasChapters && totalDurationMs > 0L) {
+                            val apiCmSections = program.recordedVideo.cmSections ?: emptyList()
+                            val renderSections = if (apiCmSections.isNotEmpty()) {
+                                apiCmSections.map {
+                                    ChapterInfo(
+                                        (it.startTime * 1000).toLong(),
+                                        (it.endTime * 1000).toLong(),
+                                        isCm = true
+                                    )
+                                }
+                            } else {
+                                externalChapters
+                            }
+
+                            Canvas(modifier = Modifier
+                                .fillMaxWidth()
+                                .height(trackHeight)) {
+                                val canvasWidth = size.width
+                                val canvasHeight = size.height
+
+                                renderSections.filter { it.isCm && !it.isMarkerOnly }
+                                    .forEach { section ->
+                                        val startRatio =
+                                            (section.startTimeMs.toFloat() / totalDurationMs).coerceIn(
+                                                0f,
+                                                1f
+                                            )
+                                        val endRatio =
+                                            (section.endTimeMs.toFloat() / totalDurationMs).coerceIn(
+                                                0f,
+                                                1f
+                                            )
+                                        val startX = startRatio * canvasWidth
+                                        val sectionWidth = (endRatio * canvasWidth) - startX
+
+                                        drawRect(
+                                            color = Color.Red.copy(alpha = 0.5f),
+                                            topLeft = Offset(startX, 0f),
+                                            size = Size(sectionWidth, canvasHeight)
+                                        )
+                                    }
+                                renderSections.forEach { section ->
+                                    val startRatio =
+                                        (section.startTimeMs.toFloat() / totalDurationMs).coerceIn(
+                                            0f,
+                                            1f
+                                        )
+                                    drawRect(
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        topLeft = Offset(startRatio * canvasWidth, 0f),
+                                        size = Size(2.dp.toPx(), canvasHeight)
+                                    )
+                                }
+                            }
+                        }
+
+                        val exoDuration = exoPlayer?.duration ?: 0L
                         val bufferProgress =
-                            if (exoPlayer.duration.coerceAtLeast(1L) > 0) (bufferedPosition.toFloat() / exoPlayer.duration.coerceAtLeast(
+                            if (exoDuration.coerceAtLeast(1L) > 0) (bufferedPosition.toFloat() / exoDuration.coerceAtLeast(
                                 1L
                             )).coerceIn(0f, 1f) else 0f
+
                         if (bufferProgress > 0f) {
                             Box(
                                 modifier = Modifier
@@ -336,11 +392,13 @@ fun PlayerControls(
                             )
                         }
 
+                        // ★ 修正: durationが0の場合でもエラーにならない安全な進行率計算
                         val playProgress =
                             if (totalDurationMs > 0) (displayPositionMs.toFloat() / totalDurationMs).coerceIn(
                                 0f,
                                 1f
                             ) else 0f
+
                         if (playProgress > 0f) {
                             Box(
                                 modifier = Modifier
@@ -491,7 +549,7 @@ private fun formatMillisToTime(ms: Long): String {
 }
 
 // ========================================================================
-// ★ 新機能: 実況コメント勢いグラフ (YouTube風ヒートマップウェーブ)
+// 実況コメント勢いグラフ (YouTube風ヒートマップウェーブ)
 // ========================================================================
 @Composable
 fun CommentMomentumGraph(
@@ -499,7 +557,7 @@ fun CommentMomentumGraph(
     totalDurationMs: Long,
     currentPositionMs: Long,
     modifier: Modifier = Modifier,
-    bucketCount: Int = 150, // ★ 棒グラフより少し多め(150等)にすると曲線が綺麗になります
+    bucketCount: Int = 150,
     playedColor: Color = Color.White.copy(alpha = 0.8f),
     unplayedColor: Color = Color.White.copy(alpha = 0.3f)
 ) {
@@ -517,7 +575,6 @@ fun CommentMomentumGraph(
 
         val maxComments = buckets.maxOrNull()?.toFloat()?.coerceAtLeast(1f) ?: 1f
         buckets.map {
-            // ★ ピーク強調: 単純な割り算ではなく「1.5乗」することで、盛り上がりがより高く尖ります
             (it.toFloat() / maxComments).pow(1.5f)
         }
     }
@@ -529,20 +586,14 @@ fun CommentMomentumGraph(
         val stepX = size.width / (bucketCount - 1).coerceAtLeast(1)
         val maxBarHeight = size.height
 
-        // 波形のパス（図形）を作成する
         val wavePath = Path().apply {
-            moveTo(0f, size.height) // 左下からスタート
-
-            // 各データポイントの座標を計算
+            moveTo(0f, size.height)
             val points = momentumData.mapIndexed { index, value ->
                 val x = index * stepX
                 val y = size.height - (value * maxBarHeight).coerceAtLeast(2f)
                 Offset(x, y)
             }
-
             lineTo(points.first().x, points.first().y)
-
-            // 点と点の間を二次ベジェ曲線（なめらかなカーブ）で繋ぐ
             var currentPoint = points.first()
             for (i in 1 until points.size) {
                 val nextPoint = points[i]
@@ -550,7 +601,6 @@ fun CommentMomentumGraph(
                     (currentPoint.x + nextPoint.x) / 2f,
                     (currentPoint.y + nextPoint.y) / 2f
                 )
-
                 if (i == 1) {
                     lineTo(midPoint.x, midPoint.y)
                 } else {
@@ -559,22 +609,13 @@ fun CommentMomentumGraph(
                 currentPoint = nextPoint
             }
             lineTo(points.last().x, points.last().y)
-            lineTo(size.width, size.height) // 右下へ
-            close() // 左下に戻って図形を閉じる
+            lineTo(size.width, size.height)
+            close()
         }
 
-        // 1. まず全体を「未再生の色（薄い白）」で描画
-        drawPath(
-            path = wavePath,
-            color = unplayedColor
-        )
-
-        // 2. 現在の再生位置(currentRatio)より左側だけを切り抜いて「再生済みの色」で上塗り
+        drawPath(path = wavePath, color = unplayedColor)
         clipRect(right = currentRatio * size.width) {
-            drawPath(
-                path = wavePath,
-                color = playedColor
-            )
+            drawPath(path = wavePath, color = playedColor)
         }
     }
 }

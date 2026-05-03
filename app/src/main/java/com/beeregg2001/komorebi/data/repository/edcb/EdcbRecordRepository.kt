@@ -54,6 +54,12 @@ class EdcbRecordRepository @Inject constructor(
         val chapterAltUrl: String, val tileImageUrl: String, val tileJsonUrl: String
     )
 
+    private data class EdcbResolverSettings(
+        val ctokXcode: String,
+        val ctokView: String,
+        val options: List<StreamQuality>
+    )
+
     private suspend fun getTcpIpAndPort(): Pair<String, Int> {
         val rawIp = settingsRepository.edcbIp.first()
         val cleanIp = rawIp.replace(Regex("^https?://"), "")
@@ -65,20 +71,65 @@ class EdcbRecordRepository @Inject constructor(
         return settingsRepository.getEdcbFullUrl()
     }
 
-    private suspend fun fetchCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder().url("$baseUrl/EMWUI/epg.html").build()
-            baseEdcbHttpClient.newCall(request).execute().use { response ->
-                val html = response.body?.string() ?: return@withContext null
-                val regex = Regex("""name="ctok"\s+value="([^"]+)"""")
-                val match = regex.find(html)
-                match?.groupValues?.get(1)
+    // -----------------------------------------------------------------------------------------
+    // resolver.lua から共通設定 (ctok, options) を取得するメソッド
+    // エラーレスポンスを受け取った場合はExceptionを投げ、UI側(ダイアログ)で表示させる
+    // -----------------------------------------------------------------------------------------
+    private suspend fun fetchResolverSettings(baseUrl: String): EdcbResolverSettings? =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$baseUrl/komorebi/resolver.lua"
+                val request = Request.Builder().url(url).build()
+                baseEdcbHttpClient.newCall(request).execute().use { response ->
+                    val jsonStr = response.body?.string() ?: return@withContext null
+
+                    // JSONをパース
+                    val json = JSONObject(jsonStr)
+
+                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
+                    if (json.has("error")) {
+                        val errMsg = json.optString("error", "Unknown Resolver Error")
+                        val errDetail = json.optString("detail", "")
+                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        Log.e(TAG, "Resolver Lua Error: $fullMsg")
+                        // 例外をスローして上位へ伝搬させる
+                        throw Exception("Komorebi Resolver エラー:\n$fullMsg")
+                    }
+
+                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
+                    }
+
+                    val ctokObj = json.optJSONObject("ctok")
+                    val ctokXcode = ctokObj?.optString("xcode") ?: ""
+                    val ctokView = ctokObj?.optString("view") ?: ""
+
+                    val optionsArray = json.optJSONArray("option")
+                    val qualities = mutableListOf<StreamQuality>()
+                    if (optionsArray != null) {
+                        for (i in 0 until optionsArray.length()) {
+                            val opt = optionsArray.getJSONObject(i)
+                            val value = opt.optString("id")
+                            val label = opt.optString("name")
+                            Log.i(TAG, "Found stream quality: $label ($value)")
+                            qualities.add(
+                                StreamQuality(
+                                    label = label,
+                                    value = value,
+                                    isRawTs = false
+                                )
+                            )
+                        }
+                    }
+                    return@withContext EdcbResolverSettings(ctokXcode, ctokView, qualities)
+                }
+            } catch (e: Exception) {
+                // 既存の処理: そのまま例外として再スローして、上位のViewModel側でキャッチさせる
+                Log.e(TAG, "Failed to fetch resolver settings", e)
+                throw e
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch ctok", e)
-            null
         }
-    }
 
     override suspend fun getStreamQualities(): List<StreamQuality> = withContext(Dispatchers.IO) {
         try {
@@ -90,27 +141,18 @@ class EdcbRecordRepository @Inject constructor(
             }
 
             val baseUrl = getHttpBaseUrl()
-            val request = Request.Builder().url("$baseUrl/EMWUI/library.html").build()
-
-            baseEdcbHttpClient.newCall(request).execute().use { response ->
-                val html = response.body?.string() ?: return@withContext emptyList()
-                val regex =
-                    Regex("""name="quality"[^>]*value="(\d+)"[^>]*>.*?<label[^>]*>.*?<i[^>]*>check</i>.*?</label>\s*<label[^>]*>([^<]+)</label>""")
-                val matches = regex.findAll(html)
-
-                return@use matches.mapNotNull { matchResult ->
-                    val optionId = matchResult.groupValues[1]
-                    val label = matchResult.groupValues[2]
-                    if (label.contains("TS-Live!", ignoreCase = true)) null
-                    else StreamQuality(label = label, value = optionId, isRawTs = false)
-                }.toList()
-            }
+            val settings = fetchResolverSettings(baseUrl)
+            return@withContext settings?.options ?: emptyList()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch stream qualities from EDCB", e)
             emptyList()
         }
     }
 
+    // -----------------------------------------------------------------------------------------
+    // resolver.lua から指定した動画IDのURL群を取得するメソッド
+    // エラーレスポンスを受け取った場合はExceptionを投げ、UI側(ダイアログ)で表示させる
+    // -----------------------------------------------------------------------------------------
     private suspend fun fetchResolverUrls(baseUrl: String, videoId: Int): KomorebiResolverUrls? =
         withContext(Dispatchers.IO) {
             try {
@@ -120,24 +162,40 @@ class EdcbRecordRepository @Inject constructor(
                     .readTimeout(3, TimeUnit.SECONDS).build()
 
                 client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val jsonStr = response.body?.string() ?: return@withContext null
-                        val json = JSONObject(jsonStr)
-                        if (json.has("error")) return@withContext null
-                        return@withContext KomorebiResolverUrls(
-                            videoUrl = json.optString("video_url"),
-                            thumbnailUrl = json.optString("thumbnail_url"),
-                            chapterUrl = json.optString("chapter_url"),
-                            chapterAltUrl = json.optString("chapter_alt_url"),
-                            tileImageUrl = json.optString("tile_image_url"),
-                            tileJsonUrl = json.optString("tile_json_url")
-                        )
+                    val jsonStr = response.body?.string() ?: return@withContext null
+
+                    // JSONをパース
+                    val json = JSONObject(jsonStr)
+
+                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
+                    if (json.has("error")) {
+                        val errMsg = json.optString("error", "Unknown Resolver Error")
+                        val errDetail = json.optString("detail", "")
+                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        Log.e(TAG, "Resolver Lua Error for ID $videoId: $fullMsg")
+                        // 例外をスローして上位へ伝搬させる
+                        throw Exception("Komorebi Resolver エラー:\n$fullMsg")
                     }
+
+                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
+                    }
+
+                    return@withContext KomorebiResolverUrls(
+                        videoUrl = json.optString("video_url"),
+                        thumbnailUrl = json.optString("thumbnail_url"),
+                        chapterUrl = json.optString("chapter_url"),
+                        chapterAltUrl = json.optString("chapter_alt_url"),
+                        tileImageUrl = json.optString("tile_image_url"),
+                        tileJsonUrl = json.optString("tile_json_url")
+                    )
                 }
             } catch (e: Exception) {
+                // 既存の処理: 再スローして、上位のViewModel側でキャッチさせる
                 Log.e(TAG, "Failed to fetch resolver urls for id=$videoId", e)
+                throw e
             }
-            return@withContext null
         }
 
     private fun isValidRecord(info: EdcbRecFileInfo): Boolean {
@@ -241,13 +299,13 @@ class EdcbRecordRepository @Inject constructor(
                             info.recFilePath.substringAfterLast("\\").substringAfterLast("/")
                         val encodedFileName =
                             URLEncoder.encode("video/rec/$fileName", "UTF-8").replace("+", "%20")
-                        val ctok = fetchCtok(baseUrl) ?: ""
+                        val ctokView = fetchResolverSettings(baseUrl)?.ctokView ?: ""
 
                         val builder = android.net.Uri.parse(baseUrl).buildUpon()
                             .appendPath("api").appendPath("xcode")
                             .appendQueryParameter("fname", encodedFileName)
                             .appendQueryParameter("option", "10")
-                            .appendQueryParameter("ctok", ctok)
+                            .appendQueryParameter("ctok", ctokView)
                         if (offsetSeconds > 0) builder.appendQueryParameter(
                             "ofssec",
                             offsetSeconds.toInt().toString()
@@ -263,13 +321,13 @@ class EdcbRecordRepository @Inject constructor(
         if (!videoPath.isNullOrEmpty()) {
             val fnameRaw = videoPath.trimStart('/')
             val decodedFname = java.net.URLDecoder.decode(fnameRaw, "UTF-8")
-            val ctok = fetchCtok(baseUrl) ?: ""
+            val ctokView = fetchResolverSettings(baseUrl)?.ctokView ?: ""
 
             val builder = android.net.Uri.parse(baseUrl).buildUpon()
                 .appendPath("api").appendPath("xcode")
                 .appendQueryParameter("fname", decodedFname)
                 .appendQueryParameter("option", optionIdStr)
-                .appendQueryParameter("ctok", ctok)
+                .appendQueryParameter("ctok", ctokView)
             if (offsetSeconds > 0) builder.appendQueryParameter(
                 "ofssec",
                 offsetSeconds.toInt().toString()
@@ -313,7 +371,6 @@ class EdcbRecordRepository @Inject constructor(
         val isRecording = info.durationSec == 0 || info.recStatus == 0
         val channelId = "edcb_${info.onid}_${info.tsid}_${info.sid}"
 
-        // Mapperに委譲していなかった独自の抽出ロジック（そのまま維持）
         val detailStartIdx = info.programInfo.indexOf("詳細情報")
         val genreStartIdx =
             info.programInfo.indexOf("ジャンル").takeIf { it != -1 } ?: info.programInfo.length
@@ -355,13 +412,21 @@ class EdcbRecordRepository @Inject constructor(
                     try {
                         val request = Request.Builder().url(urlStr).build()
                         client.newCall(request).execute().use { response ->
-                            if (response.isSuccessful) {
+                            // ステータスコードが 200 OK かつ ボディが空でないことを確認
+                            if (response.isSuccessful && response.code == 200) {
                                 val bytes = response.body?.bytes()
-                                if (bytes != null) chapterText = decodeEdcbString(bytes)
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    val rawText = decodeEdcbString(bytes)
+                                    // ★追加: 取得したテキストがHTMLやエラーメッセージでないか簡易チェック
+                                    if (!rawText.contains("Error 404") && !rawText.contains("<!DOCTYPE html>")) {
+                                        chapterText = rawText
+                                    }
+                                }
                             }
                         }
                         if (chapterText != null) break
                     } catch (e: Exception) {
+                        Log.w(TAG, "Chapter fetch failed for $urlStr", e)
                     }
                 }
                 if (chapterText != null) {
@@ -416,9 +481,8 @@ class EdcbRecordRepository @Inject constructor(
             }
         }
 
-        // 仮の空のリストを生成してMapperに渡す（ジャンルパースを独立化させるため）
         val contentList = mutableListOf<EdcbContentData>()
-        val dummyGenre = EdcbDataMapper.mapEdcbGenre(contentList) // 本来は別関数を作るべきだが一旦そのまま
+        val dummyGenre = EdcbDataMapper.mapEdcbGenre(contentList)
 
         return@withContext RecordedProgram(
             info.id,

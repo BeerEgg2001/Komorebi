@@ -29,9 +29,6 @@ import com.beeregg2001.komorebi.viewmodel.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/**
- * MainRootScreenから切り出された、アプリ背面のルーティング（ホーム画面、録画リストなど）を担当します。
- */
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -61,8 +58,9 @@ fun MainRootBackground(
     val scope = rememberCoroutineScope()
     val colors = KomorebiTheme.colors
 
+    // ★ 修正: SMBアイテムが選択されている場合も背面を非表示（ホームレイヤー維持）にする
     val showHomeLayer =
-        (state.selectedChannel == null && state.selectedProgram == null) || state.isMiniPlayerMode
+        (state.selectedChannel == null && state.selectedProgram == null && state.selectedSmbItem == null) || state.isMiniPlayerMode
 
     if (showHomeLayer) {
         Box(
@@ -71,7 +69,6 @@ fun MainRootBackground(
                 .zIndex(0f)
         ) {
             when {
-                // 1. 録画リスト画面
                 state.isRecordListOpen -> {
                     RecordListScreen(
                         konomiIp = konomiIp, konomiPort = konomiPort,
@@ -117,7 +114,27 @@ fun MainRootBackground(
                     )
                 }
 
-                // 2. 自動予約条件の編集画面
+                state.isSmbLibraryOpen -> {
+                    com.beeregg2001.komorebi.ui.video.smb.SmbLibraryScreen(
+                        onBack = { state.isSmbLibraryOpen = false },
+                        onFileClick = { item ->
+                            // ★ 修正: SMBファイルをクリックしたら、プレイヤーを起動する
+                            state.selectedSmbItem = item
+                            state.showPlayerControls = true
+                            state.isReturningFromPlayer = false
+                            state.isMiniPlayerMode = false
+                            state.initialPlaybackPositionMs = 0L
+
+                            // ★ 追加: 再生したファイルのパスを保存（戻ってきた時のフォーカス復帰用）
+                            state.lastPlayedSmbPath = item.path
+                        },
+                        // ★ 追加: 再生画面から戻ってきた際のフォーカス復帰用パラメータ
+                        isReturningFromPlayer = state.isReturningFromPlayer,
+                        lastPlayedPath = state.lastPlayedSmbPath,
+                        onReturnFocusConsumed = { state.isReturningFromPlayer = false }
+                    )
+                }
+
                 state.editingCondition != null -> {
                     val currentCondition = conditions.find { it.id == state.editingCondition!!.id }
                         ?: state.editingCondition!!
@@ -179,7 +196,6 @@ fun MainRootBackground(
                     )
                 }
 
-                // 3. ホームランチャー（メインタブ群）
                 else -> {
                     HomeLauncherScreen(
                         channelViewModel = channelViewModel,
@@ -258,6 +274,7 @@ fun MainRootBackground(
                         onShowAllRecordings = { state.isRecordListOpen = true },
                         onCloseRecordList = { state.isRecordListOpen = false },
                         onShowSeriesList = { state.isSeriesListOpen = true },
+                        onShowSmbLibrary = { state.isSmbLibraryOpen = true },
                         isReturningFromPlayer = state.isReturningFromPlayer,
                         onReturnFocusConsumed = { state.isReturningFromPlayer = false },
                         isUiReadyFlag = state.isUiReady,

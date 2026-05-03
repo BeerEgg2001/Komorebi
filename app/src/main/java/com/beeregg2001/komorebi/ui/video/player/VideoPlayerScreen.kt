@@ -34,6 +34,7 @@ import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.AudioMode
+import com.beeregg2001.komorebi.ui.video.smb.SmbItem
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -47,6 +48,7 @@ private const val TAG = "VideoPlayerScreen"
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
+    smbItem: SmbItem? = null, // ★ 新規追加: nullでない場合はSMB再生として振る舞う
     initialPositionMs: Long = 0,
     initialQuality: String = "1080p-60fps",
     showControls: Boolean,
@@ -84,8 +86,10 @@ fun VideoPlayerScreen(
     var isBuffering by remember { mutableStateOf(true) }
 
     LaunchedEffect(program.id) {
-        videoPlayerViewModel.fetchProgramDetail(program.id)
-        videoPlayerViewModel.fetchAvailableQualities()
+        if (smbItem == null) {
+            videoPlayerViewModel.fetchProgramDetail(program.id)
+            videoPlayerViewModel.fetchAvailableQualities()
+        }
     }
 
     LaunchedEffect(fetchedDetail) {
@@ -99,7 +103,6 @@ fun VideoPlayerScreen(
     val autoCmSkipStr by settingsViewModel.autoCmSkip.collectAsState()
     LaunchedEffect(autoCmSkipStr) {
         vs.isAutoCmSkipEnabled = (autoCmSkipStr == "ON")
-        Log.i(TAG, "Auto CM Skip globally synced: ${vs.isAutoCmSkipEnabled}")
     }
 
     LaunchedEffect(availableQualities, isQualitiesLoaded, currentVideoQualityStr) {
@@ -108,10 +111,6 @@ fun VideoPlayerScreen(
             if (matched != null) {
                 vs.currentQuality = matched
             } else {
-                Log.w(
-                    TAG,
-                    "User's videoQuality ($currentVideoQualityStr) is not in the list. Falling back to default."
-                )
                 val fallback = availableQualities.first()
                 vs.currentQuality = fallback
                 videoPlayerViewModel.saveVideoQuality(fallback.value)
@@ -173,11 +172,14 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(program.recordedVideo.id) {
-        allComments.clear()
-        allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
+        if (smbItem == null) {
+            allComments.clear()
+            allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
+        }
     }
 
-    // ★ 修正: ExoPlayerの生成・管理を外部ファイル(VideoPlayerManager)に委譲
+    var smbDurationMs by remember { mutableLongStateOf(0L) } // ★ 追加: SMB用の動的な動画尺
+
     val exoPlayer = rememberManagedExoPlayer(
         vs = vs,
         scope = scope,
@@ -188,14 +190,17 @@ fun VideoPlayerScreen(
             pixelWidthHeightRatio = ratio
         },
         onBufferingChanged = { isBuffering = it },
+        onDurationChanged = { smbDurationMs = it }, // ★ 追加
         onStopOrDispose = { player ->
-            val posMs =
-                if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
-            videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
+            // ★ 修正: SMB再生時は視聴履歴を更新しない
+            if (smbItem == null) {
+                val posMs =
+                    if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
+            }
         }
     )
 
-    // ★ 修正: ラムダを remember でキャッシュし、毎フレーム作り直されるのを防ぎます
     val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
         { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     }
@@ -206,10 +211,17 @@ fun VideoPlayerScreen(
 
     val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
+    // ★ 修正: PlayerControls等に渡すための動画尺（SMBと録画番組で取得元を切り替え）
+    val totalDurationForControls =
+        if (smbItem != null) smbDurationMs.coerceAtLeast(0L) else (currentProgram.recordedVideo.duration * 1000).toLong()
+
     val performSeek: (Long) -> Unit = { targetMs: Long ->
-        val safeTarget =
-            targetMs.coerceIn(0L, (currentProgram.recordedVideo.duration * 1000).toLong())
-        if (isLiveStream) {
+        val safeTarget = targetMs.coerceIn(
+            0L,
+            if (totalDurationForControls > 0) totalDurationForControls else Long.MAX_VALUE
+        )
+
+        if (isLiveStream && smbItem == null) {
             scope.launch {
                 isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
@@ -274,7 +286,23 @@ fun VideoPlayerScreen(
 
     var isFirstLoad by remember { mutableStateOf(true) }
 
-    LaunchedEffect(currentProgram.id, vs.currentQuality, availableQualities) {
+    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities) {
+        // ★ 追加: SMB再生ルート
+        if (smbItem != null) {
+            isBuffering = true
+            vs.playbackOffsetMs = 0L
+            val mediaItem = MediaItem.fromUri(smbItem.path)
+            exoPlayer.setMediaItem(mediaItem)
+            if (isFirstLoad && initialPositionMs > 0) {
+                exoPlayer.seekTo(initialPositionMs)
+            }
+            isFirstLoad = false
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+            return@LaunchedEffect
+        }
+
+        // 既存のRecordedProgramルート
         if (currentProgram.id == 0 || !isQualitiesLoaded || vs.currentQuality.value.isBlank()) return@LaunchedEffect
         if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) return@LaunchedEffect
 
@@ -329,13 +357,16 @@ fun VideoPlayerScreen(
         }
     }
 
-    DisposableEffect(vs.currentQuality, currentSessionId) {
-        videoPlayerViewModel.startStreamMaintenance(
-            program,
-            vs.currentQuality.value,
-            currentSessionId
-        ) { getCurrentPositionMs() / 1000.0 }
-        onDispose { videoPlayerViewModel.stopStreamMaintenance() }
+    DisposableEffect(vs.currentQuality, currentSessionId, smbItem) {
+        // ★ 修正: SMB再生時はKonomiTVへのストリーム維持APIを叩かない
+        if (smbItem == null) {
+            videoPlayerViewModel.startStreamMaintenance(
+                program,
+                vs.currentQuality.value,
+                currentSessionId
+            ) { getCurrentPositionMs() / 1000.0 }
+        }
+        onDispose { if (smbItem == null) videoPlayerViewModel.stopStreamMaintenance() }
     }
 
     LaunchedEffect(
@@ -385,7 +416,7 @@ fun VideoPlayerScreen(
                     showControls = showControls,
                     isSubOverlayOpen = isSubOverlayOpen,
                     chapters = chapters,
-                    totalDurationMs = (currentProgram.recordedVideo.duration * 1000).toLong(),
+                    totalDurationMs = totalDurationForControls, // ★ 修正
                     getCurrentPositionMs = getCurrentPositionMs,
                     performSeek = performSeek,
                     triggerSeekingPreview = triggerSeekingPreview,
@@ -469,7 +500,6 @@ fun VideoPlayerScreen(
                             }
                         },
                         update = { view ->
-                            // ★ 修正: visibilityの変更は激重なので、alpha（透明度）の変更に留めます
                             val targetAlpha =
                                 if (vs.isSubtitleEnabled && !isSubOverlayOpen) 1f else 0f
                             if (view.alpha != targetAlpha) {
@@ -496,14 +526,14 @@ fun VideoPlayerScreen(
                 exoPlayer = exoPlayer,
                 program = currentProgram,
                 tiledThumbnailUrl = tiledThumbnailUrl,
-                allComments = allComments, // ★ これを追加！
+                allComments = allComments,
                 isVisible = showControls && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN,
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
                 isPlaying = exoPlayer.isPlaying,
-                hasChapters = chapters.size > 1,
+                hasChapters = chapters.size > 1 && smbItem == null, // ★ 修正: SMBはチャプターリスト非表示
                 currentPositionMs = getEffectivePositionMs(),
-                totalDurationMs = (currentProgram.recordedVideo.duration * 1000).toLong(),
+                totalDurationMs = totalDurationForControls, // ★ 修正
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
                 onPlayPauseToggle = { vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play() },
@@ -514,7 +544,7 @@ fun VideoPlayerScreen(
                 )
                 },
                 onSeekForward = {
-                    val totalDuration = (currentProgram.recordedVideo.duration * 1000).toLong()
+                    val totalDuration = totalDurationForControls
                     performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration)); vs.updateIndicator(
                     Icons.Default.FastForward,
                     "+30s"
@@ -570,6 +600,12 @@ fun VideoPlayerScreen(
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
                     onQualitySelect = {
+                        // ★ 修正: SMB再生時は画質変更をブロック
+                        if (smbItem != null) {
+                            onShowToast("SMB再生中は画質の変更はできません")
+                            isModernSettingsOpen = false
+                            return@ModernVideoSettingsOverlay
+                        }
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it
@@ -710,6 +746,12 @@ fun VideoPlayerScreen(
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
                     onQualitySelect = {
+                        // ★ 修正: SMB再生時は画質変更をブロック
+                        if (smbItem != null) {
+                            onShowToast("SMB再生中は画質の変更はできません")
+                            onSubMenuToggle(false)
+                            return@VideoTopSubMenuUI
+                        }
                         if (vs.currentQuality != it) {
                             vs.playbackOffsetMs = getCurrentPositionMs()
                             vs.currentQuality = it

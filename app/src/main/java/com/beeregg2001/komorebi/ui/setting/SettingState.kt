@@ -4,6 +4,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
+import com.beeregg2001.komorebi.viewmodel.SmbServer
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
@@ -12,7 +13,7 @@ class SettingPreferences(
     val backendType: String,
     val edcbIp: String,
     val edcbPort: String,
-    val edcbHttpPort: String, // ★追加
+    val edcbHttpPort: String,
     val epgStationIp: String,
     val epgStationPort: String,
 
@@ -49,13 +50,15 @@ class SettingPreferences(
     val currentThemeName: String,
     val defaultRecordListView: String,
     val hideSubChannels: Boolean,
-    // ★ 追加: EDCB録画再生方式の設定値 ("API" または "DIRECT")
-    val edcbRecordPlayMethod: String
+    val edcbRecordPlayMethod: String,
+    // ★ 変更: 個別の変数からリストへ変更
+    val smbServerList: List<SmbServer>
 )
 
 @Composable
 fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferences {
     val gson = remember { Gson() }
+
     val batchListJson = repository.postRecordingBatchList.collectAsState(initial = "[]").value
     val batchList = remember(batchListJson) {
         try {
@@ -65,6 +68,7 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
             emptyList()
         }
     }
+
     val favoriteTeamsJson = repository.favoriteBaseballTeams.collectAsState(initial = "[]").value
     val favoriteTeams = remember(favoriteTeamsJson) {
         try {
@@ -75,14 +79,24 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         }
     }
 
+    // ★ 変更: JSONから SmbServer リストを復元
+    val smbListJson = repository.smbServerList.collectAsState(initial = "[]").value
+    val smbList = remember(smbListJson) {
+        try {
+            val type = object : TypeToken<List<SmbServer>>() {}.type
+            gson.fromJson<List<SmbServer>>(smbListJson, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     return SettingPreferences(
         backendType = repository.backendType.collectAsState(initial = "KONOMITV").value,
         edcbIp = repository.edcbIp.collectAsState(initial = "").value,
         edcbPort = repository.edcbPort.collectAsState(initial = "5510").value,
-        edcbHttpPort = repository.edcbHttpPort.collectAsState(initial = "5510").value, // ★追加
+        edcbHttpPort = repository.edcbHttpPort.collectAsState(initial = "5510").value,
         epgStationIp = repository.epgStationIp.collectAsState(initial = "").value,
         epgStationPort = repository.epgStationPort.collectAsState(initial = "8888").value,
-
         konomiIp = repository.konomiIp.collectAsState(initial = "").value,
         konomiPort = repository.konomiPort.collectAsState(initial = "7000").value,
         mirakurunIp = repository.mirakurunIp.collectAsState(initial = "").value,
@@ -116,8 +130,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         currentThemeName = repository.appTheme.collectAsState(initial = "MONOTONE").value,
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
         hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value,
-        // ★ 追加: Flowから収集
-        edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value
+        edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value,
+        // ★ 変更: SMBリストを渡す
+        smbServerList = smbList
     )
 }
 

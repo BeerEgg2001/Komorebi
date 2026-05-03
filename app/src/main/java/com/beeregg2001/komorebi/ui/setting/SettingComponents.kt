@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,14 +43,18 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
+import com.beeregg2001.komorebi.viewmodel.SmbServer
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -79,6 +85,11 @@ sealed class SettingDialogState {
 
     object Licenses : SettingDialogState()
     object GeminiSetup : SettingDialogState()
+
+    data class SmbAction(val target: SmbServer) : SettingDialogState()
+    data class SmbSetup(val target: SmbServer? = null) : SettingDialogState()
+    data class SmbManualInput(val target: SmbServer? = null, val onConfirm: (SmbServer) -> Unit) :
+        SettingDialogState()
 }
 
 data class Category(val name: String, val icon: ImageVector)
@@ -121,25 +132,23 @@ fun CategoryItem(
     val colors = KomorebiTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-
     val focusedTextColor = MaterialTheme.colorScheme.onPrimary
     val focusedBgColor = MaterialTheme.colorScheme.primary
 
     Surface(
-        selected = isSelected,
-        onClick = { if (enabled) onClick() },
+        selected = isSelected, onClick = { if (enabled) onClick() },
         modifier = modifier
             .fillMaxWidth()
             .focusProperties { canFocus = enabled }
             .onFocusChanged { if (it.isFocused && enabled) onFocused() },
-        interactionSource = interactionSource, // ★ 確実なフォーカス監視
+        interactionSource = interactionSource,
         colors = SelectableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             selectedContainerColor = colors.textPrimary.copy(0.1f),
-            focusedContainerColor = focusedBgColor, // ★ アクセント背景に統一
+            focusedContainerColor = focusedBgColor,
             contentColor = if (enabled) colors.textSecondary else colors.textSecondary.copy(alpha = 0.3f),
             selectedContentColor = colors.textPrimary,
-            focusedContentColor = focusedTextColor // ★ 確実な文字色
+            focusedContentColor = focusedTextColor
         ),
         shape = SelectableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
         scale = SelectableSurfaceDefaults.scale(focusedScale = if (enabled) 1.05f else 1.0f)
@@ -186,11 +195,8 @@ fun SettingItem(
     onClick: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-
-    // ★ 確実なフォーカス状態の取得
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-
     val focusedTextColor = MaterialTheme.colorScheme.onPrimary
     val focusedBgColor = MaterialTheme.colorScheme.primary
 
@@ -199,7 +205,7 @@ fun SettingItem(
         modifier = modifier
             .fillMaxWidth()
             .focusProperties { canFocus = enabled },
-        interactionSource = interactionSource, // ★ ここで結びつける
+        interactionSource = interactionSource,
         colors = ClickableSurfaceDefaults.colors(
             containerColor = colors.textPrimary.copy(alpha = if (enabled) 0.05f else 0.02f),
             focusedContainerColor = focusedBgColor,
@@ -238,6 +244,134 @@ fun SettingItem(
                     alpha = if (enabled) 1f else 0.5f
                 )
             )
+        }
+    }
+}
+
+@Composable
+fun DialogTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    isPassword: Boolean = false,
+    focusRequester: FocusRequester = remember { FocusRequester() }
+) {
+    val colors = KomorebiTheme.colors
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    Surface(
+        onClick = { focusRequester.requestFocus() },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f)),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        border = ClickableSurfaceDefaults.border(
+            focusedBorder = Border(
+                BorderStroke(
+                    2.dp,
+                    colors.accent
+                )
+            )
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+    ) {
+        Box(
+            contentAlignment = Alignment.CenterStart,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+        ) {
+            BasicTextField(
+                value = value, onValueChange = onValueChange,
+                textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
+                cursorBrush = SolidColor(colors.textPrimary),
+                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { if (it.isFocused) keyboardController?.show() },
+                singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) Text(
+                            text = placeholder,
+                            color = colors.textSecondary.copy(0.5f),
+                            fontSize = 16.sp
+                        )
+                        innerTextField()
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun InputDialog(
+    title: String,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    var value by remember { mutableStateOf(initialValue) }
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                    onDismiss(); true
+                } else false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(540.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                DialogTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    placeholder = "",
+                    focusRequester = focusRequester
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        )
+                    ) { Text("キャンセル") }
+                    Button(
+                        onClick = { onConfirm(value) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("OK") }
+                }
+            }
         }
     }
 }
@@ -332,62 +466,296 @@ fun BatchInputDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit)
 }
 
 @Composable
-fun DialogTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    focusRequester: FocusRequester = remember { FocusRequester() }
+fun SmbManualInputDialog(
+    target: SmbServer?,
+    onDismiss: () -> Unit,
+    onConfirm: (SmbServer) -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val keyboardController = LocalSoftwareKeyboardController.current
+    var name by remember { mutableStateOf(target?.name ?: "") }
+    var ip by remember { mutableStateOf(target?.ip ?: "") }
+    var port by remember { mutableStateOf(target?.port ?: "445") }
+    var user by remember { mutableStateOf(target?.user ?: "") }
+    var password by remember { mutableStateOf(target?.password ?: "") }
 
-    Surface(
-        onClick = { focusRequester.requestFocus() },
+    val focusRequester = remember { FocusRequester() }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
+
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp),
-        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f)),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        border = ClickableSurfaceDefaults.border(
-            focusedBorder = Border(
-                BorderStroke(
-                    2.dp,
-                    colors.accent
-                )
-            )
-        ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+            .fillMaxSize()
+            .background(Color.Black.copy(0.8f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
+                    onDismiss(); true
+                } else false
+            },
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            contentAlignment = Alignment.CenterStart,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(540.dp)
         ) {
-            BasicTextField(
-                value = value, onValueChange = onValueChange,
-                textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
-                cursorBrush = SolidColor(colors.textPrimary),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { if (it.isFocused) keyboardController?.show() },
-                singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                decorationBox = { innerTextField ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty()) Text(
-                            text = placeholder,
-                            color = colors.textSecondary.copy(0.5f),
-                            fontSize = 16.sp
+            Column(modifier = Modifier
+                .padding(32.dp)
+                .heightIn(max = 500.dp)) {
+                Text(
+                    if (target != null) "SMBサーバーの編集" else "SMBサーバーの追加",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 20.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "表示名 (必須)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textSecondary
                         )
-                        innerTextField()
+                        DialogTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            placeholder = "例: リビングのNAS",
+                            focusRequester = focusRequester
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "IPアドレス (必須)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textSecondary
+                        )
+                        DialogTextField(
+                            value = ip,
+                            onValueChange = { ip = it },
+                            placeholder = "例: 192.168.1.10"
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "ポート番号",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textSecondary
+                        )
+                        DialogTextField(
+                            value = port,
+                            onValueChange = { port = it },
+                            placeholder = "例: 445"
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "ユーザー名 (空ならゲスト)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textSecondary
+                        )
+                        DialogTextField(
+                            value = user,
+                            onValueChange = { user = it },
+                            placeholder = "ユーザー名"
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "パスワード",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textSecondary
+                        )
+                        DialogTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            placeholder = "パスワード",
+                            isPassword = true
+                        )
                     }
                 }
-            )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        )
+                    ) { Text("キャンセル") }
+                    Button(
+                        onClick = {
+                            if (name.isNotBlank() && ip.isNotBlank()) {
+                                val id = target?.id ?: java.util.UUID.randomUUID().toString()
+                                onConfirm(SmbServer(id, name, ip, port, user, password))
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = name.isNotBlank() && ip.isNotBlank()
+                    ) { Text(if (target != null) "保存" else "追加") }
+                }
+            }
         }
     }
 }
+
+// ★ 変更: onShowToast コールバックを追加し、ViewModelの受信イベントを拾う
+@Composable
+fun SmbSetupDialog(
+    target: SmbServer?,
+    serverIp: String,
+    onStartServer: () -> Unit,
+    onStopServer: () -> Unit,
+    onDismiss: () -> Unit,
+    onManualInputClick: () -> Unit,
+    onShowToast: (String) -> Unit = {}
+) {
+    val colors = KomorebiTheme.colors
+    var isClosing by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+
+    val viewModel: SettingsViewModel = hiltViewModel()
+
+    DisposableEffect(Unit) { onStartServer(); onDispose { onStopServer() } }
+    LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
+
+    // ★ 追加: Ktor側で受信したイベントをフックしてToastを表示する
+    LaunchedEffect(Unit) {
+        viewModel.smbServerAddedEvent.collect { name ->
+            onShowToast("設定を受信しました！\n「$name」")
+        }
+    }
+
+    val serverUrl = "http://$serverIp:8081/smb" + if (target != null) "?id=${target.id}" else ""
+    val qrBitmap = rememberQrBitmap(content = serverUrl, size = 300)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(0.85f))
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
+            .focusGroup()
+            .onKeyEvent {
+                if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
+                    isClosing = true; onDismiss(); return@onKeyEvent true
+                }; false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            colors = SurfaceDefaults.colors(containerColor = colors.surface),
+            modifier = Modifier.width(680.dp)
+        ) {
+            Column(modifier = Modifier.padding(40.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.FolderShared,
+                        null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        if (target != null) "SMBサーバーの編集" else "SMBサーバーの追加",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.height(32.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "設定手順",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.accent,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "1. スマホのカメラで右のQRコードを読み取ります。",
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.bodyLarge,
+                            lineHeight = 24.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "2. スマホの画面に従い、必要な情報を入力して送信してください。",
+                            color = colors.textPrimary,
+                            style = MaterialTheme.typography.bodyLarge,
+                            lineHeight = 24.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        // ★ 変更: 連続追加ができる旨を記載
+                        Text(
+                            "3. 送信後もこの画面は開いたままになるため、スマホから連続して複数のサーバーを追加できます！",
+                            color = colors.textSecondary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 24.sp
+                        )
+                    }
+                    Spacer(Modifier.width(32.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(220.dp)
+                            .background(Color.White, RoundedCornerShape(12.dp))
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (qrBitmap != null) Image(
+                            bitmap = qrBitmap,
+                            contentDescription = "QR Code",
+                            modifier = Modifier.fillMaxSize()
+                        ) else CircularProgressIndicator(color = colors.accent)
+                    }
+                }
+                Spacer(Modifier.height(40.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    // ★ 変更: キャンセルボタンの名称を状況に応じて変更
+                    Button(
+                        onClick = { isClosing = true; onDismiss() },
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier
+                            .width(180.dp)
+                            .focusRequester(focusRequester)
+                    ) { Text(if (target != null) "キャンセル" else "閉じる") }
+                    Spacer(Modifier.width(24.dp))
+                    Button(
+                        onClick = { isClosing = true; onManualInputClick() },
+                        colors = ButtonDefaults.colors(
+                            containerColor = colors.textPrimary.copy(0.1f),
+                            contentColor = colors.textPrimary
+                        ),
+                        modifier = Modifier.width(180.dp)
+                    ) { Text("リモコンで手動入力") }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// これ以降は既存コンポーネント
+// ----------------------------------------------------------------------
 
 @Composable
 fun SelectionDialog(
@@ -406,11 +774,10 @@ fun SelectionDialog(
     var isClosing by remember { mutableStateOf(false) }
     val initialFocusRequester = remember { FocusRequester() }
 
+    // ★ 修正: safeRequestFocus を使い、ディレイを延長してUI構築を待つ
     LaunchedEffect(Unit) {
-        delay(50); try {
-        initialFocusRequester.requestFocus()
-    } catch (e: Exception) {
-    }
+        delay(150)
+        initialFocusRequester.safeRequestFocus("SelectionDialog_Initial")
     }
 
     Box(
@@ -421,11 +788,12 @@ fun SelectionDialog(
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
             .focusGroup()
+            // ★ 修正: 背景のBoxにもFocusRequesterを付与してフォーカスの漏れをキャッチする
+            .focusRequester(initialFocusRequester)
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true
-                }
-                false
+                }; false
             },
         contentAlignment = Alignment.Center
     ) {
@@ -454,7 +822,8 @@ fun SelectionDialog(
                                 initialFocusRequester
                             ) else Modifier
                         SelectionDialogItem(
-                            label = label, isSelected = isSelected,
+                            label = label,
+                            isSelected = isSelected,
                             onClick = { isClosing = true; onSelect(value) },
                             modifier = focusModifier
                         )
@@ -484,7 +853,6 @@ fun SelectionDialogItem(
     val colors = KomorebiTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-
     val focusedTextColor = MaterialTheme.colorScheme.onPrimary
     val focusedBgColor = MaterialTheme.colorScheme.primary
 
@@ -493,10 +861,12 @@ fun SelectionDialogItem(
         modifier = modifier.fillMaxWidth(),
         interactionSource = interactionSource,
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isSelected) colors.textPrimary.copy(0.1f) else Color.Transparent,
+            containerColor = if (isSelected) colors.textPrimary.copy(
+                0.1f
+            ) else Color.Transparent,
             focusedContainerColor = focusedBgColor,
             contentColor = colors.textPrimary,
-            focusedContentColor = focusedTextColor // ★ ハードコードを完全排除
+            focusedContentColor = focusedTextColor
         ),
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
@@ -514,7 +884,9 @@ fun SelectionDialogItem(
             )
             if (isSelected) {
                 Icon(
-                    Icons.Default.Check, null, modifier = Modifier.size(20.dp),
+                    Icons.Default.Check,
+                    null,
+                    modifier = Modifier.size(20.dp),
                     tint = if (isFocused) focusedTextColor else colors.textPrimary
                 )
             }
@@ -533,7 +905,6 @@ fun MultiSelectionDialog(
     val colors = KomorebiTheme.colors
     var selections by remember { mutableStateOf(currentSelections) }
     val listState = rememberLazyListState()
-
     var isClosing by remember { mutableStateOf(false) }
     val initialFocusRequester = remember { FocusRequester() }
 
@@ -555,8 +926,7 @@ fun MultiSelectionDialog(
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true
-                }
-                false
+                }; false
             },
         contentAlignment = Alignment.Center
     ) {
@@ -583,7 +953,8 @@ fun MultiSelectionDialog(
                         val focusModifier =
                             if (index == 0) Modifier.focusRequester(initialFocusRequester) else Modifier
                         MultiSelectionDialogItem(
-                            label = label, isSelected = isSelected,
+                            label = label,
+                            isSelected = isSelected,
                             onClick = {
                                 selections =
                                     if (isSelected) selections - value else selections + value
@@ -609,7 +980,7 @@ fun MultiSelectionDialog(
                         onClick = { isClosing = true; onConfirm(selections) },
                         colors = ButtonDefaults.colors(
                             containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary // ★ 修正: 確定ボタンのテキスト色
+                            contentColor = MaterialTheme.colorScheme.onPrimary
                         ),
                         modifier = Modifier.weight(1f)
                     ) { Text("確定", fontWeight = FontWeight.Bold) }
@@ -629,7 +1000,6 @@ fun MultiSelectionDialogItem(
     val colors = KomorebiTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-
     val focusedTextColor = MaterialTheme.colorScheme.onPrimary
     val focusedBgColor = MaterialTheme.colorScheme.primary
 
@@ -638,10 +1008,12 @@ fun MultiSelectionDialogItem(
         modifier = modifier.fillMaxWidth(),
         interactionSource = interactionSource,
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = if (isSelected) colors.textPrimary.copy(0.1f) else Color.Transparent,
+            containerColor = if (isSelected) colors.textPrimary.copy(
+                0.1f
+            ) else Color.Transparent,
             focusedContainerColor = focusedBgColor,
             contentColor = colors.textPrimary,
-            focusedContentColor = focusedTextColor // ★ 修正
+            focusedContentColor = focusedTextColor
         ),
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.small),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
@@ -652,7 +1024,8 @@ fun MultiSelectionDialogItem(
         ) {
             Icon(
                 imageVector = if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                contentDescription = null, modifier = Modifier.size(24.dp),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
                 tint = if (isFocused) focusedTextColor else if (isSelected) colors.accent else colors.textSecondary
             )
             Spacer(Modifier.width(16.dp))
@@ -689,8 +1062,7 @@ fun ConfirmClearDialog(
                 if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                     onDismiss(); true
                 } else false
-            },
-        contentAlignment = Alignment.Center
+            }, contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -774,10 +1146,8 @@ fun GeminiSetupDialog(
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true
-                }
-                false
-            },
-        contentAlignment = Alignment.Center
+                }; false
+            }, contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(24.dp),
@@ -791,8 +1161,7 @@ fun GeminiSetupDialog(
                         null,
                         tint = colors.accent,
                         modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(Modifier.width(16.dp))
+                    ); Spacer(Modifier.width(16.dp))
                     Text(
                         "AIコンシェルジュ連携 (Gemini)",
                         style = MaterialTheme.typography.headlineMedium,
@@ -807,16 +1176,14 @@ fun GeminiSetupDialog(
                             "連携ステータス",
                             style = MaterialTheme.typography.titleMedium,
                             color = colors.textSecondary
-                        )
-                        Spacer(Modifier.height(8.dp))
+                        ); Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 if (isKeySet) Icons.Default.CheckCircle else Icons.Default.Warning,
                                 null,
                                 tint = if (isKeySet) Color(0xFF34A853) else Color(0xFFFFB300),
                                 modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
+                            ); Spacer(Modifier.width(8.dp))
                             Text(
                                 if (isKeySet) "設定済み (キー受信完了)" else "未設定",
                                 style = MaterialTheme.typography.titleLarge,
@@ -830,22 +1197,19 @@ fun GeminiSetupDialog(
                             style = MaterialTheme.typography.titleMedium,
                             color = colors.accent,
                             fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(12.dp))
+                        ); Spacer(Modifier.height(12.dp))
                         Text(
                             "1. スマホのカメラで右のQRコードを読み取ります。",
                             color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyLarge,
                             lineHeight = 24.sp
-                        )
-                        Spacer(Modifier.height(8.dp))
+                        ); Spacer(Modifier.height(8.dp))
                         Text(
                             "2. スマホの画面に従い、GoogleからAPIキーを取得して送信してください。",
                             color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyLarge,
                             lineHeight = 24.sp
-                        )
-                        Spacer(Modifier.height(8.dp))
+                        ); Spacer(Modifier.height(8.dp))
                         Text(
                             "3. 送信後、上のステータスが「設定済み」になれば完了です！",
                             color = colors.textPrimary,
@@ -950,7 +1314,6 @@ fun SettingToggleItem(
     val colors = KomorebiTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-
     val focusedTextColor = MaterialTheme.colorScheme.onPrimary
     val focusedBgColor = MaterialTheme.colorScheme.primary
 
@@ -967,7 +1330,9 @@ fun SettingToggleItem(
     ) {
         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = icon, contentDescription = null, modifier = Modifier.size(32.dp),
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
                 tint = if (isFocused) focusedTextColor else colors.textPrimary
             )
             Spacer(modifier = Modifier.width(16.dp))
@@ -980,7 +1345,8 @@ fun SettingToggleItem(
                 )
                 if (description.isNotEmpty()) {
                     Text(
-                        text = description, style = MaterialTheme.typography.bodySmall,
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
                         color = if (isFocused) focusedTextColor.copy(alpha = 0.8f) else colors.textSecondary
                     )
                 }
@@ -988,7 +1354,8 @@ fun SettingToggleItem(
             Spacer(modifier = Modifier.width(16.dp))
             Icon(
                 imageVector = if (checked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                contentDescription = null, modifier = Modifier.size(32.dp),
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
                 tint = if (isFocused) focusedTextColor else if (checked) colors.accent else colors.textSecondary
             )
         }

@@ -20,7 +20,9 @@ enum class ZoomOrigin { TopLeft, TopRight, BottomLeft, BottomRight }
 data class ChapterInfo(
     val startTimeMs: Long,
     val endTimeMs: Long,
-    val isCm: Boolean
+    val isCm: Boolean,
+    val isMarkerOnly: Boolean = false, // trueなら「区間」ではなく「点（マーカー）」として扱う
+    val label: String = ""             // UIに表示するチャプター名（例: "Aパート", "oxA" など）
 )
 
 @Stable
@@ -75,6 +77,10 @@ class VideoPlayerState {
     var isDownKeyLongPressed by mutableStateOf(false)
     var pendingSeekPositionMs by mutableStateOf<Long?>(null)
     var lastSeekUpdateTime by mutableLongStateOf(0L)
+
+    // 長押し開始時点のシークモード（チャプターか時間か）を保持するフラグ
+    var activeRightSeekIsChapterMode by mutableStateOf(false)
+    var activeLeftSeekIsChapterMode by mutableStateOf(false)
 
     fun updateIndicator(icon: ImageVector, label: String) {
         indicatorState = IndicatorState(icon, label)
@@ -204,13 +210,14 @@ class VideoPlayerState {
 
         // RIGHT (早送り / シーク)
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
-            val isChapterMode = !isModern || !showControls
             if (isActionDown) {
                 if (isModern && isSeekBarFocused) triggerSeekingPreview()
                 if (repeatCount == 0) {
                     rightKeyDownTime = System.currentTimeMillis()
                     isRightKeyLongPressed = false
                     pendingSeekPositionMs = getCurrentPositionMs()
+                    // ★ 修正: キーを押し始めた瞬間のモードを記憶する (コントロール非表示ならチャプタースキップ)
+                    activeRightSeekIsChapterMode = !isModern || !showControls
                 } else {
                     if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
                         isRightKeyLongPressed = true
@@ -218,17 +225,18 @@ class VideoPlayerState {
                     }
                     if (isRightKeyLongPressed) {
                         val now = System.currentTimeMillis()
-                        if (now - lastSeekUpdateTime > 150) {
+                        // ★ 修正: チャプタースキップ時は長押しの反応速度を落とし(400ms)、意図せず複数チャプターを飛ばしてしまうのを防ぐ
+                        val interval = if (activeRightSeekIsChapterMode) 400L else 150L
+                        if (now - lastSeekUpdateTime > interval) {
                             lastSeekUpdateTime = now
                             val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
 
-                            if (isChapterMode) {
-                                val boundaries = listOf(0L) + chapters.flatMap {
-                                    listOf(
-                                        it.startTimeMs,
-                                        it.endTimeMs
-                                    )
-                                }.distinct() + totalDurationMs
+                            if (activeRightSeekIsChapterMode) {
+                                // ★ 修正: 境界値を確実にソート（sorted()）して誤検知を防ぐ
+                                val boundaries = (listOf(0L) + chapters.flatMap {
+                                    listOf(it.startTimeMs, it.endTimeMs)
+                                } + totalDurationMs).distinct().sorted()
+
                                 if (boundaries.size <= 2) {
                                     pendingSeekPositionMs =
                                         (currentTarget + 180_000).coerceAtMost(totalDurationMs)
@@ -242,6 +250,7 @@ class VideoPlayerState {
                             } else {
                                 pendingSeekPositionMs =
                                     (currentTarget + 15_000).coerceAtMost(totalDurationMs)
+                                updateIndicator(Icons.Default.FastForward, "+15s")
                             }
                         }
                     }
@@ -251,7 +260,10 @@ class VideoPlayerState {
                 if (!isRightKeyLongPressed) {
                     onShowControlsChange(true)
                     performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDurationMs))
-                    if (isChapterMode) updateIndicator(Icons.Default.FastForward, "+30s")
+                    if (activeRightSeekIsChapterMode) updateIndicator(
+                        Icons.Default.FastForward,
+                        "+30s"
+                    )
                 } else {
                     pendingSeekPositionMs?.let { performSeek(it) }
                 }
@@ -264,13 +276,13 @@ class VideoPlayerState {
 
         // LEFT (巻き戻し / シーク)
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
-            val isChapterMode = !isModern || !showControls
             if (isActionDown) {
                 if (isModern && isSeekBarFocused) triggerSeekingPreview()
                 if (repeatCount == 0) {
                     leftKeyDownTime = System.currentTimeMillis()
                     isLeftKeyLongPressed = false
                     pendingSeekPositionMs = getCurrentPositionMs()
+                    activeLeftSeekIsChapterMode = !isModern || !showControls
                 } else {
                     if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
                         isLeftKeyLongPressed = true
@@ -278,17 +290,18 @@ class VideoPlayerState {
                     }
                     if (isLeftKeyLongPressed) {
                         val now = System.currentTimeMillis()
-                        if (now - lastSeekUpdateTime > 150) {
+                        // ★ 修正: チャプタースキップ時は長押しの反応速度を落とす
+                        val interval = if (activeLeftSeekIsChapterMode) 400L else 150L
+                        if (now - lastSeekUpdateTime > interval) {
                             lastSeekUpdateTime = now
                             val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
 
-                            if (isChapterMode) {
-                                val boundaries = listOf(0L) + chapters.flatMap {
-                                    listOf(
-                                        it.startTimeMs,
-                                        it.endTimeMs
-                                    )
-                                }.distinct() + totalDurationMs
+                            if (activeLeftSeekIsChapterMode) {
+                                // ★ 修正: 境界値を確実にソート（sorted()）
+                                val boundaries = (listOf(0L) + chapters.flatMap {
+                                    listOf(it.startTimeMs, it.endTimeMs)
+                                } + totalDurationMs).distinct().sorted()
+
                                 if (boundaries.size <= 2) {
                                     pendingSeekPositionMs =
                                         (currentTarget - 60_000).coerceAtLeast(0L)
@@ -301,6 +314,7 @@ class VideoPlayerState {
                                 }
                             } else {
                                 pendingSeekPositionMs = (currentTarget - 15_000).coerceAtLeast(0L)
+                                updateIndicator(Icons.Default.FastRewind, "-15s")
                             }
                         }
                     }
@@ -310,7 +324,10 @@ class VideoPlayerState {
                 if (!isLeftKeyLongPressed) {
                     onShowControlsChange(true)
                     performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                    if (isChapterMode) updateIndicator(Icons.Default.FastRewind, "-10s")
+                    if (activeLeftSeekIsChapterMode) updateIndicator(
+                        Icons.Default.FastRewind,
+                        "-10s"
+                    )
                 } else {
                     pendingSeekPositionMs?.let { performSeek(it) }
                 }

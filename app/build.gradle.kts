@@ -192,4 +192,9 @@ dependencies {
     implementation("io.ktor:ktor-server-core") // ← バージョン番号はBOMが管理するので消す
     implementation("io.ktor:ktor-server-cio")  // ← バージョン番号はBOMが管理するので消す
     implementation("com.google.zxing:core:3.5.3")
+
+    // ★ 追加: SMB (ファイルライブラリ) 用
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
+
+    implementation("org.videolan.android:libvlc-all:3.7.0")
 }

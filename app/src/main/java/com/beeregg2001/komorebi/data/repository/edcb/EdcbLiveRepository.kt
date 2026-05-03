@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
@@ -62,35 +63,44 @@ class EdcbLiveRepository @Inject constructor(
         return settingsRepository.getEdcbFullUrl()
     }
 
-    private suspend fun fetchMainCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
-            baseEdcbHttpClient.newCall(request).execute().use { response ->
-                val html = response.body?.string() ?: return@withContext null
-                val regex = Regex("""data-ctok="([^"]+)"""")
-                val match = regex.find(html)
-                match?.groupValues?.get(1)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch main ctok from tvcast.html", e)
-            null
-        }
-    }
+    // -----------------------------------------------------------------------------------------
+    // resolver.lua から指定した用途(xcode または view)の ctok を取得するメソッド
+    // エラーレスポンスを受け取った場合はExceptionを投げ、UI側(ダイアログ)で表示させる
+    // -----------------------------------------------------------------------------------------
+    private suspend fun fetchResolverCtok(baseUrl: String, purpose: String): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$baseUrl/komorebi/resolver.lua"
+                val request = Request.Builder().url(url).build()
+                baseEdcbHttpClient.newCall(request).execute().use { response ->
+                    val jsonStr = response.body?.string() ?: return@withContext null
 
-    private suspend fun fetchVideoCtok(baseUrl: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder().url("$baseUrl/EMWUI/tvcast.html").build()
-            baseEdcbHttpClient.newCall(request).execute().use { response ->
-                val html = response.body?.string() ?: return@withContext null
-                val regex = Regex("""<video[^>]*ctok="([^"]+)"""")
-                val match = regex.find(html)
-                match?.groupValues?.get(1)
+                    // JSONをパース
+                    val json = JSONObject(jsonStr)
+
+                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
+                    if (json.has("error")) {
+                        val errMsg = json.optString("error", "Unknown Resolver Error")
+                        val errDetail = json.optString("detail", "")
+                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        Log.e(TAG, "Resolver Lua Error: $fullMsg")
+                        // 例外をスローして上位へ伝搬させる
+                        throw Exception("Komorebi Resolver エラー:\n$fullMsg")
+                    }
+
+                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
+                    }
+
+                    return@withContext json.optJSONObject("ctok")?.optString(purpose)
+                }
+            } catch (e: Exception) {
+                // 既存の処理: 再スローして、上位のViewModel側でキャッチさせる
+                Log.e(TAG, "Failed to fetch ctok for purpose=$purpose", e)
+                throw e
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch video ctok from tvcast.html", e)
-            null
         }
-    }
 
     private fun fetchNxJikkyoForce(): Map<String, Int> {
         val forceMap = mutableMapOf<String, Int>()
@@ -299,11 +309,11 @@ class EdcbLiveRepository @Inject constructor(
                 val sid = parts[3]
                 val edcbId = "$onid-$tsid-$sid"
 
-                val mainCtok = fetchMainCtok(baseUrl) ?: ""
-                Log.i(TAG, "[Live/Dual] 0. Main Ctok: $mainCtok")
+                val ctokView = fetchResolverCtok(baseUrl, "view") ?: ""
+                Log.i(TAG, "[Live/Dual] 0. Main Ctok (view): $ctokView")
 
                 val tvCastUrl =
-                    "$baseUrl/api/TvCast?id=$edcbId&n=$streamNumber&json=1&ctok=$mainCtok"
+                    "$baseUrl/api/TvCast?id=$edcbId&n=$streamNumber&json=1&ctok=$ctokView"
                 val tvCastRequest = Request.Builder().url(tvCastUrl).get().build()
 
                 Log.i(TAG, "[Live/Dual] 1. TvCast リクエスト(n=$streamNumber) 送信中...")
@@ -314,20 +324,20 @@ class EdcbLiveRepository @Inject constructor(
                     }
                 }
 
-                val videoCtok = fetchVideoCtok(baseUrl) ?: mainCtok
+                val ctokXcode = fetchResolverCtok(baseUrl, "xcode") ?: ctokView
                 val hlsKey = "komorebi_live_${streamNumber}_${System.currentTimeMillis()}"
 
                 val postUrl =
-                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$ctokXcode"
                 val formBody = okhttp3.FormBody.Builder()
-                    .add("ctok", videoCtok)
+                    .add("ctok", ctokXcode)
                     .add("open", "1")
                     .build()
 
                 val postRequest = Request.Builder()
                     .url(postUrl)
                     .post(formBody)
-                    .header("Cookie", "ctok=$videoCtok")
+                    .header("Cookie", "ctok=$ctokXcode")
                     .build()
 
                 Log.i(
@@ -345,14 +355,15 @@ class EdcbLiveRepository @Inject constructor(
                 kotlinx.coroutines.delay(4000)
 
                 val m3u8Url =
-                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$videoCtok"
+                    "$baseUrl/api/view?n=$streamNumber&id=$edcbId&option=$quality&hls=$hlsKey&ctok=$ctokXcode"
                 Log.i(TAG, "[Live/Dual] 3. 生成された m3u8 プレイリストURL: $m3u8Url")
 
                 return@withContext m3u8Url
 
             } catch (e: Exception) {
+                // 既存の処理: そのまま再スローし、ViewModel側でエラーダイアログを表示させる
                 Log.e(TAG, "Failed to start live streaming", e)
-                return@withContext ""
+                throw e
             }
         }
 

@@ -14,16 +14,25 @@ class FocusTicketManager {
         private set
     var issueTime by mutableLongStateOf(0L)
         private set
-    var targetProgramId by mutableStateOf<Int?>(null) // ★特定の番組を狙い撃ちするためのID
-        private set
-    var forceResetTick by mutableIntStateOf(0) // ★強制リセット用のカウンター
+    var targetProgramId by mutableStateOf<Int?>(null) // 特定の番組を狙い撃ちするためのID
         private set
 
-    fun issue(ticket: FocusTicket, programId: Int? = null) {
+    // ★ 追加: 文字列(パス)でターゲットを狙い撃ちするための変数
+    var targetPath by mutableStateOf<String?>(null)
+        private set
+    var forceResetTick by mutableIntStateOf(0) // 強制リセット用のカウンター
+        private set
+
+    // ★ 修正: path を受け取れるように拡張
+    fun issue(ticket: FocusTicket, programId: Int? = null, path: String? = null) {
         targetProgramId = programId
+        targetPath = path
         currentTicket = ticket
         issueTime = System.currentTimeMillis()
-        Log.i("KomorebiFocus", "🎟️ Ticket ISSUED: $ticket (TargetID: $programId)")
+        Log.i(
+            "KomorebiFocus",
+            "🎟️ Ticket ISSUED: $ticket (TargetID: $programId, TargetPath: $path)"
+        )
     }
 
     fun consume(ticket: FocusTicket) {
@@ -31,6 +40,7 @@ class FocusTicketManager {
             Log.i("KomorebiFocus", "🗑️ Ticket CONSUMED: $currentTicket")
             currentTicket = FocusTicket.NONE
             targetProgramId = null
+            targetPath = null // ★ 追加
         }
     }
 
