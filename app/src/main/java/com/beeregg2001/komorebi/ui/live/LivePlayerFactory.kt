@@ -20,6 +20,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import dagger.hilt.android.qualifiers.ApplicationContext

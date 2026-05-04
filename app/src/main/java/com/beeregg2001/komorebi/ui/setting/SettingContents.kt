@@ -1097,7 +1097,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0 Stable",
+            "Version 1.1.0 beta-4",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

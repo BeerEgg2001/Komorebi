@@ -428,7 +428,7 @@ fun SettingsScreen(
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_PREFERRED_SOURCE,
                                     mutableListOf(
-                                        "メインシステムに従う" to "KONOMITV",
+                                        "メインシステムに従う\n（トランスコード）" to "KONOMITV",
                                         "Mirakurun を優先" to "MIRAKURUN"
                                     ).apply {
                                         if (prefs.backendType != "EDCB") add("EDCB (TCP) を優先" to "EDCB") else add(
