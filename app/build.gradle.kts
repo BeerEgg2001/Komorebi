@@ -16,8 +16,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13 // 数値を1つ上げる
-        versionName = "1.1.0-beta3"
+        versionCode = 14 // 数値を1つ上げる
+        versionName = "1.1.0 beta-4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -128,6 +128,7 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.hilt.work)
     implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.runtime)
     "baselineProfile"(project(":baselineprofile"))
     ksp("com.google.dagger:hilt-compiler:2.59.2")
 
@@ -191,4 +192,9 @@ dependencies {
     implementation("io.ktor:ktor-server-core") // ← バージョン番号はBOMが管理するので消す
     implementation("io.ktor:ktor-server-cio")  // ← バージョン番号はBOMが管理するので消す
     implementation("com.google.zxing:core:3.5.3")
+
+    // ★ 追加: SMB (ファイルライブラリ) 用
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
+
+    implementation("org.videolan.android:libvlc-all:3.7.0")
 }

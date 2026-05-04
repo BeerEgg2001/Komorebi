@@ -107,6 +107,7 @@ fun HomeLauncherScreen(
     onShowAllRecordings: () -> Unit = {},
     onCloseRecordList: () -> Unit = {},
     onShowSeriesList: () -> Unit = {},
+    onShowSmbLibrary: () -> Unit = {}, // ★ 追加: SMBライブラリを開くコールバック
     isReturningFromPlayer: Boolean = false,
     onReturnFocusConsumed: () -> Unit = {},
     timeFormat: String = "24H",
@@ -583,6 +584,7 @@ fun HomeLauncherScreen(
                                 onProgramClick = { onProgramSelected(it) },
                                 onShowAllRecordings = onShowAllRecordings,
                                 onShowSeriesList = onShowSeriesList,
+                                onShowSmbLibrary = onShowSmbLibrary, // ★ 追加: コールバックを渡す
                                 openedSeriesTitle = ui.openedSeriesTitle,
                                 onOpenedSeriesTitleChange = { ui.openedSeriesTitle = it },
                                 tabFocusRequester = ui.tabFocusRequesters[safeTabIndex],

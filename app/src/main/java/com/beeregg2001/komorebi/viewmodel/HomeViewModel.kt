@@ -194,7 +194,7 @@ class HomeViewModel @Inject constructor(
                     )
                     if (excludeKeywords.any { prog.title.contains(it) }) return@filter false
 
-                    val matchKeywords = listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE")
+                    val matchKeywords = listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE", "L！VE")
                     matchKeywords.any { keyword ->
                         prog.title.contains(
                             keyword,

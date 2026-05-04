@@ -2,6 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.video.components
 
+import android.annotation.SuppressLint
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
@@ -9,6 +10,7 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -48,7 +50,13 @@ import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Dp
 
+@SuppressLint("RememberInComposition")
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -147,7 +155,7 @@ fun RecordListContent(
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 28.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier
                 .fillMaxSize()
@@ -155,6 +163,7 @@ fun RecordListContent(
                 .focusGroup()
                 .focusProperties { canFocus = !isAnyMenuOpen }
                 .onKeyEvent { if (!menuTransitionState.isIdle) true else false }
+                .simpleVerticalScrollbar(state = listState, color = colors.textPrimary)
         ) {
             items(
                 count = pagedRecordings.itemCount,
@@ -211,6 +220,17 @@ fun RecordListContent(
                                 false
                             },
                         timeFormat = timeFormat
+                    )
+                } else {
+                    // ★ 追加: まだ読み込まれていない場所用のプレースホルダー（空箱）
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(88.dp) // ※リストアイテムのおおよその高さに合わせて調整してください
+                            .background(
+                                colors.textPrimary.copy(alpha = 0.05f),
+                                RoundedCornerShape(8.dp)
+                            )
                     )
                 }
             }
@@ -459,4 +479,33 @@ private fun SideMenuItem(
             }
         }
     }
+}
+
+private fun Modifier.simpleVerticalScrollbar(
+    state: LazyListState,
+    color: Color,
+    width: Dp = 4.dp,
+    paddingEnd: Dp = 4.dp
+): Modifier = drawWithContent {
+    drawContent()
+    val totalItems = state.layoutInfo.totalItemsCount
+    val visibleItems = state.layoutInfo.visibleItemsInfo.size
+    if (totalItems == 0 || visibleItems == 0 || visibleItems >= totalItems) return@drawWithContent
+
+    val firstVisible = state.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
+    val thumbHeightRatio = (visibleItems.toFloat() / totalItems.toFloat()).coerceIn(0.05f, 0.8f)
+    val thumbHeight = size.height * thumbHeightRatio
+    val thumbOffsetRatio =
+        (firstVisible.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(
+            0f,
+            1f
+        )
+    val thumbY = (size.height - thumbHeight) * thumbOffsetRatio
+
+    drawRoundRect(
+        color = color.copy(alpha = 0.5f),
+        topLeft = Offset(size.width - width.toPx() - paddingEnd.toPx(), thumbY),
+        size = Size(width.toPx(), thumbHeight),
+        cornerRadius = CornerRadius(width.toPx() / 2f, width.toPx() / 2f)
+    )
 }

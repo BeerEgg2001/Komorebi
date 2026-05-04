@@ -26,9 +26,14 @@ class EpgConfig(density: Density, colors: KomorebiColors, val hideSubChannels: B
     val colorBg = Color.Transparent
     val colorHeaderBg = colors.surface.copy(alpha = 0.95f)
 
-    val colorTimeHourEven = if (colors.isDark) Color(0xFF2E2424) else Color(0xFFFDEFEF)
-    val colorTimeHourOdd = if (colors.isDark) Color(0xFF242E24) else Color(0xFFEFFDEE)
-    val colorTimeHourNight = if (colors.isDark) Color(0xFF24242E) else Color(0xFFEEF1FD)
+    // ★ 修正: ハードコードされた色を廃止し、テーマの surface 色にほんのり色味を乗せて合成する
+    // これにより、時間連動テーマの昼(ライトモード)でも、テーマのベース色に完璧に馴染みます。
+    val colorTimeHourEven = Color(0xFFFF5252).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
+    val colorTimeHourOdd = Color(0xFF4CAF50).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
+    val colorTimeHourNight = Color(0xFF448AFF).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
 
     val colorGridLine = colors.textPrimary.copy(alpha = 0.1f)
     val colorFocusBg = colors.textPrimary.copy(alpha = 0.2f).compositeOver(colors.background)

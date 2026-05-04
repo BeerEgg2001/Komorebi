@@ -4,10 +4,13 @@ import android.util.Log
 import android.view.View
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.ui.live.LiveCommentOverlay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import master.flame.danmaku.controller.IDanmakuView
 import master.flame.danmaku.danmaku.model.BaseDanmaku
 import android.graphics.Color as AndroidColor
@@ -28,67 +31,82 @@ fun ArchivedCommentOverlay(
     commentMaxLines: Int,
     useSoftwareRendering: Boolean = false
 ) {
-    // DanmakuViewの実体保持
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
 
-    // 最後にコメントを放出した時間を記録
-    var lastEmittedTime by remember { mutableDoubleStateOf(0.0) }
+    // UIスレッドでしか取得できない画面密度(density)を事前に計算しておく
+    val context = LocalContext.current
+    val density = remember(context) { context.resources.displayMetrics.density }
 
     LaunchedEffect(isPlaying, isCommentEnabled) {
-        Log.i(TAG, "State Changed -> isPlaying: $isPlaying, isCommentEnabled: $isCommentEnabled")
         danmakuViewRef.value?.let { view ->
             if (view.isPrepared) {
                 if (isPlaying && isCommentEnabled) {
-                    Log.i(TAG, "Resuming DanmakuView")
                     view.resume()
                 } else {
-                    Log.i(TAG, "Pausing DanmakuView")
                     view.pause()
                 }
             }
         }
     }
 
-    // コメント同期ロジック
+    // コメント同期・描画予約ロジック
     LaunchedEffect(isPlaying, isCommentEnabled, comments.size) {
-        Log.i(TAG, "Sync loop started. Comments count: ${comments.size}")
         if (!isCommentEnabled || comments.isEmpty()) return@LaunchedEffect
+
+        var currentIndex = 0
+        var lastPlayerSec = withContext(Dispatchers.Main) { currentPositionProvider() / 1000.0 }
+        val lookAheadSec = 2.0 // 2秒先まで先読みして描画予約する
 
         while (isActive) {
             if (isPlaying) {
-                val currentSec = currentPositionProvider() / 1000.0
+                // ★ 修正1: ExoPlayerへのアクセス(currentPositionProvider)は必ずメインスレッドで行う
+                val currentSec =
+                    withContext(Dispatchers.Main) { currentPositionProvider() / 1000.0 }
 
-                // シーク検知 (時間が2秒以上ジャンプした場合)
-                if (abs(currentSec - lastEmittedTime) > 2.0) {
-                    Log.i(TAG, "Seek detected! Jumped from $lastEmittedTime to $currentSec")
-                    lastEmittedTime = (currentSec - 0.2).coerceAtLeast(0.0)
-                    danmakuViewRef.value?.removeAllDanmakus(true) // 画面の古いコメントを消去
-                }
+                // ★ 修正2: 重い検索処理やインスタンス化はバックグラウンドスレッドで行う
+                withContext(Dispatchers.Default) {
+                    // シーク検知: 現在位置と最後に処理した時間が1.5秒以上乖離している場合
+                    if (abs(currentSec - lastPlayerSec) > 1.5) {
+                        danmakuViewRef.value?.removeAllDanmakus(true)
+                        // バイナリサーチ的に次のインデックスを取得
+                        currentIndex = comments.indexOfFirst { it.time >= currentSec }
+                            .let { if (it == -1) comments.size else it }
+                    }
 
-                if (currentSec > lastEmittedTime) {
-                    var addedCount = 0
-                    comments.forEach { comment ->
-                        if (comment.time > lastEmittedTime && comment.time <= currentSec) {
-                            danmakuViewRef.value?.let { view ->
-                                (view as? View)?.post {
-                                    if (!view.isPrepared) return@post
-                                    addDanmakuToView(view, comment, commentFontSizeScale)
+                    danmakuViewRef.value?.let { view ->
+                        if (view.isPrepared) {
+                            val targetTimeSec = currentSec + lookAheadSec
+                            val danmakusToAdd = mutableListOf<BaseDanmaku>()
+
+                            while (currentIndex < comments.size) {
+                                val comment = comments[currentIndex]
+                                if (comment.time > targetTimeSec) break // 2秒以上先ならループを抜ける
+
+                                // シーク直後の過去すぎるコメントを捨てる
+                                if (comment.time >= currentSec - 0.5) {
+                                    val d =
+                                        createDanmaku(view, comment, commentFontSizeScale, density)
+                                    if (d != null) {
+                                        // 現在時刻との差分を計算し、DanmakuViewの内部時計で正確な表示時刻を予約
+                                        val futureMs = ((comment.time - currentSec) * 1000).toLong()
+                                        d.setTime(view.currentTime + futureMs)
+                                        danmakusToAdd.add(d)
+                                    }
                                 }
+                                currentIndex++
                             }
-                            addedCount++
+
+                            // コメントの追加(addDanmaku)は内部的にスレッドセーフなのでバックグラウンドから呼んでもOK
+                            danmakusToAdd.forEach { view.addDanmaku(it) }
                         }
                     }
-                    if (addedCount > 0) {
-                        Log.i(TAG, "Added $addedCount comments to view at $currentSec sec")
-                    }
-                    lastEmittedTime = currentSec
                 }
+                lastPlayerSec = currentSec
             }
-            delay(200) // 0.2秒間隔で同期
+            delay(500)
         }
     }
 
-    // 既存のLiveCommentOverlayを再利用して描画
     LiveCommentOverlay(
         modifier = modifier,
         useSoftwareRendering = useSoftwareRendering,
@@ -96,24 +114,28 @@ fun ArchivedCommentOverlay(
         opacity = commentOpacity,
         maxLines = commentMaxLines,
         onViewCreated = { view ->
-            Log.i(TAG, "DanmakuView created and prepared")
             danmakuViewRef.value = view
-            if (!isPlaying || !isCommentEnabled) view.pause() // 初期表示時に止まっていたら止める
+            if (!isPlaying || !isCommentEnabled) view.pause()
         }
     )
 }
 
 /**
- * DanmakuViewに個別のコメントを追加するユーティリティ
+ * コメントのインスタンスを作成する
+ * UIスレッド外から呼ばれるため、View(Context)への直接アクセスを避けて引数からdensityを受け取る
  */
-private fun addDanmakuToView(view: IDanmakuView, comment: ArchivedComment, fontSizeScale: Float) {
-    val danmaku = view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL) ?: return
+private fun createDanmaku(
+    view: IDanmakuView,
+    comment: ArchivedComment,
+    fontSizeScale: Float,
+    density: Float
+): BaseDanmaku? {
+    val danmaku =
+        view.config.mDanmakuFactory.createDanmaku(BaseDanmaku.TYPE_SCROLL_RL) ?: return null
     danmaku.text = comment.text
     danmaku.padding = 5
 
-    val viewContext = (view as? View)?.context ?: return
-    val density = viewContext.resources.displayMetrics.density
-
+    // 引数で受け取った density を使って計算する
     danmaku.textSize = (32f * fontSizeScale) * density
 
     try {
@@ -123,6 +145,5 @@ private fun addDanmakuToView(view: IDanmakuView, comment: ArchivedComment, fontS
     }
 
     danmaku.textShadowColor = AndroidColor.BLACK
-    danmaku.setTime(view.currentTime + 10)
-    view.addDanmaku(danmaku)
+    return danmaku
 }

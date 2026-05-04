@@ -481,7 +481,7 @@ fun RecordListScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = contentStartPadding, end = 28.dp, bottom = 20.dp)
+                    .padding(start = contentStartPadding, bottom = 20.dp)
                     .focusProperties {
                         if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible) {
                             up = FocusRequester.Cancel; down = FocusRequester.Cancel; left =

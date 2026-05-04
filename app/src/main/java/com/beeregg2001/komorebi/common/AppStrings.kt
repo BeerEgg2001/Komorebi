@@ -255,6 +255,20 @@ object AppStrings {
     const val SETTINGS_VALUE_SEASON_WINTER = "冬"
     const val SETTINGS_VALUE_SEASON_DEFAULT = "デフォルト"
 
+    // --- テーマ設定の追加分 ---
+// --- 時間連動テーマ用動的ラベル ---
+    const val THEME_NAME_MORNING_KOMOREBI = "朝焼け"
+    const val THEME_NAME_DAY_KOMOREBI = "木漏れ日"
+    const val THEME_NAME_EVENING_KOMOREBI = "夕焼け"
+    const val THEME_NAME_NIGHT_KOMOREBI = "月光"
+
+    const val THEME_NAME_MORNING_KYLE = "朝凪のカイル"
+    const val THEME_NAME_DAY_KYLE = "海辺のカイル"
+    const val THEME_NAME_EVENING_KYLE = "夕凪のカイル"
+    const val THEME_NAME_NIGHT_KYLE = "深海のカイル"
+
+    const val SETTINGS_VALUE_THEME_TIME_LINKED = "時間連動テーマ"
+
     // ★追加: 起動時のチャンネル設定
     const val SETTINGS_ITEM_STARTUP_TAB = "起動時のデフォルトタブ"
     const val SETTINGS_ITEM_STARTUP_CHANNEL = "起動時に再生するチャンネル"

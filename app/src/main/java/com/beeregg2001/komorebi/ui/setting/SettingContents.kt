@@ -2,11 +2,12 @@
 
 package com.beeregg2001.komorebi.ui.setting
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -21,6 +22,10 @@ import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
+import com.beeregg2001.komorebi.viewmodel.SmbServer // ★ 追加
+import java.time.LocalTime
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 private fun ValidationErrorText(message: String) {
@@ -231,6 +236,13 @@ fun ConnectionSettingsContent(
     mPort: String,
     prefSrc: String,
     edcbPlayMethod: String,
+    // ★ 変更: SMBリスト関連の引数に置き換え
+    smbServerList: List<SmbServer>,
+    onAddSmbServer: () -> Unit,
+    onSmbServerClick: (SmbServer) -> Unit,
+    addSmbR: FocusRequester,
+    smbItemRs: List<FocusRequester>,
+    // ------------------------------------
     onSelectEdcbPlayMethod: () -> Unit,
     edcbPlayMethodR: FocusRequester,
     onEdit: (String, String) -> Unit,
@@ -246,6 +258,7 @@ fun ConnectionSettingsContent(
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
+    val colors = KomorebiTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
             AppStrings.SETTINGS_CATEGORY_CONNECTION,
@@ -315,7 +328,7 @@ fun ConnectionSettingsContent(
                     .focusProperties {
                         left = sidebarR; up = backendIpR;
                         down =
-                            if (backendType == "EDCB") edcbHttpPortR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                            if (backendType == "EDCB") edcbHttpPortR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else addSmbR
                     },
                 onClick = { onClick(backendPortR); onEdit(portTitle, currentPort) }
             )
@@ -330,9 +343,8 @@ fun ConnectionSettingsContent(
                             left = sidebarR
                             up = backendPortR
                             down =
-                                if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else FocusRequester.Cancel
+                                if (backendType == "EDCB") edcbPlayMethodR else if (backendType != "MIRAKURUN_ONLY") prefSrcR else addSmbR
                         },
-                    // ★ 修正: TCPポートの編集画面が開いてしまうバグを修正
                     onClick = { onClick(edcbHttpPortR); onEdit(edcbHttpPortTitle, edcbHttpPort) }
                 )
             }
@@ -360,14 +372,14 @@ fun ConnectionSettingsContent(
             }
         }
 
+        val hasOverride = prefSrc == "MIRAKURUN" || (prefSrc == "EDCB" && backendType != "EDCB")
         if (backendType != "MIRAKURUN_ONLY") {
-            val hasOverride = prefSrc == "MIRAKURUN" || (prefSrc == "EDCB" && backendType != "EDCB")
             SettingsSection("ライブ視聴ソースの優先設定") {
                 val srcLabel = when {
                     prefSrc == "MIRAKURUN" -> "Mirakurun を優先"
                     prefSrc == "EDCB" && backendType != "EDCB" -> "EDCB (TCP) を優先"
                     prefSrc == "EDCB" && backendType == "EDCB" -> "EDCB (ダイレクトストリーミング)"
-                    else -> "メインシステムに従う"
+                    else -> "メインシステムに従う（トランスコード）"
                 }
 
                 SettingItem(
@@ -379,7 +391,7 @@ fun ConnectionSettingsContent(
                         .focusProperties {
                             left = sidebarR
                             up = if (backendType == "EDCB") edcbPlayMethodR else backendPortR
-                            down = if (hasOverride) overrideIpR else FocusRequester.Cancel
+                            down = if (hasOverride) overrideIpR else addSmbR
                         },
                     onClick = { onClick(prefSrcR); onSelectSrc() }
                 )
@@ -405,7 +417,7 @@ fun ConnectionSettingsContent(
                         modifier = Modifier
                             .focusRequester(overridePortR)
                             .focusProperties {
-                                left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
+                                left = sidebarR; up = overrideIpR; down = addSmbR
                             },
                         onClick = { onClick(overridePortR); onEdit("Mirakurun (ポート)", mPort) }
                     )
@@ -434,7 +446,7 @@ fun ConnectionSettingsContent(
                         modifier = Modifier
                             .focusRequester(overridePortR)
                             .focusProperties {
-                                left = sidebarR; up = overrideIpR; down = FocusRequester.Cancel
+                                left = sidebarR; up = overrideIpR; down = addSmbR
                             },
                         onClick = { onClick(overridePortR); onEdit("EDCB (ポート)", edcbPort) }
                     )
@@ -445,8 +457,59 @@ fun ConnectionSettingsContent(
                 }
             }
         }
+
+        // ★ 変更: SMB設定セクション (リスト形式に改修)
+        SettingsSection("ファイルライブラリ (SMB) 接続設定") {
+            SettingItem(
+                title = "新しいSMBサーバーを追加",
+                value = "",
+                icon = Icons.Default.Add,
+                modifier = Modifier
+                    .focusRequester(addSmbR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = if (hasOverride) overridePortR else prefSrcR
+                        down =
+                            if (smbServerList.isEmpty()) FocusRequester.Cancel else smbItemRs.firstOrNull()
+                                ?: FocusRequester.Cancel
+                    },
+                onClick = { onClick(addSmbR); onAddSmbServer() }
+            )
+
+            if (smbServerList.isEmpty()) {
+                Text(
+                    "登録されたSMBサーバーはありません",
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.textSecondary.copy(0.6f)
+                )
+            } else {
+                smbServerList.forEachIndexed { index, server ->
+                    val requester = smbItemRs.getOrNull(index) ?: remember { FocusRequester() }
+                    val isLast = index == smbServerList.lastIndex
+                    SettingItem(
+                        title = server.name,
+                        value = server.ip,
+                        icon = Icons.Default.Storage, // ドライブ風のアイコン
+                        modifier = Modifier
+                            .focusRequester(requester)
+                            .focusProperties {
+                                left = sidebarR
+                                up = if (index == 0) addSmbR else smbItemRs[index - 1]
+                                down = if (isLast) FocusRequester.Cancel else smbItemRs[index + 1]
+                            },
+                        onClick = { onClick(requester); onSmbServerClick(server) }
+                    )
+                }
+            }
+        }
     }
 }
+
+// -------------------------------------------------------------------------
+// これ以下の PlaybackSettingsContent, HomeDisplaySettingsContent, DisplaySettingsContent,
+// CommentSettingsContent, LabSettingsContent, AppInfoContent は変更なし
+// -------------------------------------------------------------------------
 
 @Composable
 fun PlaybackSettingsContent(
@@ -598,6 +661,7 @@ fun PlaybackSettingsContent(
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HomeDisplaySettingsContent(
     isDarkMode: Boolean,
@@ -621,6 +685,60 @@ fun HomeDisplaySettingsContent(
     onExPaid: () -> Unit,
     onClick: (FocusRequester) -> Unit
 ) {
+    val isTimeLinked = themeSeason == "KOMOREBI" || themeSeason == "KYLE"
+    val baseThemeLabel =
+        if (isTimeLinked) "時間連動テーマ" else if (!isDarkMode) AppStrings.SETTINGS_VALUE_THEME_DARK else AppStrings.SETTINGS_VALUE_THEME_LIGHT
+
+    var currentTime by remember { mutableStateOf(LocalTime.now()) }
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            delay(60000)
+            currentTime = LocalTime.now()
+        }
+    }
+
+    val hour = currentTime.hour
+    val timeZoneName = when {
+        hour in 5..8 -> "MORNING"
+        hour in 9..15 -> "DAY"
+        hour in 16..18 -> "EVENING"
+        else -> "NIGHT"
+    }
+
+    val colorSettingTitle =
+        if (isTimeLinked) "時間連動セット" else AppStrings.SETTINGS_ITEM_THEME_COLOR
+    val detailThemeLabel = if (isTimeLinked) {
+        when (themeSeason) {
+            "KOMOREBI" -> when (timeZoneName) {
+                "MORNING" -> "朝焼け"
+                "DAY" -> "木漏れ日"
+                "EVENING" -> "夕焼け"
+                else -> "月光"
+            }
+
+            "KYLE" -> when (timeZoneName) {
+                "MORNING" -> "朝凪のカイル"
+                "DAY" -> "海辺のカイル"
+                "EVENING" -> "夕凪のカイル"
+                else -> "深海の夜のカイル"
+            }
+
+            else -> themeSeason
+        }
+    } else {
+        when (themeSeason) {
+            "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING
+            "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER
+            "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN
+            "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER
+            "KOMOREBI_DAY" -> "木漏れ日"
+            "KOMOREBI_NIGHT" -> "月光"
+            "KYLE_DAY" -> "海辺のカイル"
+            "KYLE_NIGHT" -> "深海のカイル"
+            else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
             AppStrings.SETTINGS_CATEGORY_HOME,
@@ -631,7 +749,7 @@ fun HomeDisplaySettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_UI_CUSTOM) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_BASE_THEME,
-                if (isDarkMode) AppStrings.SETTINGS_VALUE_THEME_DARK else AppStrings.SETTINGS_VALUE_THEME_LIGHT,
+                baseThemeLabel,
                 Icons.Default.Brightness4,
                 modifier = Modifier
                     .focusRequester(modeR)
@@ -641,12 +759,10 @@ fun HomeDisplaySettingsContent(
                         down = colorR
                     },
                 onClick = { onClick(modeR); onMode() })
-            val seasonLabel = when (themeSeason) {
-                "SPRING" -> AppStrings.SETTINGS_VALUE_SEASON_SPRING; "SUMMER" -> AppStrings.SETTINGS_VALUE_SEASON_SUMMER; "AUTUMN" -> AppStrings.SETTINGS_VALUE_SEASON_AUTUMN; "WINTER" -> AppStrings.SETTINGS_VALUE_SEASON_WINTER; else -> AppStrings.SETTINGS_VALUE_SEASON_DEFAULT
-            }
+
             SettingItem(
-                AppStrings.SETTINGS_ITEM_THEME_COLOR,
-                seasonLabel,
+                colorSettingTitle,
+                detailThemeLabel,
                 Icons.Default.ColorLens,
                 modifier = Modifier
                     .focusRequester(colorR)
@@ -981,7 +1097,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0-beta3",
+            "Version 1.1.0 beta-4",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

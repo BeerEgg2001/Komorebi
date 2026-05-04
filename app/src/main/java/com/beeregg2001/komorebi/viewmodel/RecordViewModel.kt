@@ -272,7 +272,7 @@ class RecordViewModel @Inject constructor(
                     pageSize = 30,
                     prefetchDistance = 10,
                     initialLoadSize = 20,
-                    enablePlaceholders = false
+                    enablePlaceholders = true
                 )
             ) {
                 when {

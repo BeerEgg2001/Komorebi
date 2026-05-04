@@ -41,6 +41,11 @@ import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Dp
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -90,7 +95,7 @@ fun RecordSeriesGridContent(
     LazyVerticalGrid(
         state = gridState,
         columns = GridCells.Fixed(4),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 28.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier
@@ -98,6 +103,7 @@ fun RecordSeriesGridContent(
             .focusRequester(contentContainerFocusRequester)
             // ★ 修正: クラッシュの原因だった focusRestorer を安全な focusGroup に変更
             .focusGroup()
+            .simpleGridVerticalScrollbar(state = gridState, color = colors.textPrimary)
     ) {
         itemsIndexed(seriesList) { index, series ->
             var isFocused by remember { mutableStateOf(false) }
@@ -238,4 +244,29 @@ fun RecordSeriesGridContent(
             }
         }
     }
+}
+
+private fun Modifier.simpleGridVerticalScrollbar(
+    state: LazyGridState,
+    color: Color,
+    width: Dp = 4.dp,
+    paddingEnd: Dp = 4.dp
+): Modifier = drawWithContent {
+    drawContent()
+    val totalItems = state.layoutInfo.totalItemsCount
+    val visibleItems = state.layoutInfo.visibleItemsInfo.size
+    if (totalItems == 0 || visibleItems == 0 || visibleItems >= totalItems) return@drawWithContent
+
+    val firstVisible = state.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
+    val thumbHeightRatio = (visibleItems.toFloat() / totalItems.toFloat()).coerceIn(0.05f, 0.8f)
+    val thumbHeight = size.height * thumbHeightRatio
+    val thumbOffsetRatio = (firstVisible.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+    val thumbY = (size.height - thumbHeight) * thumbOffsetRatio
+
+    drawRoundRect(
+        color = color.copy(alpha = 0.5f),
+        topLeft = Offset(size.width - width.toPx() - paddingEnd.toPx(), thumbY),
+        size = Size(width.toPx(), thumbHeight),
+        cornerRadius = CornerRadius(width.toPx() / 2f, width.toPx() / 2f)
+    )
 }

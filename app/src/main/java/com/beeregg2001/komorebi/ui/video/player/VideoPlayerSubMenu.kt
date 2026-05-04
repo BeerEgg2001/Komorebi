@@ -58,7 +58,13 @@ fun VideoTopSubMenuUI(
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
-    onAutoCmSkipToggle: () -> Unit
+    onAutoCmSkipToggle: () -> Unit,
+    // ★ 追加: 各機能のサポート状況を受け取るフラグ (既存に影響しないようデフォルトは true)
+    isAudioSupported: Boolean = true,
+    isQualitySupported: Boolean = true,
+    isCommentSupported: Boolean = true,
+    isSubtitleSupported: Boolean = true,
+    isAutoCmSkipSupported: Boolean = true
 ) {
     val colors = KomorebiTheme.colors
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
@@ -128,7 +134,8 @@ fun VideoTopSubMenuUI(
                     modifier = Modifier
                         .focusRequester(focusRequester)
                         .focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
+                    contentColor = colors.textPrimary,
+                    enabled = isAudioSupported // ★ 適用
                 )
                 VideoMenuTileItem(
                     title = "再生速度",
@@ -136,7 +143,8 @@ fun VideoTopSubMenuUI(
                     subtitle = "${currentSpeed}x",
                     onClick = onSpeedToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
+                    contentColor = colors.textPrimary,
+                    enabled = true // 速度は常に利用可能
                 )
                 VideoMenuTileItem(
                     title = "字幕",
@@ -144,7 +152,8 @@ fun VideoTopSubMenuUI(
                     subtitle = if (isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
+                    contentColor = colors.textPrimary,
+                    enabled = isSubtitleSupported // ★ 適用
                 )
                 VideoMenuTileItem(
                     title = "L字クロップ",
@@ -152,7 +161,8 @@ fun VideoTopSubMenuUI(
                     subtitle = if (isLCropEnabled) "有効" else "設定",
                     onClick = onLCropToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary
+                    contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary,
+                    enabled = true // L字クロップは常に利用可能
                 )
 
                 VideoMenuTileItem(
@@ -161,7 +171,8 @@ fun VideoTopSubMenuUI(
                     subtitle = if (isAutoCmSkipEnabled) "有効" else "無効",
                     onClick = onAutoCmSkipToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = if (isAutoCmSkipEnabled) colors.accent else colors.textPrimary
+                    contentColor = if (isAutoCmSkipEnabled) colors.accent else colors.textPrimary,
+                    enabled = isAutoCmSkipSupported // ★ 適用
                 )
 
                 VideoMenuTileItem(
@@ -170,15 +181,18 @@ fun VideoTopSubMenuUI(
                     subtitle = if (isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
                     modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                    contentColor = colors.textPrimary
+                    contentColor = colors.textPrimary,
+                    enabled = isCommentSupported // ★ 適用
                 )
                 VideoMenuTileItem(
                     title = "画質",
                     icon = Icons.Default.HighQuality,
                     subtitle = currentQuality.label,
                     onClick = {
-                        selectedCategory =
-                            if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                        if (isQualitySupported && availableQualities.isNotEmpty()) { // ★ 修正: 無効時は無視
+                            selectedCategory =
+                                if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                        }
                     },
                     modifier = Modifier
                         .focusRequester(qualityButtonRequester)
@@ -186,7 +200,8 @@ fun VideoTopSubMenuUI(
                             if (selectedCategory != SubMenuCategory.QUALITY) down =
                                 FocusRequester.Cancel
                         },
-                    contentColor = colors.textPrimary
+                    contentColor = colors.textPrimary,
+                    enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
                 )
             }
 
@@ -276,7 +291,8 @@ fun VideoMenuTileItem(
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
         modifier = modifier
             .size(width, height)
-            .alpha(if (enabled) 1f else 0.5f)
+            // ★ 追加: 非対応項目は半透明にしてグレーアウトを強調
+            .alpha(if (enabled) 1f else 0.4f)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -327,6 +343,12 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
     onAutoCmSkipToggle: () -> Unit,
+    // ★ 追加: 各機能のサポート状況を受け取るフラグ
+    isAudioSupported: Boolean = true,
+    isQualitySupported: Boolean = true,
+    isCommentSupported: Boolean = true,
+    isSubtitleSupported: Boolean = true,
+    isAutoCmSkipSupported: Boolean = true,
     onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
@@ -402,7 +424,6 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
 
             AnimatedContent(targetState = selectedCategory, label = "SettingsMenu") { category ->
                 if (category == null) {
-                    // ★ 修正: メニュー項目が入りきらない場合に備えてスクロールを可能にする
                     Column(
                         modifier = Modifier.verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -412,45 +433,54 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             value = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
                             icon = Icons.Default.Audiotrack,
                             onClick = onAudioToggle,
-                            modifier = Modifier.focusRequester(initialFocusRequester)
+                            modifier = Modifier.focusRequester(initialFocusRequester),
+                            enabled = isAudioSupported // ★ 適用
                         )
                         ModernSettingRow(
                             title = "再生速度",
                             value = "${currentSpeed}x",
                             icon = Icons.Default.Speed,
-                            onClick = onSpeedToggle
+                            onClick = onSpeedToggle,
+                            enabled = true
                         )
                         ModernSettingRow(
                             title = "字幕",
                             value = if (isSubtitleEnabled) "表示" else "非表示",
                             icon = Icons.Default.Subtitles,
-                            onClick = onSubtitleToggle
+                            onClick = onSubtitleToggle,
+                            enabled = isSubtitleSupported // ★ 適用
                         )
                         ModernSettingRow(
                             title = "画質",
                             value = currentQuality.label,
                             icon = Icons.Default.HighQuality,
-                            onClick = { selectedCategory = SubMenuCategory.QUALITY }
+                            onClick = {
+                                if (isQualitySupported) selectedCategory = SubMenuCategory.QUALITY
+                            }, // ★ 無効時は開かない
+                            enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
                         )
                         ModernSettingRow(
                             title = "自動CMスキップ",
                             value = if (isAutoCmSkipEnabled) "有効" else "無効",
                             icon = Icons.Default.FastForward,
                             onClick = onAutoCmSkipToggle,
-                            highlight = isAutoCmSkipEnabled
+                            highlight = isAutoCmSkipEnabled,
+                            enabled = isAutoCmSkipSupported // ★ 適用
                         )
                         ModernSettingRow(
                             title = "実況コメント",
                             value = if (isCommentEnabled) "表示" else "非表示",
                             icon = Icons.Default.Chat,
-                            onClick = onCommentToggle
+                            onClick = onCommentToggle,
+                            enabled = isCommentSupported // ★ 適用
                         )
                         ModernSettingRow(
                             title = "L字クロップ",
                             value = if (isLCropEnabled) "有効" else "設定",
                             icon = Icons.Default.Crop,
                             onClick = onLCropToggle,
-                            highlight = isLCropEnabled
+                            highlight = isLCropEnabled,
+                            enabled = true
                         )
                     }
                 } else if (category == SubMenuCategory.QUALITY) {
@@ -516,7 +546,8 @@ fun ModernSettingRow(
         modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
-            .alpha(if (enabled) 1f else 0.5f)
+            // ★ 追加: 非対応項目は半透明にしてグレーアウトを強調
+            .alpha(if (enabled) 1f else 0.4f)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
