@@ -19,6 +19,7 @@
 * REGZA 55X8900K (Android TV 10)
 * Fire TV Stick 4K Max 第一世代 (Fire OS 7 Android 9ベース)
 * Fire TV Stick 4K Max 第二世代 (Fire OS 8 Android 11ベース)
+* Mirakurun（4.0.0-beta.16）＋KonomiTV v0.13.0 beta
 * EDCB-Wine（xtne6f版EDCB＋EMWUI）等の Linux/Windows EDCB 環境
 * LinuxネイティブEDCB（xtne6f版EDCB 260331リリース＋EMWUI）環境
 
