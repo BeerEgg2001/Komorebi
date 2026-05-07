@@ -33,6 +33,7 @@ import io.ktor.server.request.receiveParameters
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
@@ -291,7 +292,6 @@ class SettingsViewModel @Inject constructor(
         false
     )
 
-    // ★ 追加: APIキーの状態を取得する
     val geminiApiKey: StateFlow<String> = settingsRepository.geminiApiKey.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
@@ -336,11 +336,15 @@ class SettingsViewModel @Inject constructor(
     val smbServerAddedEvent = _smbServerAddedEvent.asSharedFlow()
 
     init {
-        forceSyncStreamQualities()
+        // ★ 修正: 初期化時の重い同期処理をバックグラウンドに回し、UI描画後に遅らせる
+        viewModelScope.launch {
+            delay(1500)
+            forceSyncStreamQualities()
+        }
     }
 
-    private fun forceSyncStreamQualities() {
-        viewModelScope.launch(Dispatchers.IO) {
+    private suspend fun forceSyncStreamQualities() {
+        withContext(Dispatchers.IO) {
             try {
                 val backend = settingsRepository.backendType.first()
                 val preLive = settingsRepository.liveQuality.first()

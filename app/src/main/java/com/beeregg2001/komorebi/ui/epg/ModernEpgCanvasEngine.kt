@@ -117,7 +117,6 @@ fun ModernEpgCanvasEngine_Smooth(
     val epgViewModel: com.beeregg2001.komorebi.viewmodel.EpgViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
 
-    // ★修正: epgRestoreTrigger の処理に「期限切れ判定」を追加
     LaunchedEffect(epgViewModel.epgRestoreTrigger) {
         val triggerTime = epgViewModel.epgRestoreTrigger
         if (triggerTime > 0L) {
@@ -125,23 +124,11 @@ fun ModernEpgCanvasEngine_Smooth(
             val targetTime = epgViewModel.lastFocusedTime
             val now = System.currentTimeMillis()
 
-            // トリガーが発行されてから1秒(1000ms)未満の「新鮮なトリガー」のみジャンプを実行する
-            // （別タブで詳細を開閉した際の古いトリガーの暴発を防ぐため）
             if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
-                Log.i(
-                    "KomorebiFocus",
-                    "[ModernEpgCanvas] 復元トリガー検知！ $targetCh - $targetTime へジャンプします"
-                )
                 epgState.restoreFocus(targetCh, targetTime)
                 delay(150)
                 gridFocusRequester.requestFocus()
-            } else {
-                Log.i(
-                    "KomorebiFocus",
-                    "[ModernEpgCanvas] 古いトリガー($triggerTime) または無効なデータのためジャンプをスキップします"
-                )
             }
-            // 処理後は必ずフラグをクリアする
             epgViewModel.clearEpgFocus()
         }
     }
@@ -160,17 +147,6 @@ fun ModernEpgCanvasEngine_Smooth(
                 epgState.baseTime
             )
             epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
-
-            // =========================================================
-            // ★ 追加: 番組にフォーカスが当たったときにジャンル情報をログ出力
-            // =========================================================
-            Log.i("EpgGenreCheck", "====================================")
-            Log.i("EpgGenreCheck", "Focused: ${prog.title}")
-            Log.i(
-                "EpgGenreCheck",
-                "Genres : ${prog.genres?.joinToString { "${it.major} / ${it.middle}" }}"
-            )
-            Log.i("EpgGenreCheck", "====================================")
         }
     }
 
@@ -212,9 +188,11 @@ fun ModernEpgCanvasEngine_Smooth(
 
             val prevChannelId = epgViewModel.lastFocusedChannelId
 
+            // ★ 修正: currentType を追加してキャッシュキーとして渡す
             epgState.updateData(
                 newData = uiState.data,
                 targetTime = uiState.targetTime,
+                currentType = currentType,
                 resetFocus = isTypeChanged
             )
 

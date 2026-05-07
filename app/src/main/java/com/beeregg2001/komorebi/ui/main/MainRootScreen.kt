@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.LocalTime
 import androidx.compose.runtime.collectAsState
+import androidx.media3.common.util.Log
 
 private const val TAG = "MainRootScreen"
 
@@ -55,6 +56,48 @@ fun MainRootScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state = rememberMainRootState()
+
+    // =========================================================================================
+    // ★ 追加: アプリのバックグラウンド移行（スリープ）と復帰を検知する機構
+    // =========================================================================================
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var isAppInForeground by remember { mutableStateOf(true) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    // 別のアプリを開いた、またはホーム画面に戻ってアプリが裏に回った（スリープ状態）
+                    isAppInForeground = false
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    // アプリ画面に戻ってきた時（かつ、一度裏に回っていた場合のみ実行）
+                    if (!isAppInForeground) {
+                        isAppInForeground = true
+
+                        Log.i("KomorebiLifecycle", "アプリがバックグラウンドから復帰しました。データをリフレッシュします。")
+
+                        // 1. プロ野球タブやホーム画面のデータを最新に更新する
+                        homeViewModel.refreshHomeData()
+                        channelViewModel.fetchChannels()
+
+                        // 2. プレイヤー（ライブ・ビデオ・SMB）を開いたまま裏に行っていた場合、強制的にホーム画面に戻す
+                        if (state.selectedChannel != null || state.selectedProgram != null || state.selectedSmbItem != null) {
+                            state.selectedChannel = null
+                            state.selectedProgram = null
+                            state.selectedSmbItem = null
+                            state.isMiniPlayerMode = false
+                            state.isReturningFromPlayer = true // ホーム画面側で適切にフォーカスを復元させる
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // =========================================================================================
 
     val timeFormat by settingsViewModel.timeFormat.collectAsState()
     // ★ 修正: APIキーの状態を取得
