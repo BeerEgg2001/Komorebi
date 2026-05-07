@@ -57,6 +57,8 @@ fun MainRootScreen(
     val state = rememberMainRootState()
 
     val timeFormat by settingsViewModel.timeFormat.collectAsState()
+    // ★ 修正: APIキーの状態を取得
+    val geminiApiKey by settingsViewModel.geminiApiKey.collectAsState(initial = "")
 
     val closeAiConcierge = { restoreFocus: Boolean ->
         state.isAiConciergeOpen = false
@@ -348,6 +350,8 @@ fun MainRootScreen(
         state.currentTabIndex = 0
         channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData()
         recordViewModel.fetchRecentRecordings(forceRefresh = false); reserveViewModel.fetchReserves()
+        state.settingsInitialCategoryIndex = 0
+        state.settingsInitialFocusItemIndex = null
     }
 
     LaunchedEffect(state.toastMessage) {
@@ -680,9 +684,17 @@ fun MainRootScreen(
                 isSettingsInitialized = isSettingsInitialized,
                 hasSyncError = hasSyncError,
                 detailFocusRequester = detailFocusRequester,
+                apiKey = geminiApiKey, // ★ 追加: 取得したAPIキーを渡す
                 onExitApp = onExitApp,
                 closeSettingsAndRefresh = closeSettingsAndRefresh,
-                closeAiConcierge = closeAiConcierge
+                closeAiConcierge = closeAiConcierge,
+                onGoToSettings = { // ★ 追加: 設定画面を開くコールバック
+                    closeAiConcierge(true)
+                    // ★ 追加: 「ラボ(7)」の「APIキー(2)」をターゲットに指定
+                    state.settingsInitialCategoryIndex = 7
+                    state.settingsInitialFocusItemIndex = 2
+                    state.isSettingsOpen = true
+                }
             )
         }
     }

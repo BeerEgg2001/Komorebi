@@ -35,7 +35,7 @@ class MainRootState {
     var selectedChannel by mutableStateOf<Channel?>(null)
     var selectedProgram by mutableStateOf<RecordedProgram?>(null)
 
-    // ★ 追加: 選択されたSMB動画を保持
+    // SMB動画を保持
     var selectedSmbItem by mutableStateOf<SmbItem?>(null)
     var initialPlaybackPositionMs by mutableLongStateOf(0L)
     var epgSelectedProgram by mutableStateOf<EpgProgram?>(null)
@@ -64,6 +64,11 @@ class MainRootState {
     // 各種オーバーレイの開閉状態
     var isEpgJumpMenuOpen by mutableStateOf(false)
     var isSettingsOpen by mutableStateOf(false)
+
+    // ★ 追加: 設定画面を開く際のターゲット指定（ディープリンク用）
+    var settingsInitialCategoryIndex by mutableIntStateOf(0)
+    var settingsInitialFocusItemIndex by mutableStateOf<Int?>(null)
+
     var isRecordListOpen by mutableStateOf(false)
     var isSeriesListOpen by mutableStateOf(false)
     var isSmbLibraryOpen by mutableStateOf(false)
@@ -96,7 +101,7 @@ class MainRootState {
     // 再生から戻った際にフォーカスすべき録画番組のID
     var lastPlayedRecordingId by mutableStateOf<Int?>(null)
 
-    // ★ 追加: 再生から戻った際にフォーカスすべきSMBファイルのパス
+    // 再生から戻った際にフォーカスすべきSMBファイルのパス
     var lastPlayedSmbPath by mutableStateOf<String?>(null)
 
     // システム状態
@@ -130,7 +135,6 @@ class MainRootState {
     ): Boolean {
         if (isMiniPlayerMode) return false
 
-        // ★ 追加: selectedSmbItem != null の場合もフルスクリーン（プレイヤー起動）と判定
         return channel != null || program != null || selectedSmbItem != null || epgProgram != null ||
                 settingsOpen || recordListOpen || reserveOverlayOpen ||
                 isSeriesListOpen || isAiConciergeOpen || isSmbLibraryOpen ||

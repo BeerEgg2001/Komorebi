@@ -45,9 +45,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 
-/**
- * MainRootScreenから切り出された、アプリ全体で最前面に表示されるダイアログ・オーバーレイ群です。
- */
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -66,9 +63,11 @@ fun MainRootDialogs(
     isSettingsInitialized: Boolean,
     hasSyncError: Boolean,
     detailFocusRequester: FocusRequester,
+    apiKey: String, // ★ 追加: 取得したAPIキーを受け取る
     onExitApp: () -> Unit,
     closeSettingsAndRefresh: () -> Unit,
-    closeAiConcierge: (Boolean) -> Unit
+    closeAiConcierge: (Boolean) -> Unit,
+    onGoToSettings: () -> Unit // ★ 追加: 設定画面誘導コールバック
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -407,6 +406,8 @@ fun MainRootDialogs(
     if (state.isSettingsOpen) {
         SettingsScreen(
             onBack = closeSettingsAndRefresh,
+            initialCategoryIndex = state.settingsInitialCategoryIndex,
+            initialFocusItemIndex = state.settingsInitialFocusItemIndex,
             onClearLastChannel = {
                 homeViewModel.clearLastChannelHistory(); state.toastMessage =
                 AppStrings.TOAST_CHANNEL_HISTORY_DELETED
@@ -446,6 +447,8 @@ fun MainRootDialogs(
         isSpeechSupported = isSpeechSupported,
         isRecording = isRecordingVoice,
         ticketManager = aiTicketManager,
+        apiKey = apiKey, // ★ 追加: 取得したAPIキーを渡す
+        onGoToSettings = onGoToSettings, // ★ 追加: 設定への誘導処理
         onClose = { closeAiConcierge(true) },
         onMicLongPressStart = {
             if (ContextCompat.checkSelfPermission(

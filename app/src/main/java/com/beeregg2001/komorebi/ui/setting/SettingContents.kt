@@ -1097,7 +1097,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0 beta-4",
+            "Version ${com.beeregg2001.komorebi.BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

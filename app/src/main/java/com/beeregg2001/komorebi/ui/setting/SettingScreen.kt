@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalComposeUiApi::class)
+
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
@@ -37,13 +39,13 @@ import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.LocalTime
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import java.time.LocalTime
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -52,6 +54,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onClearLastChannel: () -> Unit = {},
     onClearWatchHistory: () -> Unit = {},
+    initialCategoryIndex: Int = 0,
+    initialFocusItemIndex: Int? = null,
     viewModel: SettingsViewModel = hiltViewModel(),
     channelViewModel: ChannelViewModel = hiltViewModel()
 ) {
@@ -63,7 +67,7 @@ fun SettingsScreen(
     val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
 
     val prefs = rememberSettingPreferences(repository)
-    val uiState = rememberSettingUiState()
+    val uiState = rememberSettingUiState(initialCategoryIndex)
 
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
@@ -74,7 +78,6 @@ fun SettingsScreen(
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
-    // ★ GlobalToast 用のステート
     var toastMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(toastMessage) {
         if (toastMessage != null) {
@@ -83,7 +86,6 @@ fun SettingsScreen(
         }
     }
 
-    // ★ ViewModelからのSMB受信イベントを監視してトーストを表示
     LaunchedEffect(Unit) {
         viewModel.smbServerAddedEvent.collect { name ->
             toastMessage = "設定を受信しました！\n「$name」"
@@ -102,6 +104,8 @@ fun SettingsScreen(
         Category(AppStrings.SETTINGS_CATEGORY_APP_INFO, Icons.Default.Info)
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
+    val homeBackRequester = remember { FocusRequester() } // ★ 追加: ホームへ戻るボタン用
+
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
     val edcbPlayMethodR = remember { FocusRequester() }
@@ -168,11 +172,39 @@ fun SettingsScreen(
     val mainScrollState = rememberScrollState()
     val sidebarScrollState = rememberScrollState()
 
-    LaunchedEffect(uiState.selectedCategoryIndex) { mainScrollState.scrollTo(0) }
+    LaunchedEffect(uiState.selectedCategoryIndex) {
+        if (initialFocusItemIndex == null || uiState.selectedCategoryIndex != initialCategoryIndex) {
+            mainScrollState.scrollTo(0)
+        }
+    }
+
     LaunchedEffect(Unit) {
-        delay(300)
-        categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
-            ?.safeRequestFocus("Settings_Initial")
+        delay(400)
+
+        if (initialFocusItemIndex != null) {
+            uiState.isSidebarFocused = false
+            val targetRequester = itemFocusRequesters.getOrNull(initialCategoryIndex)
+                ?.getOrNull(initialFocusItemIndex)
+
+            var success = false
+            for (i in 0..5) {
+                try {
+                    targetRequester?.requestFocus()
+                    success = true
+                    break
+                } catch (e: Exception) {
+                    delay(150)
+                }
+            }
+
+            if (!success) {
+                categoryFocusRequesters.getOrNull(initialCategoryIndex)
+                    ?.safeRequestFocus("Settings_Fallback")
+            }
+        } else {
+            categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
+                ?.safeRequestFocus("Settings_Initial")
+        }
     }
 
     val closeDialog = {
@@ -255,7 +287,12 @@ fun SettingsScreen(
                             enabled = !uiState.isRestoringFocus,
                             modifier = Modifier
                                 .focusRequester(categoryFocusRequesters[index])
-                                .focusProperties { right = targetR }
+                                .focusProperties {
+                                    right = targetR
+                                    // ★ 修正: 一番上からの「上キー」と、一番下からの「下キー」を明示的に制御
+                                    if (index == 0) up = FocusRequester.Cancel
+                                    if (index == categories.lastIndex) down = homeBackRequester
+                                }
                         )
                     }
                 }
@@ -267,11 +304,15 @@ fun SettingsScreen(
                     onFocused = { },
                     onClick = onBack,
                     enabled = !uiState.isRestoringFocus,
-                    modifier = Modifier.focusProperties {
-                        up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default; right =
-                        itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
-                            ?: FocusRequester.Default
-                    })
+                    modifier = Modifier
+                        .focusRequester(homeBackRequester) // ★ 追加: FocusRequesterを紐付け
+                        .focusProperties {
+                            up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
+                            down = FocusRequester.Cancel // ★ 追加: これ以上下に行かないようにブロック
+                            right = itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
+                                ?.firstOrNull() ?: FocusRequester.Default
+                        }
+                )
             }
 
             // メインコンテンツ
@@ -943,6 +984,7 @@ fun SettingsScreen(
 
         // --- ダイアログ表示制御 ---
         when (val state = uiState.activeDialog) {
+            // 省略なし
             is SettingDialogState.Input -> InputDialog(
                 state.title,
                 state.initialValue,
@@ -1007,7 +1049,6 @@ fun SettingsScreen(
                     })
             }
 
-            // ★ SMBサーバー操作（編集/削除の選択）
             is SettingDialogState.SmbAction -> SelectionDialog(
                 title = "${state.target.name} の操作",
                 options = listOf("編集する" to "EDIT", "削除する" to "DELETE"),
@@ -1025,7 +1066,6 @@ fun SettingsScreen(
                 }
             )
 
-            // ★ SMBサーバー設定（QRコード表示・連続受信対応）
             is SettingDialogState.SmbSetup -> {
                 val localIp by viewModel.localIpAddress.collectAsState()
                 SmbSetupDialog(
@@ -1041,12 +1081,10 @@ fun SettingsScreen(
                                 viewModel.saveSmbServer(server)
                             }
                     },
-                    // ★ 画面上のトーストを出すためのコールバック
                     onShowToast = { msg -> toastMessage = msg }
                 )
             }
 
-            // ★ SMBサーバー手動入力
             is SettingDialogState.SmbManualInput -> {
                 SmbManualInputDialog(
                     state.target,
@@ -1057,7 +1095,6 @@ fun SettingsScreen(
             else -> {}
         }
 
-        // ★ 最前面にトーストを配置
         GlobalToast(message = toastMessage)
     }
 }

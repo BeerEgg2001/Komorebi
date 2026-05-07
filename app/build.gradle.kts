@@ -16,8 +16,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 14 // 数値を1つ上げる
-        versionName = "1.1.0 beta-4"
+        versionCode = 15 // 数値を1つ上げる
+        versionName = "1.1.0 Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,6 +58,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true // ★ BuildConfigクラスの生成を有効化
     }
     kotlin {
         compilerOptions {

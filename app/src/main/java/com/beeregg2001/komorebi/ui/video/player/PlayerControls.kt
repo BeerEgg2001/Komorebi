@@ -56,7 +56,7 @@ import kotlin.math.pow
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerControls(
-    exoPlayer: ExoPlayer?, // VLC時はnull
+    exoPlayer: ExoPlayer?,
     program: RecordedProgram,
     allComments: List<ArchivedComment>,
     tiledThumbnailUrl: String?,
@@ -73,6 +73,9 @@ fun PlayerControls(
     onPlayPauseToggle: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
+    // ★ 追加: チャプタースキップ用のコールバック
+    onSkipPreviousChapter: () -> Unit = {},
+    onSkipNextChapter: () -> Unit = {},
     onChapterListToggle: () -> Unit,
     onInfoToggle: () -> Unit,
     onSettingsToggle: () -> Unit
@@ -125,7 +128,6 @@ fun PlayerControls(
             val now = System.currentTimeMillis()
             if (isPlaying) {
                 val elapsed = now - lastUpdate
-                // ★ 修正: durationが0の時に強制的に0にリセット(coerceIn)されて点滅するバグを回避
                 val safeMax = if (totalDurationMs > 0L) totalDurationMs else Long.MAX_VALUE
                 displayPositionMs = (displayPositionMs + elapsed).coerceIn(0L, safeMax)
             }
@@ -332,9 +334,11 @@ fun PlayerControls(
                                 externalChapters
                             }
 
-                            Canvas(modifier = Modifier
-                                .fillMaxWidth()
-                                .height(trackHeight)) {
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(trackHeight)
+                            ) {
                                 val canvasWidth = size.width
                                 val canvasHeight = size.height
 
@@ -392,7 +396,6 @@ fun PlayerControls(
                             )
                         }
 
-                        // ★ 修正: durationが0の場合でもエラーにならない安全な進行率計算
                         val playProgress =
                             if (totalDurationMs > 0) (displayPositionMs.toFloat() / totalDurationMs).coerceIn(
                                 0f,
@@ -466,6 +469,17 @@ fun PlayerControls(
                             horizontalArrangement = Arrangement.spacedBy(24.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // ★ 追加: 前のチャプターへボタン
+                            if (hasChapters) {
+                                OsdIconButton(
+                                    icon = Icons.Default.SkipPrevious,
+                                    label = "前のチャプター",
+                                    onClick = onSkipPreviousChapter,
+                                    buttonSize = 48.dp,
+                                    iconSize = 24.dp
+                                )
+                            }
+
                             OsdIconButton(
                                 icon = Icons.Default.FastRewind,
                                 label = "-10秒",
@@ -489,6 +503,17 @@ fun PlayerControls(
                                 buttonSize = 56.dp,
                                 iconSize = 32.dp
                             )
+
+                            // ★ 追加: 次のチャプターへボタン
+                            if (hasChapters) {
+                                OsdIconButton(
+                                    icon = Icons.Default.SkipNext,
+                                    label = "次のチャプター",
+                                    onClick = onSkipNextChapter,
+                                    buttonSize = 48.dp,
+                                    iconSize = 24.dp
+                                )
+                            }
                         }
 
                         OsdIconButton(
@@ -548,9 +573,6 @@ private fun formatMillisToTime(ms: Long): String {
     else String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }
 
-// ========================================================================
-// 実況コメント勢いグラフ (YouTube風ヒートマップウェーブ)
-// ========================================================================
 @Composable
 fun CommentMomentumGraph(
     comments: List<ArchivedComment>,

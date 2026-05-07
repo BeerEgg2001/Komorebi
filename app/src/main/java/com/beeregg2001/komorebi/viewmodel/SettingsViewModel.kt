@@ -291,6 +291,13 @@ class SettingsViewModel @Inject constructor(
         false
     )
 
+    // ★ 追加: APIキーの状態を取得する
+    val geminiApiKey: StateFlow<String> = settingsRepository.geminiApiKey.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
+    )
+
     val smbServerList: StateFlow<List<SmbServer>> = settingsRepository.smbServerList
         .map { json ->
             try {
@@ -395,7 +402,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: データストアから確実に最新の値を読み取る
     fun updateBackendType(newType: String) = viewModelScope.launch(Dispatchers.IO) {
         val oldType = settingsRepository.backendType.first()
         if (oldType == newType) return@launch
@@ -466,7 +472,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { syncEngine.launchSyncAllRecords(forceFullSync = true) }
     }
 
-    // ★ 修正: 直接Repositoryから最新のリストを読んで追加する (上書きバグ解消)
     fun addPostRecordingBatch(name: String, path: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val json = settingsRepository.postRecordingBatchList.first()
@@ -503,7 +508,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: 直接Repositoryから最新のリストを読んで追加する (上書きバグ解消)
     fun saveSmbServer(server: SmbServer) {
         viewModelScope.launch(Dispatchers.IO) {
             val json = settingsRepository.smbServerList.first()
@@ -633,7 +637,6 @@ class SettingsViewModel @Inject constructor(
                 }
 
                 get("/smb") {
-                    // ★ 修正: Ktor内でも確実に最新のリストを取得してからHTMLを返す
                     val targetId = call.request.queryParameters["id"]
                     val json = settingsRepository.smbServerList.first()
                     val currentList = try {

@@ -216,7 +216,6 @@ class VideoPlayerState {
                     rightKeyDownTime = System.currentTimeMillis()
                     isRightKeyLongPressed = false
                     pendingSeekPositionMs = getCurrentPositionMs()
-                    // ★ 修正: キーを押し始めた瞬間のモードを記憶する (コントロール非表示ならチャプタースキップ)
                     activeRightSeekIsChapterMode = !isModern || !showControls
                 } else {
                     if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
@@ -225,14 +224,12 @@ class VideoPlayerState {
                     }
                     if (isRightKeyLongPressed) {
                         val now = System.currentTimeMillis()
-                        // ★ 修正: チャプタースキップ時は長押しの反応速度を落とし(400ms)、意図せず複数チャプターを飛ばしてしまうのを防ぐ
                         val interval = if (activeRightSeekIsChapterMode) 400L else 150L
                         if (now - lastSeekUpdateTime > interval) {
                             lastSeekUpdateTime = now
                             val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
 
                             if (activeRightSeekIsChapterMode) {
-                                // ★ 修正: 境界値を確実にソート（sorted()）して誤検知を防ぐ
                                 val boundaries = (listOf(0L) + chapters.flatMap {
                                     listOf(it.startTimeMs, it.endTimeMs)
                                 } + totalDurationMs).distinct().sorted()
@@ -240,17 +237,26 @@ class VideoPlayerState {
                                 if (boundaries.size <= 2) {
                                     pendingSeekPositionMs =
                                         (currentTarget + 180_000).coerceAtMost(totalDurationMs)
-                                    updateIndicator(Icons.Default.FastForward, "+3m")
+                                    if (!isModern || !showControls) updateIndicator(
+                                        Icons.Default.FastForward,
+                                        "+3m"
+                                    )
                                 } else {
                                     val next = boundaries.firstOrNull { it > currentTarget + 1000 }
                                         ?: totalDurationMs
                                     pendingSeekPositionMs = next
-                                    updateIndicator(Icons.Default.SkipNext, "次チャプター")
+                                    if (!isModern || !showControls) updateIndicator(
+                                        Icons.Default.SkipNext,
+                                        "次チャプター"
+                                    )
                                 }
                             } else {
                                 pendingSeekPositionMs =
                                     (currentTarget + 15_000).coerceAtMost(totalDurationMs)
-                                updateIndicator(Icons.Default.FastForward, "+15s")
+                                if (!isModern || !showControls) updateIndicator(
+                                    Icons.Default.FastForward,
+                                    "+15s"
+                                )
                             }
                         }
                     }
@@ -260,10 +266,14 @@ class VideoPlayerState {
                 if (!isRightKeyLongPressed) {
                     onShowControlsChange(true)
                     performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDurationMs))
-                    if (activeRightSeekIsChapterMode) updateIndicator(
-                        Icons.Default.FastForward,
-                        "+30s"
-                    )
+                    // ★修正: クラシックUI時のみインジケータを表示するようにガード
+                    if (!isModern || !showControls) {
+                        if (activeRightSeekIsChapterMode) updateIndicator(
+                            Icons.Default.SkipNext,
+                            "次チャプター"
+                        )
+                        else updateIndicator(Icons.Default.FastForward, "+30s")
+                    }
                 } else {
                     pendingSeekPositionMs?.let { performSeek(it) }
                 }
@@ -290,14 +300,12 @@ class VideoPlayerState {
                     }
                     if (isLeftKeyLongPressed) {
                         val now = System.currentTimeMillis()
-                        // ★ 修正: チャプタースキップ時は長押しの反応速度を落とす
                         val interval = if (activeLeftSeekIsChapterMode) 400L else 150L
                         if (now - lastSeekUpdateTime > interval) {
                             lastSeekUpdateTime = now
                             val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
 
                             if (activeLeftSeekIsChapterMode) {
-                                // ★ 修正: 境界値を確実にソート（sorted()）
                                 val boundaries = (listOf(0L) + chapters.flatMap {
                                     listOf(it.startTimeMs, it.endTimeMs)
                                 } + totalDurationMs).distinct().sorted()
@@ -305,16 +313,25 @@ class VideoPlayerState {
                                 if (boundaries.size <= 2) {
                                     pendingSeekPositionMs =
                                         (currentTarget - 60_000).coerceAtLeast(0L)
-                                    updateIndicator(Icons.Default.FastRewind, "-1m")
+                                    if (!isModern || !showControls) updateIndicator(
+                                        Icons.Default.FastRewind,
+                                        "-1m"
+                                    )
                                 } else {
                                     val prev =
                                         boundaries.lastOrNull { it < currentTarget - 1000 } ?: 0L
                                     pendingSeekPositionMs = prev
-                                    updateIndicator(Icons.Default.SkipPrevious, "前チャプター")
+                                    if (!isModern || !showControls) updateIndicator(
+                                        Icons.Default.SkipPrevious,
+                                        "前チャプター"
+                                    )
                                 }
                             } else {
                                 pendingSeekPositionMs = (currentTarget - 15_000).coerceAtLeast(0L)
-                                updateIndicator(Icons.Default.FastRewind, "-15s")
+                                if (!isModern || !showControls) updateIndicator(
+                                    Icons.Default.FastRewind,
+                                    "-15s"
+                                )
                             }
                         }
                     }
@@ -324,10 +341,14 @@ class VideoPlayerState {
                 if (!isLeftKeyLongPressed) {
                     onShowControlsChange(true)
                     performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                    if (activeLeftSeekIsChapterMode) updateIndicator(
-                        Icons.Default.FastRewind,
-                        "-10s"
-                    )
+                    // ★修正: クラシックUI時のみインジケータを表示するようにガード
+                    if (!isModern || !showControls) {
+                        if (activeLeftSeekIsChapterMode) updateIndicator(
+                            Icons.Default.SkipPrevious,
+                            "前チャプター"
+                        )
+                        else updateIndicator(Icons.Default.FastRewind, "-10s")
+                    }
                 } else {
                     pendingSeekPositionMs?.let { performSeek(it) }
                 }

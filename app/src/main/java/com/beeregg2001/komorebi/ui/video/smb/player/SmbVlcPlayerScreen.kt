@@ -158,23 +158,70 @@ fun SmbVlcPlayerScreen(
         }
     }
 
-    val safeLengthMs = remember(lengthMs, vlcChapters, customChapters) {
-        if (lengthMs > 0L) {
-            lengthMs
+    // ★ ターゲットURIの構築を切り出し（VLCとタイムスタンプ解析の両方で使うため）
+    val targetUri = remember(smbItem.path, smbUser, smbPass) {
+        val parts = smbItem.path.split("/")
+        val encodedSmbPath = parts.mapIndexed { index, part ->
+            if (index >= 3) Uri.encode(part) else part
+        }.joinToString("/")
+
+        if (smbUser.isNotBlank()) {
+            val safeUser = Uri.encode(smbUser)
+            val safePass = Uri.encode(smbPass)
+            val authPrefix = if (safePass.isNotBlank()) "$safeUser:$safePass@" else "$safeUser:@"
+            encodedSmbPath.replace("smb://", "smb://$authPrefix")
         } else {
-            val maxChapterTime = (vlcChapters + customChapters).maxOfOrNull {
-                if (it.endTimeMs < 43200000L) it.endTimeMs else it.startTimeMs
-            } ?: 0L
-            if (maxChapterTime > 0L) maxChapterTime + 30000L else 0L
+            encodedSmbPath
         }
     }
 
-    val vlcComponents = remember(smbUser, smbPass) {
+    // ★ TSファイルのタイムスタンプ(PCR)解析による正確な長さ計算
+    var calculatedTsDurationMs by remember { mutableLongStateOf(0L) }
+    var isCalculatingDuration by remember { mutableStateOf(false) }
+
+    LaunchedEffect(targetUri) {
+        if (smbItem.name.endsWith(".ts", ignoreCase = true) || smbItem.name.endsWith(
+                ".m2ts",
+                ignoreCase = true
+            )
+        ) {
+            isCalculatingDuration = true
+            calculatedTsDurationMs = TsDurationCalculator.calculateDurationMs(targetUri)
+            if (calculatedTsDurationMs > 0) {
+                Log.i(TAG, "TS Duration exactly calculated: ${calculatedTsDurationMs}ms")
+            }
+            isCalculatingDuration = false
+        }
+    }
+
+    // ★ 長さの決定（VLCが取得できればそれ、できなければ独自計算、それでも無理なら概算）
+    val safeLengthMs =
+        remember(lengthMs, vlcChapters, customChapters, smbItem.size, calculatedTsDurationMs) {
+            if (lengthMs > 0L) {
+                lengthMs
+            } else if (calculatedTsDurationMs > 0L) {
+                calculatedTsDurationMs // 独自計算した超正確な時間
+            } else {
+                val maxChapterTime = (vlcChapters + customChapters).maxOfOrNull {
+                    if (it.endTimeMs < 43200000L) it.endTimeMs else it.startTimeMs
+                } ?: 0L
+                if (maxChapterTime > 0L) {
+                    maxChapterTime + 30000L
+                } else if (smbItem.size > 0L && !isCalculatingDuration) {
+                    // 最終手段の概算（計算がまだ終わっていない場合は0のままにして待つ）
+                    (smbItem.size.toDouble() / 2000000.0 * 1000.0).toLong()
+                } else {
+                    0L
+                }
+            }
+        }
+
+    val vlcComponents = remember(targetUri) {
         val options = arrayListOf(
             "--drop-late-frames",
             "--skip-frames",
-            "--network-caching=10000",
-            "--file-caching=10000",
+            "--network-caching=3000",
+            "--file-caching=3000",
             "--clock-jitter=0",
             "--clock-synchro=0",
             "--avcodec-skiploopfilter=4",
@@ -183,20 +230,6 @@ fun SmbVlcPlayerScreen(
         )
         val libVLC = LibVLC(context, options)
         val mediaPlayer = MediaPlayer(libVLC)
-
-        val parts = smbItem.path.split("/")
-        val encodedSmbPath = parts.mapIndexed { index, part ->
-            if (index >= 3) Uri.encode(part) else part
-        }.joinToString("/")
-
-        val targetUri = if (smbUser.isNotBlank()) {
-            val safeUser = Uri.encode(smbUser)
-            val safePass = Uri.encode(smbPass)
-            val authPrefix = if (safePass.isNotBlank()) "$safeUser:$safePass@" else "$safeUser:@"
-            encodedSmbPath.replace("smb://", "smb://$authPrefix")
-        } else {
-            encodedSmbPath
-        }
 
         val media = Media(libVLC, Uri.parse(targetUri)).apply {
             setHWDecoderEnabled(true, true)
@@ -362,29 +395,39 @@ fun SmbVlcPlayerScreen(
     }
 
     LaunchedEffect(timeMs) { if (isSeeking) isSeeking = false }
-    val getCurrentPositionMs: () -> Long =
-        { if (isSeeking) vs.pendingSeekPositionMs ?: timeMs else timeMs }
+    val getCurrentPositionMs: () -> Long = { timeMs }
+    val getEffectivePositionMs: () -> Long = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
+    var pendingSeekJob by remember { mutableStateOf<Job?>(null) }
     val performSeek: (Long) -> Unit = { targetMs ->
         val limitLength = safeLengthMs.coerceAtLeast(1L)
-        if (limitLength > 1L && mediaPlayer.isSeekable) {
-            isSeeking = true
-            ignoreTimeEventUntil = System.currentTimeMillis() + 2000L
-            timeMs = targetMs
-
+        if (limitLength > 1L) {
             val safeTarget = targetMs.coerceIn(0L, limitLength)
-            mediaPlayer.time = safeTarget
-            mediaPlayer.position = safeTarget.toFloat() / limitLength.toFloat()
-        }
-    }
 
-    LaunchedEffect(vs.pendingSeekPositionMs) {
-        vs.pendingSeekPositionMs?.let {
-            delay(400)
-            performSeek(it)
-            vs.pendingSeekPositionMs = null
-            vs.isRightKeyLongPressed = false; vs.isLeftKeyLongPressed = false
-            vs.rightKeyDownTime = 0L; vs.leftKeyDownTime = 0L
+            isSeeking = true
+            timeMs = safeTarget
+            vs.pendingSeekPositionMs = safeTarget
+
+            pendingSeekJob?.cancel()
+            pendingSeekJob = scope.launch {
+                delay(400) // 連打防止
+
+                ignoreTimeEventUntil = System.currentTimeMillis() + 2000L
+
+                if (mediaPlayer.isSeekable) {
+                    mediaPlayer.time = safeTarget
+                    if (safeLengthMs > 0L) {
+                        mediaPlayer.position = safeTarget.toFloat() / safeLengthMs.toFloat()
+                    }
+                } else {
+                    // TSファイル等でシーク不可判定された場合も強制的に飛ばす
+                    mediaPlayer.time = safeTarget
+                }
+
+                vs.pendingSeekPositionMs = null
+                delay(500)
+                isSeeking = false
+            }
         }
     }
 
@@ -410,16 +453,29 @@ fun SmbVlcPlayerScreen(
         }
     }
 
-    LaunchedEffect(isSubOverlayOpen, showControls) {
+    var wasControlsVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(
+        isSubMenuOpen,
+        isSceneSearchOpen,
+        isChapterListOpen,
+        isProgramInfoOpen,
+        isModernSettingsOpen,
+        showControls
+    ) {
         if (isPiPMode) return@LaunchedEffect
         delay(150)
-        if (isSubMenuOpen) subMenuFocusRequester.safeRequestFocus(TAG)
-        else if (showControls && isModern && !isSubOverlayOpen) playerControlsFocusRequester.safeRequestFocus(
-            TAG
-        )
-        else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) mainFocusRequester.safeRequestFocus(
-            TAG
-        )
+
+        if (isSubMenuOpen) {
+            subMenuFocusRequester.safeRequestFocus(TAG)
+        } else if (showControls && isModern && !isSubOverlayOpen) {
+            if (!wasControlsVisible) {
+                playerControlsFocusRequester.safeRequestFocus(TAG)
+            }
+        } else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) {
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
+
+        wasControlsVisible = showControls
     }
 
     var isSeekingPreviewVisible by remember { mutableStateOf(false) }
@@ -436,30 +492,30 @@ fun SmbVlcPlayerScreen(
             .background(Color.Black)
             .onPreviewKeyEvent { keyEvent ->
                 vs.handleKeyEvent(
-                    keyEvent,
-                    isPiPMode,
-                    isModern,
-                    showControls,
-                    isSubOverlayOpen,
-                    vlcChapters,
-                    safeLengthMs,
-                    getCurrentPositionMs,
-                    performSeek,
-                    triggerSeekingPreview,
-                    onShowControlsChange,
-                    onPiPRequested,
-                    onBackPressed,
-                    onSceneSearchToggle,
-                    { isChapterListOpen = it },
-                    onSubMenuToggle,
-                    vs.isPlayerPlaying,
-                    { mediaPlayer.pause() },
-                    { mediaPlayer.play() })
+                    keyEvent = keyEvent,
+                    isPiPMode = isPiPMode,
+                    isModern = isModern,
+                    showControls = showControls,
+                    isSubOverlayOpen = isSubOverlayOpen,
+                    chapters = vlcChapters,
+                    totalDurationMs = safeLengthMs,
+                    getCurrentPositionMs = getCurrentPositionMs,
+                    performSeek = performSeek,
+                    triggerSeekingPreview = triggerSeekingPreview,
+                    onShowControlsChange = onShowControlsChange,
+                    onPiPRequested = onPiPRequested,
+                    onBackPressed = onBackPressed,
+                    onSceneSearchToggle = onSceneSearchToggle,
+                    onChapterListToggle = { isChapterListOpen = it },
+                    onSubMenuToggle = onSubMenuToggle,
+                    exoPlayerIsPlaying = vs.isPlayerPlaying,
+                    onPause = { mediaPlayer.pause() },
+                    onPlay = { mediaPlayer.play() }
+                )
             }
     ) {
         AndroidView(
             factory = { ctx ->
-                // ★ 修正: スリープ（アンビエントモード）防止のための keepScreenOn = true を設定
                 VLCVideoLayout(ctx).apply {
                     keepScreenOn = true
                     mediaPlayer.attachViews(
@@ -510,23 +566,41 @@ fun SmbVlcPlayerScreen(
                 isPlaying = vs.isPlayerPlaying,
                 hasChapters = vlcChapters.isNotEmpty(),
                 externalChapters = vlcChapters,
-                currentPositionMs = getCurrentPositionMs(),
+                currentPositionMs = getEffectivePositionMs(),
                 totalDurationMs = safeLengthMs,
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
-                onPlayPauseToggle = { vs.togglePlayPause(vs.isPlayerPlaying); if (vs.isPlayerPlaying) mediaPlayer.pause() else mediaPlayer.play() },
+                onPlayPauseToggle = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    vs.togglePlayPause(vs.isPlayerPlaying)
+                    if (vs.isPlayerPlaying) mediaPlayer.pause() else mediaPlayer.play()
+                },
                 onSeekBack = {
-                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L)); vs.updateIndicator(
-                    Icons.Default.FastRewind,
-                    "-10s"
-                )
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos - 10_000).coerceAtLeast(0L))
                 },
                 onSeekForward = {
-                    performSeek(
-                        (getCurrentPositionMs() + 30_000).coerceAtMost(
-                            safeLengthMs
-                        )
-                    ); vs.updateIndicator(Icons.Default.FastForward, "+30s")
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos + 30_000).coerceAtMost(safeLengthMs))
+                },
+                onSkipPreviousChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    val reversedChapters = vlcChapters.sortedByDescending { it.startTimeMs }
+                    val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
+                    performSeek(prevChapter?.startTimeMs ?: 0L)
+                },
+                onSkipNextChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    val nextChapter = vlcChapters.find { it.startTimeMs > basePos + 3000 }
+                    if (nextChapter != null) {
+                        performSeek(nextChapter.startTimeMs)
+                    } else {
+                        onShowToast("次のチャプターはありません")
+                    }
                 },
                 onChapterListToggle = { isChapterListOpen = true; onShowControlsChange(true) },
                 onInfoToggle = { isProgramInfoOpen = true; onShowControlsChange(true) },
@@ -551,7 +625,7 @@ fun SmbVlcPlayerScreen(
                     program = currentProgram,
                     chapters = vlcChapters,
                     tiledThumbnailUrl = null,
-                    currentPositionMs = getCurrentPositionMs(),
+                    currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = { performSeek(it); isChapterListOpen = false },
                     onClose = { isChapterListOpen = false })
             }
@@ -659,8 +733,8 @@ fun SmbVlcPlayerScreen(
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
-                            vs.lCropMode = LCropMode.MENU; isModernSettingsOpen =
-                                false; onShowControlsChange(false)
+                            vs.lCropMode =
+                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f
@@ -672,7 +746,105 @@ fun SmbVlcPlayerScreen(
                     }
                 )
             }
-            PlaybackIndicator(vs.indicatorState)
+
+            if (!isModern) {
+                PlaybackIndicator(vs.indicatorState)
+            }
         }
+    }
+}
+
+// =========================================================================================
+// ★ TSファイルのタイムスタンプ(PCR)を読み取り、正確な動画長を算出するユーティリティクラス
+// =========================================================================================
+object TsDurationCalculator {
+    private const val TS_PACKET_SIZE = 188
+    private const val CHUNK_SIZE = 2 * 1024 * 1024L // 両端2MBだけをピンポイントで読み取る
+
+    suspend fun calculateDurationMs(targetUri: String): Long = withContext(Dispatchers.IO) {
+        var file: jcifs.smb.SmbRandomAccessFile? = null
+        try {
+            val smbFile = jcifs.smb.SmbFile(targetUri)
+            file = jcifs.smb.SmbRandomAccessFile(smbFile, "r")
+
+            val length = file.length()
+            if (length < CHUNK_SIZE) return@withContext 0L
+
+            // 1. ファイル先頭(2MB)から最初のPCRを探す
+            val frontBuffer = ByteArray(CHUNK_SIZE.toInt())
+            file.seek(0)
+            file.read(frontBuffer)
+            val firstPcr = findFirstPcr(frontBuffer)
+
+            // 2. ファイル末尾(2MB)から最後のPCRを探す
+            val backBuffer = ByteArray(CHUNK_SIZE.toInt())
+            val backPos = java.lang.Long.max(0L, length - CHUNK_SIZE)
+            file.seek(backPos)
+            file.read(backBuffer)
+            val lastPcr = findLastPcr(backBuffer)
+
+            if (firstPcr != -1L && lastPcr != -1L) {
+                var diffTicks = lastPcr - firstPcr
+                if (diffTicks < 0) {
+                    // PCRのラップアラウンド（約26.5時間）に対応
+                    diffTicks += (1L shl 33)
+                }
+                // PCRベースは90kHzクロックなので、90で割るとミリ秒単位になる
+                return@withContext (diffTicks / 90.0).toLong()
+            }
+        } catch (e: Exception) {
+            Log.e("TsDurationCalculator", "TS length calculation failed: ${e.message}")
+        } finally {
+            try {
+                file?.close()
+            } catch (e: Exception) {
+            }
+        }
+        return@withContext 0L
+    }
+
+    private fun findFirstPcr(data: ByteArray): Long {
+        for (i in 0 until data.size - TS_PACKET_SIZE) {
+            if (data[i] == 0x47.toByte()) {
+                val pcr = extractPcr(data, i)
+                if (pcr != -1L) return pcr
+            }
+        }
+        return -1L
+    }
+
+    private fun findLastPcr(data: ByteArray): Long {
+        for (i in data.size - TS_PACKET_SIZE downTo 0) {
+            if (data[i] == 0x47.toByte()) {
+                val pcr = extractPcr(data, i)
+                if (pcr != -1L) return pcr
+            }
+        }
+        return -1L
+    }
+
+    private fun extractPcr(data: ByteArray, offset: Int): Long {
+        if (offset + 11 > data.size) return -1L
+
+        val afc = (data[offset + 3].toInt() and 0x30) shr 4
+        // アダプテーションフィールドが存在するか
+        if (afc == 2 || afc == 3) {
+            val afLength = data[offset + 4].toInt() and 0xFF
+            if (afLength > 0 && offset + 5 + afLength <= data.size) {
+                val flags = data[offset + 5].toInt() and 0xFF
+                // PCRフラグ(0x10)が立っているか
+                if ((flags and 0x10) != 0) {
+                    val pcr1 = data[offset + 6].toLong() and 0xFF
+                    val pcr2 = data[offset + 7].toLong() and 0xFF
+                    val pcr3 = data[offset + 8].toLong() and 0xFF
+                    val pcr4 = data[offset + 9].toLong() and 0xFF
+                    val pcr5 = data[offset + 10].toLong() and 0x80
+
+                    // 33bitのPCRベースを抽出
+                    return (pcr1 shl 25) or (pcr2 shl 17) or (pcr3 shl 9) or (pcr4 shl 1) or (pcr5 ushr 7)
+                }
+            }
+        }
+        return -1L
     }
 }

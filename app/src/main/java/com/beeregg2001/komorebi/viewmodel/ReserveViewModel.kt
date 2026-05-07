@@ -40,6 +40,12 @@ class ReserveViewModel @Inject constructor(
     private val _selectedTabIndex = MutableStateFlow(0)
     val selectedTabIndex: StateFlow<Int> = _selectedTabIndex.asStateFlow()
 
+    // ReserveViewModel.kt に以下のメソッドを追加
+    fun refreshAll(showLoading: Boolean = true) {
+        fetchReserves(showLoading)
+        fetchConditions(showLoading)
+    }
+
     fun updateTabIndex(index: Int) {
         _selectedTabIndex.value = index
     }

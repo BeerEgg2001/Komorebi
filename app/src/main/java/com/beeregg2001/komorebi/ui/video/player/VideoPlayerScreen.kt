@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
@@ -23,8 +24,11 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -48,7 +52,7 @@ private const val TAG = "VideoPlayerScreen"
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
-    smbItem: SmbItem? = null, // ★ 新規追加: nullでない場合はSMB再生として振る舞う
+    smbItem: SmbItem? = null,
     initialPositionMs: Long = 0,
     initialQuality: String = "1080p-60fps",
     showControls: Boolean,
@@ -76,10 +80,6 @@ fun VideoPlayerScreen(
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
     val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
-
-    LaunchedEffect(tiledThumbnailUrl) {
-        Log.i(TAG, "[DataCheck] Screen received tiledThumbnailUrl update: $tiledThumbnailUrl")
-    }
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
     val isModern = playerUiMode == "MODERN"
@@ -178,7 +178,9 @@ fun VideoPlayerScreen(
         }
     }
 
-    var smbDurationMs by remember { mutableLongStateOf(0L) } // ★ 追加: SMB用の動的な動画尺
+    var smbDurationMs by remember { mutableLongStateOf(0L) }
+    val isBackground = remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     val exoPlayer = rememberManagedExoPlayer(
         vs = vs,
@@ -190,9 +192,8 @@ fun VideoPlayerScreen(
             pixelWidthHeightRatio = ratio
         },
         onBufferingChanged = { isBuffering = it },
-        onDurationChanged = { smbDurationMs = it }, // ★ 追加
+        onDurationChanged = { smbDurationMs = it },
         onStopOrDispose = { player ->
-            // ★ 修正: SMB再生時は視聴履歴を更新しない
             if (smbItem == null) {
                 val posMs =
                     if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
@@ -211,7 +212,6 @@ fun VideoPlayerScreen(
 
     val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
-    // ★ 修正: PlayerControls等に渡すための動画尺（SMBと録画番組で取得元を切り替え）
     val totalDurationForControls =
         if (smbItem != null) smbDurationMs.coerceAtLeast(0L) else (currentProgram.recordedVideo.duration * 1000).toLong()
 
@@ -220,13 +220,20 @@ fun VideoPlayerScreen(
             0L,
             if (totalDurationForControls > 0) totalDurationForControls else Long.MAX_VALUE
         )
+        // 一瞬だけpendingSeekに記録してUI表示をサクサク進める
+        vs.pendingSeekPositionMs = safeTarget
+        scope.launch {
+            delay(800)
+            if (vs.pendingSeekPositionMs == safeTarget) {
+                vs.pendingSeekPositionMs = null
+            }
+        }
 
         if (isLiveStream && smbItem == null) {
             scope.launch {
                 isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
                 val newOffsetSec = safeTarget / 1000.0
-                Log.i(TAG, "Performing Pseudo-Seek (API Offset Reconnect) to $newOffsetSec sec")
                 val newUrl = videoPlayerViewModel.resolveStreamUrl(
                     currentProgram.id,
                     vs.currentQuality.value,
@@ -254,6 +261,39 @@ fun VideoPlayerScreen(
         Unit
     }
 
+    val externalChapters by videoPlayerViewModel.externalChapters.collectAsState()
+    val activeChapters = remember(program.recordedVideo.cmSections, externalChapters) {
+        val apiChapters = program.recordedVideo.cmSections?.map {
+            ChapterInfo(
+                (it.startTime * 1000).toLong(),
+                (it.endTime * 1000).toLong(),
+                isCm = true
+            )
+        } ?: emptyList()
+        if (apiChapters.isNotEmpty()) apiChapters else externalChapters
+    }
+
+    val skipToNextChapter = {
+        val basePos = getEffectivePositionMs()
+        val nextChapter = activeChapters.find { it.startTimeMs > basePos + 3000 }
+        if (nextChapter != null) {
+            performSeek(nextChapter.startTimeMs)
+        } else {
+            onShowToast("次のチャプターはありません")
+        }
+    }
+
+    val skipToPreviousChapter = {
+        val basePos = getEffectivePositionMs()
+        val reversedChapters = activeChapters.sortedByDescending { it.startTimeMs }
+        val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
+        if (prevChapter != null) {
+            performSeek(prevChapter.startTimeMs)
+        } else {
+            performSeek(0L)
+        }
+    }
+
     LaunchedEffect(vs.isAutoCmSkipEnabled, chapters) {
         var hasWarnedEmptyChapters = false
         while (isActive) {
@@ -263,17 +303,12 @@ fun VideoPlayerScreen(
                     val cmChapter =
                         chapters.find { it.isCm && currentPos >= it.startTimeMs && currentPos < (it.endTimeMs - 1500) }
                     if (cmChapter != null) {
-                        Log.i(
-                            TAG,
-                            "Auto CM Skip triggered: currentPos=$currentPos, skipping to ${cmChapter.endTimeMs}"
-                        )
                         performSeek(cmChapter.endTimeMs)
                         onShowToast("自動CMスキップ: 本編へ移動しました")
                         delay(3000)
                     }
                 } else {
                     if (!hasWarnedEmptyChapters) {
-                        Log.w(TAG, "Auto CM Skip is ON but chapters list is empty.")
                         hasWarnedEmptyChapters = true
                     }
                 }
@@ -287,7 +322,6 @@ fun VideoPlayerScreen(
     var isFirstLoad by remember { mutableStateOf(true) }
 
     LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities) {
-        // ★ 追加: SMB再生ルート
         if (smbItem != null) {
             isBuffering = true
             vs.playbackOffsetMs = 0L
@@ -302,7 +336,6 @@ fun VideoPlayerScreen(
             return@LaunchedEffect
         }
 
-        // 既存のRecordedProgramルート
         if (currentProgram.id == 0 || !isQualitiesLoaded || vs.currentQuality.value.isBlank()) return@LaunchedEffect
         if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) return@LaunchedEffect
 
@@ -358,7 +391,6 @@ fun VideoPlayerScreen(
     }
 
     DisposableEffect(vs.currentQuality, currentSessionId, smbItem) {
-        // ★ 修正: SMB再生時はKonomiTVへのストリーム維持APIを叩かない
         if (smbItem == null) {
             videoPlayerViewModel.startStreamMaintenance(
                 program,
@@ -385,6 +417,8 @@ fun VideoPlayerScreen(
         }
     }
 
+    // ★ フォーカス消失防止: isPlayingの変化でフォーカスを奪われないようにロック
+    var wasControlsVisible by remember { mutableStateOf(false) }
     LaunchedEffect(
         isSubMenuOpen,
         isSceneSearchOpen,
@@ -395,14 +429,25 @@ fun VideoPlayerScreen(
     ) {
         if (isPiPMode) return@LaunchedEffect
         delay(150)
-        if (isSubMenuOpen) subMenuFocusRequester.safeRequestFocus(TAG)
-        else if (showControls && isModern && !isSubOverlayOpen) playerControlsFocusRequester.safeRequestFocus(
-            TAG
-        )
-        else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) mainFocusRequester.safeRequestFocus(
-            TAG
-        )
+
+        if (isSubMenuOpen) {
+            subMenuFocusRequester.safeRequestFocus(TAG)
+        } else if (showControls && isModern && !isSubOverlayOpen) {
+            if (!wasControlsVisible) {
+                playerControlsFocusRequester.safeRequestFocus(TAG)
+            }
+        } else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) {
+            mainFocusRequester.safeRequestFocus(TAG)
+        }
+
+        wasControlsVisible = showControls
     }
+
+    val safeHouseFocusRequester = remember { FocusRequester() }
+    val sceneSearchFocusRequester = remember { FocusRequester() }
+    var isLongPressHandled by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = isPiPMode) {}
 
     Box(
         modifier = Modifier
@@ -415,10 +460,10 @@ fun VideoPlayerScreen(
                     isModern = isModern,
                     showControls = showControls,
                     isSubOverlayOpen = isSubOverlayOpen,
-                    chapters = chapters,
-                    totalDurationMs = totalDurationForControls, // ★ 修正
+                    chapters = activeChapters,
+                    totalDurationMs = totalDurationForControls,
                     getCurrentPositionMs = getCurrentPositionMs,
-                    performSeek = performSeek,
+                    performSeek = performSeek, // ★ 修正: 正しいシークメソッドを渡す
                     triggerSeekingPreview = triggerSeekingPreview,
                     onShowControlsChange = onShowControlsChange,
                     onPiPRequested = onPiPRequested,
@@ -531,24 +576,34 @@ fun VideoPlayerScreen(
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
                 isPlaying = exoPlayer.isPlaying,
-                hasChapters = chapters.size > 1 && smbItem == null, // ★ 修正: SMBはチャプターリスト非表示
+                hasChapters = activeChapters.isNotEmpty(),
+                externalChapters = activeChapters,
                 currentPositionMs = getEffectivePositionMs(),
-                totalDurationMs = totalDurationForControls, // ★ 修正
+                totalDurationMs = totalDurationForControls,
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
-                onPlayPauseToggle = { vs.togglePlayPause(exoPlayer.isPlaying); if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play() },
+                onPlayPauseToggle = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    vs.togglePlayPause(exoPlayer.isPlaying)
+                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                },
                 onSeekBack = {
-                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L)); vs.updateIndicator(
-                    Icons.Default.FastRewind,
-                    "-10s"
-                )
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos - 10_000).coerceAtLeast(0L))
                 },
                 onSeekForward = {
-                    val totalDuration = totalDurationForControls
-                    performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDuration)); vs.updateIndicator(
-                    Icons.Default.FastForward,
-                    "+30s"
-                )
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos + 30_000).coerceAtMost(totalDurationForControls))
+                },
+                onSkipPreviousChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    skipToPreviousChapter()
+                },
+                onSkipNextChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    skipToNextChapter()
                 },
                 onChapterListToggle = { isChapterListOpen = true; onShowControlsChange(true) },
                 onInfoToggle = { isProgramInfoOpen = true; onShowControlsChange(true) },
@@ -563,6 +618,19 @@ fun VideoPlayerScreen(
                 ProgramInfoOverlay(
                     program = currentProgram,
                     onClose = { isProgramInfoOpen = false })
+            }
+
+            AnimatedVisibility(
+                isChapterListOpen,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()) {
+                ChapterListOverlay(
+                    program = currentProgram,
+                    chapters = activeChapters,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = getEffectivePositionMs(),
+                    onSeekRequested = { performSeek(it); isChapterListOpen = false },
+                    onClose = { isChapterListOpen = false })
             }
 
             AnimatedVisibility(visible = isModernSettingsOpen, enter = fadeIn(), exit = fadeOut()) {
@@ -600,7 +668,6 @@ fun VideoPlayerScreen(
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
                     onQualitySelect = {
-                        // ★ 修正: SMB再生時は画質変更をブロック
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
                             isModernSettingsOpen = false
@@ -650,8 +717,8 @@ fun VideoPlayerScreen(
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
-                            vs.lCropMode = LCropMode.MENU; isModernSettingsOpen =
-                                false; onShowControlsChange(false)
+                            vs.lCropMode =
+                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
@@ -668,49 +735,9 @@ fun VideoPlayerScreen(
             }
 
             AnimatedVisibility(
-                isSceneSearchOpen,
-                enter = slideInVertically { fullHeight -> fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()) {
-                SceneSearchOverlay(
-                    program = currentProgram,
-                    tiledThumbnailUrl = tiledThumbnailUrl,
-                    currentPositionMs = getEffectivePositionMs(),
-                    onSeekRequested = { performSeek(it); onSceneSearchToggle(false); },
-                    onClose = { onSceneSearchToggle(false); })
-            }
-            AnimatedVisibility(
-                isChapterListOpen,
-                enter = slideInVertically { fullHeight -> fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> fullHeight } + fadeOut()) {
-                ChapterListOverlay(
-                    program = currentProgram,
-                    chapters = chapters,
-                    tiledThumbnailUrl = tiledThumbnailUrl,
-                    currentPositionMs = getEffectivePositionMs(),
-                    onSeekRequested = { performSeek(it); isChapterListOpen = false },
-                    onClose = { isChapterListOpen = false })
-            }
-
-            androidx.compose.animation.AnimatedVisibility(
-                visible = vs.lCropMode != LCropMode.HIDDEN,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                VideoLCropOverlay(
-                    state = vs,
-                    onClose = {
-                        vs.lCropMode = LCropMode.HIDDEN; scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(
-                        TAG
-                    )
-                    }
-                    })
-            }
-
-            AnimatedVisibility(
                 isSubMenuOpen,
-                enter = slideInVertically { fullHeight -> -fullHeight } + fadeIn(),
-                exit = slideOutVertically { fullHeight -> -fullHeight } + fadeOut()) {
+                enter = slideInVertically { -it } + fadeIn(),
+                exit = slideOutVertically { -it } + fadeOut()) {
                 VideoTopSubMenuUI(
                     currentAudioMode = vs.currentAudioMode,
                     currentSpeed = vs.currentSpeed,
@@ -746,7 +773,6 @@ fun VideoPlayerScreen(
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
                     onQualitySelect = {
-                        // ★ 修正: SMB再生時は画質変更をブロック
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
                             onSubMenuToggle(false)
@@ -810,7 +836,11 @@ fun VideoPlayerScreen(
                     },
                 )
             }
-            PlaybackIndicator(vs.indicatorState)
+
+            // ★ 修正: モダンUI表示中は不要なインジケータ（画面中央のアイコン）を出さない
+            if (!isModern || !showControls) {
+                PlaybackIndicator(vs.indicatorState)
+            }
         }
     }
 }
