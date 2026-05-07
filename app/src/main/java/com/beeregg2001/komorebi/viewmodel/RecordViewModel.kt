@@ -43,12 +43,18 @@ private const val TAG = "Komorebi_RecordVM"
 private const val PREF_NAME = "search_history_pref"
 private const val KEY_HISTORY = "history_list"
 
+// ★ 追加: 録画リスト用のソート列挙型
+enum class RecordSortType { DATE, TITLE, DURATION }
+enum class RecordSortOrder { ASC, DESC }
+
 private data class FilterState(
     val category: RecordCategory,
     val channelId: String?,
     val genre: String?,
     val day: String?,
-    val query: String
+    val query: String,
+    val sortType: RecordSortType,  // ★ 追加
+    val sortOrder: RecordSortOrder // ★ 追加
 )
 
 data class SeriesInfo(
@@ -87,6 +93,13 @@ class RecordViewModel @Inject constructor(
 
     private val _selectedDay = MutableStateFlow<String?>(null)
     val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
+
+    // ★ 追加: ソート状態の管理
+    private val _sortType = MutableStateFlow(RecordSortType.DATE)
+    val sortType: StateFlow<RecordSortType> = _sortType.asStateFlow()
+
+    private val _sortOrder = MutableStateFlow(RecordSortOrder.DESC)
+    val sortOrder: StateFlow<RecordSortOrder> = _sortOrder.asStateFlow()
 
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
@@ -182,7 +195,6 @@ class RecordViewModel @Inject constructor(
                 }
         }
 
-        // ★ 修正: アプリ起動直後のUI描画を優先するため、裏側での同期開始を2秒遅らせる
         viewModelScope.launch {
             delay(2000)
             syncEngine.launchSyncAllRecords()
@@ -201,10 +213,21 @@ class RecordViewModel @Inject constructor(
         syncEngine.launchSmartSync()
     }
 
+    // ★ 修正: ソート状態も Pager のトリガーとして Combine に含める
     val pagedRecordings: Flow<PagingData<RecordedProgram>> = combine(
-        _selectedCategory, _selectedChannelId, _selectedGenre, _selectedDay, _activeSearchQuery
-    ) { category, channelId, genre, day, query ->
-        FilterState(category, channelId, genre, day, query)
+        combine(
+            _selectedCategory,
+            _selectedChannelId,
+            _selectedGenre,
+            _selectedDay,
+            _activeSearchQuery
+        ) { c, ch, g, d, q ->
+            FilterState(c, ch, g, d, q, RecordSortType.DATE, RecordSortOrder.DESC) // 仮の初期値
+        },
+        _sortType,
+        _sortOrder
+    ) { partialState, type, order ->
+        partialState.copy(sortType = type, sortOrder = order)
     }.flatMapLatest { state ->
         flow {
             emit(PagingData.empty())
@@ -218,7 +241,10 @@ class RecordViewModel @Inject constructor(
                     enablePlaceholders = true
                 )
             ) {
+                val isDesc = state.sortOrder == RecordSortOrder.DESC
+
                 when {
+                    // 検索やカテゴリ指定時はソートボタンを非表示にするため、デフォルトの降順クエリを使う
                     state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
                     state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
                         state.channelId
@@ -236,8 +262,23 @@ class RecordViewModel @Inject constructor(
                         programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
                     }
 
-                    state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
-                    else -> programDao.getAllPagingSource()
+                    // ★「未視聴」の場合、選択されたソート条件に応じてDaoを切り替える
+                    state.category == RecordCategory.UNWATCHED -> {
+                        when (state.sortType) {
+                            RecordSortType.DATE -> if (isDesc) programDao.getUnwatched_DateDesc() else programDao.getUnwatched_DateAsc()
+                            RecordSortType.TITLE -> if (isDesc) programDao.getUnwatched_TitleDesc() else programDao.getUnwatched_TitleAsc()
+                            RecordSortType.DURATION -> if (isDesc) programDao.getUnwatched_DurationDesc() else programDao.getUnwatched_DurationAsc()
+                        }
+                    }
+
+                    // ★「全ての録画」の場合、選択されたソート条件に応じてDaoを切り替える
+                    else -> {
+                        when (state.sortType) {
+                            RecordSortType.DATE -> if (isDesc) programDao.getAll_DateDesc() else programDao.getAll_DateAsc()
+                            RecordSortType.TITLE -> if (isDesc) programDao.getAll_TitleDesc() else programDao.getAll_TitleAsc()
+                            RecordSortType.DURATION -> if (isDesc) programDao.getAll_DurationDesc() else programDao.getAll_DurationAsc()
+                        }
+                    }
                 }
             }
 
@@ -246,6 +287,12 @@ class RecordViewModel @Inject constructor(
             })
         }
     }.cachedIn(viewModelScope)
+
+    // ★ 追加: メニューから指定されたソート条件を適用する
+    fun setSort(type: RecordSortType, order: RecordSortOrder) {
+        _sortType.value = type
+        _sortOrder.value = order
+    }
 
     fun updateListView(isList: Boolean) {
         _manualListViewOverride.value = isList
@@ -316,7 +363,6 @@ class RecordViewModel @Inject constructor(
 
     fun loadNextPage() {}
 
-    // ★ 修正: メインスレッドブロックを回避するため IOスレッドに移動
     private fun loadSearchHistory() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
