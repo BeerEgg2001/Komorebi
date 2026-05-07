@@ -12,6 +12,7 @@ import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -58,7 +59,7 @@ private const val TAG = "LivePlayerScreen"
 @Composable
 fun LivePlayerScreen(
     channel: Channel,
-    initialQuality: String = "1080p-60fps", // Navigationから渡されるが、DataStoreからの復元までのフォールバックに使用するのみ
+    initialQuality: String = "1080p-60fps",
     isBaseballMode: Boolean = false,
     isMiniListOpen: Boolean,
     onMiniListToggle: (Boolean) -> Unit,
@@ -200,8 +201,6 @@ fun LivePlayerScreen(
         livePlayerViewModel.fetchAvailableQualities(ps.currentStreamSource, ps.isEdcbDirect)
     }
 
-    // ★ 修正: リストがロードされた時、ユーザーが爆速で設定した DataStore の値 (currentLiveQualityStr) を最優先で使う
-    // それがリストに存在しない場合（バックエンド切り替え直後など）にのみ、フォールバックして DataStore を上書きする
     LaunchedEffect(availableQualities, isQualitiesLoaded, currentLiveQualityStr) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
             val matched = availableQualities.find { it.value == currentLiveQualityStr }
@@ -672,25 +671,25 @@ fun LivePlayerScreen(
                 isMainBuffering
             }
         }
+
         val mainLoadingText =
             if (ps.currentStreamSource == StreamSource.KONOMITV) ps.sseDetail
             else if (ps.currentStreamSource == StreamSource.EDCB && !ps.isEdcbDirect && ps.sseStatus == "Standby") ps.sseDetail
             else AppStrings.STATUS_LOADING
 
+        // ★ 修正: バッファリング中の黒画面を回避し、スピナーだけを表示する
         androidx.compose.animation.AnimatedVisibility(
             visible = !isPiPMode && !ps.isDualDisplayMode && showMainLoading,
             enter = fadeIn(),
             exit = fadeOut()
         ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-            ) {
+            Box(Modifier.fillMaxSize()) {
                 Row(
                     Modifier
                         .align(Alignment.TopStart)
-                        .padding(32.dp),
+                        .padding(32.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(
