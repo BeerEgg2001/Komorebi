@@ -92,6 +92,7 @@ fun SettingsScreen(
         }
     }
 
+    // ★ 修正: 番組表設定をインデックス 6 に追加し、以降を後ろへシフト
     val categories = listOf(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
@@ -99,12 +100,13 @@ fun SettingsScreen(
         Category("録画設定", Icons.Default.VideoSettings),
         Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
+        Category("番組表設定", Icons.Default.GridOn), // ★ 追加
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
         Category(AppStrings.SETTINGS_CATEGORY_LAB, Icons.Default.Science),
         Category(AppStrings.SETTINGS_CATEGORY_APP_INFO, Icons.Default.Info)
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
-    val homeBackRequester = remember { FocusRequester() } // ★ 追加: ホームへ戻るボタン用
+    val homeBackRequester = remember { FocusRequester() }
 
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
@@ -112,6 +114,7 @@ fun SettingsScreen(
     val smbItemRs =
         remember(prefs.smbServerList) { List(prefs.smbServerList.size) { FocusRequester() } }
 
+    // ★ 修正: インデックス 6 に番組表用の FocusRequester リストを追加
     val itemFocusRequesters = remember {
         listOf(
             listOf(
@@ -157,15 +160,23 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            listOf(
+            listOf( // ★ 追加: 番組表設定用の 3 つのフォーカスリクエスター
+                FocusRequester(),
+                FocusRequester()
+            ),
+            listOf( // コメント設定 (インデックス 7 にシフト)
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester()
             ),
-            listOf(FocusRequester(), FocusRequester(), FocusRequester()),
-            listOf(FocusRequester())
+            listOf( // ラボ設定 (インデックス 8 にシフト)
+                FocusRequester(),
+                FocusRequester(),
+                FocusRequester()
+            ),
+            listOf(FocusRequester()) // アプリ情報 (インデックス 9 にシフト)
         )
     }
 
@@ -289,7 +300,6 @@ fun SettingsScreen(
                                 .focusRequester(categoryFocusRequesters[index])
                                 .focusProperties {
                                     right = targetR
-                                    // ★ 修正: 一番上からの「上キー」と、一番下からの「下キー」を明示的に制御
                                     if (index == 0) up = FocusRequester.Cancel
                                     if (index == categories.lastIndex) down = homeBackRequester
                                 }
@@ -305,10 +315,10 @@ fun SettingsScreen(
                     onClick = onBack,
                     enabled = !uiState.isRestoringFocus,
                     modifier = Modifier
-                        .focusRequester(homeBackRequester) // ★ 追加: FocusRequesterを紐付け
+                        .focusRequester(homeBackRequester)
                         .focusProperties {
                             up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
-                            down = FocusRequester.Cancel // ★ 追加: これ以上下に行かないようにブロック
+                            down = FocusRequester.Cancel
                             right = itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
                                 ?.firstOrNull() ?: FocusRequester.Default
                         }
@@ -881,7 +891,43 @@ fun SettingsScreen(
                             itemFocusRequesters[5].last()
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
-                        6 -> CommentSettingsContent(
+                        // ★ 追加: 6 (番組表設定) のコンテンツ呼び出し
+                        6 -> EpgSettingsContent(
+                            pref = prefs,
+                            onEditColumn = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "表示チャンネル数",
+                                    listOf(
+                                        "5チャンネル" to "5",
+                                        "7チャンネル" to "7",
+                                        "9チャンネル" to "9",
+                                        "11チャンネル" to "11"
+                                    ),
+                                    prefs.epgColumnCount
+                                ) { viewModel.updateEpgColumnCount(it) }
+                            },
+                            onEditFontSize = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "文字サイズ",
+                                    listOf(
+                                        "80%" to "0.8",
+                                        "90%" to "0.9",
+                                        "100% (標準)" to "1.0",
+                                        "110%" to "1.1",
+                                        "120%" to "1.2"
+                                    ),
+                                    prefs.epgFontSizeScale
+                                ) { viewModel.updateEpgFontSizeScale(it) }
+                            },
+                            colR = itemFocusRequesters[6][0],
+                            fontR = itemFocusRequesters[6][1],
+                            sidebarR = categoryFocusRequesters[6],
+                            onClick = {
+                                uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
+                            }
+                        )
+
+                        7 -> CommentSettingsContent( // ★ シフト: 6 -> 7
                             prefs.commentDefaultDisplay,
                             prefs.commentSpeed,
                             prefs.commentFontSize,
@@ -908,22 +954,22 @@ fun SettingsScreen(
                                     )
                                 }
                             },
-                            itemFocusRequesters[6][0],
-                            itemFocusRequesters[6][1],
-                            itemFocusRequesters[6][2],
-                            itemFocusRequesters[6][3],
-                            itemFocusRequesters[6][4],
-                            categoryFocusRequesters[6]
-                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6 }
-
-                        7 -> LabSettingsContent(
-                            prefs.geminiApiKey,
-                            prefs.favoriteBaseballTeams,
-                            prefs.labAllowMirakurunDual,
                             itemFocusRequesters[7][0],
                             itemFocusRequesters[7][1],
                             itemFocusRequesters[7][2],
-                            categoryFocusRequesters[7],
+                            itemFocusRequesters[7][3],
+                            itemFocusRequesters[7][4],
+                            categoryFocusRequesters[7]
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7 }
+
+                        8 -> LabSettingsContent( // ★ シフト: 7 -> 8
+                            prefs.geminiApiKey,
+                            prefs.favoriteBaseballTeams,
+                            prefs.labAllowMirakurunDual,
+                            itemFocusRequesters[8][0],
+                            itemFocusRequesters[8][1],
+                            itemFocusRequesters[8][2],
+                            categoryFocusRequesters[8],
                             { uiState.activeDialog = SettingDialogState.GeminiSetup },
                             {
                                 uiState.activeDialog = SettingDialogState.MultiSelection(
@@ -968,14 +1014,14 @@ fun SettingsScreen(
                                     }
                                 }
                             }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8
                         }
 
-                        8 -> AppInfoContent(
+                        9 -> AppInfoContent( // ★ シフト: 8 -> 9
                             { uiState.activeDialog = SettingDialogState.Licenses },
-                            itemFocusRequesters[8][0],
-                            categoryFocusRequesters[8]
-                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8 }
+                            itemFocusRequesters[9][0],
+                            categoryFocusRequesters[9]
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 9 }
                     }
                     Spacer(Modifier.height(32.dp))
                 }
@@ -984,7 +1030,6 @@ fun SettingsScreen(
 
         // --- ダイアログ表示制御 ---
         when (val state = uiState.activeDialog) {
-            // 省略なし
             is SettingDialogState.Input -> InputDialog(
                 state.title,
                 state.initialValue,

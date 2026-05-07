@@ -298,6 +298,14 @@ class SettingsViewModel @Inject constructor(
         ""
     )
 
+    // ★ 追加: 番組表設定の StateFlow
+    val epgColumnCount: StateFlow<String> = settingsRepository.epgColumnCount.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "7"
+    )
+    val epgFontSizeScale: StateFlow<String> = settingsRepository.epgFontSizeScale.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0"
+    )
+
     val smbServerList: StateFlow<List<SmbServer>> = settingsRepository.smbServerList
         .map { json ->
             try {
@@ -404,6 +412,15 @@ class SettingsViewModel @Inject constructor(
                 _dynamicQualities.value = emptyList()
             }
         }
+    }
+
+    // ★ 追加: 番組表設定の更新メソッド
+    fun updateEpgColumnCount(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_COLUMN_COUNT, value)
+    }
+
+    fun updateEpgFontSizeScale(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_FONT_SIZE_SCALE, value)
     }
 
     fun updateBackendType(newType: String) = viewModelScope.launch(Dispatchers.IO) {

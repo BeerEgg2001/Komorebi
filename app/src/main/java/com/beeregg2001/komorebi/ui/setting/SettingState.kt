@@ -51,7 +51,10 @@ class SettingPreferences(
     val defaultRecordListView: String,
     val hideSubChannels: Boolean,
     val edcbRecordPlayMethod: String,
-    val smbServerList: List<SmbServer>
+    val smbServerList: List<SmbServer>,
+// ★ 追加: 番組表設定
+    val epgColumnCount: String,
+    val epgFontSizeScale: String
 )
 
 @Composable
@@ -129,7 +132,9 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
         hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value,
         edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value,
-        smbServerList = smbList
+        smbServerList = smbList,
+        epgColumnCount = repository.epgColumnCount.collectAsState(initial = "7").value,
+        epgFontSizeScale = repository.epgFontSizeScale.collectAsState(initial = "1.0").value
     )
 }
 

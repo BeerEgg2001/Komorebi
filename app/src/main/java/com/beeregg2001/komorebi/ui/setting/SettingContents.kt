@@ -661,6 +661,52 @@ fun PlaybackSettingsContent(
     }
 }
 
+// ★ 追加: 番組表設定のコンテンツ
+@Composable
+fun EpgSettingsContent(
+    pref: SettingPreferences,
+    onEditColumn: () -> Unit,
+    onEditFontSize: () -> Unit,
+    colR: FocusRequester,
+    fontR: FocusRequester,
+    sidebarR: FocusRequester,
+    onClick: (FocusRequester) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(
+            "番組表設定",
+            style = MaterialTheme.typography.headlineMedium,
+            color = KomorebiTheme.colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
+        SettingsSection("番組表表示設定") {
+            SettingItem(
+                "表示チャンネル数",
+                "${pref.epgColumnCount} チャンネル",
+                Icons.Default.ViewColumn,
+                modifier = Modifier
+                    .focusRequester(colR)
+                    .focusProperties {
+                        left = sidebarR; down = fontR; up = FocusRequester.Cancel
+                    },
+                onClick = { onClick(colR); onEditColumn() }
+            )
+            SettingItem(
+                "文字サイズ",
+                "${(pref.epgFontSizeScale.toFloat() * 100).toInt()}%",
+                Icons.Default.FormatSize,
+                modifier = Modifier
+                    .focusRequester(fontR)
+                    .focusProperties {
+                        left = sidebarR; up = colR; down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(fontR); onEditFontSize() }
+            )
+        }
+    }
+}
+
+
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun HomeDisplaySettingsContent(
@@ -953,7 +999,12 @@ fun CommentSettingsContent(
                         up = defR
                         down = szR
                     },
-                onClick = { onClick(spR); onEdit(AppStrings.SETTINGS_INPUT_COMMENT_SPEED, speed) })
+                onClick = {
+                    onClick(spR); onEdit(
+                    AppStrings.SETTINGS_INPUT_COMMENT_SPEED,
+                    speed
+                )
+                })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_SIZE,
                 "${size}x",
@@ -965,7 +1016,12 @@ fun CommentSettingsContent(
                         up = spR
                         down = opR
                     },
-                onClick = { onClick(szR); onEdit(AppStrings.SETTINGS_INPUT_COMMENT_SIZE, size) })
+                onClick = {
+                    onClick(szR); onEdit(
+                    AppStrings.SETTINGS_INPUT_COMMENT_SIZE,
+                    size
+                )
+                })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_OPACITY,
                 opacity,
@@ -1043,7 +1099,8 @@ fun LabSettingsContent(
         }
 
         SettingsSection("プロ野球モード (アルファ版)") {
-            val baseballText = if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
+            val baseballText =
+                if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
             SettingItem(
                 title = "フォロー球団の設定",
                 value = baseballText,
