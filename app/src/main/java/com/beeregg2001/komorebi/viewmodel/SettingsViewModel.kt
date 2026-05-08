@@ -305,6 +305,9 @@ class SettingsViewModel @Inject constructor(
     val epgFontSizeScale: StateFlow<String> = settingsRepository.epgFontSizeScale.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0"
     )
+    val epgVisibleHours: StateFlow<String> = settingsRepository.epgVisibleHours.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "6"
+    )
 
     val smbServerList: StateFlow<List<SmbServer>> = settingsRepository.smbServerList
         .map { json ->
@@ -421,6 +424,10 @@ class SettingsViewModel @Inject constructor(
 
     fun updateEpgFontSizeScale(value: String) = viewModelScope.launch(Dispatchers.IO) {
         settingsRepository.saveString(SettingsRepository.EPG_FONT_SIZE_SCALE, value)
+    }
+
+    fun updateEpgVisibleHours(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_VISIBLE_HOURS, value)
     }
 
     fun updateBackendType(newType: String) = viewModelScope.launch(Dispatchers.IO) {

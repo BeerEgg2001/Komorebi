@@ -54,7 +54,8 @@ class SettingPreferences(
     val smbServerList: List<SmbServer>,
 // ★ 追加: 番組表設定
     val epgColumnCount: String,
-    val epgFontSizeScale: String
+    val epgFontSizeScale: String,
+    val epgVisibleHours: String
 )
 
 @Composable
@@ -134,7 +135,8 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value,
         smbServerList = smbList,
         epgColumnCount = repository.epgColumnCount.collectAsState(initial = "7").value,
-        epgFontSizeScale = repository.epgFontSizeScale.collectAsState(initial = "1.0").value
+        epgFontSizeScale = repository.epgFontSizeScale.collectAsState(initial = "1.0").value,
+        epgVisibleHours = repository.epgVisibleHours.collectAsState(initial = "6").value
     )
 }
 

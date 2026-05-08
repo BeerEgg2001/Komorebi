@@ -10,32 +10,36 @@ import androidx.compose.ui.unit.sp
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import com.beeregg2001.komorebi.ui.theme.KomorebiColors
 
-// ★ 修正: 画面幅、列数、フォントサイズスケールを引数に追加
+// ★ 修正: hideSubChannels をコンストラクタの引数に追加
 class EpgConfig(
     density: Density,
     colors: KomorebiColors,
     val screenWidthPx: Float,
+    val screenHeightPx: Float, // ★ 画面の高さ
     val columnCount: Int = 7,
     val fontSizeScale: Float = 1.0f,
+    val visibleHours: Int = 6, // ★ 表示時間数
     val hideSubChannels: Boolean = false
 ) {
     // サイズ (px)
-    val twPx = with(density) { 60.dp.toPx() } // 時間軸(縦軸)の幅
-    // ★ 修正: 画面幅から左の時刻幅(twPx)を引いた残り幅を、設定された列数(columnCount)で均等割
-    val cwPx = (screenWidthPx - twPx) / columnCount
+    val twPx = with(density) { 60.dp.toPx() } // 左端の時刻カラム幅
+    val cwPx = (screenWidthPx - twPx) / columnCount // 動的チャンネル幅
 
-    val hhPx = with(density) { 75.dp.toPx() }
     val hhAreaPx = with(density) { 45.dp.toPx() }
     val tabHeightPx = with(density) { 48.dp.toPx() }
     val minExpHPx = with(density) { 140.dp.toPx() }
     val bPadPx = with(density) { 120.dp.toPx() }
     val sPadPx = with(density) { 32.dp.toPx() }
 
+    // ★ 追加: 画面の利用可能な高さから1時間あたりの高さを逆算
+    val availableHeightPx = screenHeightPx - tabHeightPx - hhAreaPx
+    val hhPx = availableHeightPx / visibleHours
+
     // --- 色のテーマ化 ---
     val colorBg = Color.Transparent
     val colorHeaderBg = colors.surface.copy(alpha = 0.95f)
 
-    // 時間連動テーマへの最適化合成カラー
+    // ★ 修正: ハードコードされた色を廃止し、テーマの surface 色にほんのり色味を乗せて合成する
     val colorTimeHourEven = Color(0xFFFF5252).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
         .compositeOver(colors.surface.copy(alpha = 0.85f))
     val colorTimeHourOdd = Color(0xFF4CAF50).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
@@ -61,7 +65,7 @@ class EpgConfig(
     val colorTextSecondary = colors.textSecondary
     val colorTextPast = colors.textSecondary.copy(alpha = 0.5f)
 
-    // --- テキストスタイル (★ 修正: fontSizeScale を適用) ---
+    // --- テキストスタイル ---
     val styleTitle = TextStyle(
         fontFamily = NotoSansJP,
         color = colors.textPrimary,

@@ -92,7 +92,6 @@ fun SettingsScreen(
         }
     }
 
-    // ★ 修正: 番組表設定をインデックス 6 に追加し、以降を後ろへシフト
     val categories = listOf(
         Category(AppStrings.SETTINGS_CATEGORY_GENERAL, Icons.Default.SettingsApplications),
         Category(AppStrings.SETTINGS_CATEGORY_CONNECTION, Icons.Default.CastConnected),
@@ -114,7 +113,6 @@ fun SettingsScreen(
     val smbItemRs =
         remember(prefs.smbServerList) { List(prefs.smbServerList.size) { FocusRequester() } }
 
-    // ★ 修正: インデックス 6 に番組表用の FocusRequester リストを追加
     val itemFocusRequesters = remember {
         listOf(
             listOf(
@@ -160,23 +158,17 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            listOf( // ★ 追加: 番組表設定用の 3 つのフォーカスリクエスター
-                FocusRequester(),
-                FocusRequester()
-            ),
-            listOf( // コメント設定 (インデックス 7 にシフト)
+            // ★ 番組表設定用の4つの FocusRequester
+            listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
+            listOf(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester()
             ),
-            listOf( // ラボ設定 (インデックス 8 にシフト)
-                FocusRequester(),
-                FocusRequester(),
-                FocusRequester()
-            ),
-            listOf(FocusRequester()) // アプリ情報 (インデックス 9 にシフト)
+            listOf(FocusRequester(), FocusRequester(), FocusRequester()),
+            listOf(FocusRequester())
         )
     }
 
@@ -250,7 +242,6 @@ fun SettingsScreen(
                     } else false
                 }
         ) {
-            // サイドバー
             Column(
                 modifier = Modifier
                     .width(280.dp)
@@ -325,7 +316,6 @@ fun SettingsScreen(
                 )
             }
 
-            // メインコンテンツ
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -412,7 +402,8 @@ fun SettingsScreen(
                                             SettingsRepository.EDCB_RECORD_PLAY_METHOD,
                                             it
                                         )
-                                    }; viewModel.updateEdcbRecordPlayMethod(it)
+                                    }
+                                    viewModel.updateEdcbRecordPlayMethod(it)
                                 }
                             },
                             edcbPlayMethodR,
@@ -423,33 +414,48 @@ fun SettingsScreen(
                                             "KonomiTV (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_IP,
                                                 input
-                                            ); "KonomiTV (ポート)" -> repository.saveString(
-                                            SettingsRepository.KONOMI_PORT,
-                                            input
-                                        ); "EDCB (IPアドレス)" -> repository.saveString(
-                                            SettingsRepository.EDCB_IP,
-                                            input
-                                        ); "EDCB (TCPポート)" -> repository.saveString(
-                                            SettingsRepository.EDCB_PORT,
-                                            input
-                                        ); "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
-                                            SettingsRepository.EDCB_HTTP_PORT,
-                                            input
-                                        ); "Mirakurun (IPアドレス)" -> repository.saveString(
-                                            SettingsRepository.MIRAKURUN_IP,
-                                            input
-                                        ); "Mirakurun (ポート)" -> repository.saveString(
-                                            SettingsRepository.MIRAKURUN_PORT,
+                                            )
+
+                                            "KonomiTV (ポート)" -> repository.saveString(
+                                                SettingsRepository.KONOMI_PORT,
+                                                input
+                                            )
+
+                                            "EDCB (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.EDCB_IP,
+                                                input
+                                            )
+
+                                            "EDCB (TCPポート)" -> repository.saveString(
+                                                SettingsRepository.EDCB_PORT,
+                                                input
+                                            )
+
+                                            "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
+                                                SettingsRepository.EDCB_HTTP_PORT,
+                                                input
+                                            )
+
+                                            "Mirakurun (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.MIRAKURUN_IP,
+                                                input
+                                            )
+
+                                            "Mirakurun (ポート)" -> repository.saveString(
+                                                SettingsRepository.MIRAKURUN_PORT,
+                                                input
+                                            )
+                                        }
+                                    }
+                                    when (t) {
+                                        "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(input)
+                                        "KonomiTV (ポート)" -> viewModel.updateKonomiPort(input)
+                                        "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(input)
+                                        "EDCB (TCPポート)" -> viewModel.updateEdcbPort(input)
+                                        "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(
                                             input
                                         )
-                                        }
-                                    }; when (t) {
-                                    "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(input); "KonomiTV (ポート)" -> viewModel.updateKonomiPort(
-                                        input
-                                    ); "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(input); "EDCB (TCPポート)" -> viewModel.updateEdcbPort(
-                                        input
-                                    ); "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(input)
-                                }
+                                    }
                                 }
                             },
                             {
@@ -472,7 +478,8 @@ fun SettingsScreen(
                                             SettingsRepository.BACKEND_TYPE,
                                             it
                                         )
-                                    }; viewModel.updateBackendType(it)
+                                    }
+                                    viewModel.updateBackendType(it)
                                 }
                             },
                             {
@@ -640,9 +647,8 @@ fun SettingsScreen(
                                         )
                                     }
                                 }
-                            }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2
-                        }
+                            }
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2 }
 
                         3 -> RecordingSettingsContent(
                             prefs.postRecordingBatchList,
@@ -660,9 +666,7 @@ fun SettingsScreen(
                                     "「${b.name}」を削除しますか？"
                                 ) { viewModel.deletePostRecordingBatch(b) }
                             },
-                            itemFocusRequesters[3][0],
-                            batchItemRs,
-                            categoryFocusRequesters[3]
+                            itemFocusRequesters[3][0], batchItemRs, categoryFocusRequesters[3]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3 }
 
                         4 -> HomeDisplaySettingsContent(
@@ -702,12 +706,13 @@ fun SettingsScreen(
                                             false,
                                             "DEFAULT"
                                         ); else -> "MONOTONE"
-                                    }; scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.APP_THEME,
-                                        nt
-                                    )
-                                }
+                                    }
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.APP_THEME,
+                                            nt
+                                        )
+                                    }
                                 }
                             },
                             {
@@ -814,9 +819,8 @@ fun SettingsScreen(
                                         if (prefs.excludePaid == "ON") "OFF" else "ON"
                                     )
                                 }
-                            }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
-                        }
+                            }
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4 }
 
                         5 -> DisplaySettingsContent(
                             prefs,
@@ -887,11 +891,10 @@ fun SettingsScreen(
                                 ) { viewModel.updateTimeFormat(it) }
                             },
                             { viewModel.toggleHideSubChannels() },
-                            itemFocusRequesters[5].dropLast(1),
-                            itemFocusRequesters[5].last()
+                            itemFocusRequesters[5].dropLast(1), itemFocusRequesters[5].last()
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
-                        // ★ 追加: 6 (番組表設定) のコンテンツ呼び出し
+                        // ★ 追加: 番組表設定
                         6 -> EpgSettingsContent(
                             pref = prefs,
                             onEditColumn = {
@@ -905,6 +908,18 @@ fun SettingsScreen(
                                     ),
                                     prefs.epgColumnCount
                                 ) { viewModel.updateEpgColumnCount(it) }
+                            },
+                            onEditHour = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "表示時間数 (縦幅)",
+                                    listOf(
+                                        "4時間" to "4",
+                                        "6時間" to "6",
+                                        "8時間" to "8",
+                                        "12時間" to "12"
+                                    ),
+                                    prefs.epgVisibleHours
+                                ) { viewModel.updateEpgVisibleHours(it) }
                             },
                             onEditFontSize = {
                                 uiState.activeDialog = SettingDialogState.Selection(
@@ -920,24 +935,22 @@ fun SettingsScreen(
                                 ) { viewModel.updateEpgFontSizeScale(it) }
                             },
                             colR = itemFocusRequesters[6][0],
-                            fontR = itemFocusRequesters[6][1],
+                            hourR = itemFocusRequesters[6][1],
+                            fontR = itemFocusRequesters[6][2],
                             sidebarR = categoryFocusRequesters[6],
                             onClick = {
                                 uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
                             }
                         )
 
-                        7 -> CommentSettingsContent( // ★ シフト: 6 -> 7
+                        7 -> CommentSettingsContent(
                             prefs.commentDefaultDisplay,
                             prefs.commentSpeed,
                             prefs.commentFontSize,
                             prefs.commentOpacity,
                             prefs.commentMaxLines,
                             { t, v ->
-                                uiState.activeDialog = SettingDialogState.Input(
-                                    t,
-                                    v
-                                ) {
+                                uiState.activeDialog = SettingDialogState.Input(t, v) {
                                     scope.launch {
                                         repository.saveString(
                                             if (t == AppStrings.SETTINGS_INPUT_COMMENT_SPEED) SettingsRepository.COMMENT_SPEED else if (t == AppStrings.SETTINGS_INPUT_COMMENT_SIZE) SettingsRepository.COMMENT_FONT_SIZE else if (t == AppStrings.SETTINGS_INPUT_COMMENT_OPACITY) SettingsRepository.COMMENT_OPACITY else SettingsRepository.COMMENT_MAX_LINES,
@@ -962,7 +975,7 @@ fun SettingsScreen(
                             categoryFocusRequesters[7]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7 }
 
-                        8 -> LabSettingsContent( // ★ シフト: 7 -> 8
+                        8 -> LabSettingsContent(
                             prefs.geminiApiKey,
                             prefs.favoriteBaseballTeams,
                             prefs.labAllowMirakurunDual,
@@ -1017,10 +1030,9 @@ fun SettingsScreen(
                             uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8
                         }
 
-                        9 -> AppInfoContent( // ★ シフト: 8 -> 9
+                        9 -> AppInfoContent(
                             { uiState.activeDialog = SettingDialogState.Licenses },
-                            itemFocusRequesters[9][0],
-                            categoryFocusRequesters[9]
+                            itemFocusRequesters[9][0], categoryFocusRequesters[9]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 9 }
                     }
                     Spacer(Modifier.height(32.dp))
@@ -1108,8 +1120,7 @@ fun SettingsScreen(
                             "「${state.target.name}」を削除しますか？"
                         ) { viewModel.deleteSmbServer(state.target.id) }
                     }
-                }
-            )
+                })
 
             is SettingDialogState.SmbSetup -> {
                 val localIp by viewModel.localIpAddress.collectAsState()
@@ -1126,8 +1137,7 @@ fun SettingsScreen(
                                 viewModel.saveSmbServer(server)
                             }
                     },
-                    onShowToast = { msg -> toastMessage = msg }
-                )
+                    onShowToast = { msg -> toastMessage = msg })
             }
 
             is SettingDialogState.SmbManualInput -> {
@@ -1139,7 +1149,6 @@ fun SettingsScreen(
 
             else -> {}
         }
-
         GlobalToast(message = toastMessage)
     }
 }

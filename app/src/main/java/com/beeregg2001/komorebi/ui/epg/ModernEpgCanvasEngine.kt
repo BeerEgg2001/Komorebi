@@ -75,14 +75,15 @@ fun ModernEpgCanvasEngine_Smooth(
     val density = LocalDensity.current
     val colors = KomorebiTheme.colors
 
-    // ★ 追加: ViewModel から設定値を購読
     val hideSubChannels by settingsViewModel.hideSubChannels.collectAsState(initial = false)
     val epgColumnCountStr by settingsViewModel.epgColumnCount.collectAsState()
     val epgFontSizeScaleStr by settingsViewModel.epgFontSizeScale.collectAsState()
+    val epgVisibleHoursStr by settingsViewModel.epgVisibleHours.collectAsState(initial = "6")
 
     val columnCount = remember(epgColumnCountStr) { epgColumnCountStr.toIntOrNull() ?: 7 }
     val fontSizeScale =
         remember(epgFontSizeScaleStr) { epgFontSizeScaleStr.toFloatOrNull() ?: 1.0f }
+    val visibleHours = remember(epgVisibleHoursStr) { epgVisibleHoursStr.toIntOrNull() ?: 6 }
 
     val filteredLogoUrls = remember(uiState, hideSubChannels, logoUrls) {
         if (uiState is EpgUiState.Success) {
@@ -132,9 +133,26 @@ fun ModernEpgCanvasEngine_Smooth(
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
 
-        // ★ 修正: 画面幅(w)、列数、文字サイズを含むパラメータの変更を検知してエンジンを再構築
-        val config = remember(density, colors, hideSubChannels, columnCount, fontSizeScale, w) {
-            EpgConfig(density, colors, w, columnCount, fontSizeScale, hideSubChannels)
+        val config = remember(
+            density,
+            colors,
+            hideSubChannels,
+            columnCount,
+            fontSizeScale,
+            visibleHours,
+            w,
+            h
+        ) {
+            EpgConfig(
+                density,
+                colors,
+                w,
+                h,
+                columnCount,
+                fontSizeScale,
+                visibleHours,
+                hideSubChannels
+            )
         }
         val epgState = remember(config) { EpgState(config) }
         val textMeasurer = rememberTextMeasurer()
@@ -191,7 +209,7 @@ fun ModernEpgCanvasEngine_Smooth(
             }
         }
 
-        LaunchedEffect(uiState, hideSubChannels, config) { // config 再構築時も再描画へ
+        LaunchedEffect(uiState, hideSubChannels, config) {
             if (uiState is EpgUiState.Success) {
                 val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
                 lastLoadedType = currentType

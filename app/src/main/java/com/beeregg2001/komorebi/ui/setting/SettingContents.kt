@@ -666,8 +666,10 @@ fun PlaybackSettingsContent(
 fun EpgSettingsContent(
     pref: SettingPreferences,
     onEditColumn: () -> Unit,
+    onEditHour: () -> Unit,
     onEditFontSize: () -> Unit,
     colR: FocusRequester,
+    hourR: FocusRequester,
     fontR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
@@ -681,15 +683,24 @@ fun EpgSettingsContent(
         )
         SettingsSection("番組表表示設定") {
             SettingItem(
-                "表示チャンネル数",
+                "表示チャンネル数 (横軸)",
                 "${pref.epgColumnCount} チャンネル",
                 Icons.Default.ViewColumn,
                 modifier = Modifier
                     .focusRequester(colR)
                     .focusProperties {
-                        left = sidebarR; down = fontR; up = FocusRequester.Cancel
+                        left = sidebarR; down = hourR; up = FocusRequester.Cancel
                     },
                 onClick = { onClick(colR); onEditColumn() }
+            )
+            SettingItem(
+                "表示時間数 (縦幅)",
+                "${pref.epgVisibleHours} 時間",
+                Icons.Default.Height,
+                modifier = Modifier.focusRequester(hourR).focusProperties {
+                    left = sidebarR; up = colR; down = fontR
+                },
+                onClick = { onClick(hourR); onEditHour() }
             )
             SettingItem(
                 "文字サイズ",
@@ -698,7 +709,7 @@ fun EpgSettingsContent(
                 modifier = Modifier
                     .focusRequester(fontR)
                     .focusProperties {
-                        left = sidebarR; up = colR; down = FocusRequester.Cancel
+                        left = sidebarR; up = hourR; down = FocusRequester.Cancel
                     },
                 onClick = { onClick(fontR); onEditFontSize() }
             )
