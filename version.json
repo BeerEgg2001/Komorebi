@@ -5,9 +5,9 @@
   "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.0.0/Komorebi-1.0.0.apk",
 
   "beta": {
-    "versionCode": 14,
-    "versionName": "1.1.0-beta4",
+    "versionCode": 15,
+    "versionName": "1.1.0-beta5",
     "releaseNotes": "・SMB経由の動画視聴に対応\n・EDCB環境でトランスコード再生できない問題に対応\n・TvtPlayのチャプターファイルが読み込めない問題に対応\n詳細はGithubのリリースノートをご覧ください\n",
-    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta4/Komorebi-1.1.0-beta4.apk"
+    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta5/Komorebi-1.1.0-beta5.apk"
   }
 }

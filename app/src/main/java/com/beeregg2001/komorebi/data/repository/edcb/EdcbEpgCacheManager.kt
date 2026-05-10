@@ -69,46 +69,59 @@ class EdcbEpgCacheManager @Inject constructor(
             epgMutex.withLock {
                 // ロック取得後にもう一度チェック（複数スレッドからの同時呼び出し対策）
                 if (cachedServices.isEmpty() || cachedEvents.isEmpty() || (System.currentTimeMillis() - lastEpgFetchTime) > CACHE_EXPIRATION_MS) {
-                    Log.i(TAG, "🔄 Fetching fresh EPG data from EDCB (Quick Load)...")
-                    val (ip, port) = getTcpIpAndPort()
-                    if (ip.isBlank()) throw Exception("EDCB IP is not set")
+                    try {
+                        Log.i(TAG, "🔄 Fetching fresh EPG data from EDCB (Quick Load)...")
+                        val (ip, port) = getTcpIpAndPort()
+                        if (ip.isBlank()) throw Exception("EDCBのIPアドレスが設定されていません。")
 
-                    val edcbApi = EdcbApi(ip, port)
-                    val services = edcbApi.getServices().getOrNull() ?: emptyList()
-                    // 映像・音声サービスのみフィルタリング
-                    val targetServices =
-                        services.filter { it.serviceType == 1 || it.serviceType == 165 }
+                        val edcbApi = EdcbApi(ip, port)
+                        val services = edcbApi.getServices().getOrNull() ?: emptyList()
 
-                    // クイックロード: 過去1時間〜未来24時間分のデータだけを同期取得
-                    val fetchStartTime = LocalDateTime.now().minusHours(1)
-                    val fetchEndTime = LocalDateTime.now().plusHours(24)
+                        // ★ 修正: サービス一覧が取得できない場合はエラーとして明確に投げる
+                        if (services.isEmpty()) {
+                            throw Exception("サービス一覧が0件です。EDCB側でEPG取得が完了しているか確認してください。")
+                        }
 
-                    val events = edcbApi.getEventInfos(targetServices, fetchStartTime, fetchEndTime)
-                        .getOrNull() ?: emptyList()
+                        // 映像・音声サービスのみフィルタリング
+                        val targetServices =
+                            services.filter { it.serviceType == 1 || it.serviceType == 165 }
 
-                    cachedServices = targetServices
-                    cachedEvents = events
-                    lastEpgFetchTime = System.currentTimeMillis()
-                    isFullEpgFetched = false
+                        // クイックロード: 過去1時間〜未来24時間分のデータだけを同期取得
+                        val fetchStartTime = LocalDateTime.now().minusHours(1)
+                        val fetchEndTime = LocalDateTime.now().plusHours(24)
 
-                    // サブチャンネル・枝番計算用のマップを構築
-                    tsidToSidsMap = targetServices
-                        .filter { getChannelType(it.onid) == "GR" }
-                        .groupBy { it.tsid }
-                        .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+                        val events =
+                            edcbApi.getEventInfos(targetServices, fetchStartTime, fetchEndTime)
+                                .getOrNull() ?: emptyList()
 
-                    bsPrefixToSidsMap = targetServices
-                        .filter { getChannelType(it.onid) == "BS" }
-                        .groupBy { it.sid / 10 }
-                        .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+                        cachedServices = targetServices
+                        cachedEvents = events
+                        lastEpgFetchTime = System.currentTimeMillis()
+                        isFullEpgFetched = false
 
-                    Log.i(
-                        TAG,
-                        "✅ Quick EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}"
-                    )
+                        // サブチャンネル・枝番計算用のマップを構築
+                        tsidToSidsMap = targetServices
+                            .filter { getChannelType(it.onid) == "GR" }
+                            .groupBy { it.tsid }
+                            .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
 
-                    // 裏側で全期間のEPG取得を開始
-                    fetchFullEpgDataInBackground(targetServices, ip, port)
+                        bsPrefixToSidsMap = targetServices
+                            .filter { getChannelType(it.onid) == "BS" }
+                            .groupBy { it.sid / 10 }
+                            .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+
+                        Log.i(
+                            TAG,
+                            "✅ Quick EPG Cache updated! Services=${cachedServices.size}, Events=${cachedEvents.size}"
+                        )
+
+                        // 裏側で全期間のEPG取得を開始
+                        fetchFullEpgDataInBackground(targetServices, ip, port)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to fetch EPG data", e)
+                        // ★ 修正: エラーを握りつぶさず、分かりやすい日本語でスローする
+                        throw Exception("EDCBサーバーからの番組表データ取得に失敗しました。\nIPアドレスやポート設定、EDCBの稼働状況を確認してください。\n[詳細]: ${e.message}")
+                    }
                 }
             }
         }
@@ -141,6 +154,7 @@ class EdcbEpgCacheManager @Inject constructor(
                     epgBackgroundUpdateEvent.tryEmit(Unit)
                 }
             } catch (e: Exception) {
+                // バックグラウンド処理のエラーはUIを邪魔しないようログ出力のみ
                 Log.e(TAG, "❌ Failed to fetch full EPG data in background", e)
             }
         }

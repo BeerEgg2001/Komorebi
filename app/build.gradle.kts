@@ -17,7 +17,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 15 // 数値を1つ上げる
-        versionName = "1.1.0 Stable"
+        versionName = "1.1.0-Beta5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -31,7 +31,7 @@ android {
         ndk {
             // 低スペック端末(Android TV等)で一般的なアーキテクチャに限定してビルド時間を短縮
             // 実機が 64bit なら arm64-v8a、32bit なら armeabi-v7a です
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
     }
 

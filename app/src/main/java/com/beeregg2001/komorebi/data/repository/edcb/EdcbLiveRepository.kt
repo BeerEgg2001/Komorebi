@@ -73,30 +73,29 @@ class EdcbLiveRepository @Inject constructor(
                 val url = "$baseUrl/komorebi/resolver.lua"
                 val request = Request.Builder().url(url).build()
                 baseEdcbHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
+                    }
+
                     val jsonStr = response.body?.string() ?: return@withContext null
 
-                    // JSONをパース
-                    val json = JSONObject(jsonStr)
+                    val json = try {
+                        JSONObject(jsonStr)
+                    } catch (e: Exception) {
+                        throw Exception("resolver.lua の応答が不正(非JSON)です。\n[詳細]: ${e.message}")
+                    }
 
-                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
                         val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
                         Log.e(TAG, "Resolver Lua Error: $fullMsg")
-                        // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
-                    }
-
-                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
-                    if (!response.isSuccessful) {
-                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
                     }
 
                     return@withContext json.optJSONObject("ctok")?.optString(purpose)
                 }
             } catch (e: Exception) {
-                // 既存の処理: 再スローして、上位のViewModel側でキャッチさせる
                 Log.e(TAG, "Failed to fetch ctok for purpose=$purpose", e)
                 throw e
             }
@@ -188,105 +187,114 @@ class EdcbLiveRepository @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getChannels(): ChannelApiResponse = withContext(Dispatchers.Default) {
-        val forceJob = async(Dispatchers.IO) { fetchNxJikkyoForce() }
+        try {
+            val forceJob = async(Dispatchers.IO) { fetchNxJikkyoForce() }
 
-        // キャッシュマネージャー経由でEPGデータを取得
-        cacheManager.fetchEpgDataIfNeeded()
+            cacheManager.fetchEpgDataIfNeeded()
 
-        val forceMap = forceJob.await()
+            val forceMap = forceJob.await()
 
-        val now = LocalDateTime.now()
-        val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
-        val eventsByService =
-            cacheManager.cachedEvents.groupBy { "${it.onid}_${it.tsid}_${it.sid}" }
+            val now = LocalDateTime.now()
+            val formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss")
+            val eventsByService =
+                cacheManager.cachedEvents.groupBy { "${it.onid}_${it.tsid}_${it.sid}" }
 
-        val presentAndFollowingMap = eventsByService.mapValues { (_, svcEvents) ->
-            val sortedEvents = svcEvents.mapNotNull { ev ->
-                if (ev.startTime == null) return@mapNotNull null
-                try {
-                    val start = LocalDateTime.parse(ev.startTime, formatter)
-                    val end = start.plusSeconds(ev.durationSec.toLong())
-                    Triple(ev, start, end)
-                } catch (e: Exception) {
-                    null
+            val presentAndFollowingMap = eventsByService.mapValues { (_, svcEvents) ->
+                val sortedEvents = svcEvents.mapNotNull { ev ->
+                    if (ev.startTime == null) return@mapNotNull null
+                    try {
+                        val start = LocalDateTime.parse(ev.startTime, formatter)
+                        val end = start.plusSeconds(ev.durationSec.toLong())
+                        Triple(ev, start, end)
+                    } catch (e: Exception) {
+                        null
+                    }
+                }.sortedBy { it.second }
+
+                var present: EdcbEventInfo? = null
+                var following: EdcbEventInfo? = null
+
+                for (i in sortedEvents.indices) {
+                    val (ev, start, end) = sortedEvents[i]
+                    if (now.isAfter(start) && now.isBefore(end)) {
+                        present = ev
+                        if (i + 1 < sortedEvents.size) following = sortedEvents[i + 1].first
+                        break
+                    } else if (now.isBefore(start) && present == null) {
+                        following = ev
+                        break
+                    }
                 }
-            }.sortedBy { it.second }
+                Pair(present, following)
+            }
 
-            var present: EdcbEventInfo? = null
-            var following: EdcbEventInfo? = null
+            val gr = mutableListOf<Channel>()
+            val bs = mutableListOf<Channel>()
+            val cs = mutableListOf<Channel>()
+            val sky = mutableListOf<Channel>()
+            val bs4k = mutableListOf<Channel>()
 
-            for (i in sortedEvents.indices) {
-                val (ev, start, end) = sortedEvents[i]
-                if (now.isAfter(start) && now.isBefore(end)) {
-                    present = ev
-                    if (i + 1 < sortedEvents.size) following = sortedEvents[i + 1].first
-                    break
-                } else if (now.isBefore(start) && present == null) {
-                    following = ev
-                    break
+            cacheManager.cachedServices.forEach { svc ->
+                val type = cacheManager.getChannelType(svc.onid)
+                val key = "${svc.onid}_${svc.tsid}_${svc.sid}"
+                val channelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}"
+
+                val (presentEvent, followingEvent) = presentAndFollowingMap[key] ?: Pair(null, null)
+
+                val isSub = cacheManager.isSubChannel(type, svc.sid, svc.tsid)
+
+                val jkId = getJikkyoId(svc.onid, svc.sid)
+                val jikkyoForce = if (jkId != null) forceMap[jkId] ?: 0 else 0
+
+                val channel = Channel(
+                    id = channelId,
+                    displayChannelId = channelId,
+                    name = svc.serviceName,
+                    channelNumber = cacheManager.formatChannelNumber(
+                        type,
+                        svc.remoteControlKeyId,
+                        svc.sid,
+                        svc.tsid
+                    ),
+                    networkId = svc.onid.toLong(),
+                    serviceId = svc.sid.toLong(),
+                    transportStreamId = svc.tsid.toLong(),
+                    type = type,
+                    isWatchable = true,
+                    isDisplay = true,
+                    is_subchannel = isSub,
+                    programPresent = presentEvent?.let { EdcbDataMapper.toProgram(it, channelId) },
+                    programFollowing = followingEvent?.let {
+                        EdcbDataMapper.toProgram(
+                            it,
+                            channelId
+                        )
+                    },
+                    remocon_Id = svc.remoteControlKeyId,
+                    jikkyoForce = jikkyoForce
+                )
+
+                when (type) {
+                    "GR" -> gr.add(channel)
+                    "BS" -> bs.add(channel)
+                    "CS" -> cs.add(channel)
+                    "SKY" -> sky.add(channel)
+                    "BS4K" -> bs4k.add(channel)
                 }
             }
-            Pair(present, following)
-        }
 
-        val gr = mutableListOf<Channel>()
-        val bs = mutableListOf<Channel>()
-        val cs = mutableListOf<Channel>()
-        val sky = mutableListOf<Channel>()
-        val bs4k = mutableListOf<Channel>()
-
-        cacheManager.cachedServices.forEach { svc ->
-            val type = cacheManager.getChannelType(svc.onid)
-            val key = "${svc.onid}_${svc.tsid}_${svc.sid}"
-            val channelId = "edcb_${svc.onid}_${svc.tsid}_${svc.sid}"
-
-            val (presentEvent, followingEvent) = presentAndFollowingMap[key] ?: Pair(null, null)
-
-            val isSub = cacheManager.isSubChannel(type, svc.sid, svc.tsid)
-
-            val jkId = getJikkyoId(svc.onid, svc.sid)
-            val jikkyoForce = if (jkId != null) forceMap[jkId] ?: 0 else 0
-
-            val channel = Channel(
-                id = channelId,
-                displayChannelId = channelId,
-                name = svc.serviceName, // ※ 自動補正なし
-                channelNumber = cacheManager.formatChannelNumber(
-                    type,
-                    svc.remoteControlKeyId,
-                    svc.sid,
-                    svc.tsid
-                ),
-                networkId = svc.onid.toLong(),
-                serviceId = svc.sid.toLong(),
-                transportStreamId = svc.tsid.toLong(),
-                type = type,
-                isWatchable = true,
-                isDisplay = true,
-                is_subchannel = isSub,
-                // Mapperに委譲
-                programPresent = presentEvent?.let { EdcbDataMapper.toProgram(it, channelId) },
-                programFollowing = followingEvent?.let { EdcbDataMapper.toProgram(it, channelId) },
-                remocon_Id = svc.remoteControlKeyId,
-                jikkyoForce = jikkyoForce
+            return@withContext ChannelApiResponse(
+                terrestrial = gr.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
+                bs = bs.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
+                cs = cs.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
+                sky = sky.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
+                bs4k = bs4k.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 }
             )
-
-            when (type) {
-                "GR" -> gr.add(channel)
-                "BS" -> bs.add(channel)
-                "CS" -> cs.add(channel)
-                "SKY" -> sky.add(channel)
-                "BS4K" -> bs4k.add(channel)
-            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get channels", e)
+            // ★ 修正: 例外をスローしてUIに知らせる
+            throw Exception("チャンネル一覧の取得に失敗しました。\nEDCBの接続設定とサーバーの稼働状況を確認してください。\n[詳細]: ${e.message}")
         }
-
-        return@withContext ChannelApiResponse(
-            terrestrial = gr.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
-            bs = bs.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
-            cs = cs.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
-            sky = sky.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 },
-            bs4k = bs4k.sortedBy { it.channelNumber.toIntOrNull() ?: 9999 }
-        )
     }
 
     override suspend fun getLiveStreamUrl(
@@ -297,12 +305,11 @@ class EdcbLiveRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 val baseUrl = getHttpBaseUrl()
-                if (baseUrl.isBlank()) return@withContext ""
+                if (baseUrl.isBlank()) throw Exception("Base URL is empty")
 
                 val parts = channelId.split("_")
                 if (parts.size < 4 || parts[0] != "edcb") {
-                    Log.e(TAG, "Invalid channelId format: $channelId")
-                    return@withContext ""
+                    throw Exception("Invalid channelId format: $channelId")
                 }
                 val onid = parts[1]
                 val tsid = parts[2]
@@ -319,8 +326,7 @@ class EdcbLiveRepository @Inject constructor(
                 Log.i(TAG, "[Live/Dual] 1. TvCast リクエスト(n=$streamNumber) 送信中...")
                 baseEdcbHttpClient.newCall(tvCastRequest).execute().use { response ->
                     if (!response.isSuccessful) {
-                        Log.e(TAG, "TvCastによるチューナーの起動に失敗しました。")
-                        return@withContext ""
+                        throw Exception("TvCastによるチューナーの起動に失敗しました。(HTTP ${response.code})")
                     }
                 }
 
@@ -346,8 +352,7 @@ class EdcbLiveRepository @Inject constructor(
                 )
                 baseEdcbHttpClient.newCall(postRequest).execute().use { response ->
                     if (!response.isSuccessful) {
-                        Log.e(TAG, "トランスコードの開始に失敗しました。")
-                        return@withContext ""
+                        throw Exception("トランスコードの開始に失敗しました。(HTTP ${response.code})")
                     }
                 }
 
@@ -361,26 +366,27 @@ class EdcbLiveRepository @Inject constructor(
                 return@withContext m3u8Url
 
             } catch (e: Exception) {
-                // 既存の処理: そのまま再スローし、ViewModel側でエラーダイアログを表示させる
-                Log.e(TAG, "Failed to start live streaming", e)
-                throw e
+                Log.e(TAG, "Failed to build live stream URL", e)
+                // ★ 修正: URL構築失敗時も例外を投げて知らせる
+                throw Exception("ライブストリームの開始に失敗しました。\n[詳細]: ${e.message}")
             }
         }
 
     override suspend fun getChannelLogoUrl(channelId: String): String =
         withContext(Dispatchers.IO) {
+            // ★ ロゴ取得失敗はアプリ進行に致命的ではないため、既存のフェールセーフ（空文字返却）を維持する
             if (failedLogoIds.contains(channelId)) return@withContext ""
 
-            val logoDir = java.io.File(context.cacheDir, "channel_logos")
-            if (!logoDir.exists()) logoDir.mkdirs()
+            val cacheDir = java.io.File(context.cacheDir, "channel_logos")
+            if (!cacheDir.exists()) cacheDir.mkdirs()
 
-            val cachedFile = java.io.File(logoDir, "$channelId.img")
+            val cachedFile = java.io.File(cacheDir, "$channelId.png")
             if (cachedFile.exists() && cachedFile.length() > 0) {
                 return@withContext android.net.Uri.fromFile(cachedFile).toString()
             }
 
             val parts = channelId.split("_")
-            if (parts.size < 4 || parts[0] != "edcb") return@withContext ""
+            if (parts.size != 4) return@withContext ""
 
             val onid = parts[1].toIntOrNull() ?: return@withContext ""
             val tsid = parts[2].toIntOrNull() ?: return@withContext ""

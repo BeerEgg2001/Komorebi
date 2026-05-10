@@ -643,19 +643,24 @@ fun VideoPlayerScreen(
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
+                    // ★ 修正: TSファイルのマルチ音声トラックに完全対応
                     onAudioToggle = {
-                        vs.currentAudioMode =
-                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
-                        val tracks =
-                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
-                        exoPlayer.trackSelectionParameters.buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
-                            )
-                            .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                        vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        if (audioGroups.size >= 2) {
+                            // 複数グループが存在する場合 (HLSの別言語ストリームなど)
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                .addOverride(TrackSelectionOverride(audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
+                                .build()
+                        } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
+                            // 1つのグループに複数トラックが存在する場合 (TSファイルのデュアル音声ストリームなど)
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                .addOverride(TrackSelectionOverride(audioGroups[0].mediaTrackGroup, if (vs.currentAudioMode == AudioMode.SUB) 1 else 0))
+                                .build()
+                        }
+                        onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
                         val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); vs.currentSpeed =
@@ -748,19 +753,24 @@ fun VideoPlayerScreen(
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
                     focusRequester = subMenuFocusRequester,
+                    // ★ 修正: TSファイルのマルチ音声トラックに完全対応
                     onAudioToggle = {
-                        vs.currentAudioMode =
-                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
-                        val tracks =
-                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
-                        exoPlayer.trackSelectionParameters.buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
-                            )
-                            .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                        vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        if (audioGroups.size >= 2) {
+                            // 複数グループが存在する場合 (HLSの別言語ストリームなど)
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                .addOverride(TrackSelectionOverride(audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
+                                .build()
+                        } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
+                            // 1つのグループに複数トラックが存在する場合 (TSファイルのデュアル音声ストリームなど)
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                .addOverride(TrackSelectionOverride(audioGroups[0].mediaTrackGroup, if (vs.currentAudioMode == AudioMode.SUB) 1 else 0))
+                                .build()
+                        }
+                        onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
                         val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); vs.currentSpeed =

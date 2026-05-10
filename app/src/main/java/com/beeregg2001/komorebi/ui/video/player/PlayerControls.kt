@@ -73,7 +73,6 @@ fun PlayerControls(
     onPlayPauseToggle: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
-    // ★ 追加: チャプタースキップ用のコールバック
     onSkipPreviousChapter: () -> Unit = {},
     onSkipNextChapter: () -> Unit = {},
     onChapterListToggle: () -> Unit,
@@ -114,15 +113,23 @@ fun PlayerControls(
         }
     }
 
-    LaunchedEffect(isVisible, isModernUi, isPlaying) {
+    // ★ 修正: フォーカス要求の処理を分離する
+    // これにより、動画のローディング等でisPlayingが変わってもフォーカスが奪われなくなります。
+    LaunchedEffect(isVisible, isModernUi) {
         if (isVisible && isModernUi) {
             delay(100)
             try {
-                controlsFocusRequester.requestFocus()
+                // シークバー操作中にUIが再描画された場合、フォーカスを奪わないように保護
+                if (!isSeekBarFocused) {
+                    controlsFocusRequester.requestFocus()
+                }
             } catch (e: Exception) {
             }
         }
+    }
 
+    // ★ 修正: 再生時間のカウントアップ処理のみを独立させる
+    LaunchedEffect(isVisible, isPlaying) {
         var lastUpdate = System.currentTimeMillis()
         while (isVisible) {
             val now = System.currentTimeMillis()
@@ -469,7 +476,6 @@ fun PlayerControls(
                             horizontalArrangement = Arrangement.spacedBy(24.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // ★ 追加: 前のチャプターへボタン
                             if (hasChapters) {
                                 OsdIconButton(
                                     icon = Icons.Default.SkipPrevious,
@@ -504,7 +510,6 @@ fun PlayerControls(
                                 iconSize = 32.dp
                             )
 
-                            // ★ 追加: 次のチャプターへボタン
                             if (hasChapters) {
                                 OsdIconButton(
                                     icon = Icons.Default.SkipNext,
