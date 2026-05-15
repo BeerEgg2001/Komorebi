@@ -99,7 +99,7 @@ fun SettingsScreen(
         Category("録画設定", Icons.Default.VideoSettings),
         Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
-        Category("番組表設定", Icons.Default.GridOn), // ★ 追加
+        Category("番組表設定", Icons.Default.GridOn),
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
         Category(AppStrings.SETTINGS_CATEGORY_LAB, Icons.Default.Science),
         Category(AppStrings.SETTINGS_CATEGORY_APP_INFO, Icons.Default.Info)
@@ -158,7 +158,6 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
-            // ★ 番組表設定用の4つの FocusRequester
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
             listOf(
                 FocusRequester(),
@@ -290,6 +289,7 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .focusRequester(categoryFocusRequesters[index])
                                 .focusProperties {
+                                    left = FocusRequester.Cancel // ★ 修正: 左キーでフォーカスが迷子になるのを防ぐ
                                     right = targetR
                                     if (index == 0) up = FocusRequester.Cancel
                                     if (index == categories.lastIndex) down = homeBackRequester
@@ -308,6 +308,7 @@ fun SettingsScreen(
                     modifier = Modifier
                         .focusRequester(homeBackRequester)
                         .focusProperties {
+                            left = FocusRequester.Cancel // ★ 修正: こちらも左キーへの防波堤を追加
                             up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
                             down = FocusRequester.Cancel
                             right = itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
@@ -894,7 +895,6 @@ fun SettingsScreen(
                             itemFocusRequesters[5].dropLast(1), itemFocusRequesters[5].last()
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
-                        // ★ 追加: 番組表設定
                         6 -> EpgSettingsContent(
                             pref = prefs,
                             onEditColumn = {

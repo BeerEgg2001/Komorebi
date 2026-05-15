@@ -91,10 +91,11 @@ class LivePlayerFactory @Inject constructor(
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
-        // ライブ遅延時の再生速度調整（追いつき設定）
+        // ★ 修正: 音ズレ（A/V Sync Drift）の完全防止策
+        // ExoPlayerによる「遅延を取り戻すための微小な倍速調整」を完全に封じ、等倍速（1.0f）に固定する
         val livePlaybackSpeedControl = DefaultLivePlaybackSpeedControl.Builder()
-            .setFallbackMaxPlaybackSpeed(1.04f)
-            .setFallbackMinPlaybackSpeed(0.96f)
+            .setFallbackMaxPlaybackSpeed(1.0f)
+            .setFallbackMinPlaybackSpeed(1.0f)
             .build()
 
         // プレイヤーのビルドとリスナーの登録
