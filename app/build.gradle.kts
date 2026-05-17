@@ -12,6 +12,16 @@ android {
     namespace = "com.beeregg2001.komorebi"
     compileSdk = 35
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            // ★ true にすると、分割版(25MB)と、Universal版(50MB)の両方を出力してくれます！
+            isUniversalApk = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
@@ -48,7 +58,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+//            isMinifyEnabled = true       // コード圧縮を有効化
+//            isShrinkResources = true     // 未使用の画像やリソースも削除
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -169,8 +180,8 @@ dependencies {
 
     // NDK Bitmap (バージョンは 0.9.21 を指定する必要があります)
     implementation("com.github.ctiao:ndkbitmap-armv7a:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
 
     compileOnly("org.checkerframework:checker-qual:3.33.0")
 
@@ -197,5 +208,6 @@ dependencies {
     // ★ 追加: SMB (ファイルライブラリ) 用
     implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 
-    implementation("org.videolan.android:libvlc-all:3.7.0")
+//    implementation("org.videolan.android:libvlc-all:3.7.0")
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }

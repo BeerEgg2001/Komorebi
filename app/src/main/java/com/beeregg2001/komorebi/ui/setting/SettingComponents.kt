@@ -253,7 +253,7 @@ fun SettingItem(
     }
 }
 
-// ★ 修正: 二重フォーカスの原因だったSurfaceをBoxに置き換え、直接キーイベントをさばく
+// ★ 修正: 決定キーで入力モードにする（UX改善）と、システムへの自然な移動を実装
 @Composable
 fun DialogTextField(
     value: String,
@@ -266,12 +266,16 @@ fun DialogTextField(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     var isFocused by remember { mutableStateOf(false) }
+    var isEditing by remember { mutableStateOf(false) } // ★ 追加: 決定キーで入力モードへ
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .background(colors.textPrimary.copy(0.05f), RoundedCornerShape(8.dp))
+            .background(
+                colors.textPrimary.copy(if (isEditing) 0.15f else 0.05f),
+                RoundedCornerShape(8.dp)
+            )
             .border(
                 BorderStroke(2.dp, if (isFocused) colors.accent else Color.Transparent),
                 RoundedCornerShape(8.dp)
@@ -284,30 +288,51 @@ fun DialogTextField(
             textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
             cursorBrush = SolidColor(colors.textPrimary),
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+            readOnly = !isEditing, // ★ 追加: 普段は読み取り専用にしてキーボードの自動表示を防ぐ
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .focusRequester(focusRequester)
                 .onFocusChanged { itState ->
                     isFocused = itState.isFocused
+                    if (!itState.isFocused) {
+                        isEditing = false // フォーカスが外れたら編集モード解除
+                    }
                 }
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
-                        when (event.key) {
-                            // 下キーで確実に次のUI（ボタン等）へフォーカスを移す
-                            Key.DirectionDown -> {
+                        when (event.nativeKeyEvent.keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                isEditing = false
+                                keyboardController?.hide()
                                 focusManager.moveFocus(FocusDirection.Down)
                                 true
                             }
-                            // 上キーで確実に前のUIへフォーカスを移す
-                            Key.DirectionUp -> {
+
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                                isEditing = false
+                                keyboardController?.hide()
                                 focusManager.moveFocus(FocusDirection.Up)
                                 true
                             }
-                            // 決定キー（センターキー等）でキーボードを表示
-                            Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+
+                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                            android.view.KeyEvent.KEYCODE_ENTER,
+                            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                                isEditing = true
                                 keyboardController?.show()
                                 true
+                            }
+
+                            android.view.KeyEvent.KEYCODE_BACK,
+                            android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                                if (isEditing) {
+                                    isEditing = false
+                                    keyboardController?.hide()
+                                    true
+                                } else {
+                                    false
+                                }
                             }
 
                             else -> false
@@ -317,6 +342,7 @@ fun DialogTextField(
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
+                isEditing = false
                 keyboardController?.hide()
                 focusManager.moveFocus(FocusDirection.Down)
             }),
@@ -553,9 +579,7 @@ fun SmbManualInputDialog(
                 )
 
                 Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(scrollState),
+                    modifier = Modifier.verticalScroll(scrollState),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -620,33 +644,35 @@ fun SmbManualInputDialog(
                             isPassword = true
                         )
                     }
-                }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Button(
-                        onClick = { isClosing = true; onDismiss() },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(0.1f),
-                            contentColor = colors.textPrimary
-                        )
-                    ) { Text("キャンセル") }
-                    Button(
-                        onClick = {
-                            if (name.isNotBlank() && ip.isNotBlank()) {
-                                isClosing = true
-                                val id = target?.id ?: java.util.UUID.randomUUID().toString()
-                                onConfirm(SmbServer(id, name, ip, port, user, password))
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = name.isNotBlank() && ip.isNotBlank()
-                    ) { Text(if (target != null) "保存" else "追加") }
+                    // ★ 究極の解決策: ボタンをスクロールコンテナの中に移動！
+                    // これにより、パスワード欄から「下キー」を押すとシステムが自然にスクロールしてボタンへ移動してくれます。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Button(
+                            onClick = { isClosing = true; onDismiss() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(0.1f),
+                                contentColor = colors.textPrimary
+                            )
+                        ) { Text("キャンセル") }
+                        Button(
+                            onClick = {
+                                if (name.isNotBlank() && ip.isNotBlank()) {
+                                    isClosing = true
+                                    val id = target?.id ?: java.util.UUID.randomUUID().toString()
+                                    onConfirm(SmbServer(id, name, ip, port, user, password))
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = name.isNotBlank() && ip.isNotBlank()
+                        ) { Text(if (target != null) "保存" else "追加") }
+                    }
                 }
             }
         }
@@ -866,16 +892,20 @@ fun SelectionDialog(
                             modifier = focusModifier
                         )
                     }
+
+                    // ★ 予防対応: LazyColumnの中にボタンを格納
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { isClosing = true; onDismiss() },
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(0.1f),
+                                contentColor = colors.textPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("キャンセル") }
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { isClosing = true; onDismiss() },
-                    colors = ButtonDefaults.colors(
-                        containerColor = colors.textPrimary.copy(0.1f),
-                        contentColor = colors.textPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("キャンセル") }
             }
         }
     }
@@ -1000,28 +1030,32 @@ fun MultiSelectionDialog(
                             modifier = focusModifier
                         )
                     }
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Button(
-                        onClick = { isClosing = true; onDismiss() },
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(0.1f),
-                            contentColor = colors.textPrimary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("キャンセル") }
-                    Button(
-                        onClick = { isClosing = true; onConfirm(selections) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("確定", fontWeight = FontWeight.Bold) }
+
+                    // ★ 予防対応: LazyColumnの中にボタンを格納
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Button(
+                                onClick = { isClosing = true; onDismiss() },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(0.1f),
+                                    contentColor = colors.textPrimary
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("キャンセル") }
+                            Button(
+                                onClick = { isClosing = true; onConfirm(selections) },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("確定", fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
             }
         }

@@ -261,21 +261,12 @@ fun VideoPlayerScreen(
         Unit
     }
 
-    val externalChapters by videoPlayerViewModel.externalChapters.collectAsState()
-    val activeChapters = remember(program.recordedVideo.cmSections, externalChapters) {
-        val apiChapters = program.recordedVideo.cmSections?.map {
-            ChapterInfo(
-                (it.startTime * 1000).toLong(),
-                (it.endTime * 1000).toLong(),
-                isCm = true
-            )
-        } ?: emptyList()
-        if (apiChapters.isNotEmpty()) apiChapters else externalChapters
-    }
+    // ★ 修正: UI側での不完全な独自チャプター計算を撤去し、
+    // ViewModelが算出した完璧な `chapters` (本編とCMが網羅されたリスト) をそのまま使用します。
 
     val skipToNextChapter = {
         val basePos = getEffectivePositionMs()
-        val nextChapter = activeChapters.find { it.startTimeMs > basePos + 3000 }
+        val nextChapter = chapters.find { it.startTimeMs > basePos + 3000 }
         if (nextChapter != null) {
             performSeek(nextChapter.startTimeMs)
         } else {
@@ -285,7 +276,7 @@ fun VideoPlayerScreen(
 
     val skipToPreviousChapter = {
         val basePos = getEffectivePositionMs()
-        val reversedChapters = activeChapters.sortedByDescending { it.startTimeMs }
+        val reversedChapters = chapters.sortedByDescending { it.startTimeMs }
         val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
         if (prevChapter != null) {
             performSeek(prevChapter.startTimeMs)
@@ -460,10 +451,10 @@ fun VideoPlayerScreen(
                     isModern = isModern,
                     showControls = showControls,
                     isSubOverlayOpen = isSubOverlayOpen,
-                    chapters = activeChapters,
+                    chapters = chapters, // ★ 修正: 正確な chapters を渡す
                     totalDurationMs = totalDurationForControls,
                     getCurrentPositionMs = getCurrentPositionMs,
-                    performSeek = performSeek, // ★ 修正: 正しいシークメソッドを渡す
+                    performSeek = performSeek,
                     triggerSeekingPreview = triggerSeekingPreview,
                     onShowControlsChange = onShowControlsChange,
                     onPiPRequested = onPiPRequested,
@@ -576,8 +567,8 @@ fun VideoPlayerScreen(
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
                 isPlaying = exoPlayer.isPlaying,
-                hasChapters = activeChapters.isNotEmpty(),
-                externalChapters = activeChapters,
+                hasChapters = chapters.isNotEmpty(), // ★ 修正: 正確な chapters を渡す
+                externalChapters = chapters, // ★ 修正: 正確な chapters を渡す
                 currentPositionMs = getEffectivePositionMs(),
                 totalDurationMs = totalDurationForControls,
                 controlsFocusRequester = playerControlsFocusRequester,
@@ -626,7 +617,7 @@ fun VideoPlayerScreen(
                 exit = slideOutVertically { it } + fadeOut()) {
                 ChapterListOverlay(
                     program = currentProgram,
-                    chapters = activeChapters,
+                    chapters = chapters, // ★ 修正: 正確な chapters を渡す
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = { performSeek(it); isChapterListOpen = false },
@@ -643,22 +634,33 @@ fun VideoPlayerScreen(
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
-                    // ★ 修正: TSファイルのマルチ音声トラックに完全対応
                     onAudioToggle = {
-                        vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        vs.currentAudioMode =
+                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        val audioGroups =
+                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                         if (audioGroups.size >= 2) {
-                            // 複数グループが存在する場合 (HLSの別言語ストリームなど)
-                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                .addOverride(TrackSelectionOverride(audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
-                                .build()
+                            exoPlayer.trackSelectionParameters =
+                                exoPlayer.trackSelectionParameters.buildUpon()
+                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                    .addOverride(
+                                        TrackSelectionOverride(
+                                            audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                            0
+                                        )
+                                    )
+                                    .build()
                         } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
-                            // 1つのグループに複数トラックが存在する場合 (TSファイルのデュアル音声ストリームなど)
-                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                .addOverride(TrackSelectionOverride(audioGroups[0].mediaTrackGroup, if (vs.currentAudioMode == AudioMode.SUB) 1 else 0))
-                                .build()
+                            exoPlayer.trackSelectionParameters =
+                                exoPlayer.trackSelectionParameters.buildUpon()
+                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                    .addOverride(
+                                        TrackSelectionOverride(
+                                            audioGroups[0].mediaTrackGroup,
+                                            if (vs.currentAudioMode == AudioMode.SUB) 1 else 0
+                                        )
+                                    )
+                                    .build()
                         }
                         onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
@@ -753,22 +755,33 @@ fun VideoPlayerScreen(
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
                     focusRequester = subMenuFocusRequester,
-                    // ★ 修正: TSファイルのマルチ音声トラックに完全対応
                     onAudioToggle = {
-                        vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        vs.currentAudioMode =
+                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        val audioGroups =
+                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                         if (audioGroups.size >= 2) {
-                            // 複数グループが存在する場合 (HLSの別言語ストリームなど)
-                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                .addOverride(TrackSelectionOverride(audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup, 0))
-                                .build()
+                            exoPlayer.trackSelectionParameters =
+                                exoPlayer.trackSelectionParameters.buildUpon()
+                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                    .addOverride(
+                                        TrackSelectionOverride(
+                                            audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
+                                            0
+                                        )
+                                    )
+                                    .build()
                         } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
-                            // 1つのグループに複数トラックが存在する場合 (TSファイルのデュアル音声ストリームなど)
-                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-                                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                .addOverride(TrackSelectionOverride(audioGroups[0].mediaTrackGroup, if (vs.currentAudioMode == AudioMode.SUB) 1 else 0))
-                                .build()
+                            exoPlayer.trackSelectionParameters =
+                                exoPlayer.trackSelectionParameters.buildUpon()
+                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                    .addOverride(
+                                        TrackSelectionOverride(
+                                            audioGroups[0].mediaTrackGroup,
+                                            if (vs.currentAudioMode == AudioMode.SUB) 1 else 0
+                                        )
+                                    )
+                                    .build()
                         }
                         onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
@@ -847,7 +860,6 @@ fun VideoPlayerScreen(
                 )
             }
 
-            // ★ 修正: モダンUI表示中は不要なインジケータ（画面中央のアイコン）を出さない
             if (!isModern || !showControls) {
                 PlaybackIndicator(vs.indicatorState)
             }
