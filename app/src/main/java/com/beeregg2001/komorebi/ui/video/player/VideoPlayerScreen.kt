@@ -261,9 +261,6 @@ fun VideoPlayerScreen(
         Unit
     }
 
-    // ★ 修正: UI側での不完全な独自チャプター計算を撤去し、
-    // ViewModelが算出した完璧な `chapters` (本編とCMが網羅されたリスト) をそのまま使用します。
-
     val skipToNextChapter = {
         val basePos = getEffectivePositionMs()
         val nextChapter = chapters.find { it.startTimeMs > basePos + 3000 }
@@ -408,7 +405,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // ★ フォーカス消失防止: isPlayingの変化でフォーカスを奪われないようにロック
     var wasControlsVisible by remember { mutableStateOf(false) }
     LaunchedEffect(
         isSubMenuOpen,
@@ -451,7 +447,7 @@ fun VideoPlayerScreen(
                     isModern = isModern,
                     showControls = showControls,
                     isSubOverlayOpen = isSubOverlayOpen,
-                    chapters = chapters, // ★ 修正: 正確な chapters を渡す
+                    chapters = chapters,
                     totalDurationMs = totalDurationForControls,
                     getCurrentPositionMs = getCurrentPositionMs,
                     performSeek = performSeek,
@@ -462,7 +458,7 @@ fun VideoPlayerScreen(
                     onSceneSearchToggle = { onSceneSearchToggle(it) },
                     onChapterListToggle = { isChapterListOpen = it },
                     onSubMenuToggle = onSubMenuToggle,
-                    exoPlayerIsPlaying = exoPlayer.isPlaying,
+                    exoPlayerIsPlaying = exoPlayer.playWhenReady,
                     onPause = { exoPlayer.pause() },
                     onPlay = { exoPlayer.play() }
                 )
@@ -566,17 +562,17 @@ fun VideoPlayerScreen(
                 isVisible = showControls && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN,
                 isSeekingPreviewVisible = isSeekingPreviewVisible,
                 isModernUi = isModern,
-                isPlaying = exoPlayer.isPlaying,
-                hasChapters = chapters.isNotEmpty(), // ★ 修正: 正確な chapters を渡す
-                externalChapters = chapters, // ★ 修正: 正確な chapters を渡す
+                isPlaying = exoPlayer.playWhenReady,
+                hasChapters = chapters.isNotEmpty(),
+                externalChapters = chapters,
                 currentPositionMs = getEffectivePositionMs(),
                 totalDurationMs = totalDurationForControls,
                 controlsFocusRequester = playerControlsFocusRequester,
                 onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
                 onPlayPauseToggle = {
                     vs.lastInteractionTime = System.currentTimeMillis()
-                    vs.togglePlayPause(exoPlayer.isPlaying)
-                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                    vs.togglePlayPause(exoPlayer.playWhenReady)
+                    if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play()
                 },
                 onSeekBack = {
                     vs.lastInteractionTime = System.currentTimeMillis()
@@ -617,7 +613,7 @@ fun VideoPlayerScreen(
                 exit = slideOutVertically { it } + fadeOut()) {
                 ChapterListOverlay(
                     program = currentProgram,
-                    chapters = chapters, // ★ 修正: 正確な chapters を渡す
+                    chapters = chapters,
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = { performSeek(it); isChapterListOpen = false },
@@ -860,7 +856,8 @@ fun VideoPlayerScreen(
                 )
             }
 
-            if (!isModern || !showControls) {
+            // ★ 修正: モダンUI表示中は不要なインジケータ（画面中央のアイコン）を出さない
+            if (!isModern) {
                 PlaybackIndicator(vs.indicatorState)
             }
         }

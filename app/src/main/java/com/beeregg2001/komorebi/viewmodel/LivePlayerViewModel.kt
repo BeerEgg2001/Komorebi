@@ -690,10 +690,13 @@ class LivePlayerViewModel @Inject constructor(
                             TsExtractor(
                                 TsExtractor.MODE_SINGLE_PMT,
                                 TimestampAdjuster(C.TIME_UNSET),
-                                DefaultTsPayloadReaderFactory(
-                                    DefaultTsPayloadReaderFactory.FLAG_IGNORE_AAC_STREAM or
-                                            DefaultTsPayloadReaderFactory.FLAG_IGNORE_H264_STREAM
-                                ),
+                                DirectSubtitlePayloadReaderFactory(
+                                    onSubtitleDataReceived = { pts, base64 ->
+                                        viewModelScope.launch(
+                                            Dispatchers.Main
+                                        ) { _subtitleEvents.emit(Pair(pts, base64)) }
+                                    },
+                                    isSubtitleEnabled = { isSubtitleEnabled }),
                                 TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
                             )
                         )

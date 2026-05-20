@@ -70,12 +70,16 @@ fun MainRootScreen(
                     // 別のアプリを開いた、またはホーム画面に戻ってアプリが裏に回った（スリープ状態）
                     isAppInForeground = false
                 }
+
                 androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
                     // アプリ画面に戻ってきた時（かつ、一度裏に回っていた場合のみ実行）
                     if (!isAppInForeground) {
                         isAppInForeground = true
 
-                        Log.i("KomorebiLifecycle", "アプリがバックグラウンドから復帰しました。データをリフレッシュします。")
+                        Log.i(
+                            "KomorebiLifecycle",
+                            "アプリがバックグラウンドから復帰しました。データをリフレッシュします。"
+                        )
 
                         // 1. プロ野球タブやホーム画面のデータを最新に更新する
                         homeViewModel.refreshHomeData()
@@ -91,6 +95,7 @@ fun MainRootScreen(
                         }
                     }
                 }
+
                 else -> {}
             }
         }
@@ -100,7 +105,6 @@ fun MainRootScreen(
     // =========================================================================================
 
     val timeFormat by settingsViewModel.timeFormat.collectAsState()
-    // ★ 修正: APIキーの状態を取得
     val geminiApiKey by settingsViewModel.geminiApiKey.collectAsState(initial = "")
 
     val closeAiConcierge = { restoreFocus: Boolean ->
@@ -501,9 +505,21 @@ fun MainRootScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // ★ 修正: onPreviewKeyEvent（トップダウン）に戻し、グローバルショートカットの確実性を復活
                 .onPreviewKeyEvent { event ->
                     val isCenterKey =
                         event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+
+                    // ★ 追加: 「プレイヤーのUI（シークバーやボタン）が表示されている時」は、
+                    // 親玉（MainRoot）がイベントを横取りせず、子要素（PlayerControlsの早送り連打など）にイベントを譲る！
+                    val isVideoUiVisible =
+                        (state.selectedProgram != null || state.selectedSmbItem != null) && state.showPlayerControls
+                    val isLiveUiVisible = (state.selectedChannel != null) && state.playerShowOverlay
+                    if ((isVideoUiVisible || isLiveUiVisible) && isCenterKey) {
+                        return@onPreviewKeyEvent false // 横取りせず、子要素へスルーさせる
+                    }
+
+                    // --- 以下、通常のグローバルAIコンシェルジュ起動処理 ---
                     if (isCenterKey && event.type == KeyEventType.KeyUp) {
                         if (isLongPressHandled) {
                             isLongPressHandled = false; return@onPreviewKeyEvent true
@@ -628,7 +644,6 @@ fun MainRootScreen(
                                     timeFormat = timeFormat
                                 )
                             } else if (state.selectedProgram != null) {
-                                // ★ 既存の録画番組はそのまま ExoPlayer を使う
                                 VideoPlayerScreen(
                                     program = state.selectedProgram!!,
                                     initialPositionMs = state.initialPlaybackPositionMs,
@@ -652,7 +667,6 @@ fun MainRootScreen(
                                     }
                                 )
                             } else if (state.selectedSmbItem != null) {
-                                // ★★★ 新規追加: SMB再生の場合は VLCエンジン×Komorebi UI を起動する！ ★★★
                                 val baseProgram =
                                     recordViewModel.recentRecordings.collectAsState().value.firstOrNull()
                                 if (baseProgram != null) {
@@ -727,13 +741,12 @@ fun MainRootScreen(
                 isSettingsInitialized = isSettingsInitialized,
                 hasSyncError = hasSyncError,
                 detailFocusRequester = detailFocusRequester,
-                apiKey = geminiApiKey, // ★ 追加: 取得したAPIキーを渡す
+                apiKey = geminiApiKey,
                 onExitApp = onExitApp,
                 closeSettingsAndRefresh = closeSettingsAndRefresh,
                 closeAiConcierge = closeAiConcierge,
-                onGoToSettings = { // ★ 追加: 設定画面を開くコールバック
+                onGoToSettings = {
                     closeAiConcierge(true)
-                    // ★ 追加: 「ラボ(7)」の「APIキー(2)」をターゲットに指定
                     state.settingsInitialCategoryIndex = 7
                     state.settingsInitialFocusItemIndex = 2
                     state.isSettingsOpen = true

@@ -30,73 +30,44 @@ class VideoPlayerState {
     // 再生設定
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
     var currentSpeed by mutableFloatStateOf(1.0f)
-
-    var currentQuality by mutableStateOf(
-        StreamQuality(
-            label = "読み込み中...",
-            value = "",
-            isRawTs = false
-        )
-    )
-
-    // API経由の擬似シーク時に使用する仮想的なオフセット時間（ミリ秒）
-    var playbackOffsetMs by mutableLongStateOf(0L)
-
-    // UI状態
-    var indicatorState by mutableStateOf<IndicatorState?>(null)
-    var isPlayerPlaying by mutableStateOf(false)
-    var wasPlayingBeforeSceneSearch by mutableStateOf(false)
-    var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
-
-    // 字幕・実況・機能の表示フラグ
-    var isCommentEnabled by mutableStateOf(true)
+    var currentQuality by mutableStateOf(StreamQuality("", ""))
     var isSubtitleEnabled by mutableStateOf(false)
-    var isAutoCmSkipEnabled by mutableStateOf(false)
+    var isCommentEnabled by mutableStateOf(false)
 
-    // 戻るキー長押し判定用
-    var backKeyDownTime by mutableLongStateOf(0L)
-    var isBackKeyLongPressed by mutableStateOf(false)
-
-    // モダンUI時のシークバーフォーカス状態
-    var isSeekBarFocused by mutableStateOf(false)
-
-    // L字クロップ関連の状態変数
     var lCropEnabled by mutableStateOf(false)
     var lCropMode by mutableStateOf(LCropMode.HIDDEN)
     var lCropZoom by mutableFloatStateOf(100f)
     var lCropX by mutableFloatStateOf(0f)
     var lCropY by mutableFloatStateOf(0f)
     var lCropOrigin by mutableStateOf(ZoomOrigin.TopRight)
+    var isAutoCmSkipEnabled by mutableStateOf(true)
 
-    // --- キー操作・シーク状態 ---
-    var rightKeyDownTime by mutableLongStateOf(0L)
-    var isRightKeyLongPressed by mutableStateOf(false)
-    var leftKeyDownTime by mutableLongStateOf(0L)
-    var isLeftKeyLongPressed by mutableStateOf(false)
-    var downKeyDownTime by mutableLongStateOf(0L)
-    var isDownKeyLongPressed by mutableStateOf(false)
+    var playbackOffsetMs by mutableLongStateOf(0L)
     var pendingSeekPositionMs by mutableStateOf<Long?>(null)
-    var lastSeekUpdateTime by mutableLongStateOf(0L)
 
-    // 長押し開始時点のシークモード（チャプターか時間か）を保持するフラグ
-    var activeRightSeekIsChapterMode by mutableStateOf(false)
-    var activeLeftSeekIsChapterMode by mutableStateOf(false)
+    var isPlayerPlaying by mutableStateOf(true)
 
-    fun updateIndicator(icon: ImageVector, label: String) {
-        indicatorState = IndicatorState(icon, label)
-    }
+    var indicatorState by mutableStateOf<IndicatorState?>(null)
+
+    var lastInteractionTime by mutableLongStateOf(0L)
+    var isSeekBarFocused by mutableStateOf(false)
+
+    var wasPlayingBeforeSceneSearch = false
+    var downKeyDownTime = 0L
+    var isDownKeyLongPressed = false
+
+    // ★ 新規追加: クイックシーク状態の追跡
+    var isQuickSeeking by mutableStateOf(false)
 
     fun togglePlayPause(isPlaying: Boolean) {
-        if (isPlaying) {
-            updateIndicator(Icons.Default.Pause, "停止")
+        isPlayerPlaying = !isPlaying
+        indicatorState = if (isPlaying) {
+            IndicatorState(icon = Icons.Default.Pause, label = "一時停止")
         } else {
-            updateIndicator(Icons.Default.PlayArrow, "再生")
+            IndicatorState(icon = Icons.Default.PlayArrow, label = "再生")
         }
     }
 
-    // ========================================================================
-    // キーイベントハンドリング
-    // ========================================================================
     fun handleKeyEvent(
         keyEvent: KeyEvent,
         isPiPMode: Boolean,
@@ -119,261 +90,159 @@ class VideoPlayerState {
         onPlay: () -> Unit
     ): Boolean {
         if (isPiPMode) return false
-
         val keyCode = keyEvent.nativeKeyEvent.keyCode
-        val repeatCount = keyEvent.nativeKeyEvent.repeatCount
-        val isActionDown = keyEvent.type == KeyEventType.KeyDown
-        val isActionUp = keyEvent.type == KeyEventType.KeyUp
+        val isActionDown = keyEvent.nativeKeyEvent.action == NativeKeyEvent.ACTION_DOWN
+        val isActionUp = keyEvent.nativeKeyEvent.action == NativeKeyEvent.ACTION_UP
 
-        // L字クロップ位置調整モード
+        // ★ 安全装置: UIが非表示になったら必ずクイックシークモードを解除する
+        if (!showControls) {
+            isQuickSeeking = false
+        }
+
         if (lCropMode == LCropMode.DIRECT_ADJUST) {
             if (isActionDown) {
                 when (keyCode) {
-                    NativeKeyEvent.KEYCODE_DPAD_UP -> lCropY -= 2f
-                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> lCropY += 2f
-                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> lCropX -= 2f
-                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> lCropX += 2f
-                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                        lCropZoom = when {
-                            lCropZoom < 125f -> 125f
-                            lCropZoom < 150f -> 150f
-                            lCropZoom < 175f -> 175f
-                            lCropZoom < 200f -> 200f
-                            else -> 100f
-                        }
+                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
+                        lCropY = (lCropY - 5f).coerceAtLeast(0f); return true
                     }
 
-                    NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
-                        lCropMode = LCropMode.MENU
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        lCropY = (lCropY + 5f).coerceAtMost(100f); return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
+                        lCropX = (lCropX - 5f).coerceAtLeast(0f); return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        lCropX = (lCropX + 5f).coerceAtMost(100f); return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_PAGE_UP, NativeKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        lCropZoom = (lCropZoom + 5f).coerceAtMost(200f); return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_PAGE_DOWN, NativeKeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        lCropZoom = (lCropZoom - 5f).coerceAtLeast(100f); return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER, NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
+                        lCropMode = LCropMode.MENU; onSubMenuToggle(true); return true
                     }
                 }
             }
             return true
         }
 
-        if (lCropMode == LCropMode.MENU) return false
         if (isSubOverlayOpen) return false
 
-        if (isActionDown) {
-            lastInteractionTime = System.currentTimeMillis()
-        }
-
-        // 戻るキー
         if (keyCode == NativeKeyEvent.KEYCODE_BACK || keyCode == NativeKeyEvent.KEYCODE_ESCAPE) {
             if (isActionDown) {
-                if (repeatCount == 0) {
-                    backKeyDownTime = System.currentTimeMillis()
-                    isBackKeyLongPressed = false
+                if (showControls) {
+                    onShowControlsChange(false)
+                    isQuickSeeking = false // 手動で閉じた時も解除
                 } else {
-                    if (!isBackKeyLongPressed && System.currentTimeMillis() - backKeyDownTime > 500) {
-                        isBackKeyLongPressed = true
-                        onPiPRequested()
-                    }
+                    onBackPressed()
                 }
-                return true
-            } else if (isActionUp) {
-                if (!isBackKeyLongPressed && System.currentTimeMillis() - backKeyDownTime < 500) {
-                    if (showControls && isModern) {
-                        onShowControlsChange(false)
-                    } else {
-                        onBackPressed()
-                    }
-                }
-                backKeyDownTime = 0L
-                isBackKeyLongPressed = false
-                return true
             }
-            return false
+            return true
         }
 
-        // モダンUI コントロール表示時の挙動
-        if (isModern) {
-            if (!showControls) {
+        // UI非表示時の安全装置
+        if (!showControls) {
+            if (keyCode in listOf(
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER,
+                    NativeKeyEvent.KEYCODE_ENTER,
+                    NativeKeyEvent.KEYCODE_DPAD_UP,
+                    NativeKeyEvent.KEYCODE_DPAD_DOWN
+                )
+            ) {
+                if (isActionUp) {
+                    onShowControlsChange(true)
+                }
+                return true
+            }
+        }
+
+        // ★ モダンUI表示時のフォーカスとクイックシークの制御
+        if (isModern && showControls) {
+            if (isQuickSeeking) {
+                // クイックシーク中に別のナビゲーションキー（上下決定）が押されたら、
+                // モードを解除してCompose側に処理（フォーカス移動やボタン押下）を譲る
                 if (keyCode in listOf(
-                        NativeKeyEvent.KEYCODE_DPAD_UP, NativeKeyEvent.KEYCODE_DPAD_DOWN,
-                        NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER
+                        NativeKeyEvent.KEYCODE_DPAD_UP,
+                        NativeKeyEvent.KEYCODE_DPAD_DOWN,
+                        NativeKeyEvent.KEYCODE_DPAD_CENTER,
+                        NativeKeyEvent.KEYCODE_ENTER
                     )
                 ) {
-                    if (isActionDown) onShowControlsChange(true)
-                    return true
+                    if (isActionDown) {
+                        isQuickSeeking = false
+                    }
+                    return false
                 }
-            } else if (isSeekBarFocused) {
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) return false
-                if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
-                    if (isActionDown) onShowControlsChange(false)
-                    return true
+            }
+
+            if (!isQuickSeeking) {
+                // クイックシーク中でなければ、ナビゲーションキーはすべてCompose（UI操作）に譲る
+                if (keyCode in listOf(
+                        NativeKeyEvent.KEYCODE_DPAD_LEFT,
+                        NativeKeyEvent.KEYCODE_DPAD_RIGHT,
+                        NativeKeyEvent.KEYCODE_DPAD_UP,
+                        NativeKeyEvent.KEYCODE_DPAD_DOWN,
+                        NativeKeyEvent.KEYCODE_DPAD_CENTER,
+                        NativeKeyEvent.KEYCODE_ENTER
+                    )
+                ) {
+                    return false
                 }
-            } else {
-                return false
             }
         }
 
-        // RIGHT (早送り / シーク)
-        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
-            if (isActionDown) {
-                if (isModern && isSeekBarFocused) triggerSeekingPreview()
-                if (repeatCount == 0) {
-                    rightKeyDownTime = System.currentTimeMillis()
-                    isRightKeyLongPressed = false
-                    pendingSeekPositionMs = getCurrentPositionMs()
-                    activeRightSeekIsChapterMode = !isModern || !showControls
-                } else {
-                    if (!isRightKeyLongPressed && System.currentTimeMillis() - rightKeyDownTime > 500) {
-                        isRightKeyLongPressed = true
-                        onShowControlsChange(true)
-                    }
-                    if (isRightKeyLongPressed) {
-                        val now = System.currentTimeMillis()
-                        val interval = if (activeRightSeekIsChapterMode) 400L else 150L
-                        if (now - lastSeekUpdateTime > interval) {
-                            lastSeekUpdateTime = now
-                            val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
+        // -----------------------------------------------------------
+        // 以下の処理は、UI表示中（または左右キー押下時）にのみ到達します
+        // -----------------------------------------------------------
 
-                            if (activeRightSeekIsChapterMode) {
-                                val boundaries = (listOf(0L) + chapters.flatMap {
-                                    listOf(it.startTimeMs, it.endTimeMs)
-                                } + totalDurationMs).distinct().sorted()
-
-                                if (boundaries.size <= 2) {
-                                    pendingSeekPositionMs =
-                                        (currentTarget + 180_000).coerceAtMost(totalDurationMs)
-                                    if (!isModern || !showControls) updateIndicator(
-                                        Icons.Default.FastForward,
-                                        "+3m"
-                                    )
-                                } else {
-                                    val next = boundaries.firstOrNull { it > currentTarget + 1000 }
-                                        ?: totalDurationMs
-                                    pendingSeekPositionMs = next
-                                    if (!isModern || !showControls) updateIndicator(
-                                        Icons.Default.SkipNext,
-                                        "次チャプター"
-                                    )
-                                }
-                            } else {
-                                pendingSeekPositionMs =
-                                    (currentTarget + 15_000).coerceAtMost(totalDurationMs)
-                                if (!isModern || !showControls) updateIndicator(
-                                    Icons.Default.FastForward,
-                                    "+15s"
-                                )
-                            }
-                        }
-                    }
-                }
-            } else if (isActionUp) {
-                if (isModern && isSeekBarFocused) triggerSeekingPreview()
-                if (!isRightKeyLongPressed) {
-                    onShowControlsChange(true)
-                    performSeek((getCurrentPositionMs() + 30_000).coerceAtMost(totalDurationMs))
-                    // ★修正: クラシックUI時のみインジケータを表示するようにガード
-                    if (!isModern || !showControls) {
-                        if (activeRightSeekIsChapterMode) updateIndicator(
-                            Icons.Default.SkipNext,
-                            "次チャプター"
-                        )
-                        else updateIndicator(Icons.Default.FastForward, "+30s")
-                    }
-                } else {
-                    pendingSeekPositionMs?.let { performSeek(it) }
-                }
-                pendingSeekPositionMs = null
-                rightKeyDownTime = 0L
-                isRightKeyLongPressed = false
-            }
-            return true
-        }
-
-        // LEFT (巻き戻し / シーク)
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_LEFT) {
             if (isActionDown) {
-                if (isModern && isSeekBarFocused) triggerSeekingPreview()
-                if (repeatCount == 0) {
-                    leftKeyDownTime = System.currentTimeMillis()
-                    isLeftKeyLongPressed = false
-                    pendingSeekPositionMs = getCurrentPositionMs()
-                    activeLeftSeekIsChapterMode = !isModern || !showControls
-                } else {
-                    if (!isLeftKeyLongPressed && System.currentTimeMillis() - leftKeyDownTime > 500) {
-                        isLeftKeyLongPressed = true
-                        onShowControlsChange(true)
-                    }
-                    if (isLeftKeyLongPressed) {
-                        val now = System.currentTimeMillis()
-                        val interval = if (activeLeftSeekIsChapterMode) 400L else 150L
-                        if (now - lastSeekUpdateTime > interval) {
-                            lastSeekUpdateTime = now
-                            val currentTarget = pendingSeekPositionMs ?: getCurrentPositionMs()
-
-                            if (activeLeftSeekIsChapterMode) {
-                                val boundaries = (listOf(0L) + chapters.flatMap {
-                                    listOf(it.startTimeMs, it.endTimeMs)
-                                } + totalDurationMs).distinct().sorted()
-
-                                if (boundaries.size <= 2) {
-                                    pendingSeekPositionMs =
-                                        (currentTarget - 60_000).coerceAtLeast(0L)
-                                    if (!isModern || !showControls) updateIndicator(
-                                        Icons.Default.FastRewind,
-                                        "-1m"
-                                    )
-                                } else {
-                                    val prev =
-                                        boundaries.lastOrNull { it < currentTarget - 1000 } ?: 0L
-                                    pendingSeekPositionMs = prev
-                                    if (!isModern || !showControls) updateIndicator(
-                                        Icons.Default.SkipPrevious,
-                                        "前チャプター"
-                                    )
-                                }
-                            } else {
-                                pendingSeekPositionMs = (currentTarget - 15_000).coerceAtLeast(0L)
-                                if (!isModern || !showControls) updateIndicator(
-                                    Icons.Default.FastRewind,
-                                    "-15s"
-                                )
-                            }
-                        }
-                    }
-                }
-            } else if (isActionUp) {
-                if (isModern && isSeekBarFocused) triggerSeekingPreview()
-                if (!isLeftKeyLongPressed) {
-                    onShowControlsChange(true)
-                    performSeek((getCurrentPositionMs() - 10_000).coerceAtLeast(0L))
-                    // ★修正: クラシックUI時のみインジケータを表示するようにガード
-                    if (!isModern || !showControls) {
-                        if (activeLeftSeekIsChapterMode) updateIndicator(
-                            Icons.Default.SkipPrevious,
-                            "前チャプター"
-                        )
-                        else updateIndicator(Icons.Default.FastRewind, "-10s")
-                    }
-                } else {
-                    pendingSeekPositionMs?.let { performSeek(it) }
-                }
-                pendingSeekPositionMs = null
-                leftKeyDownTime = 0L
-                isLeftKeyLongPressed = false
+                isQuickSeeking = true // ★ クイックシークモード開始
+                onShowControlsChange(true)
+                indicatorState = IndicatorState(icon = Icons.Default.FastRewind, label = "巻き戻し")
+                val basePos = pendingSeekPositionMs ?: getCurrentPositionMs()
+                val skipAmount = if (keyEvent.nativeKeyEvent.repeatCount > 0) 15000L else 30000L
+                val newPos = (basePos - skipAmount).coerceAtLeast(0L)
+                performSeek(newPos)
+                triggerSeekingPreview()
             }
             return true
         }
 
-        // DOWN
+        if (keyCode == NativeKeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (isActionDown) {
+                isQuickSeeking = true // ★ クイックシークモード開始
+                onShowControlsChange(true)
+                indicatorState = IndicatorState(icon = Icons.Default.FastForward, label = "早送り")
+                val basePos = pendingSeekPositionMs ?: getCurrentPositionMs()
+                val skipAmount = if (keyEvent.nativeKeyEvent.repeatCount > 0) 15000L else 30000L
+                val newPos =
+                    (basePos + skipAmount).coerceAtMost(if (totalDurationMs > 0) totalDurationMs else Long.MAX_VALUE)
+                performSeek(newPos)
+                triggerSeekingPreview()
+            }
+            return true
+        }
+
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_DOWN) {
             val isChapterMode = !isModern || !showControls
             if (!isChapterMode) return false
             if (isActionDown) {
-                if (repeatCount == 0) {
-                    downKeyDownTime = System.currentTimeMillis(); isDownKeyLongPressed = false
-                } else {
-                    val elapsed = System.currentTimeMillis() - downKeyDownTime
-                    if (!isDownKeyLongPressed && elapsed > 500) {
-                        isDownKeyLongPressed = true
-                        if (chapters.size > 1) {
-                            onChapterListToggle(true)
-                            onShowControlsChange(true)
-                        }
+                if (downKeyDownTime == 0L) downKeyDownTime = System.currentTimeMillis()
+                val elapsed = System.currentTimeMillis() - downKeyDownTime
+                if (!isDownKeyLongPressed && elapsed > 500) {
+                    isDownKeyLongPressed = true
+                    if (chapters.size > 1) {
+                        onChapterListToggle(true)
+                        onShowControlsChange(true)
                     }
                 }
             } else if (isActionUp) {
@@ -385,7 +254,6 @@ class VideoPlayerState {
             return true
         }
 
-        // UP
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_UP) {
             val isChapterMode = !isModern || !showControls
             if (!isChapterMode) return false
@@ -396,14 +264,15 @@ class VideoPlayerState {
             return true
         }
 
-        // CENTER/ENTER
         if (keyCode == NativeKeyEvent.KEYCODE_DPAD_CENTER || keyCode == NativeKeyEvent.KEYCODE_ENTER) {
             if (isActionDown) {
+                return true
+            } else if (isActionUp) {
                 onShowControlsChange(true)
                 togglePlayPause(exoPlayerIsPlaying)
                 if (exoPlayerIsPlaying) onPause() else onPlay()
+                return true
             }
-            return true
         }
 
         return false
