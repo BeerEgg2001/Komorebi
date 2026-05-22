@@ -78,6 +78,7 @@ fun PlayerControls(
     onPlayPauseToggle: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
+    onSeekRequested: (Long) -> Unit, // ★ 追加: シークバーでのシーク用コールバック
     onSkipPreviousChapter: () -> Unit = {},
     onSkipNextChapter: () -> Unit = {},
     onChapterListToggle: () -> Unit,
@@ -311,7 +312,31 @@ fun PlayerControls(
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
                             }
-                            .focusable(isModernUi),
+                            .focusable(isModernUi)
+                            // ★ シークバーでのシークができない問題の修正
+                            // フォーカスが当たっている間に左右キーが押された際、onSeekRequested へ新しい時間を渡してシークさせる
+                            .onKeyEvent { event ->
+                                if (isSeekBarFocused && event.type == KeyEventType.KeyDown) {
+                                    when (event.key) {
+                                        Key.DirectionLeft -> {
+                                            val newPos =
+                                                (currentPositionMs - 10_000L).coerceAtLeast(0L)
+                                            onSeekRequested(newPos)
+                                            return@onKeyEvent true
+                                        }
+
+                                        Key.DirectionRight -> {
+                                            val limit =
+                                                if (totalDurationMs > 0) totalDurationMs else Long.MAX_VALUE
+                                            val newPos =
+                                                (currentPositionMs + 10_000L).coerceAtMost(limit)
+                                            onSeekRequested(newPos)
+                                            return@onKeyEvent true
+                                        }
+                                    }
+                                }
+                                false
+                            },
                         contentAlignment = Alignment.CenterStart
                     ) {
                         if (allComments.isNotEmpty() && totalDurationMs > 0) {

@@ -441,6 +441,12 @@ fun VideoPlayerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .onPreviewKeyEvent { keyEvent ->
+                // ★ UIのボタンにフォーカスがある場合に操作していてもUIが消えてしまう問題の修正
+                // キー操作が行われるたびに最終インタラクション時間を更新し、非表示タイマーをリセットする
+                if (keyEvent.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                }
+
                 vs.handleKeyEvent(
                     keyEvent = keyEvent,
                     isPiPMode = isPiPMode,
@@ -584,6 +590,7 @@ fun VideoPlayerScreen(
                     val basePos = getEffectivePositionMs()
                     performSeek((basePos + 30_000).coerceAtMost(totalDurationForControls))
                 },
+                onSeekRequested = { performSeek(it) }, // ★ 追加: シークバー操作によるシーク実行
                 onSkipPreviousChapter = {
                     vs.lastInteractionTime = System.currentTimeMillis()
                     skipToPreviousChapter()
@@ -856,7 +863,6 @@ fun VideoPlayerScreen(
                 )
             }
 
-            // ★ 修正: モダンUI表示中は不要なインジケータ（画面中央のアイコン）を出さない
             if (!isModern) {
                 PlaybackIndicator(vs.indicatorState)
             }

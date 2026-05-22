@@ -101,7 +101,6 @@ fun SmbVlcPlayerScreen(
     var customChapters by remember { mutableStateOf<List<ChapterInfo>>(emptyList()) }
     var calculatedTsDurationMs by remember { mutableLongStateOf(0L) }
 
-    // ★ 追加: 解析が完全に終わるまでVLCの起動とUI描画をブロックするフラグ
     var isReadyToPlay by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -130,7 +129,6 @@ fun SmbVlcPlayerScreen(
         }
     }
 
-    // ★ 修正: TS解析が完了してから isReadyToPlay を true にする
     LaunchedEffect(smbItem.path, smbUser, smbPass) {
         if (smbItem.name.endsWith(".ts", ignoreCase = true) || smbItem.name.endsWith(
                 ".m2ts",
@@ -173,7 +171,9 @@ fun SmbVlcPlayerScreen(
         var lengthMs by remember { mutableLongStateOf(0L) }
         var isSeeking by remember { mutableStateOf(false) }
 
-        var ignoreTimeEventUntil by remember { mutableLongStateOf(0L) }
+        var preSeekTimeMs by remember { mutableLongStateOf(-1L) }
+        var lastSeekTargetMs by remember { mutableLongStateOf(-1L) }
+        var seekTimeoutUntil by remember { mutableLongStateOf(0L) }
 
         val allComments = remember { mutableStateListOf<ArchivedComment>() }
 
@@ -196,7 +196,6 @@ fun SmbVlcPlayerScreen(
             }
         }
 
-        // 解析完了後に計算されるため、一瞬の 01:00 のチラつきが発生しません
         val safeLengthMs =
             remember(lengthMs, vlcChapters, customChapters, smbItem.size, calculatedTsDurationMs) {
                 if (calculatedTsDurationMs > 0L) {
@@ -349,11 +348,64 @@ fun SmbVlcPlayerScreen(
                     }
 
                     MediaPlayer.Event.TimeChanged -> {
-                        if (System.currentTimeMillis() > ignoreTimeEventUntil) {
-                            val newTime = event.timeChanged
-                            if (newTime > 0L || safeLengthMs == 0L || timeMs < 1000L) {
-                                if (kotlin.math.abs(newTime - timeMs) < 5000L || timeMs == 0L) {
+                        val newTime = event.timeChanged
+                        if (newTime > 0L) {
+                            val now = System.currentTimeMillis()
+                            var shouldUpdate = true
+
+                            if (isSeeking) {
+                                shouldUpdate = false
+                            } else if (now < seekTimeoutUntil && lastSeekTargetMs >= 0L && preSeekTimeMs >= 0L) {
+                                val diffToTarget = kotlin.math.abs(newTime - lastSeekTargetMs)
+                                val diffToOld = kotlin.math.abs(newTime - preSeekTimeMs)
+                                val jumpSize = kotlin.math.abs(lastSeekTargetMs - preSeekTimeMs)
+
+                                // ★ 新しい時間が「目標位置」よりも「元の位置(古いキャッシュ)」に近い場合のみブロックする
+                                if (diffToOld < diffToTarget && jumpSize > 2000L) {
+                                    shouldUpdate = false
+                                } else {
+                                    seekTimeoutUntil = 0L // 目標側に到達したため即座にロック解除
+                                }
+                            }
+
+                            if (shouldUpdate) {
+                                if (newTime < 1000L && timeMs > 5000L) {
+                                    // ノイズとして無視
+                                } else {
                                     timeMs = newTime
+                                    isBuffering = false // ★ 時間が進み始めたらバッファリング完了とみなす
+                                }
+                            }
+                        }
+                    }
+
+                    MediaPlayer.Event.PositionChanged -> {
+                        if (mediaPlayer.length <= 0L && safeLengthMs > 0L) {
+                            val posTime = (event.positionChanged * safeLengthMs).toLong()
+                            if (posTime > 0L) {
+                                val now = System.currentTimeMillis()
+                                var shouldUpdate = true
+
+                                if (isSeeking) {
+                                    shouldUpdate = false
+                                } else if (now < seekTimeoutUntil && lastSeekTargetMs >= 0L && preSeekTimeMs >= 0L) {
+                                    val diffToTarget = kotlin.math.abs(posTime - lastSeekTargetMs)
+                                    val diffToOld = kotlin.math.abs(posTime - preSeekTimeMs)
+                                    val jumpSize = kotlin.math.abs(lastSeekTargetMs - preSeekTimeMs)
+
+                                    if (diffToOld < diffToTarget && jumpSize > 2000L) {
+                                        shouldUpdate = false
+                                    } else {
+                                        seekTimeoutUntil = 0L
+                                    }
+                                }
+
+                                if (shouldUpdate) {
+                                    if (posTime < 1000L && timeMs > 5000L) {
+                                    } else {
+                                        timeMs = posTime
+                                        isBuffering = false // ★ ここでも解除
+                                    }
                                 }
                             }
                         }
@@ -398,30 +450,42 @@ fun SmbVlcPlayerScreen(
             { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
         var pendingSeekJob by remember { mutableStateOf<Job?>(null) }
+
+        // ★ 修正: SMB経由で再生する際、動画の長さ(safeLengthMs)が 0 と判定された場合でもシークをブロックせず許可。
+        // さらにVLCエンジンで time と position の両方をセットすると競合バグが起きるため、正確な time のみに一本化。
         val performSeek: (Long) -> Unit = { targetMs ->
-            val limitLength = safeLengthMs.coerceAtLeast(1L)
-            if (limitLength > 1L) {
-                val safeTarget = targetMs.coerceIn(0L, limitLength)
+            val safeTarget = if (safeLengthMs > 0L) {
+                targetMs.coerceIn(0L, safeLengthMs)
+            } else {
+                targetMs.coerceAtLeast(0L)
+            }
 
-                isSeeking = true
-                timeMs = safeTarget
-                vs.pendingSeekPositionMs = safeTarget
+            // ★ 追加: シーク開始時のみ、元の位置を記録する
+            if (!isSeeking) {
+                preSeekTimeMs = timeMs
+            }
+            isSeeking = true
+            timeMs = safeTarget
+            vs.pendingSeekPositionMs = safeTarget
 
-                pendingSeekJob?.cancel()
-                pendingSeekJob = scope.launch {
-                    delay(400)
-                    ignoreTimeEventUntil = System.currentTimeMillis() + 2000L
-                    if (mediaPlayer.isSeekable) {
-                        mediaPlayer.time = safeTarget
-                        if (safeLengthMs > 0L) mediaPlayer.position =
-                            safeTarget.toFloat() / safeLengthMs.toFloat()
-                    } else {
-                        mediaPlayer.time = safeTarget
-                    }
-                    vs.pendingSeekPositionMs = null
-                    delay(500)
-                    isSeeking = false
+            lastSeekTargetMs = safeTarget
+            seekTimeoutUntil = System.currentTimeMillis() + 3000L // 最大3秒のロック
+
+            pendingSeekJob?.cancel()
+            pendingSeekJob = scope.launch {
+                delay(400)
+
+                if (mediaPlayer.length > 0L) {
+                    mediaPlayer.time = safeTarget
+                } else if (safeLengthMs > 0L) {
+                    mediaPlayer.position = (safeTarget.toFloat() / safeLengthMs.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    mediaPlayer.time = safeTarget
                 }
+
+                vs.pendingSeekPositionMs = null
+                delay(500)
+                isSeeking = false
             }
         }
 
@@ -441,7 +505,14 @@ fun SmbVlcPlayerScreen(
             }
         }
 
-        LaunchedEffect(showControls, isSubOverlayOpen, vs.lCropMode, vs.isSeekBarFocused) {
+        // ★ 修正: vs.lastInteractionTime を監視キーに追加し、操作ごとにタイマーがリセットされるように修正
+        LaunchedEffect(
+            showControls,
+            isSubOverlayOpen,
+            vs.lCropMode,
+            vs.isSeekBarFocused,
+            vs.lastInteractionTime
+        ) {
             if (showControls && !isSubOverlayOpen && !vs.isSeekBarFocused && vs.lCropMode == LCropMode.HIDDEN) {
                 delay(5000); onShowControlsChange(false)
             }
@@ -480,6 +551,12 @@ fun SmbVlcPlayerScreen(
                 .fillMaxSize()
                 .background(Color.Black)
                 .onPreviewKeyEvent { keyEvent ->
+                    // ★ UIのボタンにフォーカスがある場合に操作していてもUIが消えてしまう問題の修正
+                    // キー操作が行われるたびに最終インタラクション時間を更新し、非表示タイマーをリセットする
+                    if (keyEvent.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                        vs.lastInteractionTime = System.currentTimeMillis()
+                    }
+
                     vs.handleKeyEvent(
                         keyEvent = keyEvent,
                         isPiPMode = isPiPMode,
@@ -543,7 +620,8 @@ fun SmbVlcPlayerScreen(
                     isVisible = showControls && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN,
                     isSeekingPreviewVisible = isSeekingPreviewVisible,
                     isModernUi = isModern,
-                    isPlaying = vs.isPlayerPlaying,
+                    // ★ 変更: バッファリング中(キャッシュ待ち)は、UI側のローカルタイマーの進行も止める
+                    isPlaying = vs.isPlayerPlaying && !isBuffering,
                     hasChapters = vlcChapters.isNotEmpty(),
                     externalChapters = vlcChapters,
                     currentPositionMs = getEffectivePositionMs(),
@@ -566,6 +644,7 @@ fun SmbVlcPlayerScreen(
                         val limit = if (safeLengthMs > 0L) safeLengthMs else Long.MAX_VALUE
                         performSeek((basePos + 30_000).coerceAtMost(limit))
                     },
+                    onSeekRequested = { performSeek(it) }, // ★ 追加: シークバー操作によるシーク実行
                     onSkipPreviousChapter = {
                         vs.lastInteractionTime = System.currentTimeMillis()
                         val basePos = getEffectivePositionMs()
