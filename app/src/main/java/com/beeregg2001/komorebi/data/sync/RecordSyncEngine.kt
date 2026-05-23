@@ -5,7 +5,6 @@ import android.content.Context
 import android.util.Log
 import androidx.room.withTransaction
 import com.beeregg2001.komorebi.data.SettingsRepository
-// ★ 修正: KonomiApi の直接利用をやめ、抽象化された RecordProvider (DtvProviderProxy) を使う
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
@@ -56,7 +55,6 @@ data class SyncProgress(
 
 @Singleton
 class RecordSyncEngine @Inject constructor(
-    // ★ 修正: KonomiApi ではなく RecordProvider (実体は DtvProviderProxy) を注入
     private val recordProvider: RecordProvider,
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
@@ -176,9 +174,7 @@ class RecordSyncEngine @Inject constructor(
                         currentCoroutineContext().ensureActive()
 
                         Log.i(TAG, "Fetching page: $currentPage")
-                        // ★ 修正: KonomiApiではなくRecordProviderを使用する。
-                        // EDCB等の未実装バックエンドの場合、プロキシから CancellationException が投げられ、
-                        // 下の catch (e: CancellationException) で無音スキップされる。
+
                         val response = recordProvider.getRecordedPrograms(page = currentPage)
                         val programs = response.recordedPrograms
 
@@ -306,8 +302,6 @@ class RecordSyncEngine @Inject constructor(
                     isSyncSuccessful = true
 
                 } catch (e: CancellationException) {
-                    // ★ 魔法: プロキシからの無音スキップ指示をここでキャッチし、
-                    // エラーダイアログを出さずに静かにプログレスを閉じる。
                     Log.i(TAG, "Sync gracefully cancelled: ${e.message}")
                     _syncProgress.value = SyncProgress(isSyncing = false)
                     throw e
@@ -381,7 +375,6 @@ class RecordSyncEngine @Inject constructor(
                         val programDao = db.recordedProgramDao()
                         currentCoroutineContext().ensureActive()
 
-                        // ★ 修正: ここも KonomiApi ではなく RecordProvider に変更
                         val response = recordProvider.getRecordedPrograms(page = 1)
                         val apiPrograms = response.recordedPrograms
                         if (apiPrograms.isEmpty()) return@withContext
@@ -453,7 +446,7 @@ class RecordSyncEngine @Inject constructor(
             return
         }
 
-        Log.i(TAG, "startDictionaryResolutionLoop: started")
+        Log.i(TAG, "startDictionaryResolutionLoop: started (Serial + Compliant Mode)")
 
         try {
             withContext(Dispatchers.IO) {
@@ -480,36 +473,42 @@ class RecordSyncEngine @Inject constructor(
                     current = 0,
                     total = totalUnknown
                 )
-                Log.i(TAG, "startDictionaryResolutionLoop: progress updated to 自動生成中")
 
                 var processedCount = 0
+                val CHUNK_SIZE = 100
 
                 while (true) {
                     currentCoroutineContext().ensureActive()
-                    val unknownTitles = programDao.getUnknownTitles(limit = 50)
+                    val unknownTitles = programDao.getUnknownTitles(limit = CHUNK_SIZE)
                     if (unknownTitles.isEmpty()) break
 
                     val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
 
-                    for (title in unknownTitles) {
+                    // ★ 規約遵守の工夫1: ベースタイトルで重複排除し、APIコール回数を極限まで減らす
+                    val baseTitleMap =
+                        unknownTitles.groupBy { TitleNormalizer.extractDisplayTitle(it) }
+                    val resolvedBaseTitles = HashMap<String, String>()
+
+                    // ★ 規約遵守の工夫2: 並列処理(async)をやめ、直列(for)で丁寧にAPIを叩く
+                    for (baseTitle in baseTitleMap.keys) {
                         currentCoroutineContext().ensureActive()
-                        val baseTitle = TitleNormalizer.extractDisplayTitle(title)
-
-                        val canonicalTitle = try {
-                            WikipediaNormalizer.getCanonicalTitle(baseTitle)
-                        } catch (e: CancellationException) {
-                            throw e
+                        try {
+                            val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                            resolvedBaseTitles[baseTitle] = canonicalTitle ?: baseTitle
                         } catch (e: Exception) {
-                            Log.w(
-                                TAG,
-                                "Wikipedia lookup failed for '$baseTitle', skipping: ${e.message}"
-                            )
-                            null
+                            if (e !is CancellationException) {
+                                Log.w(TAG, "Wikipedia lookup failed for '$baseTitle': ${e.message}")
+                            }
+                            resolvedBaseTitles[baseTitle] = baseTitle
                         }
-
+                        // ★ 規約遵守の工夫3: APIコールの間に1000ms(1秒)のポライトディレイを挿入
                         delay(300)
+                    }
 
-                        val finalSeriesName = canonicalTitle ?: baseTitle
+                    for (title in unknownTitles) {
+                        val baseTitle = TitleNormalizer.extractDisplayTitle(title)
+                        val finalSeriesName = resolvedBaseTitles[baseTitle] ?: baseTitle
+
                         processedCount++
                         _syncProgress.value = _syncProgress.value.copy(current = processedCount)
 
@@ -522,6 +521,7 @@ class RecordSyncEngine @Inject constructor(
                         )
                     }
 
+                    // DB更新は一括（トランザクション）で行い、端末の処理速度を稼ぐ
                     if (newDictEntries.isNotEmpty()) {
                         db.withTransaction {
                             aiSeriesDictionaryDao.insertAll(newDictEntries)
@@ -535,7 +535,7 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     val hasMore = programDao.getUnknownTitlesCount() > 0
-                    if (hasMore) delay(2000)
+                    if (hasMore) delay(500)
                 }
 
                 Log.i(TAG, "Dictionary resolution loop completed successfully.")

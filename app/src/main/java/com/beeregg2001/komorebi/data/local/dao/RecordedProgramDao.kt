@@ -27,6 +27,49 @@ interface RecordedProgramDao {
     @Query("DELETE FROM recorded_programs WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
 
+    // =========================================================================
+    // ★ 修正: 「全ての録画」用のソートクエリ群 (日時、名前、録画時間)
+    // =========================================================================
+    @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
+    fun getAll_DateDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY start_time ASC")
+    fun getAll_DateAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY title DESC")
+    fun getAll_TitleDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY title ASC")
+    fun getAll_TitleAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY video_duration DESC")
+    fun getAll_DurationDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY video_duration ASC")
+    fun getAll_DurationAsc(): PagingSource<Int, RecordedProgramEntity>
+
+
+    // =========================================================================
+    // ★ 修正: 「未視聴」用のソートクエリ群 (日時、名前、録画時間)
+    // =========================================================================
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY start_time DESC")
+    fun getUnwatched_DateDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY start_time ASC")
+    fun getUnwatched_DateAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY title DESC")
+    fun getUnwatched_TitleDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY title ASC")
+    fun getUnwatched_TitleAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY video_duration DESC")
+    fun getUnwatched_DurationDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY video_duration ASC")
+    fun getUnwatched_DurationAsc(): PagingSource<Int, RecordedProgramEntity>
+
     @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
     fun getAllPagingSource(): PagingSource<Int, RecordedProgramEntity>
 

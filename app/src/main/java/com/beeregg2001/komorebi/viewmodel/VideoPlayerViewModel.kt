@@ -50,6 +50,10 @@ class VideoPlayerViewModel @Inject constructor(
     private val _chapters = MutableStateFlow<List<ChapterInfo>>(emptyList())
     val chapters: StateFlow<List<ChapterInfo>> = _chapters.asStateFlow()
 
+    // ★ 追加: 外部ファイルなどから取得したチャプター情報を保持するStateFlow
+    private val _externalChapters = MutableStateFlow<List<ChapterInfo>>(emptyList())
+    val externalChapters: StateFlow<List<ChapterInfo>> = _externalChapters.asStateFlow()
+
     private val _isLiveStream = MutableStateFlow(false)
     val isLiveStream: StateFlow<Boolean> = _isLiveStream.asStateFlow()
 
@@ -63,7 +67,6 @@ class VideoPlayerViewModel @Inject constructor(
     private var detailFetchJob: Job? = null
     private var streamMaintenanceJob: Job? = null
 
-    // ★ 修正: ライブ視聴側と同様に、キャッシュが空ならAPIから取得する安全なフローに統一
     fun fetchAvailableQualities() {
         viewModelScope.launch(Dispatchers.IO) {
             _isQualitiesLoaded.value = false
@@ -212,6 +215,7 @@ class VideoPlayerViewModel @Inject constructor(
         _programDetail.value = null
         _tiledThumbnailUrl.value = null
         _chapters.value = emptyList()
+        _externalChapters.value = emptyList() // ★ 追加: 外部チャプター情報もクリア
         _isLiveStream.value = false
     }
 

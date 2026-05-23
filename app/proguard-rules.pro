@@ -15,3 +15,9 @@
     public static **[] values();
     public static ** valueOf(java.lang.String);
 }
+
+# Ktorが参照するAndroid非対応のJava Management APIの警告を無視する
+-dontwarn java.lang.management.**
+
+# Ktor内部のデバッグ機能関連の欠落警告を無視する
+-dontwarn io.ktor.util.debug.**

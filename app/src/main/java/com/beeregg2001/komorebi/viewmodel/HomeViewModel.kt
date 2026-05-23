@@ -39,7 +39,7 @@ data class BaseballGameInfo(
 )
 
 @RequiresApi(Build.VERSION_CODES.O)
-@OptIn(FlowPreview::class) // ★ 追加: debounceを使用するためのオプトイン
+@OptIn(FlowPreview::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
@@ -194,7 +194,8 @@ class HomeViewModel @Inject constructor(
                     )
                     if (excludeKeywords.any { prog.title.contains(it) }) return@filter false
 
-                    val matchKeywords = listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE", "L！VE")
+                    val matchKeywords =
+                        listOf("中継", "対", "×", "vs", "戦", "生放送", "LIVE", "L！VE")
                     matchKeywords.any { keyword ->
                         prog.title.contains(
                             keyword,
@@ -334,7 +335,6 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // ★ 最適化: FlowPreview を使用し、起動時の値のバタつきによるAPI多重呼び出しをブロック
             combine(
                 pickupGenreLabel,
                 pickupTimeSetting,
@@ -343,19 +343,23 @@ class HomeViewModel @Inject constructor(
             ) { genre, time, excludePaid, baseballTeams ->
                 listOf(genre, time, excludePaid, baseballTeams.toString())
             }
-                .distinctUntilChanged() // 値が本当に変わった時だけ下へ流す
-                .debounce(1500L)        // 最後の変更から1.5秒間待機してから実行（連続発火防止）
+                .distinctUntilChanged()
+                .debounce(1500L)
                 .collectLatest {
                     fetchAllTypeGenrePickup()
                 }
         }
 
+        // ★ 修正: アプリアップデート確認は急がないので、UI描画後（3秒後）に実行
         viewModelScope.launch {
+            delay(3000)
             val receiveBeta = settingsRepository.receiveBetaUpdates.first()
             appUpdater.checkForUpdates(receiveBetaUpdates = receiveBeta)
         }
 
+        // ★ 修正: バックエンドのヘルスチェックも、UIが立ち上がってから（1.5秒後）実行
         viewModelScope.launch {
+            delay(1500)
             performBackendHealthCheck()
         }
     }

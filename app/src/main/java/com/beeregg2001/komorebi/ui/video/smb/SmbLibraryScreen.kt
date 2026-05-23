@@ -52,8 +52,11 @@ import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.*
+import com.beeregg2001.komorebi.viewmodel.SmbSortOrder
+import com.beeregg2001.komorebi.viewmodel.SmbSortType
 import com.beeregg2001.komorebi.viewmodel.SmbViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -70,24 +73,37 @@ fun SmbLibraryScreen(
     onReturnFocusConsumed: () -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
-    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     val fileList by viewModel.fileList.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val activeSearchQuery by viewModel.activeSearchQuery.collectAsState()
+    val searchHistory by viewModel.searchHistory.collectAsState()
+
+    val sortType by viewModel.sortType.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
+
     val pinnedFolders by viewModel.pinnedFolders.collectAsState()
     val drives by viewModel.drives.collectAsState()
     val currentPath by viewModel.currentPath.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.errorMessage.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
 
     val focuses = rememberRecordListFocusRequesters()
     val ticketManager = rememberFocusTicketManager()
 
     var isListView by remember { mutableStateOf(true) }
-
     var isRightMenuOpen by remember { mutableStateOf(false) }
     var isDetailOpen by remember { mutableStateOf(false) }
+    var isSortMenuOpen by remember { mutableStateOf(false) }
     var selectedItemForMenu by remember { mutableStateOf<SmbItem?>(null) }
     var isLeftMenuOverlayOpen by remember { mutableStateOf(false) }
     var lastFocusedPath by remember { mutableStateOf<String?>(null) }
+
+    var isSearchBarVisible by remember { mutableStateOf(false) }
+    var isBackButtonFocused by remember { mutableStateOf(false) }
+    val sortButtonRequester = remember { FocusRequester() }
+    val historyFirstItemRequester = remember { FocusRequester() }
 
     var toastMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(toastMessage) {
@@ -97,8 +113,9 @@ fun SmbLibraryScreen(
         }
     }
 
-    val isAnyOverlayOpen = isRightMenuOpen || isDetailOpen || isLeftMenuOverlayOpen
-    val topBarDownRequester = remember { FocusRequester() }
+    val isAnyOverlayOpen =
+        isRightMenuOpen || isDetailOpen || isLeftMenuOverlayOpen || isSortMenuOpen
+    var topBarDownRequester by remember { mutableStateOf(focuses.firstItem) }
 
     LaunchedEffect(Unit) {
         if (isReturningFromPlayer && lastPlayedPath != null) {
@@ -129,6 +146,11 @@ fun SmbLibraryScreen(
                 )
             }
 
+            isSortMenuOpen -> {
+                isSortMenuOpen = false
+                sortButtonRequester.safeRequestFocus("CloseSort")
+            }
+
             isLeftMenuOverlayOpen -> {
                 isLeftMenuOverlayOpen = false
                 if (lastFocusedPath != null) ticketManager.issue(
@@ -137,6 +159,21 @@ fun SmbLibraryScreen(
                 )
             }
 
+            isSearchBarVisible -> {
+                isSearchBarVisible = false
+                scope.launch {
+                    delay(50)
+                    if (activeSearchQuery.isNotEmpty()) focuses.contentContainer.safeRequestFocus("SearchHide")
+                    else ticketManager.issue(FocusTicket.LIST_TOP)
+                }
+            }
+
+            activeSearchQuery.isNotEmpty() -> {
+                viewModel.clearSearch()
+                ticketManager.issue(FocusTicket.LIST_TOP)
+            }
+
+            isBackButtonFocused -> onBack()
             else -> {
                 focuses.loadingSafeHouse.safeRequestFocus("Back_SafeHouse")
                 if (!viewModel.navigateUp()) {
@@ -149,10 +186,23 @@ fun SmbLibraryScreen(
     }
     BackHandler { handleBackPress() }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(colors.background)) {
+    val displayTitle = remember(currentPath, drives) {
+        if (currentPath == "smb://") "ファイルライブラリ (SMB)"
+        else {
+            val matchingDrive = drives.find { currentPath.startsWith(it.path) }
+            if (matchingDrive != null) {
+                val relativePath = currentPath.removePrefix(matchingDrive.path)
+                if (relativePath.isEmpty()) matchingDrive.name
+                else "${matchingDrive.name} - /$relativePath"
+            } else currentPath.replace("smb://", "")
+        }
+    }
 
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+    ) {
         Box(
             modifier = Modifier
                 .size(1.dp)
@@ -161,12 +211,12 @@ fun SmbLibraryScreen(
                 .focusable()
         )
 
-        Column(modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 88.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 88.dp)
+        ) {
             Row(modifier = Modifier.fillMaxSize()) {
-
-                // --- 左メニュー (ナビゲーションペイン: 常設) ---
                 if (isListView) {
                     Box(
                         modifier = Modifier
@@ -174,7 +224,6 @@ fun SmbLibraryScreen(
                             .width(240.dp)
                             .fillMaxHeight()
                             .padding(start = 28.dp, bottom = 20.dp)
-                        // ★ 修正: ここでのクリップや背景塗りを削除し、中のSurfaceに任せる
                     ) {
                         SmbNavigationPaneContent(
                             drives = drives,
@@ -196,7 +245,6 @@ fun SmbLibraryScreen(
                     }
                 }
 
-                // --- メインコンテンツエリア ---
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -229,7 +277,7 @@ fun SmbLibraryScreen(
                             onFocusedItemChanged = { lastFocusedPath = it.path },
                             isMenuOpen = isAnyOverlayOpen,
                             onBackPress = { handleBackPress() },
-                            onTopBarDownRequesterChanged = { topBarDownRequester.safeRequestFocus() }
+                            onTopBarDownRequesterChanged = { topBarDownRequester = it }
                         )
                     } else {
                         SmbGridContent(
@@ -248,7 +296,7 @@ fun SmbLibraryScreen(
                             onFocusedItemChanged = { lastFocusedPath = it.path },
                             isMenuOpen = isAnyOverlayOpen,
                             onBackPress = { handleBackPress() },
-                            onTopBarDownRequesterChanged = { topBarDownRequester.safeRequestFocus() }
+                            onTopBarDownRequesterChanged = { topBarDownRequester = it }
                         )
                     }
 
@@ -261,20 +309,78 @@ fun SmbLibraryScreen(
                                 .background(colors.background.copy(alpha = 0.6f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(color = colors.accent)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = colors.accent)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                if (activeSearchQuery.isNotEmpty()) {
+                                    Text(
+                                        text = "ネットワーク内を横断検索中...",
+                                        color = colors.textPrimary,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (errorMessage != null && !isLoading) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = errorMessage!!,
+                                color = colors.textSecondary,
+                                style = MaterialTheme.typography.titleMedium
+                            )
                         }
                     }
                 }
             }
         }
 
+        // ★ 修正: TopBarの zIndex を 100f から 5f に下げることで、詳細オーバーレイ(21f)に被らないようにする
         SmbTopBar(
-            path = currentPath,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp, vertical = 20.dp)
+                .zIndex(5f)
+                .focusProperties {
+                    up = FocusRequester.Cancel
+                    if (isAnyOverlayOpen) {
+                        down = FocusRequester.Cancel; left = FocusRequester.Cancel; right =
+                            FocusRequester.Cancel
+                    }
+                },
+            isSearchBarVisible = isSearchBarVisible,
+            searchQuery = searchQuery,
+            activeSearchQuery = activeSearchQuery,
+            currentDisplayTitle = displayTitle,
+            searchHistory = searchHistory,
+            hasHistory = searchHistory.isNotEmpty(),
             isListView = isListView,
+            searchCloseButtonFocusRequester = focuses.searchCloseButton,
+            searchInputFocusRequester = focuses.searchInput,
+            innerTextFieldFocusRequester = focuses.innerTextField,
+            historyListFocusRequester = focuses.historyList,
+            historyFirstItemFocusRequester = historyFirstItemRequester,
+            firstItemFocusRequester = topBarDownRequester,
+            backButtonFocusRequester = focuses.backButton,
+            searchOpenButtonFocusRequester = focuses.searchOpenButton,
+            viewToggleButtonFocusRequester = focuses.viewToggleButton,
+            sortButtonFocusRequester = sortButtonRequester,
+            onSearchQueryChange = { viewModel.updateSearchQuery(it) },
+            onExecuteSearch = {
+                viewModel.searchFiles(it)
+                isSearchBarVisible = false
+                ticketManager.issue(FocusTicket.LIST_TOP)
+            },
+            onBackPress = handleBackPress,
+            onSearchOpen = { isSearchBarVisible = true },
             onViewToggle = { isListView = !isListView; ticketManager.issue(FocusTicket.LIST_TOP) },
-            onBack = handleBackPress,
-            focuses = focuses,
-            onFocusDown = { ticketManager.issue(FocusTicket.LIST_TOP) }
+            onSortOpen = { isSortMenuOpen = true },
+            onKeyboardActiveClick = { },
+            onBackButtonFocusChanged = { isBackButtonFocused = it }
         )
 
         // --- オーバーレイ群 ---
@@ -303,6 +409,18 @@ fun SmbLibraryScreen(
             onClose = { handleBackPress() }
         )
 
+        SmbSortMenuOverlay(
+            isOpen = isSortMenuOpen,
+            currentType = sortType,
+            currentOrder = sortOrder,
+            onClose = { handleBackPress() },
+            onSelect = { newType, newOrder ->
+                viewModel.setSort(newType, newOrder)
+                isSortMenuOpen = false
+                sortButtonRequester.safeRequestFocus("CloseSort")
+            }
+        )
+
         if (!isListView) {
             SmbLeftNavPaneOverlay(
                 isOpen = isLeftMenuOverlayOpen,
@@ -322,9 +440,121 @@ fun SmbLibraryScreen(
     }
 }
 
-// ======================================================================================
-// ナビゲーションペインのコンテンツ部分
-// ======================================================================================
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
+@Composable
+fun BoxScope.SmbSortMenuOverlay(
+    isOpen: Boolean,
+    currentType: SmbSortType,
+    currentOrder: SmbSortOrder,
+    onClose: () -> Unit,
+    onSelect: (SmbSortType, SmbSortOrder) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(isOpen) {
+        if (isOpen) {
+            delay(150); try {
+                focusRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = isOpen,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.zIndex(10f)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+        )
+    }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = isOpen,
+        enter = slideInHorizontally { it } + fadeIn(),
+        exit = slideOutHorizontally { it } + fadeOut(),
+        modifier = Modifier
+            .align(Alignment.CenterEnd)
+            .zIndex(11f)
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(280.dp)
+                .fillMaxHeight()
+                .focusProperties { left = FocusRequester.Cancel; right = FocusRequester.Cancel }
+                .onKeyEvent {
+                    if (it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.Back || it.key == Key.Escape)) {
+                        onClose(); true
+                    } else false
+                },
+            colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.98f)),
+            shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowLeft,
+                    contentDescription = null,
+                    tint = colors.textPrimary.copy(alpha = 0.4f),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 4.dp)
+                        .size(24.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 28.dp, top = 24.dp, end = 12.dp, bottom = 24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "並び替え",
+                        color = colors.textSecondary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 16.dp, start = 8.dp)
+                    )
+
+                    val options = listOf(
+                        Triple(SmbSortType.NAME, SmbSortOrder.ASC, "名前 (A→Z)"),
+                        Triple(SmbSortType.NAME, SmbSortOrder.DESC, "名前 (Z→A)"),
+                        Triple(SmbSortType.DATE, SmbSortOrder.DESC, "更新日時 (新しい順)"),
+                        Triple(SmbSortType.DATE, SmbSortOrder.ASC, "更新日時 (古い順)"),
+                        Triple(SmbSortType.SIZE, SmbSortOrder.DESC, "サイズ (大きい順)"),
+                        Triple(SmbSortType.SIZE, SmbSortOrder.ASC, "サイズ (小さい順)")
+                    )
+
+                    var isFirstItem = true
+                    options.forEach { (type, order, label) ->
+                        val isSelected = currentType == type && currentOrder == order
+                        val reqModifier =
+                            if (isSelected || (isFirstItem && !options.any { it.first == currentType && it.second == currentOrder })) {
+                                isFirstItem = false
+                                Modifier.focusRequester(focusRequester)
+                            } else Modifier
+
+                        SmbSideMenuItem(
+                            icon = if (isSelected) Icons.Default.Check else Icons.Default.Circle,
+                            iconTint = if (isSelected) colors.accent else Color.Transparent,
+                            label = label,
+                            onClick = { onSelect(type, order) },
+                            modifier = reqModifier
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SmbNavigationPaneContent(
@@ -343,7 +573,6 @@ fun SmbNavigationPaneContent(
             .fillMaxSize()
             .then(if (isOverlay) Modifier.focusRequester(focuses.navPane) else Modifier),
         colors = SurfaceDefaults.colors(
-            // ★ 修正: 透明度を調整して視認性とテーマの統一感を向上
             containerColor = colors.surface.copy(alpha = if (isOverlay) 0.98f else 0.85f),
             contentColor = colors.textPrimary
         ),
@@ -364,7 +593,6 @@ fun SmbNavigationPaneContent(
             var isFirstFocusableSet = false
 
             Column(modifier = Modifier.verticalScroll(scrollState)) {
-                // --- ドライブ一覧セクション ---
                 Text(
                     text = "ドライブ",
                     style = MaterialTheme.typography.titleMedium,
@@ -394,7 +622,6 @@ fun SmbNavigationPaneContent(
 
                 Spacer(Modifier.height(16.dp))
 
-                // --- ピン留めフォルダセクション ---
                 Text(
                     text = "ピン留めフォルダ",
                     style = MaterialTheme.typography.titleMedium,
@@ -451,9 +678,6 @@ fun SmbNavigationPaneContent(
     }
 }
 
-// ======================================================================================
-// 左メニュー用ボタン (フォーカス時の色反転を明示的に制御)
-// ======================================================================================
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun SmbMenuButton(
@@ -465,7 +689,6 @@ private fun SmbMenuButton(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    // ★ 修正: isFocused に応じて色を明示的に計算する
     val inverseColor = if (colors.isDark) Color.Black else Color.White
     val contentColor = if (isFocused) inverseColor else colors.textPrimary
 
@@ -490,7 +713,6 @@ private fun SmbMenuButton(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // ★ 修正: 計算した contentColor を明示的に適用
             Icon(
                 imageVector = icon,
                 contentDescription = null,
@@ -503,30 +725,35 @@ private fun SmbMenuButton(
                 fontSize = 15.sp,
                 maxLines = 1,
                 style = MaterialTheme.typography.labelLarge,
-                color = contentColor, // ★ 修正: ここにも明示適用
+                color = contentColor,
                 modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier)
             )
         }
     }
 }
 
-// ======================================================================================
-// 右サブメニュー用ボタン (フォーカス時の色反転を明示的に制御)
-// ======================================================================================
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun SmbSideMenuItem(
     icon: ImageVector,
     label: String,
     modifier: Modifier = Modifier,
+    iconTint: Color = Color.Unspecified,
     onClick: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    // ★ 修正: isFocused に応じて色を明示的に計算する
     val inverseColor = if (colors.isDark) Color.Black else Color.White
     val contentColor = if (isFocused) inverseColor else colors.textPrimary
+
+    // ★ 修正: 透明が指定されている場合は、フォーカス時も透明を維持する
+    val finalIconTint = when {
+        iconTint == Color.Transparent -> Color.Transparent
+        isFocused -> inverseColor
+        iconTint != Color.Unspecified -> iconTint
+        else -> colors.textPrimary
+    }
 
     Surface(
         onClick = onClick,
@@ -548,12 +775,11 @@ private fun SmbSideMenuItem(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // ★ 修正: 計算した contentColor を明示的に適用
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 modifier = Modifier.size(24.dp),
-                tint = contentColor
+                tint = finalIconTint
             )
             Spacer(Modifier.width(12.dp))
             Text(
@@ -561,16 +787,13 @@ private fun SmbSideMenuItem(
                 style = MaterialTheme.typography.labelLarge,
                 fontSize = 13.sp,
                 maxLines = 1,
-                color = contentColor, // ★ 修正: ここにも明示適用
+                color = contentColor,
                 modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier)
             )
         }
     }
 }
 
-// ======================================================================================
-// オーバーレイ群
-// ======================================================================================
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalAnimationApi::class, ExperimentalTvMaterial3Api::class)
 @Composable
@@ -591,9 +814,11 @@ fun BoxScope.SmbFileDetailOverlay(isOpen: Boolean, item: SmbItem?, onClose: () -
         exit = fadeOut(),
         modifier = Modifier.zIndex(20f)
     ) {
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.6f)))
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.6f))
+        )
     }
     androidx.compose.animation.AnimatedVisibility(
         visible = isOpen,
@@ -708,9 +933,11 @@ fun BoxScope.SmbRightMenuOverlay(
         exit = fadeOut(),
         modifier = Modifier.zIndex(10f)
     ) {
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f)))
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+        )
     }
     androidx.compose.animation.AnimatedVisibility(
         visible = isOpen,
@@ -743,9 +970,11 @@ fun BoxScope.SmbRightMenuOverlay(
                         .padding(start = 4.dp)
                         .size(24.dp)
                 )
-                Box(modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 28.dp)
+                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -800,9 +1029,11 @@ fun BoxScope.SmbLeftNavPaneOverlay(
         exit = fadeOut(),
         modifier = Modifier.zIndex(10f)
     ) {
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f)))
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+        )
     }
     androidx.compose.animation.AnimatedVisibility(
         visible = isOpen,

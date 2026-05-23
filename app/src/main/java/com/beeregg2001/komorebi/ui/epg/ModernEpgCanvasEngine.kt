@@ -76,13 +76,14 @@ fun ModernEpgCanvasEngine_Smooth(
     val colors = KomorebiTheme.colors
 
     val hideSubChannels by settingsViewModel.hideSubChannels.collectAsState(initial = false)
+    val epgColumnCountStr by settingsViewModel.epgColumnCount.collectAsState()
+    val epgFontSizeScaleStr by settingsViewModel.epgFontSizeScale.collectAsState()
+    val epgVisibleHoursStr by settingsViewModel.epgVisibleHours.collectAsState(initial = "6")
 
-    val config =
-        remember(density, colors, hideSubChannels) { EpgConfig(density, colors, hideSubChannels) }
-    val epgState = remember(config) { EpgState(config) }
-
-    val textMeasurer = rememberTextMeasurer()
-    val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
+    val columnCount = remember(epgColumnCountStr) { epgColumnCountStr.toIntOrNull() ?: 7 }
+    val fontSizeScale =
+        remember(epgFontSizeScaleStr) { epgFontSizeScaleStr.toFloatOrNull() ?: 1.0f }
+    val visibleHours = remember(epgVisibleHoursStr) { epgVisibleHoursStr.toIntOrNull() ?: 6 }
 
     val filteredLogoUrls = remember(uiState, hideSubChannels, logoUrls) {
         if (uiState is EpgUiState.Success) {
@@ -117,63 +118,6 @@ fun ModernEpgCanvasEngine_Smooth(
     val epgViewModel: com.beeregg2001.komorebi.viewmodel.EpgViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
 
-    // ★修正: epgRestoreTrigger の処理に「期限切れ判定」を追加
-    LaunchedEffect(epgViewModel.epgRestoreTrigger) {
-        val triggerTime = epgViewModel.epgRestoreTrigger
-        if (triggerTime > 0L) {
-            val targetCh = epgViewModel.lastFocusedChannelId
-            val targetTime = epgViewModel.lastFocusedTime
-            val now = System.currentTimeMillis()
-
-            // トリガーが発行されてから1秒(1000ms)未満の「新鮮なトリガー」のみジャンプを実行する
-            // （別タブで詳細を開閉した際の古いトリガーの暴発を防ぐため）
-            if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
-                Log.i(
-                    "KomorebiFocus",
-                    "[ModernEpgCanvas] 復元トリガー検知！ $targetCh - $targetTime へジャンプします"
-                )
-                epgState.restoreFocus(targetCh, targetTime)
-                delay(150)
-                gridFocusRequester.requestFocus()
-            } else {
-                Log.i(
-                    "KomorebiFocus",
-                    "[ModernEpgCanvas] 古いトリガー($triggerTime) または無効なデータのためジャンプをスキップします"
-                )
-            }
-            // 処理後は必ずフラグをクリアする
-            epgViewModel.clearEpgFocus()
-        }
-    }
-
-    androidx.compose.runtime.LaunchedEffect(
-        epgState.focusedCol,
-        epgState.focusedMin,
-        epgState.currentFocusedProgram
-    ) {
-        val ch = epgState.uiChannels.getOrNull(epgState.focusedCol)
-        val prog = epgState.currentFocusedProgram
-
-        if (ch != null && prog != null && prog.title != "（番組情報なし）") {
-            val time = com.beeregg2001.komorebi.ui.epg.EpgDataConverter.safeParseTime(
-                prog.start_time,
-                epgState.baseTime
-            )
-            epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
-
-            // =========================================================
-            // ★ 追加: 番組にフォーカスが当たったときにジャンル情報をログ出力
-            // =========================================================
-            Log.i("EpgGenreCheck", "====================================")
-            Log.i("EpgGenreCheck", "Focused: ${prog.title}")
-            Log.i(
-                "EpgGenreCheck",
-                "Genres : ${prog.genres?.joinToString { "${it.major} / ${it.middle}" }}"
-            )
-            Log.i("EpgGenreCheck", "====================================")
-        }
-    }
-
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
@@ -185,57 +129,116 @@ fun ModernEpgCanvasEngine_Smooth(
     var lastRequestedTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     var isNextUpdateSeamless by remember { mutableStateOf(false) }
 
-    LaunchedEffect(epgState.hasData) {
-        if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
-    }
-
-    LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
-        if (isHeaderVisible && pendingHeaderFocusIndex != null) {
-            val index = pendingHeaderFocusIndex!!
-            delay(50)
-            if (index == -2) topTabFocusRequester.safeRequestFocus("Epg_TopTab")
-            else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].safeRequestFocus(
-                "Epg_SubTab"
-            )
-            pendingHeaderFocusIndex = null
-        }
-    }
-
-    LaunchedEffect(uiState, hideSubChannels) {
-        if (uiState is EpgUiState.Success) {
-            val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
-            lastLoadedType = currentType
-            if (isTypeChanged) hasRenderedFirstFrame = false
-
-            isJumping = true
-            lastRequestedTargetTime = null
-
-            val prevChannelId = epgViewModel.lastFocusedChannelId
-
-            epgState.updateData(
-                newData = uiState.data,
-                targetTime = uiState.targetTime,
-                resetFocus = isTypeChanged
-            )
-
-            if (!isTypeChanged && prevChannelId != null) {
-                val targetTime =
-                    uiState.targetTime ?: epgViewModel.lastFocusedTime ?: OffsetDateTime.now()
-                epgState.restoreFocus(prevChannelId, targetTime)
-            }
-
-            isNextUpdateSeamless = false
-
-            delay(100)
-            isJumping = false
-        }
-    }
-
     BoxWithConstraints {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
 
+        val config = remember(
+            density,
+            colors,
+            hideSubChannels,
+            columnCount,
+            fontSizeScale,
+            visibleHours,
+            w,
+            h
+        ) {
+            EpgConfig(
+                density,
+                colors,
+                w,
+                h,
+                columnCount,
+                fontSizeScale,
+                visibleHours,
+                hideSubChannels
+            )
+        }
+        val epgState = remember(config) { EpgState(config) }
+        val textMeasurer = rememberTextMeasurer()
+        val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
+
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
+
+        LaunchedEffect(epgViewModel.epgRestoreTrigger) {
+            val triggerTime = epgViewModel.epgRestoreTrigger
+            if (triggerTime > 0L) {
+                val targetCh = epgViewModel.lastFocusedChannelId
+                val targetTime = epgViewModel.lastFocusedTime
+                val now = System.currentTimeMillis()
+
+                if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
+                    epgState.restoreFocus(targetCh, targetTime)
+                    delay(150)
+                    gridFocusRequester.requestFocus()
+                }
+                epgViewModel.clearEpgFocus()
+            }
+        }
+
+        androidx.compose.runtime.LaunchedEffect(
+            epgState.focusedCol,
+            epgState.focusedMin,
+            epgState.currentFocusedProgram
+        ) {
+            val ch = epgState.uiChannels.getOrNull(epgState.focusedCol)
+            val prog = epgState.currentFocusedProgram
+
+            if (ch != null && prog != null && prog.title != "（番組情報なし）") {
+                val time = com.beeregg2001.komorebi.ui.epg.EpgDataConverter.safeParseTime(
+                    prog.start_time,
+                    epgState.baseTime
+                )
+                epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
+            }
+        }
+
+        LaunchedEffect(epgState.hasData) {
+            if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
+        }
+
+        LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
+            if (isHeaderVisible && pendingHeaderFocusIndex != null) {
+                val index = pendingHeaderFocusIndex!!
+                delay(50)
+                if (index == -2) topTabFocusRequester.safeRequestFocus("Epg_TopTab")
+                else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].safeRequestFocus(
+                    "Epg_SubTab"
+                )
+                pendingHeaderFocusIndex = null
+            }
+        }
+
+        LaunchedEffect(uiState, hideSubChannels, config) {
+            if (uiState is EpgUiState.Success) {
+                val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
+                lastLoadedType = currentType
+                if (isTypeChanged) hasRenderedFirstFrame = false
+
+                isJumping = true
+                lastRequestedTargetTime = null
+
+                val prevChannelId = epgViewModel.lastFocusedChannelId
+
+                epgState.updateData(
+                    newData = uiState.data,
+                    targetTime = uiState.targetTime,
+                    currentType = currentType,
+                    resetFocus = isTypeChanged
+                )
+
+                if (!isTypeChanged && prevChannelId != null) {
+                    val targetTime =
+                        uiState.targetTime ?: epgViewModel.lastFocusedTime ?: OffsetDateTime.now()
+                    epgState.restoreFocus(prevChannelId, targetTime)
+                }
+
+                isNextUpdateSeamless = false
+
+                delay(100)
+                isJumping = false
+            }
+        }
 
         val scrollSpec = if (isJumping) snap() else spring<Float>(
             dampingRatio = Spring.DampingRatioNoBouncy,

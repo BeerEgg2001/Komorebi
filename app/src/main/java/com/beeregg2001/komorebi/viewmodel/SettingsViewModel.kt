@@ -33,6 +33,7 @@ import io.ktor.server.request.receiveParameters
 import io.ktor.http.ContentType
 import io.ktor.server.application.call
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
@@ -291,6 +292,23 @@ class SettingsViewModel @Inject constructor(
         false
     )
 
+    val geminiApiKey: StateFlow<String> = settingsRepository.geminiApiKey.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
+    )
+
+    // ★ 追加: 番組表設定の StateFlow
+    val epgColumnCount: StateFlow<String> = settingsRepository.epgColumnCount.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "7"
+    )
+    val epgFontSizeScale: StateFlow<String> = settingsRepository.epgFontSizeScale.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "1.0"
+    )
+    val epgVisibleHours: StateFlow<String> = settingsRepository.epgVisibleHours.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), "6"
+    )
+
     val smbServerList: StateFlow<List<SmbServer>> = settingsRepository.smbServerList
         .map { json ->
             try {
@@ -329,11 +347,15 @@ class SettingsViewModel @Inject constructor(
     val smbServerAddedEvent = _smbServerAddedEvent.asSharedFlow()
 
     init {
-        forceSyncStreamQualities()
+        // ★ 修正: 初期化時の重い同期処理をバックグラウンドに回し、UI描画後に遅らせる
+        viewModelScope.launch {
+            delay(1500)
+            forceSyncStreamQualities()
+        }
     }
 
-    private fun forceSyncStreamQualities() {
-        viewModelScope.launch(Dispatchers.IO) {
+    private suspend fun forceSyncStreamQualities() {
+        withContext(Dispatchers.IO) {
             try {
                 val backend = settingsRepository.backendType.first()
                 val preLive = settingsRepository.liveQuality.first()
@@ -395,7 +417,19 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: データストアから確実に最新の値を読み取る
+    // ★ 追加: 番組表設定の更新メソッド
+    fun updateEpgColumnCount(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_COLUMN_COUNT, value)
+    }
+
+    fun updateEpgFontSizeScale(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_FONT_SIZE_SCALE, value)
+    }
+
+    fun updateEpgVisibleHours(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPG_VISIBLE_HOURS, value)
+    }
+
     fun updateBackendType(newType: String) = viewModelScope.launch(Dispatchers.IO) {
         val oldType = settingsRepository.backendType.first()
         if (oldType == newType) return@launch
@@ -466,7 +500,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { syncEngine.launchSyncAllRecords(forceFullSync = true) }
     }
 
-    // ★ 修正: 直接Repositoryから最新のリストを読んで追加する (上書きバグ解消)
     fun addPostRecordingBatch(name: String, path: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val json = settingsRepository.postRecordingBatchList.first()
@@ -503,7 +536,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ★ 修正: 直接Repositoryから最新のリストを読んで追加する (上書きバグ解消)
     fun saveSmbServer(server: SmbServer) {
         viewModelScope.launch(Dispatchers.IO) {
             val json = settingsRepository.smbServerList.first()
@@ -633,7 +665,6 @@ class SettingsViewModel @Inject constructor(
                 }
 
                 get("/smb") {
-                    // ★ 修正: Ktor内でも確実に最新のリストを取得してからHTMLを返す
                     val targetId = call.request.queryParameters["id"]
                     val json = settingsRepository.smbServerList.first()
                     val currentList = try {

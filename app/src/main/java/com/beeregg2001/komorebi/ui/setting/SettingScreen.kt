@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalComposeUiApi::class)
+
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
@@ -37,13 +39,13 @@ import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.LocalTime
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import java.time.LocalTime
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -52,6 +54,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onClearLastChannel: () -> Unit = {},
     onClearWatchHistory: () -> Unit = {},
+    initialCategoryIndex: Int = 0,
+    initialFocusItemIndex: Int? = null,
     viewModel: SettingsViewModel = hiltViewModel(),
     channelViewModel: ChannelViewModel = hiltViewModel()
 ) {
@@ -63,7 +67,7 @@ fun SettingsScreen(
     val backgroundBrush = getSeasonalBackgroundBrush(KomorebiTheme.theme, currentTime)
 
     val prefs = rememberSettingPreferences(repository)
-    val uiState = rememberSettingUiState()
+    val uiState = rememberSettingUiState(initialCategoryIndex)
 
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
@@ -74,7 +78,6 @@ fun SettingsScreen(
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
-    // ★ GlobalToast 用のステート
     var toastMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(toastMessage) {
         if (toastMessage != null) {
@@ -83,7 +86,6 @@ fun SettingsScreen(
         }
     }
 
-    // ★ ViewModelからのSMB受信イベントを監視してトーストを表示
     LaunchedEffect(Unit) {
         viewModel.smbServerAddedEvent.collect { name ->
             toastMessage = "設定を受信しました！\n「$name」"
@@ -97,11 +99,14 @@ fun SettingsScreen(
         Category("録画設定", Icons.Default.VideoSettings),
         Category(AppStrings.SETTINGS_CATEGORY_HOME, Icons.Default.Home),
         Category(AppStrings.SETTINGS_CATEGORY_DISPLAY, Icons.Default.Dashboard),
+        Category("番組表設定", Icons.Default.GridOn),
         Category(AppStrings.SETTINGS_CATEGORY_COMMENT, Icons.Default.Tv),
         Category(AppStrings.SETTINGS_CATEGORY_LAB, Icons.Default.Science),
         Category(AppStrings.SETTINGS_CATEGORY_APP_INFO, Icons.Default.Info)
     )
     val categoryFocusRequesters = remember { List(categories.size) { FocusRequester() } }
+    val homeBackRequester = remember { FocusRequester() }
+
     val batchItemRs =
         remember(prefs.postRecordingBatchList) { List(prefs.postRecordingBatchList.size) { FocusRequester() } }
     val edcbPlayMethodR = remember { FocusRequester() }
@@ -153,6 +158,7 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester()
             ),
+            listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -168,11 +174,39 @@ fun SettingsScreen(
     val mainScrollState = rememberScrollState()
     val sidebarScrollState = rememberScrollState()
 
-    LaunchedEffect(uiState.selectedCategoryIndex) { mainScrollState.scrollTo(0) }
+    LaunchedEffect(uiState.selectedCategoryIndex) {
+        if (initialFocusItemIndex == null || uiState.selectedCategoryIndex != initialCategoryIndex) {
+            mainScrollState.scrollTo(0)
+        }
+    }
+
     LaunchedEffect(Unit) {
-        delay(300)
-        categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
-            ?.safeRequestFocus("Settings_Initial")
+        delay(400)
+
+        if (initialFocusItemIndex != null) {
+            uiState.isSidebarFocused = false
+            val targetRequester = itemFocusRequesters.getOrNull(initialCategoryIndex)
+                ?.getOrNull(initialFocusItemIndex)
+
+            var success = false
+            for (i in 0..5) {
+                try {
+                    targetRequester?.requestFocus()
+                    success = true
+                    break
+                } catch (e: Exception) {
+                    delay(150)
+                }
+            }
+
+            if (!success) {
+                categoryFocusRequesters.getOrNull(initialCategoryIndex)
+                    ?.safeRequestFocus("Settings_Fallback")
+            }
+        } else {
+            categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
+                ?.safeRequestFocus("Settings_Initial")
+        }
     }
 
     val closeDialog = {
@@ -207,7 +241,6 @@ fun SettingsScreen(
                     } else false
                 }
         ) {
-            // サイドバー
             Column(
                 modifier = Modifier
                     .width(280.dp)
@@ -255,7 +288,12 @@ fun SettingsScreen(
                             enabled = !uiState.isRestoringFocus,
                             modifier = Modifier
                                 .focusRequester(categoryFocusRequesters[index])
-                                .focusProperties { right = targetR }
+                                .focusProperties {
+                                    left = FocusRequester.Cancel // ★ 修正: 左キーでフォーカスが迷子になるのを防ぐ
+                                    right = targetR
+                                    if (index == 0) up = FocusRequester.Cancel
+                                    if (index == categories.lastIndex) down = homeBackRequester
+                                }
                         )
                     }
                 }
@@ -267,14 +305,18 @@ fun SettingsScreen(
                     onFocused = { },
                     onClick = onBack,
                     enabled = !uiState.isRestoringFocus,
-                    modifier = Modifier.focusProperties {
-                        up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default; right =
-                        itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)?.firstOrNull()
-                            ?: FocusRequester.Default
-                    })
+                    modifier = Modifier
+                        .focusRequester(homeBackRequester)
+                        .focusProperties {
+                            left = FocusRequester.Cancel // ★ 修正: こちらも左キーへの防波堤を追加
+                            up = categoryFocusRequesters.lastOrNull() ?: FocusRequester.Default
+                            down = FocusRequester.Cancel
+                            right = itemFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
+                                ?.firstOrNull() ?: FocusRequester.Default
+                        }
+                )
             }
 
-            // メインコンテンツ
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -361,7 +403,8 @@ fun SettingsScreen(
                                             SettingsRepository.EDCB_RECORD_PLAY_METHOD,
                                             it
                                         )
-                                    }; viewModel.updateEdcbRecordPlayMethod(it)
+                                    }
+                                    viewModel.updateEdcbRecordPlayMethod(it)
                                 }
                             },
                             edcbPlayMethodR,
@@ -372,33 +415,48 @@ fun SettingsScreen(
                                             "KonomiTV (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_IP,
                                                 input
-                                            ); "KonomiTV (ポート)" -> repository.saveString(
-                                            SettingsRepository.KONOMI_PORT,
-                                            input
-                                        ); "EDCB (IPアドレス)" -> repository.saveString(
-                                            SettingsRepository.EDCB_IP,
-                                            input
-                                        ); "EDCB (TCPポート)" -> repository.saveString(
-                                            SettingsRepository.EDCB_PORT,
-                                            input
-                                        ); "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
-                                            SettingsRepository.EDCB_HTTP_PORT,
-                                            input
-                                        ); "Mirakurun (IPアドレス)" -> repository.saveString(
-                                            SettingsRepository.MIRAKURUN_IP,
-                                            input
-                                        ); "Mirakurun (ポート)" -> repository.saveString(
-                                            SettingsRepository.MIRAKURUN_PORT,
+                                            )
+
+                                            "KonomiTV (ポート)" -> repository.saveString(
+                                                SettingsRepository.KONOMI_PORT,
+                                                input
+                                            )
+
+                                            "EDCB (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.EDCB_IP,
+                                                input
+                                            )
+
+                                            "EDCB (TCPポート)" -> repository.saveString(
+                                                SettingsRepository.EDCB_PORT,
+                                                input
+                                            )
+
+                                            "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
+                                                SettingsRepository.EDCB_HTTP_PORT,
+                                                input
+                                            )
+
+                                            "Mirakurun (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.MIRAKURUN_IP,
+                                                input
+                                            )
+
+                                            "Mirakurun (ポート)" -> repository.saveString(
+                                                SettingsRepository.MIRAKURUN_PORT,
+                                                input
+                                            )
+                                        }
+                                    }
+                                    when (t) {
+                                        "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(input)
+                                        "KonomiTV (ポート)" -> viewModel.updateKonomiPort(input)
+                                        "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(input)
+                                        "EDCB (TCPポート)" -> viewModel.updateEdcbPort(input)
+                                        "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(
                                             input
                                         )
-                                        }
-                                    }; when (t) {
-                                    "KonomiTV (IPアドレス)" -> viewModel.updateKonomiIp(input); "KonomiTV (ポート)" -> viewModel.updateKonomiPort(
-                                        input
-                                    ); "EDCB (IPアドレス)" -> viewModel.updateEdcbIp(input); "EDCB (TCPポート)" -> viewModel.updateEdcbPort(
-                                        input
-                                    ); "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(input)
-                                }
+                                    }
                                 }
                             },
                             {
@@ -421,7 +479,8 @@ fun SettingsScreen(
                                             SettingsRepository.BACKEND_TYPE,
                                             it
                                         )
-                                    }; viewModel.updateBackendType(it)
+                                    }
+                                    viewModel.updateBackendType(it)
                                 }
                             },
                             {
@@ -589,9 +648,8 @@ fun SettingsScreen(
                                         )
                                     }
                                 }
-                            }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2
-                        }
+                            }
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 2 }
 
                         3 -> RecordingSettingsContent(
                             prefs.postRecordingBatchList,
@@ -609,9 +667,7 @@ fun SettingsScreen(
                                     "「${b.name}」を削除しますか？"
                                 ) { viewModel.deletePostRecordingBatch(b) }
                             },
-                            itemFocusRequesters[3][0],
-                            batchItemRs,
-                            categoryFocusRequesters[3]
+                            itemFocusRequesters[3][0], batchItemRs, categoryFocusRequesters[3]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 3 }
 
                         4 -> HomeDisplaySettingsContent(
@@ -651,12 +707,13 @@ fun SettingsScreen(
                                             false,
                                             "DEFAULT"
                                         ); else -> "MONOTONE"
-                                    }; scope.launch {
-                                    repository.saveString(
-                                        SettingsRepository.APP_THEME,
-                                        nt
-                                    )
-                                }
+                                    }
+                                    scope.launch {
+                                        repository.saveString(
+                                            SettingsRepository.APP_THEME,
+                                            nt
+                                        )
+                                    }
                                 }
                             },
                             {
@@ -763,9 +820,8 @@ fun SettingsScreen(
                                         if (prefs.excludePaid == "ON") "OFF" else "ON"
                                     )
                                 }
-                            }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4
-                        }
+                            }
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 4 }
 
                         5 -> DisplaySettingsContent(
                             prefs,
@@ -836,21 +892,65 @@ fun SettingsScreen(
                                 ) { viewModel.updateTimeFormat(it) }
                             },
                             { viewModel.toggleHideSubChannels() },
-                            itemFocusRequesters[5].dropLast(1),
-                            itemFocusRequesters[5].last()
+                            itemFocusRequesters[5].dropLast(1), itemFocusRequesters[5].last()
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
-                        6 -> CommentSettingsContent(
+                        6 -> EpgSettingsContent(
+                            pref = prefs,
+                            onEditColumn = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "表示チャンネル数",
+                                    listOf(
+                                        "5チャンネル" to "5",
+                                        "7チャンネル" to "7",
+                                        "9チャンネル" to "9",
+                                        "11チャンネル" to "11"
+                                    ),
+                                    prefs.epgColumnCount
+                                ) { viewModel.updateEpgColumnCount(it) }
+                            },
+                            onEditHour = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "表示時間数 (縦幅)",
+                                    listOf(
+                                        "4時間" to "4",
+                                        "6時間" to "6",
+                                        "8時間" to "8",
+                                        "12時間" to "12"
+                                    ),
+                                    prefs.epgVisibleHours
+                                ) { viewModel.updateEpgVisibleHours(it) }
+                            },
+                            onEditFontSize = {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    "文字サイズ",
+                                    listOf(
+                                        "80%" to "0.8",
+                                        "90%" to "0.9",
+                                        "100% (標準)" to "1.0",
+                                        "110%" to "1.1",
+                                        "120%" to "1.2"
+                                    ),
+                                    prefs.epgFontSizeScale
+                                ) { viewModel.updateEpgFontSizeScale(it) }
+                            },
+                            colR = itemFocusRequesters[6][0],
+                            hourR = itemFocusRequesters[6][1],
+                            fontR = itemFocusRequesters[6][2],
+                            sidebarR = categoryFocusRequesters[6],
+                            onClick = {
+                                uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6
+                            }
+                        )
+
+                        7 -> CommentSettingsContent(
                             prefs.commentDefaultDisplay,
                             prefs.commentSpeed,
                             prefs.commentFontSize,
                             prefs.commentOpacity,
                             prefs.commentMaxLines,
                             { t, v ->
-                                uiState.activeDialog = SettingDialogState.Input(
-                                    t,
-                                    v
-                                ) {
+                                uiState.activeDialog = SettingDialogState.Input(t, v) {
                                     scope.launch {
                                         repository.saveString(
                                             if (t == AppStrings.SETTINGS_INPUT_COMMENT_SPEED) SettingsRepository.COMMENT_SPEED else if (t == AppStrings.SETTINGS_INPUT_COMMENT_SIZE) SettingsRepository.COMMENT_FONT_SIZE else if (t == AppStrings.SETTINGS_INPUT_COMMENT_OPACITY) SettingsRepository.COMMENT_OPACITY else SettingsRepository.COMMENT_MAX_LINES,
@@ -867,22 +967,22 @@ fun SettingsScreen(
                                     )
                                 }
                             },
-                            itemFocusRequesters[6][0],
-                            itemFocusRequesters[6][1],
-                            itemFocusRequesters[6][2],
-                            itemFocusRequesters[6][3],
-                            itemFocusRequesters[6][4],
-                            categoryFocusRequesters[6]
-                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 6 }
-
-                        7 -> LabSettingsContent(
-                            prefs.geminiApiKey,
-                            prefs.favoriteBaseballTeams,
-                            prefs.labAllowMirakurunDual,
                             itemFocusRequesters[7][0],
                             itemFocusRequesters[7][1],
                             itemFocusRequesters[7][2],
-                            categoryFocusRequesters[7],
+                            itemFocusRequesters[7][3],
+                            itemFocusRequesters[7][4],
+                            categoryFocusRequesters[7]
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7 }
+
+                        8 -> LabSettingsContent(
+                            prefs.geminiApiKey,
+                            prefs.favoriteBaseballTeams,
+                            prefs.labAllowMirakurunDual,
+                            itemFocusRequesters[8][0],
+                            itemFocusRequesters[8][1],
+                            itemFocusRequesters[8][2],
+                            categoryFocusRequesters[8],
                             { uiState.activeDialog = SettingDialogState.GeminiSetup },
                             {
                                 uiState.activeDialog = SettingDialogState.MultiSelection(
@@ -927,14 +1027,13 @@ fun SettingsScreen(
                                     }
                                 }
                             }) {
-                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 7
+                            uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8
                         }
 
-                        8 -> AppInfoContent(
+                        9 -> AppInfoContent(
                             { uiState.activeDialog = SettingDialogState.Licenses },
-                            itemFocusRequesters[8][0],
-                            categoryFocusRequesters[8]
-                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 8 }
+                            itemFocusRequesters[9][0], categoryFocusRequesters[9]
+                        ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 9 }
                     }
                     Spacer(Modifier.height(32.dp))
                 }
@@ -1007,7 +1106,6 @@ fun SettingsScreen(
                     })
             }
 
-            // ★ SMBサーバー操作（編集/削除の選択）
             is SettingDialogState.SmbAction -> SelectionDialog(
                 title = "${state.target.name} の操作",
                 options = listOf("編集する" to "EDIT", "削除する" to "DELETE"),
@@ -1022,10 +1120,8 @@ fun SettingsScreen(
                             "「${state.target.name}」を削除しますか？"
                         ) { viewModel.deleteSmbServer(state.target.id) }
                     }
-                }
-            )
+                })
 
-            // ★ SMBサーバー設定（QRコード表示・連続受信対応）
             is SettingDialogState.SmbSetup -> {
                 val localIp by viewModel.localIpAddress.collectAsState()
                 SmbSetupDialog(
@@ -1041,12 +1137,9 @@ fun SettingsScreen(
                                 viewModel.saveSmbServer(server)
                             }
                     },
-                    // ★ 画面上のトーストを出すためのコールバック
-                    onShowToast = { msg -> toastMessage = msg }
-                )
+                    onShowToast = { msg -> toastMessage = msg })
             }
 
-            // ★ SMBサーバー手動入力
             is SettingDialogState.SmbManualInput -> {
                 SmbManualInputDialog(
                     state.target,
@@ -1056,8 +1149,6 @@ fun SettingsScreen(
 
             else -> {}
         }
-
-        // ★ 最前面にトーストを配置
         GlobalToast(message = toastMessage)
     }
 }

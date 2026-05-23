@@ -22,7 +22,7 @@ import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
-import com.beeregg2001.komorebi.viewmodel.SmbServer // ★ 追加
+import com.beeregg2001.komorebi.viewmodel.SmbServer
 import java.time.LocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -236,13 +236,11 @@ fun ConnectionSettingsContent(
     mPort: String,
     prefSrc: String,
     edcbPlayMethod: String,
-    // ★ 変更: SMBリスト関連の引数に置き換え
     smbServerList: List<SmbServer>,
     onAddSmbServer: () -> Unit,
     onSmbServerClick: (SmbServer) -> Unit,
     addSmbR: FocusRequester,
     smbItemRs: List<FocusRequester>,
-    // ------------------------------------
     onSelectEdcbPlayMethod: () -> Unit,
     edcbPlayMethodR: FocusRequester,
     onEdit: (String, String) -> Unit,
@@ -259,6 +257,34 @@ fun ConnectionSettingsContent(
     onClick: (FocusRequester) -> Unit
 ) {
     val colors = KomorebiTheme.colors
+
+    // ★ 修正: ループによるフォーカスの点滅（奪い合い）を防ぐため、
+    // レイアウトの安定（ダイアログの退出アニメーション等）を350msだけ静かに待ち、
+    // その直後に「1発だけ」確実なフォーカス要求を行うスマートな方式に変更。
+    var previousBackendType by remember { mutableStateOf(backendType) }
+    LaunchedEffect(backendType) {
+        if (previousBackendType != backendType) {
+            previousBackendType = backendType
+            delay(350)
+            try {
+                backendTypeR.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    var previousPrefSrc by remember { mutableStateOf(prefSrc) }
+    LaunchedEffect(prefSrc) {
+        if (previousPrefSrc != prefSrc) {
+            previousPrefSrc = prefSrc
+            delay(350)
+            try {
+                prefSrcR.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Text(
             AppStrings.SETTINGS_CATEGORY_CONNECTION,
@@ -458,7 +484,6 @@ fun ConnectionSettingsContent(
             }
         }
 
-        // ★ 変更: SMB設定セクション (リスト形式に改修)
         SettingsSection("ファイルライブラリ (SMB) 接続設定") {
             SettingItem(
                 title = "新しいSMBサーバーを追加",
@@ -505,11 +530,6 @@ fun ConnectionSettingsContent(
         }
     }
 }
-
-// -------------------------------------------------------------------------
-// これ以下の PlaybackSettingsContent, HomeDisplaySettingsContent, DisplaySettingsContent,
-// CommentSettingsContent, LabSettingsContent, AppInfoContent は変更なし
-// -------------------------------------------------------------------------
 
 @Composable
 fun PlaybackSettingsContent(
@@ -660,6 +680,64 @@ fun PlaybackSettingsContent(
         }
     }
 }
+
+@Composable
+fun EpgSettingsContent(
+    pref: SettingPreferences,
+    onEditColumn: () -> Unit,
+    onEditHour: () -> Unit,
+    onEditFontSize: () -> Unit,
+    colR: FocusRequester,
+    hourR: FocusRequester,
+    fontR: FocusRequester,
+    sidebarR: FocusRequester,
+    onClick: (FocusRequester) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Text(
+            "番組表設定",
+            style = MaterialTheme.typography.headlineMedium,
+            color = KomorebiTheme.colors.textPrimary,
+            fontWeight = FontWeight.Bold
+        )
+        SettingsSection("番組表表示設定") {
+            SettingItem(
+                "表示チャンネル数 (横軸)",
+                "${pref.epgColumnCount} チャンネル",
+                Icons.Default.ViewColumn,
+                modifier = Modifier
+                    .focusRequester(colR)
+                    .focusProperties {
+                        left = sidebarR; down = hourR; up = FocusRequester.Cancel
+                    },
+                onClick = { onClick(colR); onEditColumn() }
+            )
+            SettingItem(
+                "表示時間数 (縦幅)",
+                "${pref.epgVisibleHours} 時間",
+                Icons.Default.Height,
+                modifier = Modifier
+                    .focusRequester(hourR)
+                    .focusProperties {
+                        left = sidebarR; up = colR; down = fontR
+                    },
+                onClick = { onClick(hourR); onEditHour() }
+            )
+            SettingItem(
+                "文字サイズ",
+                "${(pref.epgFontSizeScale.toFloat() * 100).toInt()}%",
+                Icons.Default.FormatSize,
+                modifier = Modifier
+                    .focusRequester(fontR)
+                    .focusProperties {
+                        left = sidebarR; up = hourR; down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(fontR); onEditFontSize() }
+            )
+        }
+    }
+}
+
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -953,7 +1031,12 @@ fun CommentSettingsContent(
                         up = defR
                         down = szR
                     },
-                onClick = { onClick(spR); onEdit(AppStrings.SETTINGS_INPUT_COMMENT_SPEED, speed) })
+                onClick = {
+                    onClick(spR); onEdit(
+                    AppStrings.SETTINGS_INPUT_COMMENT_SPEED,
+                    speed
+                )
+                })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_SIZE,
                 "${size}x",
@@ -965,7 +1048,12 @@ fun CommentSettingsContent(
                         up = spR
                         down = opR
                     },
-                onClick = { onClick(szR); onEdit(AppStrings.SETTINGS_INPUT_COMMENT_SIZE, size) })
+                onClick = {
+                    onClick(szR); onEdit(
+                    AppStrings.SETTINGS_INPUT_COMMENT_SIZE,
+                    size
+                )
+                })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_COMMENT_OPACITY,
                 opacity,
@@ -1043,7 +1131,8 @@ fun LabSettingsContent(
         }
 
         SettingsSection("プロ野球モード (アルファ版)") {
-            val baseballText = if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
+            val baseballText =
+                if (baseball.isEmpty()) "未設定" else "${baseball.size}球団選択中"
             SettingItem(
                 title = "フォロー球団の設定",
                 value = baseballText,
@@ -1097,7 +1186,7 @@ fun AppInfoContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Version 1.1.0 beta-4",
+            "Version ${com.beeregg2001.komorebi.BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.titleMedium,
             color = KomorebiTheme.colors.textSecondary
         )

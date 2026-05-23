@@ -81,12 +81,23 @@ class EdcbRecordRepository @Inject constructor(
                 val url = "$baseUrl/komorebi/resolver.lua"
                 val request = Request.Builder().url(url).build()
                 baseEdcbHttpClient.newCall(request).execute().use { response ->
+
+                    // ★ 修正: JSONパースの前に、HTTPステータスコードを最優先でチェックする
+                    // 404等でHTMLが返ってきている場合に即座に例外を投げるための防波堤
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。\nファイルが正しく配置されているか確認してください。")
+                    }
+
                     val jsonStr = response.body?.string() ?: return@withContext null
 
-                    // JSONをパース
-                    val json = JSONObject(jsonStr)
+                    // ★ 修正: プレーンテキスト(Luaエラー等)が返ってきた際のクラッシュ(Value Error)を防ぐためtry-catchで保護
+                    val json = try {
+                        JSONObject(jsonStr)
+                    } catch (e: Exception) {
+                        throw Exception("resolver.lua の応答が不正(非JSON)です。\nファイルが正しく配置されているか確認してください。\n[詳細]: ${e.message}")
+                    }
 
-                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
+                    // 既存: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
@@ -94,11 +105,6 @@ class EdcbRecordRepository @Inject constructor(
                         Log.e(TAG, "Resolver Lua Error: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
-                    }
-
-                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
-                    if (!response.isSuccessful) {
-                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
                     }
 
                     val ctokObj = json.optJSONObject("ctok")
@@ -125,7 +131,7 @@ class EdcbRecordRepository @Inject constructor(
                     return@withContext EdcbResolverSettings(ctokXcode, ctokView, qualities)
                 }
             } catch (e: Exception) {
-                // 既存の処理: そのまま例外として再スローして、上位のViewModel側でキャッチさせる
+                // そのまま例外として再スローして、上位のViewModel側でキャッチ・ダイアログ表示させる
                 Log.e(TAG, "Failed to fetch resolver settings", e)
                 throw e
             }
@@ -145,7 +151,8 @@ class EdcbRecordRepository @Inject constructor(
             return@withContext settings?.options ?: emptyList()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch stream qualities from EDCB", e)
-            emptyList()
+            // ★ 修正: エラーを握りつぶして空リストを返さず、UI層へ伝搬させる
+            throw e
         }
     }
 
@@ -162,12 +169,22 @@ class EdcbRecordRepository @Inject constructor(
                     .readTimeout(3, TimeUnit.SECONDS).build()
 
                 client.newCall(request).execute().use { response ->
+
+                    // ★ 修正: JSONパースの前にHTTPステータスコードをチェック
+                    if (!response.isSuccessful) {
+                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。\nファイルが正しく配置されているか確認してください。")
+                    }
+
                     val jsonStr = response.body?.string() ?: return@withContext null
 
-                    // JSONをパース
-                    val json = JSONObject(jsonStr)
+                    // ★ 修正: JSONパースをtry-catchで保護。HTML等の不正なレスポンスでクラッシュさせない
+                    val json = try {
+                        JSONObject(jsonStr)
+                    } catch (e: Exception) {
+                        throw Exception("resolver.lua の応答が不正(非JSON)です。\nファイルが正しく配置されているか確認してください。\n[詳細]: ${e.message}")
+                    }
 
-                    // ★ 新規処理: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
+                    // 既存: resolver.luaからのエラー(フェールセーフ含む)をキャッチ
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
@@ -175,11 +192,6 @@ class EdcbRecordRepository @Inject constructor(
                         Log.e(TAG, "Resolver Lua Error for ID $videoId: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
-                    }
-
-                    // HTTPステータスが200以外で、かつJSONにerrorが含まれていない場合のフェールセーフ
-                    if (!response.isSuccessful) {
-                        throw Exception("HTTP Error ${response.code}\nresolver.lua へのアクセスに失敗しました。")
                     }
 
                     return@withContext KomorebiResolverUrls(
@@ -192,7 +204,7 @@ class EdcbRecordRepository @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                // 既存の処理: 再スローして、上位のViewModel側でキャッチさせる
+                // 再スローして、上位のViewModel側でキャッチさせる
                 Log.e(TAG, "Failed to fetch resolver urls for id=$videoId", e)
                 throw e
             }
@@ -245,7 +257,9 @@ class EdcbRecordRepository @Inject constructor(
                     RecordedApiResponse(total, programs)
                 } catch (e: Exception) {
                     Log.e(TAG, "同期エラー", e)
-                    RecordedApiResponse(0, emptyList())
+                    // ★ 修正: TCP通信エラーとresolver.luaのエラーを明確に区別し、
+                    // エラーを握りつぶして空リストを返すのではなく、例外を上に投げてUIにダイアログを出させる
+                    throw e
                 }
             }
         }
@@ -417,7 +431,7 @@ class EdcbRecordRepository @Inject constructor(
                                 val bytes = response.body?.bytes()
                                 if (bytes != null && bytes.isNotEmpty()) {
                                     val rawText = decodeEdcbString(bytes)
-                                    // ★追加: 取得したテキストがHTMLやエラーメッセージでないか簡易チェック
+                                    // 取得したテキストがHTMLやエラーメッセージでないか簡易チェック
                                     if (!rawText.contains("Error 404") && !rawText.contains("<!DOCTYPE html>")) {
                                         chapterText = rawText
                                     }

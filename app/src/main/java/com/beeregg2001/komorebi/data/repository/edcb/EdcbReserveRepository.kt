@@ -155,7 +155,8 @@ class EdcbReserveRepository @Inject constructor(
             Result.success(mappedReserves)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get reserves from EDCB", e)
-            Result.failure(e)
+            // ★ 修正: エラーメッセージを分かりやすくラップ
+            Result.failure(Exception("予約一覧の取得に失敗しました。\nEDCBとの接続設定を確認してください。\n[詳細]: ${e.message}"))
         }
     }
 
@@ -262,7 +263,8 @@ class EdcbReserveRepository @Inject constructor(
                 Result.success(mappedConditions)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to get conditions from EDCB", e)
-                Result.failure(e)
+                // ★ 修正
+                Result.failure(Exception("自動録画ルールの取得に失敗しました。\n[詳細]: ${e.message}"))
             }
         }
 
@@ -279,7 +281,8 @@ class EdcbReserveRepository @Inject constructor(
 
             Result.failure(Exception("Failed to delete reservation"))
         } catch (e: Exception) {
-            Result.failure(e)
+            // ★ 修正
+            Result.failure(Exception("予約の削除に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
@@ -297,7 +300,8 @@ class EdcbReserveRepository @Inject constructor(
 
                 Result.failure(Exception("Failed to delete reservation condition"))
             } catch (e: Exception) {
-                Result.failure(e)
+                // ★ 修正
+                Result.failure(Exception("自動録画ルールの削除に失敗しました。\n[詳細]: ${e.message}"))
             }
         }
 
@@ -350,7 +354,8 @@ class EdcbReserveRepository @Inject constructor(
 
             Result.failure(Exception("Failed to add reserve"))
         } catch (e: Exception) {
-            Result.failure(e)
+            // ★ 修正
+            Result.failure(Exception("予約の追加に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
@@ -375,7 +380,8 @@ class EdcbReserveRepository @Inject constructor(
 
                 Result.failure(Exception("Failed to update reserve"))
             } catch (e: Exception) {
-                Result.failure(e)
+                // ★ 修正
+                Result.failure(Exception("予約の更新に失敗しました。\n[詳細]: ${e.message}"))
             }
         }
 
@@ -411,7 +417,8 @@ class EdcbReserveRepository @Inject constructor(
 
                 Result.failure(Exception("Failed to add auto add condition"))
             } catch (e: Exception) {
-                Result.failure(e)
+                // ★ 修正
+                Result.failure(Exception("自動録画ルールの追加に失敗しました。\n[詳細]: ${e.message}"))
             }
         }
 
@@ -419,6 +426,7 @@ class EdcbReserveRepository @Inject constructor(
         i: Int,
         r: ReservationConditionUpdateRequest
     ): Result<ReservationCondition> = withContext(Dispatchers.IO) {
-        Result.failure(Exception("Not fully implemented in this refactored snippet to save space, but follows the same pattern as updateReserve."))
+        // ★ 修正: 未実装部分のプレースホルダーを正式なエラー通知に修正
+        Result.failure(Exception("自動録画ルールの更新は現在EDCBバックエンドではサポートされていません。"))
     }
 }

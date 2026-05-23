@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -45,6 +46,7 @@ fun RecordScreenTopBar(
     searchHistory: List<String>,
     hasHistory: Boolean,
     isListView: Boolean,
+    selectedCategory: RecordCategory, // ★ 追加
     searchCloseButtonFocusRequester: FocusRequester,
     searchInputFocusRequester: FocusRequester,
     innerTextFieldFocusRequester: FocusRequester,
@@ -53,11 +55,13 @@ fun RecordScreenTopBar(
     backButtonFocusRequester: FocusRequester,
     searchOpenButtonFocusRequester: FocusRequester,
     viewToggleButtonFocusRequester: FocusRequester,
+    sortButtonFocusRequester: FocusRequester, // ★ 追加
     onSearchQueryChange: (String) -> Unit,
     onExecuteSearch: (String) -> Unit,
     onBackPress: () -> Unit,
     onSearchOpen: () -> Unit,
     onViewToggle: () -> Unit,
+    onSortOpen: () -> Unit, // ★ 追加
     onKeyboardActiveClick: () -> Unit,
     onBackButtonFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
@@ -240,6 +244,24 @@ fun RecordScreenTopBar(
                             maxLines = 1
                         )
                     }
+                }
+
+                // ★ 追加: 「全ての録画」と「未視聴」の時のみソートボタンを表示する
+                val showSortButton = selectedCategory == RecordCategory.ALL || selectedCategory == RecordCategory.UNWATCHED
+                if (showSortButton) {
+                    IconButton(
+                        onClick = onSortOpen,
+                        modifier = Modifier
+                            .focusRequester(sortButtonFocusRequester)
+                            .focusProperties {
+                                up = FocusRequester.Cancel
+                                down = firstItemFocusRequester
+                            },
+                        colors = iconButtonColors
+                    ) {
+                        Icon(Icons.Default.Sort, "並び替え")
+                    }
+                    Spacer(Modifier.width(16.dp))
                 }
 
                 Surface(

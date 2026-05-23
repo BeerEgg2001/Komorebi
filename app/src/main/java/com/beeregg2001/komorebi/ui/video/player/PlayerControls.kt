@@ -42,10 +42,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.ArchivedComment
-import com.beeregg2001.komorebi.data.model.CmSection
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -56,7 +61,7 @@ import kotlin.math.pow
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerControls(
-    exoPlayer: ExoPlayer?, // VLC時はnull
+    exoPlayer: ExoPlayer?,
     program: RecordedProgram,
     allComments: List<ArchivedComment>,
     tiledThumbnailUrl: String?,
@@ -73,6 +78,9 @@ fun PlayerControls(
     onPlayPauseToggle: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
+    onSeekRequested: (Long) -> Unit, // ★ 追加: シークバーでのシーク用コールバック
+    onSkipPreviousChapter: () -> Unit = {},
+    onSkipNextChapter: () -> Unit = {},
     onChapterListToggle: () -> Unit,
     onInfoToggle: () -> Unit,
     onSettingsToggle: () -> Unit
@@ -111,21 +119,24 @@ fun PlayerControls(
         }
     }
 
-    LaunchedEffect(isVisible, isModernUi, isPlaying) {
+    LaunchedEffect(isVisible, isModernUi) {
         if (isVisible && isModernUi) {
             delay(100)
             try {
-                controlsFocusRequester.requestFocus()
+                if (!isSeekBarFocused) {
+                    controlsFocusRequester.requestFocus()
+                }
             } catch (e: Exception) {
             }
         }
+    }
 
+    LaunchedEffect(isVisible, isPlaying) {
         var lastUpdate = System.currentTimeMillis()
         while (isVisible) {
             val now = System.currentTimeMillis()
             if (isPlaying) {
                 val elapsed = now - lastUpdate
-                // ★ 修正: durationが0の時に強制的に0にリセット(coerceIn)されて点滅するバグを回避
                 val safeMax = if (totalDurationMs > 0L) totalDurationMs else Long.MAX_VALUE
                 displayPositionMs = (displayPositionMs + elapsed).coerceIn(0L, safeMax)
             }
@@ -149,6 +160,17 @@ fun PlayerControls(
                         .focusGroup()
                         .focusRestorer() else Modifier
                 )
+                // ★ 修正: onPreviewKeyEvent から onKeyEvent（ボトムアップ型）に変更
+                // これにより、最優先される子要素（早送り/巻き戻しボタン）側で消費されなかった
+                // 長押しイベントのみがここへ上昇してキャッチされ、MainRootへのイベントのすり抜けを完璧にブロックします。
+                .onKeyEvent { event ->
+                    if ((event.key == Key.DirectionCenter || event.key == Key.Enter) && event.type == KeyEventType.KeyDown) {
+                        if (event.nativeKeyEvent.repeatCount > 0) {
+                            return@onKeyEvent true
+                        }
+                    }
+                    false
+                }
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f)),
@@ -290,7 +312,31 @@ fun PlayerControls(
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
                             }
-                            .focusable(isModernUi),
+                            .focusable(isModernUi)
+                            // ★ シークバーでのシークができない問題の修正
+                            // フォーカスが当たっている間に左右キーが押された際、onSeekRequested へ新しい時間を渡してシークさせる
+                            .onKeyEvent { event ->
+                                if (isSeekBarFocused && event.type == KeyEventType.KeyDown) {
+                                    when (event.key) {
+                                        Key.DirectionLeft -> {
+                                            val newPos =
+                                                (currentPositionMs - 10_000L).coerceAtLeast(0L)
+                                            onSeekRequested(newPos)
+                                            return@onKeyEvent true
+                                        }
+
+                                        Key.DirectionRight -> {
+                                            val limit =
+                                                if (totalDurationMs > 0) totalDurationMs else Long.MAX_VALUE
+                                            val newPos =
+                                                (currentPositionMs + 10_000L).coerceAtMost(limit)
+                                            onSeekRequested(newPos)
+                                            return@onKeyEvent true
+                                        }
+                                    }
+                                }
+                                false
+                            },
                         contentAlignment = Alignment.CenterStart
                     ) {
                         if (allComments.isNotEmpty() && totalDurationMs > 0) {
@@ -332,9 +378,11 @@ fun PlayerControls(
                                 externalChapters
                             }
 
-                            Canvas(modifier = Modifier
-                                .fillMaxWidth()
-                                .height(trackHeight)) {
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(trackHeight)
+                            ) {
                                 val canvasWidth = size.width
                                 val canvasHeight = size.height
 
@@ -392,7 +440,6 @@ fun PlayerControls(
                             )
                         }
 
-                        // ★ 修正: durationが0の場合でもエラーにならない安全な進行率計算
                         val playProgress =
                             if (totalDurationMs > 0) (displayPositionMs.toFloat() / totalDurationMs).coerceIn(
                                 0f,
@@ -466,12 +513,24 @@ fun PlayerControls(
                             horizontalArrangement = Arrangement.spacedBy(24.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            if (hasChapters) {
+                                OsdIconButton(
+                                    icon = Icons.Default.SkipPrevious,
+                                    label = "前のチャプター",
+                                    onClick = onSkipPreviousChapter,
+                                    buttonSize = 48.dp,
+                                    iconSize = 24.dp,
+                                    allowContinuousPress = true
+                                )
+                            }
+
                             OsdIconButton(
                                 icon = Icons.Default.FastRewind,
                                 label = "-10秒",
                                 onClick = onSeekBack,
                                 buttonSize = 56.dp,
-                                iconSize = 32.dp
+                                iconSize = 32.dp,
+                                allowContinuousPress = true
                             )
                             OsdIconButton(
                                 icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -487,8 +546,20 @@ fun PlayerControls(
                                 label = "+30秒",
                                 onClick = onSeekForward,
                                 buttonSize = 56.dp,
-                                iconSize = 32.dp
+                                iconSize = 32.dp,
+                                allowContinuousPress = true
                             )
+
+                            if (hasChapters) {
+                                OsdIconButton(
+                                    icon = Icons.Default.SkipNext,
+                                    label = "次のチャプター",
+                                    onClick = onSkipNextChapter,
+                                    buttonSize = 48.dp,
+                                    iconSize = 24.dp,
+                                    allowContinuousPress = true
+                                )
+                            }
                         }
 
                         OsdIconButton(
@@ -512,9 +583,12 @@ fun OsdIconButton(
     modifier: Modifier = Modifier,
     buttonSize: Dp = 48.dp,
     iconSize: Dp = 24.dp,
-    isPrimary: Boolean = false
+    isPrimary: Boolean = false,
+    allowContinuousPress: Boolean = false
 ) {
     val colors = KomorebiTheme.colors
+    var lastRepeatTime by remember { mutableLongStateOf(0L) }
+
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
@@ -525,7 +599,25 @@ fun OsdIconButton(
             contentColor = Color.White,
             focusedContentColor = Color.Black
         ),
-        modifier = modifier.size(buttonSize)
+        modifier = modifier
+            .size(buttonSize)
+            // ★ 恩恵のトップダウン処理: SurfaceがKeyDownイベントを内部消費してアニメーションする「直前」に
+            // 連打イベントをインターセプトし、onClick を 200ms 間隔で連続発火させます。
+            .onPreviewKeyEvent { event ->
+                if (event.key == Key.DirectionCenter || event.key == Key.Enter) {
+                    if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
+                        if (allowContinuousPress) {
+                            val now = System.currentTimeMillis()
+                            if (now - lastRepeatTime > 200) {
+                                onClick()
+                                lastRepeatTime = now
+                            }
+                        }
+                        return@onPreviewKeyEvent true
+                    }
+                }
+                false
+            }
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(icon, contentDescription = label, modifier = Modifier.size(iconSize))
@@ -548,9 +640,6 @@ private fun formatMillisToTime(ms: Long): String {
     else String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
 }
 
-// ========================================================================
-// 実況コメント勢いグラフ (YouTube風ヒートマップウェーブ)
-// ========================================================================
 @Composable
 fun CommentMomentumGraph(
     comments: List<ArchivedComment>,

@@ -12,12 +12,22 @@ android {
     namespace = "com.beeregg2001.komorebi"
     compileSdk = 35
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            // ★ true にすると、分割版(25MB)と、Universal版(50MB)の両方を出力してくれます！
+            isUniversalApk = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 14 // 数値を1つ上げる
-        versionName = "1.1.0 beta-4"
+        versionCode = 15 // 数値を1つ上げる
+        versionName = "1.1.0-Beta5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -31,7 +41,7 @@ android {
         ndk {
             // 低スペック端末(Android TV等)で一般的なアーキテクチャに限定してビルド時間を短縮
             // 実機が 64bit なら arm64-v8a、32bit なら armeabi-v7a です
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
     }
 
@@ -48,7 +58,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+//            isMinifyEnabled = true       // コード圧縮を有効化
+//            isShrinkResources = true     // 未使用の画像やリソースも削除
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -58,6 +69,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true // ★ BuildConfigクラスの生成を有効化
     }
     kotlin {
         compilerOptions {
@@ -168,8 +180,8 @@ dependencies {
 
     // NDK Bitmap (バージョンは 0.9.21 を指定する必要があります)
     implementation("com.github.ctiao:ndkbitmap-armv7a:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
 
     compileOnly("org.checkerframework:checker-qual:3.33.0")
 
@@ -196,5 +208,6 @@ dependencies {
     // ★ 追加: SMB (ファイルライブラリ) 用
     implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
 
-    implementation("org.videolan.android:libvlc-all:3.7.0")
+//    implementation("org.videolan.android:libvlc-all:3.7.0")
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }

@@ -5,7 +5,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.focus.FocusRequester
 import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 
-// 🎫 チケット種類の拡張
 enum class FocusTicket { NONE, LIST_TOP, NAV_PANE, PANE, TARGET_ID }
 
 @Stable
@@ -14,16 +13,14 @@ class FocusTicketManager {
         private set
     var issueTime by mutableLongStateOf(0L)
         private set
-    var targetProgramId by mutableStateOf<Int?>(null) // 特定の番組を狙い撃ちするためのID
+    var targetProgramId by mutableStateOf<Int?>(null)
         private set
 
-    // ★ 追加: 文字列(パス)でターゲットを狙い撃ちするための変数
     var targetPath by mutableStateOf<String?>(null)
         private set
-    var forceResetTick by mutableIntStateOf(0) // 強制リセット用のカウンター
+    var forceResetTick by mutableIntStateOf(0)
         private set
 
-    // ★ 修正: path を受け取れるように拡張
     fun issue(ticket: FocusTicket, programId: Int? = null, path: String? = null) {
         targetProgramId = programId
         targetPath = path
@@ -40,7 +37,7 @@ class FocusTicketManager {
             Log.i("KomorebiFocus", "🗑️ Ticket CONSUMED: $currentTicket")
             currentTicket = FocusTicket.NONE
             targetProgramId = null
-            targetPath = null // ★ 追加
+            targetPath = null
         }
     }
 
@@ -69,6 +66,8 @@ class RecordListFocusRequesters {
     val searchOpenButton = FocusRequester()
     val viewToggleButton = FocusRequester()
 
+    val sortButton = FocusRequester() // ★ 追加: ソートボタン用のフォーカス
+
     val navPane = FocusRequester()
     val genrePane = FocusRequester()
     val channelPane = FocusRequester()
@@ -94,6 +93,7 @@ class RecordListMenuState {
     var isDayPaneOpen by mutableStateOf(false)
     var isDetailActive by mutableStateOf(false)
     var isSearchBarVisible by mutableStateOf(false)
+    var isSortMenuOpen by mutableStateOf(false) // ★ 追加: ソートメニューの開閉状態
     var isSelectionMade by mutableStateOf(false)
     var isBackButtonFocused by mutableStateOf(false)
     var isInitialFocusRequested by mutableStateOf(true)

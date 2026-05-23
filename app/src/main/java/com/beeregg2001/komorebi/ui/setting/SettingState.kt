@@ -51,8 +51,11 @@ class SettingPreferences(
     val defaultRecordListView: String,
     val hideSubChannels: Boolean,
     val edcbRecordPlayMethod: String,
-    // ★ 変更: 個別の変数からリストへ変更
-    val smbServerList: List<SmbServer>
+    val smbServerList: List<SmbServer>,
+// ★ 追加: 番組表設定
+    val epgColumnCount: String,
+    val epgFontSizeScale: String,
+    val epgVisibleHours: String
 )
 
 @Composable
@@ -79,7 +82,6 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         }
     }
 
-    // ★ 変更: JSONから SmbServer リストを復元
     val smbListJson = repository.smbServerList.collectAsState(initial = "[]").value
     val smbList = remember(smbListJson) {
         try {
@@ -131,15 +133,18 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         defaultRecordListView = repository.defaultRecordListView.collectAsState(initial = "LIST").value,
         hideSubChannels = repository.hideSubChannels.collectAsState(initial = false).value,
         edcbRecordPlayMethod = repository.edcbRecordPlayMethod.collectAsState(initial = "API").value,
-        // ★ 変更: SMBリストを渡す
-        smbServerList = smbList
+        smbServerList = smbList,
+        epgColumnCount = repository.epgColumnCount.collectAsState(initial = "7").value,
+        epgFontSizeScale = repository.epgFontSizeScale.collectAsState(initial = "1.0").value,
+        epgVisibleHours = repository.epgVisibleHours.collectAsState(initial = "6").value
     )
 }
 
+// ★ 修正: initialCategoryIndex を受け取り、初期カテゴリを指定できるようにする
 @Stable
-class SettingUiState {
+class SettingUiState(initialCategoryIndex: Int = 0) {
     var activeDialog by mutableStateOf<SettingDialogState>(SettingDialogState.None)
-    var selectedCategoryIndex by mutableIntStateOf(0)
+    var selectedCategoryIndex by mutableIntStateOf(initialCategoryIndex)
     var restoreFocusRequester by mutableStateOf<FocusRequester?>(null)
     var restoreCategoryIndex by mutableIntStateOf(-1)
     var isSidebarFocused by mutableStateOf(true)
@@ -147,6 +152,6 @@ class SettingUiState {
 }
 
 @Composable
-fun rememberSettingUiState(): SettingUiState {
-    return remember { SettingUiState() }
+fun rememberSettingUiState(initialCategoryIndex: Int = 0): SettingUiState {
+    return remember(initialCategoryIndex) { SettingUiState(initialCategoryIndex) }
 }

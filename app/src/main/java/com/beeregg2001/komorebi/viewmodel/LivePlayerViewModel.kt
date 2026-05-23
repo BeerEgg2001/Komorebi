@@ -69,8 +69,8 @@ class LivePlayerViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
     private val settingsRepository: SettingsRepository,
-    private val livePlayerFactory: LivePlayerFactory, // ★ 追加: プレイヤー生成ファクトリ
-    private val liveJikkyoManager: LiveJikkyoManager  // ★ 追加: 実況管理マネージャー
+    private val livePlayerFactory: LivePlayerFactory,
+    private val liveJikkyoManager: LiveJikkyoManager
 ) : ViewModel() {
 
     companion object {
@@ -126,7 +126,6 @@ class LivePlayerViewModel @Inject constructor(
     private val _shouldCropLogo = MutableStateFlow<Boolean>(false)
     val shouldCropLogo: StateFlow<Boolean> = _shouldCropLogo.asStateFlow()
 
-    // ★ 修正: LiveJikkyoManager の Flow をそのまま UI に公開
     val liveComments: SharedFlow<LiveComment> = liveJikkyoManager.liveComments
     val clearCommentsEvent: SharedFlow<Unit> = liveJikkyoManager.clearCommentsEvent
 
@@ -310,24 +309,42 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
-        _mainPlayer.value?.stop(); _mainPlayer.value?.release(); _mainPlayer.value = null
+
+        // ★ 修正: KonomiTV等でセッションが残らないよう、確実にstop()とclearMediaItems()を呼ぶ
+        _mainPlayer.value?.stop()
+        _mainPlayer.value?.clearMediaItems()
+        _mainPlayer.value?.release(); _mainPlayer.value = null
+
         _mainSseStatus.value = "Standby"; _mainSseDetail.value = AppStrings.SSE_CONNECTING
-        liveJikkyoManager.stopJikkyo() // ★ 修正
+        liveJikkyoManager.stopJikkyo()
     }
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
-        _dualPlayer.value?.stop(); _dualPlayer.value?.release(); _dualPlayer.value = null
+
+        // ★ 修正: サブプレイヤー側も同様に確実なクリーンアップを行う
+        _dualPlayer.value?.stop()
+        _dualPlayer.value?.clearMediaItems()
+        _dualPlayer.value?.release(); _dualPlayer.value = null
+
         _dualSseStatus.value = "Standby"; _dualSseDetail.value = AppStrings.SSE_CONNECTING
     }
 
     fun releasePlayers() {
         mainPlaybackJob?.cancel(); dualPlaybackJob?.cancel()
         mainEventSource?.cancel(); dualEventSource?.cancel()
+
+        // ★ 修正: release()の前に必ずstop()とclearMediaItems()を呼んでゾンビ化を防ぐ
+        _mainPlayer.value?.stop()
+        _mainPlayer.value?.clearMediaItems()
         _mainPlayer.value?.release(); _mainPlayer.value = null
+
+        _dualPlayer.value?.stop()
+        _dualPlayer.value?.clearMediaItems()
         _dualPlayer.value?.release(); _dualPlayer.value = null
+
         _mainSseStatus.value = "Standby"; _dualSseStatus.value = "Standby"
-        liveJikkyoManager.stopJikkyo() // ★ 修正
+        liveJikkyoManager.stopJikkyo()
     }
 
     private fun handleMainError(uiContext: Context, error: PlaybackException) {
@@ -427,7 +444,6 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
-                    // ★ 修正: LivePlayerFactoryに委譲
                     val newPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
@@ -467,7 +483,7 @@ class LivePlayerViewModel @Inject constructor(
                             isEdcbDirect,
                             mainTsDataSourceFactory
                         )
-                        liveJikkyoManager.startJikkyo(channel, source) // ★ 修正: マネージャー経由で起動
+                        liveJikkyoManager.startJikkyo(channel, source)
                     }
                 }
             } catch (e: CancellationException) {
@@ -504,7 +520,6 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
-                    // ★ 修正: LivePlayerFactoryに委譲
                     val newDualPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
@@ -918,6 +933,7 @@ class LivePlayerViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         releasePlayers()
-        okHttpClient.dispatcher.executorService.shutdown()
+        // ★ 修正: 全通信機能を破壊する自爆スイッチ（shutdown）を撤去し、
+        // プレイヤーの releasePlayers() でのクリーンアップに一任する
     }
 }

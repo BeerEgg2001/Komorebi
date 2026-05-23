@@ -75,6 +75,11 @@ class SettingsRepository @Inject constructor(
 
         // ★ 変更: 個別のSMBキーを廃止し、JSONリスト用のキーを新設
         val SMB_SERVER_LIST = stringPreferencesKey("smb_server_list")
+
+        // ★ 追加: 番組表の設定キー
+        val EPG_COLUMN_COUNT = stringPreferencesKey("epg_column_count")
+        val EPG_FONT_SIZE_SCALE = stringPreferencesKey("epg_font_size_scale")
+        val EPG_VISIBLE_HOURS = stringPreferencesKey("epg_visible_hours")
     }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data
@@ -163,6 +168,11 @@ class SettingsRepository @Inject constructor(
 
     // ★ 変更: SMBサーバーのJSONリストを読み出す
     val smbServerList: Flow<String> = context.dataStore.data.map { it[SMB_SERVER_LIST] ?: "[]" }
+
+    // ★ 追加: 番組表設定の読み込み (デフォルト: 7ch, 等倍サイズ)
+    val epgColumnCount: Flow<String> = context.dataStore.data.map { it[EPG_COLUMN_COUNT] ?: "7" }
+    val epgFontSizeScale: Flow<String> = context.dataStore.data.map { it[EPG_FONT_SIZE_SCALE] ?: "1.0" }
+    val epgVisibleHours: Flow<String> = context.dataStore.data.map { it[EPG_VISIBLE_HOURS] ?: "6" }
 
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,

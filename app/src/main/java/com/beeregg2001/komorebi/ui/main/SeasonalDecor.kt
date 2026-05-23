@@ -36,7 +36,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
             600.dp
         ) else modifier.fillMaxSize()
 
-    // 内部で時間を監視し、動的に描画を切り替える
     var currentTime by remember { mutableStateOf(LocalTime.now()) }
     LaunchedEffect(Unit) {
         while (isActive) {
@@ -51,17 +50,16 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
         else -> season
     }
 
-    // ★ カイル君の回遊アニメーション (右から左へ、約45秒かけてゆっくり泳ぐ)
     val infiniteTransition = rememberInfiniteTransition(label = "kyle_swim")
     val kyleX by infiniteTransition.animateFloat(
-        initialValue = 2400f, // 画面の右外からスタート
-        targetValue = -600f,  // 画面の左外へ消える
+        initialValue = 2400f,
+        targetValue = -600f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = 45000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ), label = "kyle_x"
     )
-    // ★ カイル君の上下の波打ち (約6秒周期でフワフワ上下する)
+
     val kyleYOffset by infiniteTransition.animateFloat(
         initialValue = -30f,
         targetValue = 30f,
@@ -90,16 +88,77 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                 }
             }
 
-            "SUMMER" -> { /* ...省略(既存のまま)... */
+            "SUMMER" -> {
+                if (isDark) {
+                    val starColor = Color.White
+                    for (i in 0 until 40) {
+                        val cx = size.width * (0.2f + random.nextFloat() * 0.8f)
+                        val cy = size.height * (0.2f + random.nextFloat() * 0.8f)
+                        val r = 2f + random.nextFloat() * 5f
+                        val alpha = 0.2f + random.nextFloat() * 0.8f
+                        if (i % 3 == 0) {
+                            drawTwinkleStar(Offset(cx, cy), r * 1.5f, starColor.copy(alpha = alpha))
+                        } else {
+                            drawCircle(
+                                starColor.copy(alpha = alpha),
+                                radius = r,
+                                center = Offset(cx, cy)
+                            )
+                        }
+                    }
+                }
+
+                val cloudColor =
+                    if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.6f)
+                val cloudCount = if (isDark) 4 else 7
+                for (i in 0 until cloudCount) {
+                    val cx =
+                        if (isDark) size.width * (0.4f + random.nextFloat() * 0.6f) else size.width * (0.1f + random.nextFloat() * 0.8f)
+                    val cy =
+                        if (isDark) size.height * (0.5f + random.nextFloat() * 0.4f) else size.height * (0.4f + random.nextFloat() * 0.5f)
+                    val w = 50f + random.nextFloat() * 90f
+                    drawCloud(Offset(cx, cy), w, cloudColor)
+                }
             }
 
-            "AUTUMN" -> { /* ...省略(既存のまま)... */
+            "AUTUMN" -> {
+                val leafColors = listOf(
+                    Color(0xFFD2691E),
+                    Color(0xFFFF4500),
+                    Color(0xFFB22222),
+                    Color(0xFFDAA520)
+                )
+                val count = if (isDark) 18 else 25
+                for (i in 0 until count) {
+                    val cx =
+                        if (isDark) size.width * (0.3f + random.nextFloat() * 0.7f) else size.width * (0.05f + random.nextFloat() * 0.95f)
+                    val cy =
+                        if (isDark) size.height * (0.3f + random.nextFloat() * 0.7f) else size.height * (0.05f + random.nextFloat() * 0.95f)
+                    val r = 12f + random.nextFloat() * 22f
+                    val a = random.nextFloat() * 360f
+                    val c = leafColors[random.nextInt(leafColors.size)]
+                    val alpha =
+                        if (isDark) (0.2f + random.nextFloat() * 0.4f) else (0.5f + random.nextFloat() * 0.4f)
+                    drawMapleLeaf(Offset(cx, cy), r, a, c.copy(alpha = alpha))
+                }
             }
 
-            "WINTER" -> { /* ...省略(既存のまま)... */
+            "WINTER" -> {
+                val baseColor = if (isDark) Color.White else Color(0xFF87CEFA)
+                val count = if (isDark) 25 else 35
+                for (i in 0 until count) {
+                    val cx =
+                        if (isDark) size.width * (0.3f + random.nextFloat() * 0.7f) else size.width * (0.05f + random.nextFloat() * 0.95f)
+                    val cy =
+                        if (isDark) size.height * (0.3f + random.nextFloat() * 0.7f) else size.height * (0.05f + random.nextFloat() * 0.95f)
+                    val r = 6f + random.nextFloat() * 14f
+                    val alpha =
+                        if (isDark) (0.15f + random.nextFloat() * 0.4f) else (0.4f + random.nextFloat() * 0.5f)
+                    val angleOffset = random.nextFloat() * 60f
+                    drawSnowflake(Offset(cx, cy), r, angleOffset, baseColor.copy(alpha = alpha))
+                }
             }
 
-            // ====== 木漏れ日 ======
             "KOMOREBI_MORNING" -> {
                 val beamColor = Color(0xFFFFD599).copy(alpha = 0.08f)
                 for (i in 0 until 10) {
@@ -203,7 +262,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                 }
             }
 
-            // ====== カイル (時間連動) ======
             "KYLE_MORNING" -> {
                 val bubbleColor = Color.White.copy(alpha = 0.3f)
                 for (i in 0 until 30) {
@@ -217,7 +275,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                         style = Stroke(width = 1.5f)
                     )
                 }
-                // ★ 朝のカイル君 (白く爽やかに光る)
                 drawKyleSilhouette(
                     Offset(kyleX, size.height * 0.4f + kyleYOffset),
                     120f,
@@ -243,7 +300,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                         center = Offset(cx - r * 0.35f, cy - r * 0.35f)
                     )
                 }
-                // ★ 昼のカイル君 (海に溶け込む淡いシルエット)
                 drawKyleSilhouette(
                     Offset(kyleX, size.height * 0.5f + kyleYOffset),
                     140f,
@@ -264,7 +320,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                         style = Stroke(width = 1.5f)
                     )
                 }
-                // ★ 夕方のカイル君 (夕焼けを反射してオレンジに光る)
                 drawKyleSilhouette(
                     Offset(kyleX, size.height * 0.45f + kyleYOffset),
                     130f,
@@ -284,7 +339,6 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
                         )
                     )
                 }
-                // ★ 夜のカイル君 (月光のような青白い光を帯びて深海を泳ぐ)
                 drawKyleSilhouette(
                     Offset(kyleX, size.height * 0.6f + kyleYOffset),
                     150f,
@@ -296,7 +350,7 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
 }
 
 // ★ カイル君（イルカ）のシルエットを描画するヘルパー関数
-// ★ [最終調整版] 下腹部の引き締めと、尾ヒレのV字切れ込みを再現
+// ★ 更にスタイリッシュになるようにベジェ曲線を調整
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawKyleSilhouette(
     center: Offset,
     size: Float,
@@ -323,76 +377,76 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawKyleSilhouette(
             center.x - w * 0.8f, center.y + h * 0.3f
         )
 
-        // ★ 修正1: 下腹部を「上向きの流線型」に引き締め
+        // ★ 修正: 下腹部を「より上向きの流線型」に、後ろに行くにつれてより細くなるように調整
         cubicTo(
-            center.x - w * 0.4f, center.y + h * 0.9f, // お腹をスッキリ上に
-            center.x + w * 0.2f, center.y + h * 0.7f, // くびれも上に
-            center.x + w * 0.6f, center.y + h * 0.3f  // 尾柄（付け根）
+            center.x - w * 0.3f, center.y + h * 0.75f, // お腹の最も低い部分をさらに上に
+            center.x + w * 0.3f, center.y + h * 0.4f,  // くびれをより細く
+            center.x + w * 0.65f, center.y + h * 0.2f   // 尾柄（付け根）をスリムに
         )
 
-        // ★ 修正2: 尾ヒレの下側への広がり
+        // ★ 修正: 尾ヒレの下側への広がり
         quadraticBezierTo(
-            center.x + w * 0.8f,
-            center.y + h * 0.2f,
-            center.x + w * 1.1f,
-            center.y + h * 0.8f
+            center.x + w * 0.85f,
+            center.y + h * 0.1f,
+            center.x + w * 1.15f, // 尾びれを少し長く
+            center.y + h * 0.85f  // より鋭角に
         )
 
-        // ★ 修正3: 尾ヒレの「真ん中で分かれている（V字の切れ込み）」形状
+        // ★ 修正: 尾ヒレの「真ん中で分かれている（V字の切れ込み）」形状をより深く鋭く
         quadraticBezierTo(
             center.x + w * 1.05f,
-            center.y + h * 0.3f,
-            center.x + w * 0.95f,
+            center.y + h * 0.25f,
+            center.x + w * 0.9f,  // V字の頂点をより内側に深く
             center.y
-        ) // 下から中心へ
+        )
         quadraticBezierTo(
             center.x + w * 1.05f,
-            center.y - h * 0.3f,
-            center.x + w * 1.1f,
-            center.y - h * 0.8f
-        ) // 中心から上へ
+            center.y - h * 0.25f,
+            center.x + w * 1.15f, // 尾びれ上側も少し長く
+            center.y - h * 0.85f  // より鋭角に
+        )
 
-        // ★ 修正4: 尾ヒレ上側からスマートな背中へのライン
+        // 尾ヒレ上側からスマートな背中へのライン
         quadraticBezierTo(
-            center.x + w * 0.8f,
-            center.y - h * 0.2f,
-            center.x + w * 0.6f,
-            center.y - h * 0.4f
+            center.x + w * 0.85f,
+            center.y - h * 0.1f,
+            center.x + w * 0.65f,
+            center.y - h * 0.3f
         )
 
         // 背中からおでこへ戻るカーブ
         cubicTo(
-            center.x + w * 0.3f, center.y - h * 1.0f,
+            center.x + w * 0.3f, center.y - h * 0.9f, // 背中の膨らみを少し抑える
             center.x - w * 0.4f, center.y - h * 0.9f,
             center.x - w * 0.6f, center.y - h * 0.8f
         )
         close()
 
-        // --- 背びれ (そのまま) ---
+        // --- 背びれ (イルカらしく、少し後方に傾ける) ---
         moveTo(center.x, center.y - h * 0.8f)
         quadraticBezierTo(
-            center.x + w * 0.05f, center.y - h * 1.9f,
-            center.x + w * 0.3f, center.y - h * 1.6f
+            center.x + w * 0.15f, center.y - h * 1.8f, // 先端を少し後ろへ
+            center.x + w * 0.35f, center.y - h * 1.5f
         )
         quadraticBezierTo(
-            center.x + w * 0.15f, center.y - h * 1.2f,
-            center.x + w * 0.2f, center.y - h * 0.65f
+            center.x + w * 0.2f, center.y - h * 1.1f,
+            center.x + w * 0.25f, center.y - h * 0.65f
         )
         close()
 
-        // --- 胸びれ (お腹の引き締めに合わせて少し上に配置) ---
-        moveTo(center.x - w * 0.4f, center.y + h * 0.4f)
+        // --- 胸びれ (お腹の引き締めに合わせて少し上に配置、シャープに) ---
+        moveTo(center.x - w * 0.4f, center.y + h * 0.35f)
         quadraticBezierTo(
-            center.x - w * 0.3f,
-            center.y + h * 1.2f,
-            center.x - w * 0.1f,
-            center.y + h * 1.4f
+            center.x - w * 0.25f,
+            center.y + h * 1.1f,
+            center.x - w * 0.05f,
+            center.y + h * 1.3f
         )
         quadraticBezierTo(
-            center.x - w * 0.2f,
-            center.y + h * 0.9f,
-            center.x - w * 0.2f,
-            center.y + h * 0.5f
+            center.x - w * 0.15f,
+            center.y + h * 0.8f,
+            center.x - w * 0.15f,
+            center.y + h * 0.45f
         )
         close()
     }

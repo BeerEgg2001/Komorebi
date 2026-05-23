@@ -3,10 +3,10 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.graphics.Bitmap
-import android.view.KeyEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -27,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -35,10 +36,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.NativeKeyEvent
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -248,6 +253,7 @@ fun SettingItem(
     }
 }
 
+// ★ 修正: 決定キーで入力モードにする（UX改善）と、システムへの自然な移動を実装
 @Composable
 fun DialogTextField(
     value: String,
@@ -258,53 +264,99 @@ fun DialogTextField(
 ) {
     val colors = KomorebiTheme.colors
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    var isFocused by remember { mutableStateOf(false) }
+    var isEditing by remember { mutableStateOf(false) } // ★ 追加: 決定キーで入力モードへ
 
-    Surface(
-        onClick = { focusRequester.requestFocus() },
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp),
-        colors = ClickableSurfaceDefaults.colors(containerColor = colors.textPrimary.copy(0.05f)),
-        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        border = ClickableSurfaceDefaults.border(
-            focusedBorder = Border(
-                BorderStroke(
-                    2.dp,
-                    colors.accent
-                )
+            .height(52.dp)
+            .background(
+                colors.textPrimary.copy(if (isEditing) 0.15f else 0.05f),
+                RoundedCornerShape(8.dp)
             )
-        ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f)
+            .border(
+                BorderStroke(2.dp, if (isFocused) colors.accent else Color.Transparent),
+                RoundedCornerShape(8.dp)
+            ),
+        contentAlignment = Alignment.CenterStart
     ) {
-        Box(
-            contentAlignment = Alignment.CenterStart,
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
+            cursorBrush = SolidColor(colors.textPrimary),
+            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+            readOnly = !isEditing, // ★ 追加: 普段は読み取り専用にしてキーボードの自動表示を防ぐ
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-        ) {
-            BasicTextField(
-                value = value, onValueChange = onValueChange,
-                textStyle = TextStyle(color = colors.textPrimary, fontSize = 16.sp),
-                cursorBrush = SolidColor(colors.textPrimary),
-                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { if (it.isFocused) keyboardController?.show() },
-                singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                decorationBox = { innerTextField ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty()) Text(
-                            text = placeholder,
-                            color = colors.textSecondary.copy(0.5f),
-                            fontSize = 16.sp
-                        )
-                        innerTextField()
+                .focusRequester(focusRequester)
+                .onFocusChanged { itState ->
+                    isFocused = itState.isFocused
+                    if (!itState.isFocused) {
+                        isEditing = false // フォーカスが外れたら編集モード解除
                     }
                 }
-            )
-        }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.nativeKeyEvent.keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                isEditing = false
+                                keyboardController?.hide()
+                                focusManager.moveFocus(FocusDirection.Down)
+                                true
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                                isEditing = false
+                                keyboardController?.hide()
+                                focusManager.moveFocus(FocusDirection.Up)
+                                true
+                            }
+
+                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                            android.view.KeyEvent.KEYCODE_ENTER,
+                            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                                isEditing = true
+                                keyboardController?.show()
+                                true
+                            }
+
+                            android.view.KeyEvent.KEYCODE_BACK,
+                            android.view.KeyEvent.KEYCODE_ESCAPE -> {
+                                if (isEditing) {
+                                    isEditing = false
+                                    keyboardController?.hide()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+
+                            else -> false
+                        }
+                    } else false
+                },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                isEditing = false
+                keyboardController?.hide()
+                focusManager.moveFocus(FocusDirection.Down)
+            }),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text(
+                        text = placeholder,
+                        color = colors.textSecondary.copy(0.5f),
+                        fontSize = 16.sp
+                    )
+                    innerTextField()
+                }
+            }
+        )
     }
 }
 
@@ -318,6 +370,7 @@ fun InputDialog(
     val colors = KomorebiTheme.colors
     var value by remember { mutableStateOf(initialValue) }
     val focusRequester = remember { FocusRequester() }
+    var isClosing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
 
@@ -325,9 +378,13 @@ fun InputDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
+            .focusGroup()
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
-                    onDismiss(); true
+                    isClosing = true; onDismiss(); true
                 } else false
             },
         contentAlignment = Alignment.Center
@@ -359,7 +416,7 @@ fun InputDialog(
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Button(
-                        onClick = onDismiss,
+                        onClick = { isClosing = true; onDismiss() },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.textPrimary.copy(0.1f),
@@ -367,7 +424,7 @@ fun InputDialog(
                         )
                     ) { Text("キャンセル") }
                     Button(
-                        onClick = { onConfirm(value) },
+                        onClick = { isClosing = true; onConfirm(value) },
                         modifier = Modifier.weight(1f)
                     ) { Text("OK") }
                 }
@@ -382,6 +439,7 @@ fun BatchInputDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit)
     var name by remember { mutableStateOf("") }
     var path by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
+    var isClosing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
 
@@ -389,9 +447,13 @@ fun BatchInputDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit)
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
+            .focusGroup()
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
-                    onDismiss(); true
+                    isClosing = true; onDismiss(); true
                 } else false
             },
         contentAlignment = Alignment.Center
@@ -442,7 +504,7 @@ fun BatchInputDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit)
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Button(
-                        onClick = onDismiss,
+                        onClick = { isClosing = true; onDismiss() },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.textPrimary.copy(0.1f),
@@ -451,10 +513,10 @@ fun BatchInputDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit)
                     ) { Text("キャンセル") }
                     Button(
                         onClick = {
-                            if (name.isNotBlank() && path.isNotBlank()) onConfirm(
-                                name,
-                                path
-                            )
+                            if (name.isNotBlank() && path.isNotBlank()) {
+                                isClosing = true
+                                onConfirm(name, path)
+                            }
                         },
                         modifier = Modifier.weight(1f),
                         enabled = name.isNotBlank() && path.isNotBlank()
@@ -480,6 +542,7 @@ fun SmbManualInputDialog(
 
     val focusRequester = remember { FocusRequester() }
     val scrollState = rememberScrollState()
+    var isClosing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
 
@@ -487,9 +550,13 @@ fun SmbManualInputDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
+            .focusGroup()
+            .focusProperties {
+                exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
+            }
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
-                    onDismiss(); true
+                    isClosing = true; onDismiss(); true
                 } else false
             },
         contentAlignment = Alignment.Center
@@ -499,9 +566,11 @@ fun SmbManualInputDialog(
             colors = SurfaceDefaults.colors(containerColor = colors.surface),
             modifier = Modifier.width(540.dp)
         ) {
-            Column(modifier = Modifier
-                .padding(32.dp)
-                .heightIn(max = 500.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(32.dp)
+                    .heightIn(max = 500.dp)
+            ) {
                 Text(
                     if (target != null) "SMBサーバーの編集" else "SMBサーバーの追加",
                     style = MaterialTheme.typography.headlineSmall,
@@ -510,9 +579,7 @@ fun SmbManualInputDialog(
                 )
 
                 Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(scrollState),
+                    modifier = Modifier.verticalScroll(scrollState),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -577,39 +644,41 @@ fun SmbManualInputDialog(
                             isPassword = true
                         )
                     }
-                }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Button(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(0.1f),
-                            contentColor = colors.textPrimary
-                        )
-                    ) { Text("キャンセル") }
-                    Button(
-                        onClick = {
-                            if (name.isNotBlank() && ip.isNotBlank()) {
-                                val id = target?.id ?: java.util.UUID.randomUUID().toString()
-                                onConfirm(SmbServer(id, name, ip, port, user, password))
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = name.isNotBlank() && ip.isNotBlank()
-                    ) { Text(if (target != null) "保存" else "追加") }
+                    // ★ 究極の解決策: ボタンをスクロールコンテナの中に移動！
+                    // これにより、パスワード欄から「下キー」を押すとシステムが自然にスクロールしてボタンへ移動してくれます。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Button(
+                            onClick = { isClosing = true; onDismiss() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(0.1f),
+                                contentColor = colors.textPrimary
+                            )
+                        ) { Text("キャンセル") }
+                        Button(
+                            onClick = {
+                                if (name.isNotBlank() && ip.isNotBlank()) {
+                                    isClosing = true
+                                    val id = target?.id ?: java.util.UUID.randomUUID().toString()
+                                    onConfirm(SmbServer(id, name, ip, port, user, password))
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = name.isNotBlank() && ip.isNotBlank()
+                        ) { Text(if (target != null) "保存" else "追加") }
+                    }
                 }
             }
         }
     }
 }
 
-// ★ 変更: onShowToast コールバックを追加し、ViewModelの受信イベントを拾う
 @Composable
 fun SmbSetupDialog(
     target: SmbServer?,
@@ -629,7 +698,6 @@ fun SmbSetupDialog(
     DisposableEffect(Unit) { onStartServer(); onDispose { onStopServer() } }
     LaunchedEffect(Unit) { delay(150); focusRequester.safeRequestFocus() }
 
-    // ★ 追加: Ktor側で受信したイベントをフックしてToastを表示する
     LaunchedEffect(Unit) {
         viewModel.smbServerAddedEvent.collect { name ->
             onShowToast("設定を受信しました！\n「$name」")
@@ -643,10 +711,10 @@ fun SmbSetupDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.85f))
+            .focusGroup()
             .focusProperties {
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
-            .focusGroup()
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true
@@ -699,7 +767,6 @@ fun SmbSetupDialog(
                             lineHeight = 24.sp
                         )
                         Spacer(Modifier.height(8.dp))
-                        // ★ 変更: 連続追加ができる旨を記載
                         Text(
                             "3. 送信後もこの画面は開いたままになるため、スマホから連続して複数のサーバーを追加できます！",
                             color = colors.textSecondary,
@@ -727,7 +794,6 @@ fun SmbSetupDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    // ★ 変更: キャンセルボタンの名称を状況に応じて変更
                     Button(
                         onClick = { isClosing = true; onDismiss() },
                         colors = ButtonDefaults.colors(
@@ -774,7 +840,6 @@ fun SelectionDialog(
     var isClosing by remember { mutableStateOf(false) }
     val initialFocusRequester = remember { FocusRequester() }
 
-    // ★ 修正: safeRequestFocus を使い、ディレイを延長してUI構築を待つ
     LaunchedEffect(Unit) {
         delay(150)
         initialFocusRequester.safeRequestFocus("SelectionDialog_Initial")
@@ -784,11 +849,10 @@ fun SelectionDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
+            .focusGroup()
             .focusProperties {
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
-            .focusGroup()
-            // ★ 修正: 背景のBoxにもFocusRequesterを付与してフォーカスの漏れをキャッチする
             .focusRequester(initialFocusRequester)
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
@@ -828,16 +892,20 @@ fun SelectionDialog(
                             modifier = focusModifier
                         )
                     }
+
+                    // ★ 予防対応: LazyColumnの中にボタンを格納
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { isClosing = true; onDismiss() },
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(0.1f),
+                                contentColor = colors.textPrimary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("キャンセル") }
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { isClosing = true; onDismiss() },
-                    colors = ButtonDefaults.colors(
-                        containerColor = colors.textPrimary.copy(0.1f),
-                        contentColor = colors.textPrimary
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("キャンセル") }
             }
         }
     }
@@ -919,10 +987,10 @@ fun MultiSelectionDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.8f))
+            .focusGroup()
             .focusProperties {
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
-            .focusGroup()
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true
@@ -962,28 +1030,32 @@ fun MultiSelectionDialog(
                             modifier = focusModifier
                         )
                     }
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Button(
-                        onClick = { isClosing = true; onDismiss() },
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(0.1f),
-                            contentColor = colors.textPrimary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("キャンセル") }
-                    Button(
-                        onClick = { isClosing = true; onConfirm(selections) },
-                        colors = ButtonDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("確定", fontWeight = FontWeight.Bold) }
+
+                    // ★ 予防対応: LazyColumnの中にボタンを格納
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Button(
+                                onClick = { isClosing = true; onDismiss() },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(0.1f),
+                                    contentColor = colors.textPrimary
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("キャンセル") }
+                            Button(
+                                onClick = { isClosing = true; onConfirm(selections) },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("確定", fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
             }
         }
@@ -1056,8 +1128,8 @@ fun ConfirmClearDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.8f))
-            .focusProperties { exit = { FocusRequester.Cancel } }
             .focusGroup()
+            .focusProperties { exit = { FocusRequester.Cancel } }
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyDown && it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK) {
                     onDismiss(); true
@@ -1139,10 +1211,10 @@ fun GeminiSetupDialog(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(0.85f))
+            .focusGroup()
             .focusProperties {
                 exit = { if (isClosing) FocusRequester.Default else FocusRequester.Cancel }
             }
-            .focusGroup()
             .onKeyEvent {
                 if (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK && it.type == KeyEventType.KeyUp) {
                     isClosing = true; onDismiss(); return@onKeyEvent true

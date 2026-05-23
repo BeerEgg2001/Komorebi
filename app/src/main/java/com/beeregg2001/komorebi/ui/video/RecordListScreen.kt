@@ -11,12 +11,20 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material3.Text
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
@@ -27,7 +35,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -40,6 +55,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -48,6 +67,8 @@ import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.components.*
+import com.beeregg2001.komorebi.viewmodel.RecordSortOrder
+import com.beeregg2001.komorebi.viewmodel.RecordSortType
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import kotlinx.coroutines.delay
@@ -150,6 +171,10 @@ fun RecordListScreen(
     val availableGenres by viewModel.availableGenres.collectAsState()
     val groupedSeries by viewModel.groupedSeries.collectAsState()
 
+    // ★ 追加: ViewModelからソート状態を取得
+    val sortType by viewModel.sortType.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
+
     val isSeriesLoading by viewModel.isSeriesLoading.collectAsState()
     val activeSearchQuery by viewModel.activeSearchQuery.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
@@ -202,15 +227,18 @@ fun RecordListScreen(
         )
     }
 
+    // ★ 修正: ソート状態の変更時にリストを再構築させるため stateKey に追加
     val stateKey = remember(
         selectedCategory,
         selectedGenre,
         selectedDay,
         selectedSeriesGenre,
         activeSearchQuery,
+        sortType,
+        sortOrder,
         ticketManager.forceResetTick
     ) {
-        "${selectedCategory.name}_${selectedGenre}_${selectedDay}_${selectedSeriesGenre}_${activeSearchQuery}_${ticketManager.forceResetTick}"
+        "${selectedCategory.name}_${selectedGenre}_${selectedDay}_${selectedSeriesGenre}_${activeSearchQuery}_${sortType}_${sortOrder}_${ticketManager.forceResetTick}"
     }
 
     val listState = remember(stateKey) { LazyListState() }
@@ -332,7 +360,7 @@ fun RecordListScreen(
         savedFocusProgramId = null
         focusedProgram = null
         focusedSeries = null
-        lastKnownFocusedId = null // ★ 追加
+        lastKnownFocusedId = null
         viewModel.searchRecordings(query)
         menuState.isSearchBarVisible = false; menuState.isDetailActive = false
         ticketManager.issue(FocusTicket.LIST_TOP)
@@ -344,7 +372,7 @@ fun RecordListScreen(
         savedFocusProgramId = null
         focusedProgram = null
         focusedSeries = null
-        lastKnownFocusedId = null // ★ 追加
+        lastKnownFocusedId = null
 
         if (isSameCategory) {
             when (category) {
@@ -412,6 +440,12 @@ fun RecordListScreen(
     val handleBackPress: () -> Unit = {
         when {
             menuState.isDetailActive -> menuState.isDetailActive = false
+            // ★ 追加: ソートメニューを閉じる処理
+            menuState.isSortMenuOpen -> {
+                menuState.isSortMenuOpen = false
+                focuses.sortButton.safeRequestFocus("CloseSort")
+            }
+
             menuState.isGenrePaneOpen -> {
                 menuState.isGenrePaneOpen = false; ticketManager.issue(FocusTicket.NAV_PANE)
             }
@@ -483,7 +517,8 @@ fun RecordListScreen(
                     .fillMaxSize()
                     .padding(start = contentStartPadding, bottom = 20.dp)
                     .focusProperties {
-                        if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible) {
+                        // ★ 修正: ソートメニューが開いている時は背後のフォーカスをブロック
+                        if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible || menuState.isSortMenuOpen) {
                             up = FocusRequester.Cancel; down = FocusRequester.Cancel; left =
                                 FocusRequester.Cancel; right = FocusRequester.Cancel
                         }
@@ -516,7 +551,6 @@ fun RecordListScreen(
                                         if (it != null) lastKnownFocusedId =
                                             it.representativeVideoId
                                     },
-                                    // ★ 追加: 見えている一番上のアイテムを親に伝える
                                     onTopBarDownRequesterChanged = {
                                         listContentDownRequester = it
                                     }
@@ -667,6 +701,20 @@ fun RecordListScreen(
                     onRightKeyFromNav = onRightKeyFromNav
                 )
             }
+
+            // ★ 追加: 新しいソートメニューのオーバーレイ
+            RecordSortMenuOverlay(
+                isOpen = menuState.isSortMenuOpen,
+                currentType = sortType,
+                currentOrder = sortOrder,
+                onClose = { handleBackPress() },
+                onSelect = { newType, newOrder ->
+                    viewModel.setSort(newType, newOrder)
+                    pagedRecordings.refresh() // ソート条件が変わったらPagingをリフレッシュ
+                    menuState.isSortMenuOpen = false
+                    focuses.sortButton.safeRequestFocus("CloseSort")
+                }
+            )
         }
 
         RecordScreenTopBar(
@@ -676,7 +724,8 @@ fun RecordListScreen(
                 .zIndex(100f)
                 .focusProperties {
                     up = FocusRequester.Cancel
-                    if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible) {
+                    // ★ 修正: ソートメニューが開いている時はTopBarのフォーカス移動をブロック
+                    if (menuState.isPaneOpen || menuState.isDetailActive || isNavOverlayVisible || menuState.isSortMenuOpen) {
                         down = FocusRequester.Cancel; left = FocusRequester.Cancel; right =
                             FocusRequester.Cancel
                     }
@@ -688,6 +737,7 @@ fun RecordListScreen(
             searchHistory = searchHistory,
             hasHistory = searchHistory.isNotEmpty(),
             isListView = isListView,
+            selectedCategory = selectedCategory, // ★ 追加
             searchCloseButtonFocusRequester = focuses.searchCloseButton,
             searchInputFocusRequester = focuses.searchInput,
             innerTextFieldFocusRequester = focuses.innerTextField,
@@ -696,6 +746,7 @@ fun RecordListScreen(
             backButtonFocusRequester = focuses.backButton,
             searchOpenButtonFocusRequester = focuses.searchOpenButton,
             viewToggleButtonFocusRequester = focuses.viewToggleButton,
+            sortButtonFocusRequester = focuses.sortButton, // ★ 追加
             onSearchQueryChange = { viewModel.updateSearchQuery(it) },
             onExecuteSearch = executeSearch,
             onBackPress = handleBackPress,
@@ -704,8 +755,188 @@ fun RecordListScreen(
                 val nextListView = !isListView; viewModel.updateListView(nextListView)
                 menuState.isNavPaneOpen = false; ticketManager.issue(FocusTicket.LIST_TOP)
             },
+            onSortOpen = { menuState.isSortMenuOpen = true }, // ★ 追加
             onKeyboardActiveClick = { },
             onBackButtonFocusChanged = { menuState.isBackButtonFocused = it }
         )
+    }
+}
+
+// =========================================================================================
+// ★ 追加: 新しいソートメニューのオーバーレイと専用アイテムコンポーネント
+// =========================================================================================
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
+@Composable
+fun BoxScope.RecordSortMenuOverlay(
+    isOpen: Boolean,
+    currentType: RecordSortType,
+    currentOrder: RecordSortOrder,
+    onClose: () -> Unit,
+    onSelect: (RecordSortType, RecordSortOrder) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(isOpen) {
+        if (isOpen) {
+            delay(150); try {
+                focusRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = isOpen,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.zIndex(10f)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+        )
+    }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = isOpen,
+        enter = slideInHorizontally { it } + fadeIn(),
+        exit = slideOutHorizontally { it } + fadeOut(),
+        modifier = Modifier
+            .align(Alignment.CenterEnd)
+            .zIndex(11f)
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(280.dp)
+                .fillMaxHeight()
+                .focusProperties { left = FocusRequester.Cancel; right = FocusRequester.Cancel }
+                .onKeyEvent {
+                    if (it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.Back || it.key == Key.Escape)) {
+                        onClose(); true
+                    } else false
+                },
+            colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.98f)),
+            shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowLeft,
+                    contentDescription = null,
+                    tint = colors.textPrimary.copy(alpha = 0.4f),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 4.dp)
+                        .size(24.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 28.dp, top = 24.dp, end = 12.dp, bottom = 24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "並び替え",
+                        color = colors.textSecondary,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 16.dp, start = 8.dp)
+                    )
+
+                    val options = listOf(
+                        Triple(RecordSortType.DATE, RecordSortOrder.DESC, "録画日時 (新しい順)"),
+                        Triple(RecordSortType.DATE, RecordSortOrder.ASC, "録画日時 (古い順)"),
+                        Triple(RecordSortType.TITLE, RecordSortOrder.ASC, "名前 (A→Z)"),
+                        Triple(RecordSortType.TITLE, RecordSortOrder.DESC, "名前 (Z→A)"),
+                        Triple(RecordSortType.DURATION, RecordSortOrder.DESC, "録画時間 (長い順)"),
+                        Triple(RecordSortType.DURATION, RecordSortOrder.ASC, "録画時間 (短い順)")
+                    )
+
+                    var isFirstItem = true
+                    options.forEach { (type, order, label) ->
+                        val isSelected = currentType == type && currentOrder == order
+                        val reqModifier =
+                            if (isSelected || (isFirstItem && !options.any { it.first == currentType && it.second == currentOrder })) {
+                                isFirstItem = false
+                                Modifier.focusRequester(focusRequester)
+                            } else Modifier
+
+                        SortMenuItem(
+                            icon = if (isSelected) Icons.Default.Check else Icons.Default.Circle,
+                            iconTint = if (isSelected) colors.accent else Color.Transparent,
+                            label = label,
+                            onClick = { onSelect(type, order) },
+                            modifier = reqModifier
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SortMenuItem(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    iconTint: Color = Color.Unspecified,
+    onClick: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+
+    val inverseColor = if (colors.isDark) Color.Black else Color.White
+    val contentColor = if (isFocused) inverseColor else colors.textPrimary
+
+    val finalIconTint = when {
+        iconTint == Color.Transparent -> Color.Transparent
+        isFocused -> inverseColor
+        iconTint != Color.Unspecified -> iconTint
+        else -> colors.textPrimary
+    }
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .onFocusChanged { isFocused = it.isFocused },
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Color.Transparent,
+            focusedContainerColor = colors.textPrimary,
+            contentColor = colors.textPrimary,
+            focusedContentColor = inverseColor
+        ),
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                modifier = Modifier.size(24.dp),
+                tint = finalIconTint
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontSize = 13.sp,
+                maxLines = 1,
+                color = contentColor,
+                modifier = Modifier.then(if (isFocused) Modifier.basicMarquee() else Modifier)
+            )
+        }
     }
 }

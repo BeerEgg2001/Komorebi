@@ -9,6 +9,7 @@ import android.util.Log
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,6 +25,9 @@ import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.common.Tracks
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -31,17 +35,21 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF
+import androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER // ★ 修正: OFFからPREFERへ変更
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.common.audio.ChannelMixingAudioProcessor // ★ 追加
+import androidx.media3.common.audio.ChannelMixingMatrix // ★ 追加
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbContextBuilder
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbDataSourceFactory
+import com.beeregg2001.komorebi.data.model.AudioMode // ★ 追加
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -67,6 +75,57 @@ fun rememberManagedExoPlayer(
     // ★ 修正: 単一のユーザー名ではなく、複数登録されたサーバーリストを取得
     val smbServerList by settingsViewModel.smbServerList.collectAsState()
 
+    // ★ 追加: デュアルモノラル番組およびモノラル解説放送をリアルタイム分配制御するためのプロセッサ
+    val audioProcessor = remember { ChannelMixingAudioProcessor() }
+
+    // ★ 追加: 再生中の音声ストリームのチャンネル構成と、ユーザーが選択した音声モード（主/副）に応じてマトリクスを自動最適化する関数
+    val updateAudioMixingMatrix = { mode: AudioMode, player: ExoPlayer ->
+        val audioTrackCount = player.currentTracks.groups
+            .count { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
+
+        val activeGroup = player.currentTracks.groups
+            .find { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+
+        val format = activeGroup?.getTrackFormat(0)
+        val inputChannels = format?.channelCount ?: 2
+
+        val matrix = if (audioTrackCount >= 2) {
+            // -------------------------------------------------------------------------
+            // 【ケース1: マルチストリーム番組（音声PIDが主・副で完全に分離して配信されている解説放送等）】
+            // -------------------------------------------------------------------------
+            if (inputChannels == 1) {
+                // 解説音声ストリーム自体が1chモノラルの場合、左右スピーカーへ100%ずつ均等分配（両耳モノラル化）
+                ChannelMixingMatrix(1, 2, floatArrayOf(1f, 1f))
+            } else {
+                // 通常のステレオストリームの場合はそのままステレオ（スルー）出力
+                ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))
+            }
+        } else {
+            // ------------------------------------------------=========================
+            // 【ケース2: シングルストリーム番組（通常のステレオ、または1つのストリーム内のL/Rに分かれたデュアルモノラル）】
+            // -------------------------------------------------------------------------
+            if (inputChannels == 2) {
+                // 1ストリームかつ2ch構成の時は、日本の二カ国語放送特有のデュアルモノラルを考慮してL/Rを分離分配
+                when (mode) {
+                    AudioMode.MAIN -> ChannelMixingMatrix(
+                        2,
+                        2,
+                        floatArrayOf(1f, 1f, 0f, 0f)
+                    ) // 左チャンネル（主音声）を左右に分配
+                    AudioMode.SUB -> ChannelMixingMatrix(
+                        2,
+                        2,
+                        floatArrayOf(0f, 0f, 1f, 1f)
+                    )  // 右チャンネル（副音声）を左右に分配
+                    else -> ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f))
+                }
+            } else {
+                ChannelMixingMatrix(1, 2, floatArrayOf(1f, 1f))
+            }
+        }
+        audioProcessor.putChannelMixingMatrix(matrix)
+    }
+
     val exoPlayer = remember(smbServerList) {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
@@ -74,11 +133,18 @@ fun rememberManagedExoPlayer(
                 enableFloat: Boolean,
                 enableParams: Boolean
             ): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(ctx).setEnableAudioTrackPlaybackParams(false)
+                // ★ 修正: 構築した audioProcessor を AudioSink にインジェクション
+                val processors = arrayOf<AudioProcessor>(audioProcessor)
+                return DefaultAudioSink.Builder(ctx)
+                    .setAudioProcessors(processors)
+                    .setEnableAudioTrackPlaybackParams(false)
                     .build()
             }
         }.apply {
-            setExtensionRendererMode(EXTENSION_RENDERER_MODE_OFF)
+            // ★ 修正: EXTENSION_RENDERER_MODE_PREFER に切り替えることで、Fire TV等のハードウェアが持つ
+            // 再生中のオーディオデコーダー再初期化バグを完全にバイパスし、FFmpegソフトウェアデコードによって
+            // 2往復目以降のトラック切り替えでも絶対に無限ローディングフリーズを起こさない堅牢性を確保します。
+            setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
             setEnableDecoderFallback(true)
         }
 
@@ -138,6 +204,8 @@ fun rememberManagedExoPlayer(
             setTsExtractorFlags(
                 DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
             )
+            // ★ 修正: 独自パッチを当てたMedia3の動的PMT検出を正しく活かすため、MODE_MULTI_PMTを指定
+            setTsExtractorMode(TsExtractor.MODE_MULTI_PMT)
             setConstantBitrateSeekingEnabled(true)
             setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
         }
@@ -174,6 +242,11 @@ fun rememberManagedExoPlayer(
 
                     override fun onIsPlayingChanged(playing: Boolean) {
                         vs.isPlayerPlaying = playing
+                    }
+
+                    // ★ 追加: 日本の放送特有の動的な音声トラック追加・変更イベント発生時にマトリクスを同期更新
+                    override fun onTracksChanged(tracks: Tracks) {
+                        updateAudioMixingMatrix(vs.currentAudioMode, this@apply)
                     }
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -215,6 +288,37 @@ fun rememberManagedExoPlayer(
                     }
                 })
             }
+    }
+
+    // ★ 追加: ユーザーがリモコン操作で主音声/副音声を切り替えた際、IndexOutOfBoundsExceptionの
+    // クラッシュを完璧に防ぐ厳密な境界チェックを行いながら、純正のトラック選択パラメーターをオーバーライド更新する処理
+    LaunchedEffect(vs.currentAudioMode) {
+        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+        if (audioGroups.isNotEmpty()) {
+            val isSub = vs.currentAudioMode == AudioMode.SUB
+            val builder = exoPlayer.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+
+            if (audioGroups.size > 1) {
+                // 【マルチストリーム番組（PID分離形式）の場合】
+                // 音声PIDグループ自体を丸ごと切り替えるため、対象のTrackGroupを選択し、内部インデックスは0を固定指定
+                val targetGroupIndex = if (isSub) 1 else 0
+                if (targetGroupIndex < audioGroups.size) {
+                    val group = audioGroups[targetGroupIndex].mediaTrackGroup
+                    builder.addOverride(TrackSelectionOverride(group, 0))
+                }
+            } else {
+                // 【デュアルモノラル番組（単一PID形式）の場合】
+                // 同一のグループ（PID）の中で、トラックインデックス(0:主 / 1:副)を切り替える
+                val group = audioGroups[0].mediaTrackGroup
+                if (group.length > 1) {
+                    val targetTrackIndex = if (isSub) 1 else 0
+                    builder.addOverride(TrackSelectionOverride(group, targetTrackIndex))
+                }
+            }
+            exoPlayer.trackSelectionParameters = builder.build()
+        }
+        updateAudioMixingMatrix(vs.currentAudioMode, exoPlayer)
     }
 
     DisposableEffect(lifecycleOwner, exoPlayer) {
