@@ -54,12 +54,21 @@ class LivePlayerFactory @Inject constructor(
 
         // 5.1ch音声などをステレオ（2ch）にダウンミックスするためのプロセッサ設定
         val audioProcessor = ChannelMixingAudioProcessor().apply {
+            // 2ch -> 2ch (そのまま)
             putChannelMixingMatrix(ChannelMixingMatrix(2, 2, floatArrayOf(1f, 0f, 0f, 1f)))
+
+            // 6ch(5.1ch) -> 2ch
+            // 入力順: L, R, C, LFE, Ls, Rs
             putChannelMixingMatrix(
                 ChannelMixingMatrix(
                     6,
                     2,
-                    floatArrayOf(1f, 0f, 0f, 1f, 0.707f, 0.707f, 0f, 0f, 0.707f, 0f, 0f, 0.707f)
+                    floatArrayOf(
+                        // 出力 Left: L(1.0) + C(0.707) + Ls(0.707)
+                        1f, 0f, 0.707f, 0f, 0.707f, 0f,
+                        // 出力 Right: R(1.0) + C(0.707) + Rs(0.707)
+                        0f, 1f, 0.707f, 0f, 0f, 0.707f
+                    )
                 )
             )
         }

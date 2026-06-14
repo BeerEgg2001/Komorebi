@@ -442,18 +442,29 @@ class SmbViewModel @Inject constructor(
     }
 
     private fun parseLuaFormat(text: String, durationSec: Double): List<ChapterInfo> {
-        val rawMarkers = mutableListOf<Pair<Long, String>>()
         val trimmed = text.trim()
-        if (!trimmed.startsWith("c-") || !trimmed.endsWith("-c")) return emptyList()
 
-        val coreContent = trimmed.substring(2, trimmed.length - 2)
+        // 1. 仕様: "c-"で始めて"c"で終わる
+        if (!trimmed.startsWith("c-") || !trimmed.endsWith("c")) return emptyList()
+
+        // 先頭の "c-" と末尾の "c" を取り除く ("c-c" の場合は coreContent が空になる)
+        val coreContent = trimmed.substring(2, trimmed.length - 1)
+        if (coreContent.isEmpty()) return emptyList()
+
+        // 2. 仕様を満たさないコマンドは全体を無視するための事前バリデーション
+        // パターン: {正整数}{c|d|e}{文字列}- の連続であること
+        if (!coreContent.matches(Regex("^(?:\\d+[cde][^-]*-)+$"))) {
+            return emptyList()
+        }
+
         val segments = coreContent.split("-").filter { it.isNotEmpty() }
-        val regex = Regex("""^(\d*)([cde])(.*)$""")
+        val regex = Regex("""^(\d+)([cde])(.*)$""")
 
-        var lastTimeMs: Long = 0L
+        val rawMarkers = mutableListOf<Pair<Long, String>>()
+        var lastTimeMs = 0L
 
         for (segment in segments) {
-            val match = regex.find(segment) ?: continue
+            val match = regex.find(segment) ?: return emptyList()
             val posValue = match.groupValues[1]
             val type = match.groupValues[2]
             val name = match.groupValues[3]
@@ -462,7 +473,7 @@ class SmbViewModel @Inject constructor(
                 "c" -> posValue.toLongOrNull() ?: 0L
                 "d" -> (posValue.toLongOrNull() ?: 0L) * 100L
                 "e" -> if (durationSec > 0.0) (durationSec * 1000).toLong() else lastTimeMs + 30000L
-                else -> continue
+                else -> return emptyList() // "c" "d" "e" 以外は全体無視
             }
 
             rawMarkers.add(Pair(timeMs, name))
@@ -474,36 +485,53 @@ class SmbViewModel @Inject constructor(
         val safeDurationMs =
             if (durationSec > 0.0) (durationSec * 1000).toLong() else lastTimeMs + 30000L
         val chapters = mutableListOf<ChapterInfo>()
-        var currentCmStartMs: Long? = null
 
-        for (i in 0 until rawMarkers.size) {
+        var currentCmStartMs: Long? = null
+        var lastChapterEndMs = 0L // 本編区間を補完するための変数
+
+        for (i in rawMarkers.indices) {
             val (timeMs, name) = rawMarkers[i]
             val nextTimeMs =
                 if (i + 1 < rawMarkers.size) rawMarkers[i + 1].first else safeDurationMs
 
-            val isCmStart = name.startsWith("ox", ignoreCase = true)
-            val isCmEnd = name.startsWith("ix", ignoreCase = true)
+            val isCmStart = name.startsWith("ix", ignoreCase = true)
+            val isCmEnd = name.startsWith("ox", ignoreCase = true)
 
             if (isCmStart && currentCmStartMs == null) {
+                // [補完] 直前の終了位置から今回のCM開始位置までにギャップがあれば「本編」として追加
+                if (lastChapterEndMs < timeMs) {
+                    chapters.add(
+                        ChapterInfo(
+                            startTimeMs = lastChapterEndMs,
+                            endTimeMs = timeMs,
+                            isCm = false,
+                            isMarkerOnly = false,
+                            label = "" // UI表示用に "本編" などに変更可能です
+                        )
+                    )
+                }
                 currentCmStartMs = timeMs
             } else if (isCmEnd && currentCmStartMs != null) {
+                // CM区間の追加
                 chapters.add(
                     ChapterInfo(
-                        currentCmStartMs,
-                        timeMs,
+                        startTimeMs = currentCmStartMs,
+                        endTimeMs = timeMs,
                         isCm = true,
                         isMarkerOnly = false,
                         label = ""
                     )
                 )
                 currentCmStartMs = null
+                lastChapterEndMs = timeMs // 次の本編の開始位置を更新
             }
 
-            if (name.isNotEmpty() && !isCmStart && !isCmEnd) {
+            // ixでもoxでもない通常のマーカー（C5Sec など）
+            if (!isCmStart && !isCmEnd) {
                 chapters.add(
                     ChapterInfo(
-                        timeMs,
-                        nextTimeMs,
+                        startTimeMs = timeMs,
+                        endTimeMs = nextTimeMs,
                         isCm = false,
                         isMarkerOnly = true,
                         label = name
@@ -512,12 +540,27 @@ class SmbViewModel @Inject constructor(
             }
         }
 
+        // 終端処理 (CMが閉じられずに終わった場合)
         if (currentCmStartMs != null) {
             chapters.add(
                 ChapterInfo(
-                    currentCmStartMs,
-                    safeDurationMs,
+                    startTimeMs = currentCmStartMs,
+                    endTimeMs = safeDurationMs,
                     isCm = true,
+                    isMarkerOnly = false,
+                    label = ""
+                )
+            )
+            lastChapterEndMs = safeDurationMs
+        }
+
+        // [補完] 最後のマーカーから終端までの本編区間を追加
+        if (lastChapterEndMs < safeDurationMs) {
+            chapters.add(
+                ChapterInfo(
+                    startTimeMs = lastChapterEndMs,
+                    endTimeMs = safeDurationMs,
+                    isCm = false,
                     isMarkerOnly = false,
                     label = ""
                 )
