@@ -35,6 +35,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RecordSyncEngine"
+private const val KNOWN_RECORD_STOP_THRESHOLD = 1
 
 data class SyncProgress(
     val isSyncing: Boolean = false,
@@ -79,6 +80,15 @@ class RecordSyncEngine @Inject constructor(
 
     private val BATCH_SIZE get() = if (isLowRamDevice) 30 else 100
     private val GC_DELAY_MS get() = if (isLowRamDevice) 2000L else 1200L
+
+    private fun hasRecordChanged(
+        local: RecordedProgramEntity?,
+        remote: RecordedProgramEntity
+    ): Boolean {
+        return local == null ||
+                local.title != remote.title ||
+                local.isRecording != remote.isRecording
+    }
 
     fun clearError() {
         _syncProgress.value = _syncProgress.value.copy(error = null)
@@ -151,9 +161,15 @@ class RecordSyncEngine @Inject constructor(
                         message = "$baseMessage (接続中)"
                     )
 
+                    // 完了済みの通常更新は降順ページングの先頭から確認する。
+                    // lastSyncedPage は未完了の初期構築を再開する場合だけ使う。
+                    val canResumeInitialBuild =
+                        currentMeta.lastSyncedPage > 0 &&
+                                !currentMeta.isInitialBuildCompleted &&
+                                !forceFullSync
                     var currentPage =
-                        if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
-                    val isResumed = currentPage > 1
+                        if (canResumeInitialBuild) currentMeta.lastSyncedPage + 1 else 1
+                    val isResumed = canResumeInitialBuild
                     var isCompleted = false
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
@@ -169,6 +185,7 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
+                    var knownUnchangedStreak = 0
 
                     while (!isCompleted) {
                         currentCoroutineContext().ensureActive()
@@ -192,20 +209,33 @@ class RecordSyncEngine @Inject constructor(
                                 val localEntitiesMap =
                                     programDao.getByIds(pageIds).associateBy { it.id }
 
-                                val allPageItemsMatch =
-                                    entities.size == localEntitiesMap.size && entities.all { entity ->
-                                        val local = localEntitiesMap[entity.id]
+                                val hasPageChanges = entities.any { entity ->
+                                    hasRecordChanged(localEntitiesMap[entity.id], entity)
+                                }
+
+                                val shouldStopAfterPage = entities.any { entity ->
+                                    val local = localEntitiesMap[entity.id]
+                                    val knownUnchanged =
                                         local != null &&
-                                                local.title == entity.title &&
-                                                local.isRecording == entity.isRecording
+                                                !local.isRecording &&
+                                                !hasRecordChanged(local, entity)
+
+                                    knownUnchangedStreak = if (knownUnchanged) {
+                                        knownUnchangedStreak + 1
+                                    } else {
+                                        0
                                     }
 
-                                val hasLocalRecording =
-                                    localEntitiesMap.values.any { it.isRecording }
+                                    knownUnchangedStreak >= KNOWN_RECORD_STOP_THRESHOLD
+                                }
 
-                                if (allPageItemsMatch && !hasLocalRecording) {
+                                if (!hasPageChanges && shouldStopAfterPage) {
                                     isCompleted = true
                                     return@run
+                                }
+
+                                if (shouldStopAfterPage) {
+                                    isCompleted = true
                                 }
                             }
 
@@ -288,6 +318,7 @@ class RecordSyncEngine @Inject constructor(
 
                         metaDao.upsert(
                             currentMeta.copy(
+                                lastSyncedPage = 0,
                                 lastSyncedAt = System.currentTimeMillis(),
                                 isInitialBuildCompleted = true
                             )
