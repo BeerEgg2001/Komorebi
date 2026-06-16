@@ -32,7 +32,7 @@ object RecordDataMapper {
             endTime = program.endTime,
             videoDuration = if (program.recordedVideo.duration > 0) program.recordedVideo.duration else program.duration,
             // ★descriptionの保存を削除
-            hasKeyFrames = program.recordedVideo.hasKeyFrames,
+            hasKeyFrames = program.recordedVideo.hasKeyFrames?: true,
             isRecording = isCurrentlyRecording, // ★修正: マージした確実なフラグをDBに保存
             playbackPosition = program.playbackPosition,
             channelId = program.channel?.id,
