@@ -145,7 +145,7 @@ fun rememberManagedExoPlayer(
                 override fun open(dataSpec: DataSpec): Long {
                     val isSmb = dataSpec.uri.scheme == "smb"
                     val isEdcbScheme = dataSpec.uri.scheme == "edcb"
-                    val isDirectTs = dataSpec.uri.path?.endsWith(".ts", ignoreCase = true) == true
+                    val isDirectTs = dataSpec.uri.path?.endsWith(".ts", ignoreCase = true) == true || dataSpec.uri.path?.endsWith("m2ts", ignoreCase = true) == true
 //                    val isMirakurun = dataSpec.uri.path?.contains("/api/streams/") == true || dataSpec.uri.path?.contains("/api/channels/") == true
 
                     val sid = program?.channel?.serviceId ?: -1
