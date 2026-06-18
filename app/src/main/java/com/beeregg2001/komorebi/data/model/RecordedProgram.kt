@@ -37,6 +37,7 @@ data class CmSection(
 data class RecordedChannel(
     val id: String,
     @SerializedName("network_id") val networkId: Int? = null,
+    @SerializedName("service_id") val serviceId: Int? = null,
     @SerializedName("display_channel_id") val displayChannelId: String,
     val type: String,
     val name: String,

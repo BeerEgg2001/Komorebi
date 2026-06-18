@@ -42,21 +42,33 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.extractor.Extractor
+import androidx.media3.extractor.ExtractorInput
+import androidx.media3.extractor.ExtractorOutput
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.PositionHolder
+import androidx.media3.extractor.SeekMap
+import androidx.media3.extractor.SeekPoint
 import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbContextBuilder
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbDataSourceFactory
 import com.beeregg2001.komorebi.data.model.AudioMode
+import com.beeregg2001.komorebi.data.model.RecordedProgram
+import com.beeregg2001.komorebi.ui.video.smb.SmbItem
 import com.beeregg2001.komorebi.util.TsReadExDataSource
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "VideoPlayerManager"
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
 fun rememberManagedExoPlayer(
+    program: RecordedProgram?,
+    isLiveStream: Boolean,
     vs: VideoPlayerState,
     scope: CoroutineScope,
     webViewRef: MutableState<WebView?>,
@@ -74,7 +86,6 @@ fun rememberManagedExoPlayer(
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
     val smbServerList by settingsViewModel.smbServerList.collectAsState()
 
-    // ★ 修正: tsreadexがトラックを綺麗に分離してくれるため、標準のTrackSelectionだけで完結します
     val applyAudioSelectionAndMatrix = { mode: AudioMode, player: ExoPlayer ->
         val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
 
@@ -88,21 +99,15 @@ fun rememberManagedExoPlayer(
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
 
             if (sortedAudioGroups.size > 1) {
-                // tsreadexが分離した副音声（別トラック）へ切り替える
                 val targetGroupIndex = if (isSub) 1 else 0
-                val targetGroup =
-                    sortedAudioGroups[targetGroupIndex.coerceAtMost(sortedAudioGroups.size - 1)]
+                val targetGroup = sortedAudioGroups[targetGroupIndex.coerceAtMost(sortedAudioGroups.size - 1)]
                 builder.addOverride(TrackSelectionOverride(targetGroup.mediaTrackGroup, 0))
             } else {
-                // シングルストリーム番組の場合
                 val targetGroup = sortedAudioGroups.firstOrNull()
                 if ((targetGroup?.mediaTrackGroup?.length ?: 0) > 1) {
                     val targetTrackIndex = if (isSub) 1 else 0
                     builder.addOverride(
-                        TrackSelectionOverride(
-                            targetGroup!!.mediaTrackGroup,
-                            targetTrackIndex
-                        )
+                        TrackSelectionOverride(targetGroup!!.mediaTrackGroup, targetTrackIndex)
                     )
                 }
             }
@@ -111,7 +116,6 @@ fun rememberManagedExoPlayer(
     }
 
     val exoPlayer = remember(smbServerList) {
-        // ★ 修正: カスタムプロセッサが不要になったため、純正の RenderersFactory で完全に安定動作します
         val renderersFactory = DefaultRenderersFactory(context).apply {
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             setEnableDecoderFallback(true)
@@ -124,10 +128,10 @@ fun rememberManagedExoPlayer(
             setReadTimeoutMs(90000)
         }
 
-        // 準備: NativeLibのインスタンスと、tsreadexに渡す引数を定義（全音声・字幕・データ放送を通す設定）
         val nativeLib = NativeLib()
-        val defaultTsArgs =
-            arrayOf("tsreadex", "-a", "13", "-b", "4", "-c", "5", "-u", "1", "-d", "13")
+
+        // ★ 追加: HTTPリクエスト時に取得したファイルサイズを保持する共有変数
+        val fileSizeBytesRef = AtomicLong(0L)
 
         val dataSourceFactory = DataSource.Factory {
             object : DataSource {
@@ -141,28 +145,26 @@ fun rememberManagedExoPlayer(
                 override fun open(dataSpec: DataSpec): Long {
                     val isSmb = dataSpec.uri.scheme == "smb"
                     val isEdcbScheme = dataSpec.uri.scheme == "edcb"
-
-                    // ★ 修正: HLSストリームをバイパスし、ダイレクトTSやライブ視聴のみ tsreadex を通す判定
                     val isDirectTs = dataSpec.uri.path?.endsWith(".ts", ignoreCase = true) == true
-                    val isMirakurun =
-                        dataSpec.uri.path?.contains("/api/streams/") == true || dataSpec.uri.path?.contains(
-                            "/api/channels/"
-                        ) == true
+//                    val isMirakurun = dataSpec.uri.path?.contains("/api/streams/") == true || dataSpec.uri.path?.contains("/api/channels/") == true
+
+                    val sid = program?.channel?.serviceId ?: -1
+                    val nValue = sid.toString()
+
+                    val dynamicTsArgs = arrayOf(
+                        "tsreadex", "-x", "18/38/39", "-n", nValue,
+                        "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13"
+                    )
 
                     val source = if (isSmb) {
                         val host = dataSpec.uri.host ?: ""
-                        val server = smbServerList.find { s ->
-                            s.ip.substringBefore("/") == host
-                        }
-                        val smbContext =
-                            SmbContextBuilder.build(server?.user ?: "", server?.password ?: "")
-                        val smbFactory = SmbDataSourceFactory(smbContext)
-                        smbFactory.createDataSource()
-                    } else if (isEdcbScheme || isDirectTs || isMirakurun || isEdcbDirect) {
-                        // ダイレクトTS再生の場合は tsreadex の JNI フィルターを通す
-                        TsReadExDataSource(nativeLib, defaultTsArgs)
+                        val server = smbServerList.find { s -> s.ip.substringBefore("/") == host }
+                        val smbContext = SmbContextBuilder.build(server?.user ?: "", server?.password ?: "")
+                        SmbDataSourceFactory(smbContext).createDataSource()
+                    } else if (isEdcbScheme || isDirectTs  || isEdcbDirect) {
+                        // ★ 修正: ファイルサイズ格納用の参照を渡す
+                        TsReadExDataSource(nativeLib, dynamicTsArgs, fileSizeBytesRef)
                     } else {
-                        // トランスコード済みのHLS（m3u8など）の場合は通常のHttpDataSourceを使う
                         httpDataSourceFactory.createDataSource()
                     }
 
@@ -184,17 +186,55 @@ fun rememberManagedExoPlayer(
             }
         }
 
-        val extractorsFactory = DefaultExtractorsFactory().apply {
-            setTsExtractorFlags(
-                DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
-            )
-            // ★ 修正: tsreadexがPMTを綺麗に整頓してくれるため、純正のMODE_SINGLE_PMTで完璧に動きます
-            setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
-            setConstantBitrateSeekingEnabled(true)
-            setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
+        // ★ 核心: ExoPlayer の Extractor をラップし、自前の SeekMap を強制注入する
+        val programDurationUs = ((program?.recordedVideo?.duration ?: 0.0) * 1_000_000.0).toLong()
+//        val isDirectPlayback = isEdcbDirect != null
+
+        val customExtractorsFactory = ExtractorsFactory {
+            val defaultExtractors = DefaultExtractorsFactory().apply {
+                setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
+                setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+                setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
+            }.createExtractors()
+
+            // ダイレクトTS再生時のみ、TsExtractor をラップして SeekMap を上書き
+            if (isEdcbDirect && programDurationUs > 0L) {
+                for (i in defaultExtractors.indices) {
+                    val extractor = defaultExtractors[i]
+                    if (extractor is TsExtractor) {
+                        defaultExtractors[i] = object : Extractor {
+                            override fun sniff(input: ExtractorInput) = extractor.sniff(input)
+                            override fun init(output: ExtractorOutput) {
+                                extractor.init(object : ExtractorOutput by output {
+                                    override fun seekMap(seekMap: SeekMap) {
+                                        // TsExtractor が算出したエラーの SeekMap を無視し、独自の高精度マップを注入
+                                        val customSeekMap = object : SeekMap {
+                                            override fun isSeekable() = true
+                                            override fun getDurationUs() = programDurationUs
+                                            override fun getSeekPoints(timeUs: Long): SeekMap.SeekPoints {
+                                                val size = fileSizeBytesRef.get()
+                                                if (size <= 0L) return SeekMap.SeekPoints(SeekPoint(timeUs, 0L))
+                                                val safeTime = timeUs.coerceIn(0L, programDurationUs)
+                                                // 時間とファイルサイズから、HTTP Range の要求バイトオフセットを正確に計算する
+                                                val position = (safeTime.toDouble() / programDurationUs * size).toLong()
+                                                return SeekMap.SeekPoints(SeekPoint(safeTime, position))
+                                            }
+                                        }
+                                        output.seekMap(customSeekMap)
+                                    }
+                                })
+                            }
+                            override fun read(input: ExtractorInput, seekPosition: PositionHolder) = extractor.read(input, seekPosition)
+                            override fun seek(position: Long, timeUs: Long) = extractor.seek(position, timeUs)
+                            override fun release() = extractor.release()
+                        }
+                    }
+                }
+            }
+            defaultExtractors
         }
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory, customExtractorsFactory)
 
         val allocator = DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE)
         val loadControl = DefaultLoadControl.Builder()
@@ -216,11 +256,7 @@ fun rememberManagedExoPlayer(
                 )
                 addListener(object : Player.Listener {
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        onVideoSizeChanged(
-                            videoSize.width,
-                            videoSize.height,
-                            videoSize.pixelWidthHeightRatio
-                        )
+                        onVideoSizeChanged(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
                     }
 
                     override fun onIsPlayingChanged(playing: Boolean) {
@@ -228,35 +264,12 @@ fun rememberManagedExoPlayer(
                     }
 
                     override fun onTracksChanged(tracks: Tracks) {
-                        Log.d("KomorebiAudioDebug", "=== Tracks Changed ===")
-                        tracks.groups.forEachIndexed { i, group ->
-                            val typeStr = when (group.type) {
-                                C.TRACK_TYPE_VIDEO -> "VIDEO"
-                                C.TRACK_TYPE_AUDIO -> "AUDIO"
-                                C.TRACK_TYPE_TEXT -> "TEXT"
-                                else -> "UNKNOWN (${group.type})"
-                            }
-                            Log.d(
-                                "KomorebiAudioDebug",
-                                "Group [$i] ($typeStr): length=${group.mediaTrackGroup.length}"
-                            )
-
-                            for (j in 0 until group.mediaTrackGroup.length) {
-                                val format = group.mediaTrackGroup.getFormat(j)
-                                Log.d(
-                                    "KomorebiAudioDebug",
-                                    "  Track [$j]: ch=${format.channelCount}, mime=${format.sampleMimeType}, lang=${format.language}"
-                                )
-                            }
-                        }
                         applyAudioSelectionAndMatrix(vs.currentAudioMode, this@apply)
                     }
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         onBufferingChanged(playbackState == Player.STATE_BUFFERING)
-                        if (playbackState == Player.STATE_READY) {
-                            onDurationChanged(duration)
-                        }
+                        if (playbackState == Player.STATE_READY) onDurationChanged(duration)
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
@@ -273,18 +286,10 @@ fun rememberManagedExoPlayer(
                         if (!vs.isSubtitleEnabled) return
                         for (i in 0 until metadata.length()) {
                             val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains(
-                                    "aribb24",
-                                    true
-                                ) || entry.owner.contains("B24", true))
-                            ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                                val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
                                 webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript(
-                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                        null
-                                    )
+                                    webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }", null)
                                 }
                             }
                         }

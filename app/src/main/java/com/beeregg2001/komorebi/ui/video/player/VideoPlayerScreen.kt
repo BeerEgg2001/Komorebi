@@ -183,7 +183,9 @@ fun VideoPlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val exoPlayer = rememberManagedExoPlayer(
+        program = program,
         vs = vs,
+        isLiveStream = isLiveStream,
         scope = scope,
         webViewRef = webViewRef,
         onVideoSizeChanged = { w, h, ratio ->

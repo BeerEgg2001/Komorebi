@@ -16,13 +16,15 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 @UnstableApi
 class TsReadExDataSource(
     private val nativeLib: NativeLib,
-    var tsArgs: Array<String>
+    var tsArgs: Array<String>,
+    private val fileSizeBytesRef: AtomicLong? = null // ★ ファイルサイズ格納用
 ) : BaseDataSource(true) {
 
     private var handle: Long = 0
@@ -65,34 +67,31 @@ class TsReadExDataSource(
         transferInitializing(dataSpec)
 
         try {
-            // シーク等で再度呼ばれるたびに、C++側のtsreadexが新しく起動しバッファがリセットされます
             handle = nativeLib.openFilter(tsArgs)
         } catch (e: Exception) {
             throw IOException("Failed to open native filter", e)
         }
 
-        // ★ 修正: ExoPlayerにファイルサイズを返し、シークを可能にする
-        val length = if (dataSpec.uri.scheme == "edcb") {
+        if (dataSpec.uri.scheme == "edcb") {
             edcbTunerLock.withLock { openEdcbStream(dataSpec.uri) }
-            C.LENGTH_UNSET.toLong()
         } else {
             openHttpStream(dataSpec)
         }
 
         transferStarted(dataSpec)
         opened = true
-        return length
+
+        // ★ 核心: ExoPlayer の暴走する末尾シークを完全に封殺するため、常に LENGTH_UNSET を返す
+        return C.LENGTH_UNSET.toLong()
     }
 
-    // ★ 修正: シークに必要な Range リクエストの送信と Content-Length の取得
-    private fun openHttpStream(dataSpec: DataSpec): Long {
+    private fun openHttpStream(dataSpec: DataSpec) {
         val url = java.net.URL(dataSpec.uri.toString())
         connection = (url.openConnection() as HttpURLConnection).apply {
             connectTimeout = 8000
             readTimeout = 8000
             doInput = true
 
-            // ExoPlayerが要求するシーク位置をサーバーに伝える
             if (dataSpec.position > 0) {
                 setRequestProperty("Range", "bytes=${dataSpec.position}-")
             }
@@ -101,16 +100,14 @@ class TsReadExDataSource(
         if (responseCode !in 200..299) throw IOException("Server returned code $responseCode")
 
         val contentLengthStr = connection?.getHeaderField("Content-Length")
-        val contentLength = contentLengthStr?.toLongOrNull() ?: C.LENGTH_UNSET.toLong()
+        val contentLength = contentLengthStr?.toLongOrNull() ?: 0L
 
-        inputStream = BufferedInputStream(connection!!.inputStream)
-
-        // dataSpec.length が指定されていればそれを、なければサーバーの Content-Length を返す
-        return if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
-            dataSpec.length
-        } else {
-            contentLength
+        // ★ 初回接続時（position = 0）にファイル全体サイズを取得し、SeekMap 計算用に保存
+        if (contentLength > 0L && dataSpec.position == 0L) {
+            fileSizeBytesRef?.set(contentLength)
         }
+
+        inputStream = BufferedInputStream(connection!!.inputStream, 188 * 50000)
     }
 
     private fun openEdcbStream(uri: Uri) {
@@ -132,22 +129,15 @@ class TsReadExDataSource(
                     socket.connect(InetSocketAddress(ip, port), 2000)
 
                     val body = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
-                    body.putInt(26); body.putInt(1); body.putShort(onid.toShort()); body.putShort(
-                    tsid.toShort()
-                ); body.putShort(sid.toShort()); body.putInt(1); body.putInt(nwtvId); body.putInt(2)
+                    body.putInt(26); body.putInt(1); body.putShort(onid.toShort()); body.putShort(tsid.toShort()); body.putShort(sid.toShort()); body.putInt(1); body.putInt(nwtvId); body.putInt(2)
 
-                    sendEdcbCommand(
-                        socket.getOutputStream(),
-                        CMD_EPG_SRV_NWTV_ID_SET_CH,
-                        body.array()
-                    )
+                    sendEdcbCommand(socket.getOutputStream(), CMD_EPG_SRV_NWTV_ID_SET_CH, body.array())
 
                     val (ret, size) = readEdcbResponseHeader(socket.getInputStream())
                     if (ret == CMD_SUCCESS && size >= 4) {
                         val resData = readExactBytes(socket.getInputStream(), size)
                         if (resData != null) {
-                            targetProcessId =
-                                ByteBuffer.wrap(resData).order(ByteOrder.LITTLE_ENDIAN).getInt()
+                            targetProcessId = ByteBuffer.wrap(resData).order(ByteOrder.LITTLE_ENDIAN).getInt()
                             if (targetProcessId != 0) break
                         }
                     }
@@ -170,9 +160,7 @@ class TsReadExDataSource(
                 s.soTimeout = 15000
                 s.connect(InetSocketAddress(ip, port), 3000)
 
-                val relayReq =
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(targetProcessId)
-                        .array()
+                val relayReq = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(targetProcessId).array()
                 sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_RELAY_VIEW_STREAM, relayReq)
 
                 val (retRelay, _) = readEdcbResponseHeader(s.getInputStream())
@@ -204,14 +192,12 @@ class TsReadExDataSource(
             Socket().use { s ->
                 s.soTimeout = 2000
                 s.connect(InetSocketAddress(ip, port), 1500)
-                val closeReq =
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(nwtvId).array()
+                val closeReq = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(nwtvId).array()
                 sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_NWTV_ID_CLOSE, closeReq)
                 readEdcbResponseHeader(s.getInputStream())
                 lastCloseRequestTime = System.currentTimeMillis()
             }
-        } catch (e: Exception) {
-        }
+        } catch (e: Exception) { }
     }
 
     private fun cleanupEdcbSessionAsynchronous(ip: String, port: Int) {
@@ -246,27 +232,25 @@ class TsReadExDataSource(
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         val input = inputStream ?: return C.RESULT_END_OF_INPUT
+
         var total = 0
         while (total < length) {
             val processed = nativeLib.popDataBuffer(handle, outputBuffer, length - total)
-            if (processed <= 0) {
+            if (processed > 0) {
+                outputBuffer.position(0)
+                outputBuffer.get(buffer, offset + total, processed)
+                total += processed
+            } else {
                 val readCount = input.read(tempArray)
                 if (readCount == -1) {
-                    if (total > 0) {
-                        bytesTransferred(total)
-                        return total
-                    } else {
-                        return C.RESULT_END_OF_INPUT
-                    }
+                    return if (total > 0) total else C.RESULT_END_OF_INPUT
                 }
                 if (readCount > 0) {
-                    inputBuffer.clear(); inputBuffer.put(tempArray, 0, readCount)
+                    inputBuffer.clear()
+                    inputBuffer.put(tempArray, 0, readCount)
                     nativeLib.pushDataBuffer(handle, inputBuffer, readCount)
-                    continue
-                } else break
+                }
             }
-            outputBuffer.position(0); outputBuffer.get(buffer, offset + total, processed)
-            total += processed
         }
         if (total > 0) bytesTransferred(total)
         return total

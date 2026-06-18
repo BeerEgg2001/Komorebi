@@ -7,6 +7,7 @@ import com.beeregg2001.komorebi.NativeLib
 class TsReadExDataSourceFactory(
     private val nativeLib: NativeLib,
     initialArgs: Array<String> // 名前を変更
+
 ) : androidx.media3.datasource.DataSource.Factory {
 
     // 外部から書き換え可能なように var にする
