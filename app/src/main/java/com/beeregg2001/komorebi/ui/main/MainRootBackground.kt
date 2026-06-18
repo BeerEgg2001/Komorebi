@@ -74,7 +74,8 @@ fun MainRootBackground(
                         konomiIp = konomiIp, konomiPort = konomiPort,
                         customTitle = state.openedSeriesTitle,
                         onProgramClick = { program, forcedPosition ->
-                            if (!program.recordedVideo.hasKeyFrames) return@RecordListScreen
+                            val isAnalyzed = program.recordedVideo.hasKeyFrames?: true
+                            if (!isAnalyzed) return@RecordListScreen
                             val duration = program.recordedVideo.duration
                             val history =
                                 watchHistory.find { it.program.id.toString() == program.id.toString() }
@@ -225,7 +226,8 @@ fun MainRootBackground(
                         selectedProgram = state.selectedProgram,
                         onProgramSelected = { program ->
                             if (program != null) {
-                                if (!program.recordedVideo.hasKeyFrames) return@HomeLauncherScreen
+                                val isAnalyzed = program.recordedVideo.hasKeyFrames?: true
+                                if (!isAnalyzed) return@HomeLauncherScreen
                                 val history =
                                     watchHistory.find { it.program.id.toString() == program.id.toString() }
                                 val duration = program.recordedVideo.duration

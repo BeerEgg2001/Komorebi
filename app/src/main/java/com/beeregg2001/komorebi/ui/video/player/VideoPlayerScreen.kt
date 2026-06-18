@@ -183,7 +183,9 @@ fun VideoPlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val exoPlayer = rememberManagedExoPlayer(
+        program = program,
         vs = vs,
+        isLiveStream = isLiveStream,
         scope = scope,
         webViewRef = webViewRef,
         onVideoSizeChanged = { w, h, ratio ->
@@ -638,33 +640,9 @@ fun VideoPlayerScreen(
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
                     availableQualities = availableQualities,
                     onAudioToggle = {
+                        // Stateを変更するだけ。実際の適用は VideoPlayerManager の LaunchedEffect が検知して行います。
                         vs.currentAudioMode =
                             if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                        val audioGroups =
-                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                        if (audioGroups.size >= 2) {
-                            exoPlayer.trackSelectionParameters =
-                                exoPlayer.trackSelectionParameters.buildUpon()
-                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                    .addOverride(
-                                        TrackSelectionOverride(
-                                            audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                            0
-                                        )
-                                    )
-                                    .build()
-                        } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
-                            exoPlayer.trackSelectionParameters =
-                                exoPlayer.trackSelectionParameters.buildUpon()
-                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                    .addOverride(
-                                        TrackSelectionOverride(
-                                            audioGroups[0].mediaTrackGroup,
-                                            if (vs.currentAudioMode == AudioMode.SUB) 1 else 0
-                                        )
-                                    )
-                                    .build()
-                        }
                         onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {
@@ -759,33 +737,9 @@ fun VideoPlayerScreen(
                     availableQualities = availableQualities,
                     focusRequester = subMenuFocusRequester,
                     onAudioToggle = {
+                        // Stateを変更するだけ。実際の適用は VideoPlayerManager の LaunchedEffect が検知して行います。
                         vs.currentAudioMode =
                             if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
-                        val audioGroups =
-                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                        if (audioGroups.size >= 2) {
-                            exoPlayer.trackSelectionParameters =
-                                exoPlayer.trackSelectionParameters.buildUpon()
-                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                    .addOverride(
-                                        TrackSelectionOverride(
-                                            audioGroups[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                            0
-                                        )
-                                    )
-                                    .build()
-                        } else if (audioGroups.size == 1 && audioGroups[0].mediaTrackGroup.length >= 2) {
-                            exoPlayer.trackSelectionParameters =
-                                exoPlayer.trackSelectionParameters.buildUpon()
-                                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                                    .addOverride(
-                                        TrackSelectionOverride(
-                                            audioGroups[0].mediaTrackGroup,
-                                            if (vs.currentAudioMode == AudioMode.SUB) 1 else 0
-                                        )
-                                    )
-                                    .build()
-                        }
                         onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
                     onSpeedToggle = {

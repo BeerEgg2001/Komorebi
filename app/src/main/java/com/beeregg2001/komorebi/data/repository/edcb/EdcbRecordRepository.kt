@@ -512,6 +512,7 @@ class EdcbRecordRepository @Inject constructor(
             RecordedChannel(
                 channelId,
                 info.onid,
+                info.sid,
                 channelId,
                 cacheManager.getChannelType(info.onid),
                 info.serviceName,

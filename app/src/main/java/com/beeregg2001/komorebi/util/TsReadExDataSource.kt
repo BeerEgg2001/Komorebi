@@ -16,13 +16,15 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 @UnstableApi
 class TsReadExDataSource(
     private val nativeLib: NativeLib,
-    var tsArgs: Array<String>
+    var tsArgs: Array<String>,
+    private val fileSizeBytesRef: AtomicLong? = null // ★ ファイルサイズ格納用
 ) : BaseDataSource(true) {
 
     private var handle: Long = 0
@@ -37,7 +39,6 @@ class TsReadExDataSource(
     private val tempArray = ByteArray(188 * 20000)
     private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(188 * 30000)
 
-    // ★ 修正: インスタンス（ストリーム）ごとに一意のIDと、個別のCloseタイムスタンプを持たせる
     private val nwtvId: Int
     private var lastCloseRequestTime = 0L
 
@@ -48,18 +49,13 @@ class TsReadExDataSource(
         private const val CMD_SUCCESS = 1
         private const val TAG = "TsReadExDataSource"
 
-        // EDCBチューナーへの要求（Open / Close）が絶対に交差しないようにするためのグローバルロック
         private val edcbTunerLock = ReentrantLock()
-
-        // IDが被らないようにするためのグローバルカウンター（500〜）
         private var nwtvIdCounter = 500
     }
 
     init {
-        // インスタンス生成時に、他のストリームと絶対に被らない固有のIDを割り当てる
         edcbTunerLock.withLock {
             nwtvId = nwtvIdCounter++
-            // 万が一長期間起動してIDが大きくなりすぎた場合はリセット
             if (nwtvIdCounter > 10000) nwtvIdCounter = 500
         }
     }
@@ -77,27 +73,41 @@ class TsReadExDataSource(
         }
 
         if (dataSpec.uri.scheme == "edcb") {
-            // EDCBを開く処理全体をロックし、他ストリームのOpen/Closeと被らないようにする
-            edcbTunerLock.withLock {
-                openEdcbStream(dataSpec.uri)
-            }
+            edcbTunerLock.withLock { openEdcbStream(dataSpec.uri) }
         } else {
-            openHttpStream(dataSpec.uri)
+            openHttpStream(dataSpec)
         }
 
         transferStarted(dataSpec)
         opened = true
+
+        // ★ 核心: ExoPlayer の暴走する末尾シークを完全に封殺するため、常に LENGTH_UNSET を返す
         return C.LENGTH_UNSET.toLong()
     }
 
-    private fun openHttpStream(uri: Uri) {
-        val url = java.net.URL(uri.toString())
+    private fun openHttpStream(dataSpec: DataSpec) {
+        val url = java.net.URL(dataSpec.uri.toString())
         connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8000; readTimeout = 8000; doInput = true
+            connectTimeout = 8000
+            readTimeout = 8000
+            doInput = true
+
+            if (dataSpec.position > 0) {
+                setRequestProperty("Range", "bytes=${dataSpec.position}-")
+            }
         }
         val responseCode = connection?.responseCode ?: -1
         if (responseCode !in 200..299) throw IOException("Server returned code $responseCode")
-        inputStream = BufferedInputStream(connection!!.inputStream)
+
+        val contentLengthStr = connection?.getHeaderField("Content-Length")
+        val contentLength = contentLengthStr?.toLongOrNull() ?: 0L
+
+        // ★ 初回接続時（position = 0）にファイル全体サイズを取得し、SeekMap 計算用に保存
+        if (contentLength > 0L && dataSpec.position == 0L) {
+            fileSizeBytesRef?.set(contentLength)
+        }
+
+        inputStream = BufferedInputStream(connection!!.inputStream, 188 * 50000)
     }
 
     private fun openEdcbStream(uri: Uri) {
@@ -110,7 +120,6 @@ class TsReadExDataSource(
         var targetProcessId = 0
         val startTime = System.currentTimeMillis()
 
-        // 接続を開始する前に、確実に前のセッション（自身のID）をクリーンアップする
         cleanupEdcbSessionSynchronous(ip, port)
 
         while (System.currentTimeMillis() - startTime < 10000) {
@@ -120,28 +129,15 @@ class TsReadExDataSource(
                     socket.connect(InetSocketAddress(ip, port), 2000)
 
                     val body = ByteBuffer.allocate(26).order(ByteOrder.LITTLE_ENDIAN)
-                    body.putInt(26)
-                    body.putInt(1)
-                    body.putShort(onid.toShort())
-                    body.putShort(tsid.toShort())
-                    body.putShort(sid.toShort())
-                    body.putInt(1)
-                    // ★ 修正: インスタンス固有の nwtvId を使用する
-                    body.putInt(nwtvId)
-                    body.putInt(2)
+                    body.putInt(26); body.putInt(1); body.putShort(onid.toShort()); body.putShort(tsid.toShort()); body.putShort(sid.toShort()); body.putInt(1); body.putInt(nwtvId); body.putInt(2)
 
-                    sendEdcbCommand(
-                        socket.getOutputStream(),
-                        CMD_EPG_SRV_NWTV_ID_SET_CH,
-                        body.array()
-                    )
+                    sendEdcbCommand(socket.getOutputStream(), CMD_EPG_SRV_NWTV_ID_SET_CH, body.array())
 
                     val (ret, size) = readEdcbResponseHeader(socket.getInputStream())
                     if (ret == CMD_SUCCESS && size >= 4) {
                         val resData = readExactBytes(socket.getInputStream(), size)
                         if (resData != null) {
-                            targetProcessId =
-                                ByteBuffer.wrap(resData).order(ByteOrder.LITTLE_ENDIAN).getInt()
+                            targetProcessId = ByteBuffer.wrap(resData).order(ByteOrder.LITTLE_ENDIAN).getInt()
                             if (targetProcessId != 0) break
                         }
                     }
@@ -161,19 +157,15 @@ class TsReadExDataSource(
         while (System.currentTimeMillis() - relayStartTime < 10000) {
             try {
                 val s = Socket()
-                s.soTimeout = 15000 // EDCBはバッファが溜まるまで応答が遅いため、タイムアウトを長めに確保
+                s.soTimeout = 15000
                 s.connect(InetSocketAddress(ip, port), 3000)
 
-                val relayReq =
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(targetProcessId)
-                        .array()
+                val relayReq = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(targetProcessId).array()
                 sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_RELAY_VIEW_STREAM, relayReq)
 
                 val (retRelay, _) = readEdcbResponseHeader(s.getInputStream())
                 if (retRelay == CMD_SUCCESS) {
-                    relaySocket = s
-                    relayConnected = true
-                    break
+                    relaySocket = s; relayConnected = true; break
                 } else {
                     s.close()
                 }
@@ -189,57 +181,32 @@ class TsReadExDataSource(
         }
 
         this.edcbSocket = relaySocket
-        Log.i(TAG, "EDCB Stream Success! ProcessID: $targetProcessId (NWTV_ID: $nwtvId)")
         this.inputStream = BufferedInputStream(edcbSocket!!.getInputStream(), 188 * 30000)
     }
 
-    // オープン処理中にも確実かつ順番に呼ばれる同期的なクリーンアップ
     private fun cleanupEdcbSessionSynchronous(ip: String, port: Int) {
         val now = System.currentTimeMillis()
-        // ★ 修正: このインスタンス（ストリーム）固有のタイマーで判定するため、二画面同時のCloseが誤爆しない
-        if (now - lastCloseRequestTime < 1000) {
-            Log.d(
-                TAG,
-                "cleanupEdcbSession: Skipped for NWTV_ID $nwtvId because a close request was just sent."
-            )
-            return
-        }
+        if (now - lastCloseRequestTime < 1000) return
 
         try {
             Socket().use { s ->
                 s.soTimeout = 2000
                 s.connect(InetSocketAddress(ip, port), 1500)
-                val closeReq =
-                    // ★ 修正: 自分の nwtvId だけをクローズする
-                    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(nwtvId)
-                        .array()
+                val closeReq = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(nwtvId).array()
                 sendEdcbCommand(s.getOutputStream(), CMD_EPG_SRV_NWTV_ID_CLOSE, closeReq)
                 readEdcbResponseHeader(s.getInputStream())
                 lastCloseRequestTime = System.currentTimeMillis()
-                Log.d(
-                    TAG,
-                    "EDCB Tuner released successfully (NWTV_ID_CLOSE sent to $ip:$port for ID $nwtvId)"
-                )
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to release EDCB Tuner (ID $nwtvId): ${e.message}")
-        }
+        } catch (e: Exception) { }
     }
 
-    // DataSourceのクローズ時（ExoPlayerからの解放命令）に呼ばれる
     private fun cleanupEdcbSessionAsynchronous(ip: String, port: Int) {
-        Thread {
-            // 非同期で呼ばれるCloseも、他のインスタンスのOpen処理を邪魔しないようにグローバルロックを取る
-            edcbTunerLock.withLock {
-                cleanupEdcbSessionSynchronous(ip, port)
-            }
-        }.start()
+        Thread { edcbTunerLock.withLock { cleanupEdcbSessionSynchronous(ip, port) } }.start()
     }
 
     private fun sendEdcbCommand(outStream: OutputStream, cmd: Int, data: ByteArray) {
         val header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
-        header.putInt(cmd)
-        header.putInt(data.size)
+        header.putInt(cmd); header.putInt(data.size)
         outStream.write(header.array())
         if (data.isNotEmpty()) outStream.write(data)
         outStream.flush()
@@ -265,21 +232,27 @@ class TsReadExDataSource(
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
         val input = inputStream ?: return C.RESULT_END_OF_INPUT
+
         var total = 0
         while (total < length) {
             val processed = nativeLib.popDataBuffer(handle, outputBuffer, length - total)
-            if (processed <= 0) {
+            if (processed > 0) {
+                outputBuffer.position(0)
+                outputBuffer.get(buffer, offset + total, processed)
+                total += processed
+            } else {
                 val readCount = input.read(tempArray)
-                if (readCount == -1) return if (total > 0) total else C.RESULT_END_OF_INPUT
+                if (readCount == -1) {
+                    return if (total > 0) total else C.RESULT_END_OF_INPUT
+                }
                 if (readCount > 0) {
-                    inputBuffer.clear(); inputBuffer.put(tempArray, 0, readCount)
+                    inputBuffer.clear()
+                    inputBuffer.put(tempArray, 0, readCount)
                     nativeLib.pushDataBuffer(handle, inputBuffer, readCount)
-                    continue
-                } else break
+                }
             }
-            outputBuffer.position(0); outputBuffer.get(buffer, offset + total, processed)
-            total += processed
         }
+        if (total > 0) bytesTransferred(total)
         return total
     }
 
@@ -292,9 +265,7 @@ class TsReadExDataSource(
                 if (it.scheme == "edcb") {
                     val ip = it.host
                     val port = if (it.port != -1) it.port else 4510
-                    if (ip != null) {
-                        cleanupEdcbSessionAsynchronous(ip, port)
-                    }
+                    if (ip != null) cleanupEdcbSessionAsynchronous(ip, port)
                 }
             }
             inputStream?.close()

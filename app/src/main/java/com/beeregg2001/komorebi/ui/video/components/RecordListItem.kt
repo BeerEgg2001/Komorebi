@@ -55,7 +55,8 @@ fun RecordListItem(
     var isFocused by remember { mutableStateOf(false) }
 
     val isCurrentlyRecording = program.isRecording || program.recordedVideo.status == "Recording"
-    val isAnalyzed = program.recordedVideo.hasKeyFrames && !isCurrentlyRecording
+    val isTempAnalyzed = program.recordedVideo.hasKeyFrames?: true
+    val isAnalyzed = isTempAnalyzed && !isCurrentlyRecording
     val isVisualFocused = isFocused || isPersistentFocused
 
     // 変更後：KonomiTV、EDCBともに、Repositoryが用意してくれたURLをそのまま使う！

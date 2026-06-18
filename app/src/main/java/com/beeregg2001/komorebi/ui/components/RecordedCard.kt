@@ -50,7 +50,7 @@ fun RecordedCard(
 ) {
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
-    val isAnalyzed = program.recordedVideo.hasKeyFrames
+    val isAnalyzed = program.recordedVideo.hasKeyFrames?: true
 
     val scrolling = isScrolling()
 

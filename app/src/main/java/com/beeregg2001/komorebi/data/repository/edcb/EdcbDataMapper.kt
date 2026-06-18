@@ -350,11 +350,23 @@ object EdcbDataMapper {
 
     private fun parseLuaFormat(text: String, durationSec: Double): List<CmSection> {
         val sections = mutableListOf<CmSection>()
-        if (!text.startsWith("c-") || !text.endsWith("-c")) return emptyList()
+        val trimmed = text.trim()
 
-        val coreContent = text.substring(2, text.length - 2)
+        // 1. 仕様: "c-"で始めて"c"で終わる
+        if (!trimmed.startsWith("c-") || !trimmed.endsWith("c")) return emptyList()
+
+        // 先頭の "c-" と末尾の "c" を取り除く ("c-c" の場合は coreContent が空になる)
+        val coreContent = trimmed.substring(2, trimmed.length - 1)
+        if (coreContent.isEmpty()) return emptyList()
+
+        // 2. 仕様を満たさないコマンドは全体を無視するための事前バリデーション
+        // パターン: {正整数}{c|d|e}{文字列}- の連続であること
+        if (!coreContent.matches(Regex("^(?:\\d+[cde][^-]*-)+$"))) {
+            return emptyList()
+        }
+
         val segments = coreContent.split("-").filter { it.isNotEmpty() }
-        val regex = Regex("""^(\d*)([cde])(.*)$""")
+        val regex = Regex("""^(\d+)([cde])(.*)$""")
 
         var cmStartTimeMs: Long? = null
 
@@ -373,8 +385,8 @@ object EdcbDataMapper {
 
             // TvtPlay仕様に完全準拠
             // oxで始まるならスキップ(CM)開始、ixで始まるならスキップ終了(本編復帰)
-            val isCmStart = name.startsWith("ox", ignoreCase = true)
-            val isCmEnd = name.startsWith("ix", ignoreCase = true)
+            val isCmStart = name.startsWith("ix", ignoreCase = true)
+            val isCmEnd = name.startsWith("ox", ignoreCase = true)
 
             if (isCmStart && cmStartTimeMs == null) {
                 cmStartTimeMs = timeMs
