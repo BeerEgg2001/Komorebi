@@ -40,6 +40,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.ui.video.player.*
 import com.beeregg2001.komorebi.ui.video.smb.SmbItem
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
@@ -715,6 +716,7 @@ fun SmbVlcPlayerScreen(
                                     (tracks.indexOfFirst { it.id == mediaPlayer.audioTrack } + 1) % tracks.size
                                 mediaPlayer.audioTrack = tracks[nextIdx].id
                                 onShowToast("音声: ${tracks[nextIdx].name}")
+                                vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                             } else onShowToast("音声トラックが1つしかありません")
                         },
                         onSpeedToggle = {
