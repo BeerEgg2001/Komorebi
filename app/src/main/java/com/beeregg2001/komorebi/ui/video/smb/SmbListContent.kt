@@ -64,12 +64,35 @@ fun SmbListContent(
 
     val focusPath = ticketManager.targetPath ?: targetPathToFocus
 
+    val itemPathsKey = remember(items) { items.joinToString("|") { it.path } }
     val firstVisibleItemIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
-    LaunchedEffect(firstVisibleItemIndex, items.size) {
+
+    // ★ 修正: ソート実行時、リストの中身(順序)は変わるが listState のスクロール位置(index)は
+    // 保持されたままになる。大量アイテムの場合、保持された index は新しい並び順では
+    // 先頭ではない別アイテムを指してしまい、down 遷移先のFocusRequesterが
+    // 「コンポーズされていない(画面外の)ノード」を指して失敗する。
+    // → ソート(=itemsの中身変化)を検知したら、まずリストを先頭(index 0)へ強制的に戻す。
+    LaunchedEffect(itemPathsKey) {
+        if (items.isNotEmpty() && listState.firstVisibleItemIndex != 0) {
+            listState.scrollToItem(0)
+        }
+    }
+
+    LaunchedEffect(firstVisibleItemIndex, itemPathsKey ) {
         val firstVisibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull()
-        val requester = if (firstVisibleItem != null) {
-            val path = items.getOrNull(firstVisibleItem.index)?.path
-            if (path != null) itemFocusRequesters[path] ?: focuses.firstItem else focuses.firstItem
+        val path = if (firstVisibleItem != null) items.getOrNull(firstVisibleItem.index)?.path else null
+        val requester = if (path != null) {
+            // 上記スクロールリセットと合わせ、新しい先頭要素がコンポーズされるまで
+            // 数フレーム分リトライしてから確定させる（ソート直後のレースコンディション対策）。
+            var resolved = itemFocusRequesters[path]
+            if (resolved == null) {
+                repeat(5) {
+                    delay(50)
+                    resolved = itemFocusRequesters[path]
+                    if (resolved != null) return@repeat
+                }
+            }
+            resolved ?: focuses.firstItem
         } else {
             focuses.firstItem
         }
@@ -229,12 +252,31 @@ fun SmbGridContent(
 
     val focusPath = ticketManager.targetPath ?: targetPathToFocus
 
+    val itemPathsKey = remember(items) { items.joinToString("|") { it.path } }
     val firstVisibleItemIndex by remember { derivedStateOf { gridState.firstVisibleItemIndex } }
-    LaunchedEffect(firstVisibleItemIndex, items.size) {
+
+    // ★ 修正: SmbListContentと同様、ソート時に gridState のスクロール位置(index)が
+    // 保持されてしまい、新しい並び順での「画面外ノード」を down 遷移先にしてしまう問題への対策。
+    LaunchedEffect(itemPathsKey) {
+        if (items.isNotEmpty() && gridState.firstVisibleItemIndex != 0) {
+            gridState.scrollToItem(0)
+        }
+    }
+
+    LaunchedEffect(firstVisibleItemIndex, itemPathsKey ) {
         val firstVisibleItem = gridState.layoutInfo.visibleItemsInfo.firstOrNull()
-        val requester = if (firstVisibleItem != null) {
-            val path = items.getOrNull(firstVisibleItem.index)?.path
-            if (path != null) itemFocusRequesters[path] ?: focuses.firstItem else focuses.firstItem
+        val path = if (firstVisibleItem != null) items.getOrNull(firstVisibleItem.index)?.path else null
+        val requester = if (path != null) {
+            // ★ 修正: SmbListContentと同様、ソート直後の再コンポーズ待ちレースコンディション対策
+            var resolved = itemFocusRequesters[path]
+            if (resolved == null) {
+                repeat(5) {
+                    delay(50)
+                    resolved = itemFocusRequesters[path]
+                    if (resolved != null) return@repeat
+                }
+            }
+            resolved ?: focuses.firstItem
         } else {
             focuses.firstItem
         }
