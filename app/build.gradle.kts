@@ -26,8 +26,8 @@ android {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 16 // 数値を1つ上げる
-        versionName = "1.1.0-beta6"
+        versionCode = 17 // 数値を1つ上げる
+        versionName = "1.1.0-beta7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
