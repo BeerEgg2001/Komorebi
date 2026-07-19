@@ -68,7 +68,6 @@ private const val TAG = "VideoPlayerManager"
 @androidx.annotation.OptIn(UnstableApi::class)
 fun rememberManagedExoPlayer(
     program: RecordedProgram?,
-    isLiveStream: Boolean,
     vs: VideoPlayerState,
     scope: CoroutineScope,
     webViewRef: MutableState<WebView?>,
@@ -84,7 +83,6 @@ fun rememberManagedExoPlayer(
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
-    val smbServerList by settingsViewModel.smbServerList.collectAsState()
 
     val applyAudioSelectionAndMatrix = { mode: AudioMode, player: ExoPlayer ->
         val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
@@ -100,7 +98,8 @@ fun rememberManagedExoPlayer(
 
             if (sortedAudioGroups.size > 1) {
                 val targetGroupIndex = if (isSub) 1 else 0
-                val targetGroup = sortedAudioGroups[targetGroupIndex.coerceAtMost(sortedAudioGroups.size - 1)]
+                val targetGroup =
+                    sortedAudioGroups[targetGroupIndex.coerceAtMost(sortedAudioGroups.size - 1)]
                 builder.addOverride(TrackSelectionOverride(targetGroup.mediaTrackGroup, 0))
             } else {
                 val targetGroup = sortedAudioGroups.firstOrNull()
@@ -115,7 +114,7 @@ fun rememberManagedExoPlayer(
         }
     }
 
-    val exoPlayer = remember(smbServerList) {
+    val exoPlayer = remember {
         val renderersFactory = DefaultRenderersFactory(context).apply {
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             setEnableDecoderFallback(true)
@@ -143,10 +142,11 @@ fun rememberManagedExoPlayer(
                 }
 
                 override fun open(dataSpec: DataSpec): Long {
-                    val isSmb = dataSpec.uri.scheme == "smb"
                     val isEdcbScheme = dataSpec.uri.scheme == "edcb"
-                    val isDirectTs = dataSpec.uri.path?.endsWith(".ts", ignoreCase = true) == true || dataSpec.uri.path?.endsWith("m2ts", ignoreCase = true) == true
-//                    val isMirakurun = dataSpec.uri.path?.contains("/api/streams/") == true || dataSpec.uri.path?.contains("/api/channels/") == true
+                    val isDirectTs = dataSpec.uri.path?.endsWith(
+                        ".ts",
+                        ignoreCase = true
+                    ) == true || dataSpec.uri.path?.endsWith("m2ts", ignoreCase = true) == true
 
                     val sid = program?.channel?.serviceId ?: -1
                     val nValue = sid.toString()
@@ -156,12 +156,7 @@ fun rememberManagedExoPlayer(
                         "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13"
                     )
 
-                    val source = if (isSmb) {
-                        val host = dataSpec.uri.host ?: ""
-                        val server = smbServerList.find { s -> s.ip.substringBefore("/") == host }
-                        val smbContext = SmbContextBuilder.build(server?.user ?: "", server?.password ?: "")
-                        SmbDataSourceFactory(smbContext).createDataSource()
-                    } else if (isEdcbScheme || isDirectTs  || isEdcbDirect) {
+                    val source = if (isEdcbScheme || isDirectTs || isEdcbDirect) {
                         // ★ 修正: ファイルサイズ格納用の参照を渡す
                         TsReadExDataSource(nativeLib, dynamicTsArgs, fileSizeBytesRef)
                     } else {
@@ -188,11 +183,11 @@ fun rememberManagedExoPlayer(
 
         // ★ 核心: ExoPlayer の Extractor をラップし、自前の SeekMap を強制注入する
         val programDurationUs = ((program?.recordedVideo?.duration ?: 0.0) * 1_000_000.0).toLong()
-//        val isDirectPlayback = isEdcbDirect != null
 
         val customExtractorsFactory = ExtractorsFactory {
             val defaultExtractors = DefaultExtractorsFactory().apply {
                 setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
+                setTsExtractorTimestampSearchBytes(2 * 1024 * 1024)
                 setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
                 setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
             }.createExtractors()
@@ -213,19 +208,36 @@ fun rememberManagedExoPlayer(
                                             override fun getDurationUs() = programDurationUs
                                             override fun getSeekPoints(timeUs: Long): SeekMap.SeekPoints {
                                                 val size = fileSizeBytesRef.get()
-                                                if (size <= 0L) return SeekMap.SeekPoints(SeekPoint(timeUs, 0L))
-                                                val safeTime = timeUs.coerceIn(0L, programDurationUs)
+                                                if (size <= 0L) return SeekMap.SeekPoints(
+                                                    SeekPoint(
+                                                        timeUs,
+                                                        0L
+                                                    )
+                                                )
+                                                val safeTime =
+                                                    timeUs.coerceIn(0L, programDurationUs)
                                                 // 時間とファイルサイズから、HTTP Range の要求バイトオフセットを正確に計算する
-                                                val position = (safeTime.toDouble() / programDurationUs * size).toLong()
-                                                return SeekMap.SeekPoints(SeekPoint(safeTime, position))
+                                                val position =
+                                                    (safeTime.toDouble() / programDurationUs * size).toLong()
+                                                return SeekMap.SeekPoints(
+                                                    SeekPoint(
+                                                        safeTime,
+                                                        position
+                                                    )
+                                                )
                                             }
                                         }
                                         output.seekMap(customSeekMap)
                                     }
                                 })
                             }
-                            override fun read(input: ExtractorInput, seekPosition: PositionHolder) = extractor.read(input, seekPosition)
-                            override fun seek(position: Long, timeUs: Long) = extractor.seek(position, timeUs)
+
+                            override fun read(input: ExtractorInput, seekPosition: PositionHolder) =
+                                extractor.read(input, seekPosition)
+
+                            override fun seek(position: Long, timeUs: Long) =
+                                extractor.seek(position, timeUs)
+
                             override fun release() = extractor.release()
                         }
                     }
@@ -234,7 +246,8 @@ fun rememberManagedExoPlayer(
             defaultExtractors
         }
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory, customExtractorsFactory)
+        val mediaSourceFactory =
+            DefaultMediaSourceFactory(dataSourceFactory, customExtractorsFactory)
 
         val allocator = DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE)
         val loadControl = DefaultLoadControl.Builder()
@@ -256,7 +269,11 @@ fun rememberManagedExoPlayer(
                 )
                 addListener(object : Player.Listener {
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        onVideoSizeChanged(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
+                        onVideoSizeChanged(
+                            videoSize.width,
+                            videoSize.height,
+                            videoSize.pixelWidthHeightRatio
+                        )
                     }
 
                     override fun onIsPlayingChanged(playing: Boolean) {
@@ -286,10 +303,18 @@ fun rememberManagedExoPlayer(
                         if (!vs.isSubtitleEnabled) return
                         for (i in 0 until metadata.length()) {
                             val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
-                                val base64Data = Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
+                            if (entry is PrivFrame && (entry.owner.contains(
+                                    "aribb24",
+                                    true
+                                ) || entry.owner.contains("B24", true))
+                            ) {
+                                val base64Data =
+                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
                                 webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript("if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }", null)
+                                    webViewRef.value?.evaluateJavascript(
+                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
+                                        null
+                                    )
                                 }
                             }
                         }
