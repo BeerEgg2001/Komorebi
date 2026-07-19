@@ -72,6 +72,7 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
+    val isValidatingGeminiApiKey by viewModel.isValidatingGeminiApiKey.collectAsState()
     val playerUiMode by viewModel.playerUiMode.collectAsState()
     val autoCmSkip by viewModel.autoCmSkip.collectAsState()
     val availableQualities by viewModel.availableQualities.collectAsState()
@@ -977,6 +978,8 @@ fun SettingsScreen(
 
                         8 -> LabSettingsContent(
                             prefs.geminiApiKey,
+                            prefs.geminiApiKeyStatus,
+                            isValidatingGeminiApiKey,
                             prefs.favoriteBaseballTeams,
                             prefs.labAllowMirakurunDual,
                             itemFocusRequesters[8][0],
@@ -1078,6 +1081,8 @@ fun SettingsScreen(
                 val localIp by viewModel.localIpAddress.collectAsState()
                 GeminiSetupDialog(
                     prefs.geminiApiKey,
+                    prefs.geminiApiKeyStatus,
+                    isValidatingGeminiApiKey,
                     localIp,
                     { viewModel.startGeminiLocalServer() },
                     { viewModel.stopGeminiLocalServer() },
@@ -1088,21 +1093,13 @@ fun SettingsScreen(
                             "Gemini API Key",
                             prefs.geminiApiKey
                         ) { key ->
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.GEMINI_API_KEY,
-                                    key
-                                )
-                            }
+                            viewModel.saveAndValidateGeminiApiKey(key)
                         }
                     },
                     {
-                        viewModel.stopGeminiLocalServer(); scope.launch {
-                        repository.saveString(
-                            SettingsRepository.GEMINI_API_KEY,
-                            ""
-                        )
-                    }; closeDialog()
+                        viewModel.stopGeminiLocalServer()
+                        viewModel.clearGeminiApiKey()
+                        closeDialog()
                     })
             }
 

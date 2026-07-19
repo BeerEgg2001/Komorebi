@@ -1189,6 +1189,8 @@ fun ConfirmClearDialog(
 @Composable
 fun GeminiSetupDialog(
     currentKey: String,
+    keyStatus: String,
+    isValidating: Boolean,
     serverIp: String,
     onStartServer: () -> Unit,
     onStopServer: () -> Unit,
@@ -1205,7 +1207,27 @@ fun GeminiSetupDialog(
 
     val serverUrl = "http://$serverIp:8081"
     val qrBitmap = rememberQrBitmap(content = serverUrl, size = 300)
-    val isKeySet = currentKey.isNotBlank() && currentKey.startsWith("AIza")
+    val isKeySet = currentKey.isNotBlank()
+    val isKeyInvalid = isKeySet && keyStatus == "INVALID"
+    val statusIcon = when {
+        isValidating -> Icons.Default.Warning
+        isKeyInvalid -> Icons.Default.Warning
+        isKeySet -> Icons.Default.CheckCircle
+        else -> Icons.Default.Warning
+    }
+    val statusColor = when {
+        isValidating -> Color(0xFFFFB300)
+        isKeyInvalid -> Color(0xFFD32F2F)
+        isKeySet -> Color(0xFF34A853)
+        else -> Color(0xFFFFB300)
+    }
+    val statusText = when {
+        isValidating -> "確認中..."
+        isKeyInvalid -> "キーが無効です (再入力してください)"
+        keyStatus == "UNVERIFIED" -> "設定済み (未確認)"
+        isKeySet -> "設定済み (キー受信完了)"
+        else -> "未設定"
+    }
 
     Box(
         modifier = Modifier
@@ -1251,13 +1273,13 @@ fun GeminiSetupDialog(
                         ); Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                if (isKeySet) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                statusIcon,
                                 null,
-                                tint = if (isKeySet) Color(0xFF34A853) else Color(0xFFFFB300),
+                                tint = statusColor,
                                 modifier = Modifier.size(24.dp)
                             ); Spacer(Modifier.width(8.dp))
                             Text(
-                                if (isKeySet) "設定済み (キー受信完了)" else "未設定",
+                                statusText,
                                 style = MaterialTheme.typography.titleLarge,
                                 color = colors.textPrimary,
                                 fontWeight = FontWeight.Bold
@@ -1321,6 +1343,17 @@ fun GeminiSetupDialog(
                     ) { Text(if (isKeySet) "閉じる" else "キャンセル") }
                     Spacer(Modifier.width(24.dp))
                     if (isKeySet) {
+                        if (isKeyInvalid) {
+                            Button(
+                                onClick = { isClosing = true; onManualInputClick() },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(0.1f),
+                                    contentColor = colors.textPrimary
+                                ),
+                                modifier = Modifier.width(180.dp)
+                            ) { Text("手動で再入力") }
+                            Spacer(Modifier.width(24.dp))
+                        }
                         Button(
                             onClick = { isClosing = true; onDeleteKey() },
                             colors = ButtonDefaults.colors(

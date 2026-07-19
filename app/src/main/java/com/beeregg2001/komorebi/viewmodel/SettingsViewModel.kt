@@ -11,6 +11,8 @@ import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.InvalidAPIKeyException
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -297,6 +299,55 @@ class SettingsViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5000),
         ""
     )
+
+    // ★ 追加: APIキーの検証結果("VALID"/"INVALID"/"UNVERIFIED"/未検証時は空文字)
+    val geminiApiKeyStatus: StateFlow<String> = settingsRepository.geminiApiKeyStatus.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
+    )
+
+    private val _isValidatingGeminiApiKey = MutableStateFlow(false)
+    val isValidatingGeminiApiKey: StateFlow<Boolean> = _isValidatingGeminiApiKey
+
+    /**
+     * GeminiのAPIキーを保存する前に、Google側へ軽量な疎通確認(countTokens)を行い実際に有効かどうかを検証する。
+     * ネットワーク不通など有効性を断定できない場合は「無効」ではなく「未確認」として保存する。
+     */
+    fun saveAndValidateGeminiApiKey(rawKey: String) {
+        val key = rawKey.trim()
+        viewModelScope.launch {
+            if (key.isBlank()) {
+                settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, "")
+                settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, "")
+                return@launch
+            }
+
+            _isValidatingGeminiApiKey.value = true
+            val status = withContext(Dispatchers.IO) {
+                try {
+                    GenerativeModel(modelName = "gemini-3-flash-preview", apiKey = key)
+                        .countTokens("疎通確認")
+                    "VALID"
+                } catch (e: InvalidAPIKeyException) {
+                    "INVALID"
+                } catch (e: Exception) {
+                    Log.w("SettingsViewModel", "Geminiキーの検証に失敗(通信エラー等)", e)
+                    "UNVERIFIED"
+                }
+            }
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, key)
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, status)
+            _isValidatingGeminiApiKey.value = false
+        }
+    }
+
+    fun clearGeminiApiKey() {
+        viewModelScope.launch {
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, "")
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, "")
+        }
+    }
 
     // ★ 追加: 番組表設定の StateFlow
     val epgColumnCount: StateFlow<String> = settingsRepository.epgColumnCount.stateIn(
@@ -646,12 +697,7 @@ class SettingsViewModel @Inject constructor(
                     val formParams = call.receiveParameters()
                     val apiKey = formParams["api_key"] ?: ""
                     if (apiKey.isNotBlank()) {
-                        viewModelScope.launch {
-                            settingsRepository.saveString(
-                                SettingsRepository.GEMINI_API_KEY,
-                                apiKey
-                            )
-                        }
+                        saveAndValidateGeminiApiKey(apiKey)
                         call.respondText(
                             "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'><h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2><p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p></body></html>",
                             ContentType.Text.Html

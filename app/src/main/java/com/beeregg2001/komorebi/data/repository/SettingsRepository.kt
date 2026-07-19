@@ -57,6 +57,7 @@ class SettingsRepository @Inject constructor(
         val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
         val FAVORITE_BASEBALL_TEAMS = stringPreferencesKey("favorite_baseball_teams")
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
+        val GEMINI_API_KEY_STATUS = stringPreferencesKey("gemini_api_key_status")
         val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
@@ -146,6 +147,10 @@ class SettingsRepository @Inject constructor(
     val favoriteBaseballTeams: Flow<String> =
         context.dataStore.data.map { it[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
+
+    // ★ 追加: GeminiのAPIキーが実際に有効か検証した結果("VALID"/"INVALID"/"UNVERIFIED"/未検証時は空文字)
+    val geminiApiKeyStatus: Flow<String> =
+        context.dataStore.data.map { it[GEMINI_API_KEY_STATUS] ?: "" }
     val enableAiNormalization: Flow<String> =
         context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
     val homePickupGenre: Flow<String> =
