@@ -243,6 +243,8 @@ fun ConnectionSettingsContent(
     smbItemRs: List<FocusRequester>,
     onSelectEdcbPlayMethod: () -> Unit,
     edcbPlayMethodR: FocusRequester,
+    cfClientId: String,
+    cfClientSecret: String,
     onEdit: (String, String) -> Unit,
     onSelectBackend: () -> Unit,
     onSelectSrc: () -> Unit,
@@ -253,6 +255,8 @@ fun ConnectionSettingsContent(
     prefSrcR: FocusRequester,
     overrideIpR: FocusRequester,
     overridePortR: FocusRequester,
+    cfIdR: FocusRequester,
+    cfSecretR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
@@ -495,8 +499,8 @@ fun ConnectionSettingsContent(
                         left = sidebarR
                         up = if (hasOverride) overridePortR else prefSrcR
                         down =
-                            if (smbServerList.isEmpty()) FocusRequester.Cancel else smbItemRs.firstOrNull()
-                                ?: FocusRequester.Cancel
+                            if (smbServerList.isEmpty()) cfIdR else smbItemRs.firstOrNull()
+                                ?: cfIdR
                     },
                 onClick = { onClick(addSmbR); onAddSmbServer() }
             )
@@ -521,12 +525,50 @@ fun ConnectionSettingsContent(
                             .focusProperties {
                                 left = sidebarR
                                 up = if (index == 0) addSmbR else smbItemRs[index - 1]
-                                down = if (isLast) FocusRequester.Cancel else smbItemRs[index + 1]
+                                down = if (isLast) cfIdR else smbItemRs[index + 1]
                             },
                         onClick = { onClick(requester); onSmbServerClick(server) }
                     )
                 }
             }
+        }
+
+        SettingsSection(AppStrings.SETTINGS_SECTION_CLOUDFLARE) {
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_CF_CLIENT_ID,
+                cfClientId.ifEmpty { AppStrings.SETTINGS_VALUE_UNSET },
+                Icons.Default.Cloud,
+                modifier = Modifier
+                    .focusRequester(cfIdR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = if (smbServerList.isEmpty()) addSmbR else smbItemRs.getOrNull(
+                            smbServerList.lastIndex
+                        ) ?: addSmbR
+                        down = cfSecretR
+                    },
+                onClick = {
+                    onClick(cfIdR); onEdit(
+                    AppStrings.SETTINGS_INPUT_CF_CLIENT_ID,
+                    cfClientId
+                )
+                })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_CF_CLIENT_SECRET,
+                if (cfClientSecret.isEmpty()) AppStrings.SETTINGS_VALUE_UNSET else AppStrings.SETTINGS_VALUE_CF_SET,
+                Icons.Default.Key,
+                modifier = Modifier
+                    .focusRequester(cfSecretR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = cfIdR
+                    },
+                onClick = {
+                    onClick(cfSecretR); onEdit(
+                    AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET,
+                    cfClientSecret
+                )
+                })
         }
     }
 }

@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.*
 import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -444,6 +445,8 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
                     val newPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
@@ -467,13 +470,26 @@ class LivePlayerViewModel @Inject constructor(
                         val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 0)
                         if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
                         hlsUrl
-                    } else buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        mainTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
 
                     withContext(Dispatchers.Main) {
                         if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
                             _mainSseStatus.value = "ONAir"; _mainSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
-                            startMainSse(uiContext, channel.displayChannelId, quality.value, config)
+                            startMainSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
                         }
                         startPlayback(
                             uiContext,
@@ -481,7 +497,8 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            mainTsDataSourceFactory
+                            mainTsDataSourceFactory,
+                            cfAccessHeaders
                         )
                         liveJikkyoManager.startJikkyo(channel, source)
                     }
@@ -520,6 +537,8 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
                     val newDualPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
@@ -543,13 +562,26 @@ class LivePlayerViewModel @Inject constructor(
                         val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 1)
                         if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
                         hlsUrl
-                    } else buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        dualTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
 
                     withContext(Dispatchers.Main) {
                         if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
                             _dualSseStatus.value = "ONAir"; _dualSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
-                            startDualSse(uiContext, channel.displayChannelId, quality.value, config)
+                            startDualSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
                         }
                         startPlayback(
                             uiContext,
@@ -557,7 +589,8 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            dualTsDataSourceFactory
+                            dualTsDataSourceFactory,
+                            cfAccessHeaders
                         )
                     }
                 }
@@ -605,7 +638,8 @@ class LivePlayerViewModel @Inject constructor(
         source: StreamSource,
         quality: StreamQuality,
         config: BackendConfig,
-        factory: TsReadExDataSourceFactory
+        factory: TsReadExDataSourceFactory,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ): String {
         return when (source) {
             StreamSource.EDCB -> {
@@ -654,6 +688,8 @@ class LivePlayerViewModel @Inject constructor(
                         "-d",
                         "13"
                     )
+                    // ★ 追加: Mirakurun ストリームにも Cloudflare Access ヘッダーを付与
+                    factory.requestHeaders = cfAccessHeaders
                     UrlBuilder.getMirakurunStreamUrl(
                         config.ip,
                         config.port,
@@ -679,7 +715,8 @@ class LivePlayerViewModel @Inject constructor(
         streamUrl: String,
         source: StreamSource,
         isEdcbDirect: Boolean,
-        factory: TsReadExDataSourceFactory
+        factory: TsReadExDataSourceFactory,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
@@ -707,11 +744,21 @@ class LivePlayerViewModel @Inject constructor(
                     if (source == StreamSource.EDCB && !isEdcbDirect) {
                         val uri = Uri.parse(streamUrl)
                         val ctok = uri.getQueryParameter("ctok") ?: ""
+                        // ★ 追加: Cookie に加えて Cloudflare Access ヘッダーも付与
                         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-                            .setDefaultRequestProperties(mapOf("Cookie" to "ctok=$ctok"))
+                            .setDefaultRequestProperties(
+                                mapOf("Cookie" to "ctok=$ctok") + cfAccessHeaders
+                            )
                             .setAllowCrossProtocolRedirects(true)
                         HlsMediaSource.Factory(httpDataSourceFactory)
                             .setAllowChunklessPreparation(false).createMediaSource(mediaItem)
+                    } else if (cfAccessHeaders.isNotEmpty()) {
+                        // ★ 追加: KonomiTV ストリームに Cloudflare Access ヘッダーを付与
+                        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                            .setDefaultRequestProperties(cfAccessHeaders)
+                        DefaultMediaSourceFactory(
+                            DefaultDataSource.Factory(uiContext, httpDataSourceFactory)
+                        ).createMediaSource(mediaItem)
                     } else DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
                 }
             player?.setMediaSource(mediaSource); player?.prepare(); player?.play()
@@ -727,12 +774,16 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
-            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)").build()
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
         mainEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onFailure(
@@ -798,12 +849,16 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
-            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)").build()
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
         dualEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onFailure(
