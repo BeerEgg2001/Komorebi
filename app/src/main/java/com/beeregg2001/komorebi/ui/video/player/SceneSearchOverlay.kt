@@ -47,7 +47,11 @@ import kotlin.math.floor
 
 private const val TAG = "SceneSearchOverlay"
 
-class TileSheetLoader(private val context: Context) {
+class TileSheetLoader(
+    private val context: Context,
+    // ★ 追加: Cloudflare Access 等のリクエストヘッダー
+    private val requestHeaders: Map<String, String> = emptyMap()
+) {
     private var isReleased = false
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -131,7 +135,12 @@ class TileSheetLoader(private val context: Context) {
                         "[TileLoader] Downloading sheet to local cache file: ${file.absolutePath}"
                     )
                     withContext(Dispatchers.IO) {
-                        URL(url).openStream().use { input ->
+                        val connection = URL(url).openConnection()
+                        // ★ 追加: Cloudflare Access ヘッダーを付与
+                        requestHeaders.forEach { (name, value) ->
+                            connection.setRequestProperty(name, value)
+                        }
+                        connection.getInputStream().use { input ->
                             FileOutputStream(file).use { output ->
                                 input.copyTo(output)
                             }
@@ -182,10 +191,11 @@ fun SceneSearchOverlay(
     tiledThumbnailUrl: String?, // ★ ViewModelから受け取るように変更
     currentPositionMs: Long,
     onSeekRequested: (Long) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    requestHeaders: Map<String, String> = emptyMap()
 ) {
     val context = LocalContext.current
-    val loader = remember { TileSheetLoader(context) }
+    val loader = remember(requestHeaders) { TileSheetLoader(context, requestHeaders) }
 
     DisposableEffect(Unit) { onDispose { loader.release() } }
 
@@ -450,10 +460,11 @@ fun ChapterListOverlay(
     tiledThumbnailUrl: String?,  // ★ ViewModelから受け取るように変更
     currentPositionMs: Long,
     onSeekRequested: (Long) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    requestHeaders: Map<String, String> = emptyMap()
 ) {
     val context = LocalContext.current
-    val loader = remember { TileSheetLoader(context) }
+    val loader = remember(requestHeaders) { TileSheetLoader(context, requestHeaders) }
 
     DisposableEffect(Unit) { onDispose { loader.release() } }
 

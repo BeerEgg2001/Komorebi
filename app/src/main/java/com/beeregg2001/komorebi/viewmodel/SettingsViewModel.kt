@@ -300,6 +300,12 @@ class SettingsViewModel @Inject constructor(
         ""
     )
 
+    // ★ 追加: Cloudflare Zero Trust サービストークン
+    val cfAccessClientId: StateFlow<String> = settingsRepository.cfAccessClientId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val cfAccessClientSecret: StateFlow<String> = settingsRepository.cfAccessClientSecret
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
     // ★ 追加: APIキーの検証結果("VALID"/"INVALID"/"UNVERIFIED"/未検証時は空文字)
     val geminiApiKeyStatus: StateFlow<String> = settingsRepository.geminiApiKeyStatus.stateIn(
         viewModelScope,

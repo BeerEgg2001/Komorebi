@@ -64,6 +64,7 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "VideoPlayerManager"
+private const val MAX_PLAYER_RETRY_COUNT = 5
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -78,6 +79,9 @@ fun rememberManagedExoPlayer(
     onBufferingChanged: (Boolean) -> Unit,
     onDurationChanged: (Long) -> Unit = {},
     onStopOrDispose: (ExoPlayer) -> Unit,
+    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+    cfAccessHeaders: Map<String, String> = emptyMap(),
+    onFatalError: (String) -> Unit = {},
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ): ExoPlayer {
     val captionDecoder = remember { NativeCaptionDecoder() }
@@ -143,9 +147,14 @@ fun rememberManagedExoPlayer(
             setAllowCrossProtocolRedirects(true)
             setConnectTimeoutMs(90000)
             setReadTimeoutMs(90000)
+            // ★ 追加: Cloudflare Access ヘッダーを付与
+            setDefaultRequestProperties(cfAccessHeaders)
         }
 
         val nativeLib = NativeLib()
+
+        // ★ 追加: 再生エラーの連続リトライ回数を保持(ファイル消失以外の一時的エラー用)
+        var playerRetryCount = 0
 
         // ★ 追加: HTTPリクエスト時に取得したファイルサイズを保持する共有変数
         val fileSizeBytesRef = AtomicLong(0L)
@@ -175,8 +184,13 @@ fun rememberManagedExoPlayer(
                     )
 
                     val source = if (isEdcbScheme || isDirectTs || isEdcbDirect) {
-                        // ★ 修正: ファイルサイズ格納用の参照を渡す
-                        TsReadExDataSource(nativeLib, dynamicTsArgs, fileSizeBytesRef)
+                        // ★ 修正: ファイルサイズ格納用の参照とCloudflare Accessヘッダーを渡す
+                        TsReadExDataSource(
+                            nativeLib,
+                            dynamicTsArgs,
+                            fileSizeBytesRef,
+                            cfAccessHeaders
+                        )
                     } else {
                         httpDataSourceFactory.createDataSource()
                     }
@@ -304,11 +318,40 @@ fun rememberManagedExoPlayer(
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         onBufferingChanged(playbackState == Player.STATE_BUFFERING)
-                        if (playbackState == Player.STATE_READY) onDurationChanged(duration)
+                        if (playbackState == Player.STATE_READY) {
+                            onDurationChanged(duration)
+                            // ★ 正常に再生再開できたのでリトライ回数をリセット
+                            playerRetryCount = 0
+                        }
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
+
+                        // ★ 原因チェーンをたどり、録画ファイル消失(HTTP 404)かどうかを判定
+                        var cause: Throwable? = error
+                        var isFileMissing = false
+                        while (cause != null) {
+                            if (cause is java.io.FileNotFoundException) {
+                                isFileMissing = true
+                                break
+                            }
+                            cause = cause.cause
+                        }
+
+                        if (isFileMissing) {
+                            Log.e(TAG, "Recording file is missing. Aborting retry.")
+                            onFatalError("録画ファイルが見つかりません。削除された可能性があります。")
+                            return
+                        }
+
+                        playerRetryCount++
+                        if (playerRetryCount > MAX_PLAYER_RETRY_COUNT) {
+                            Log.e(TAG, "Max retry count exceeded. Aborting.")
+                            onFatalError("再生エラーが発生しました。通信状況をご確認ください。")
+                            return
+                        }
+
                         scope.launch {
                             onBufferingChanged(true)
                             delay(3000L)
