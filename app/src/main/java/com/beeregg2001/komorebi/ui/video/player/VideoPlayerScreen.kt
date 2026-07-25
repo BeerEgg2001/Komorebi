@@ -209,7 +209,11 @@ fun VideoPlayerScreen(
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
         },
-        cfAccessHeaders = cfAccessHeaders
+        cfAccessHeaders = cfAccessHeaders,
+        onFatalError = { message ->
+            onShowToast(message)
+            onBackPressed()
+        }
     )
 
     val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {

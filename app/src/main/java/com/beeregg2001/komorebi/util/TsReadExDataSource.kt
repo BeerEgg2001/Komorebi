@@ -8,6 +8,7 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
 import com.beeregg2001.komorebi.NativeLib
 import java.io.BufferedInputStream
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -100,7 +101,13 @@ class TsReadExDataSource(
             requestHeaders.forEach { (name, value) -> setRequestProperty(name, value) }
         }
         val responseCode = connection?.responseCode ?: -1
-        if (responseCode !in 200..299) throw IOException("Server returned code $responseCode")
+        if (responseCode !in 200..299) {
+            // ★ 404はファイル消失(録画削除など)として区別し、呼び出し側でリトライ対象から除外できるようにする
+            if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                throw FileNotFoundException("Recording file not found (HTTP 404): ${dataSpec.uri}")
+            }
+            throw IOException("Server returned code $responseCode")
+        }
 
         val contentLengthStr = connection?.getHeaderField("Content-Length")
         val contentLength = contentLengthStr?.toLongOrNull() ?: 0L
