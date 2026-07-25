@@ -1,7 +1,16 @@
 cmake_minimum_required(VERSION 3.13)
 project(komorebi-native)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+
+set(ARIBCC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ARIBCC_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(ARIBCC_NO_RENDERER OFF CACHE BOOL "" FORCE)
+set(ARIBCC_USE_EMBEDDED_FREETYPE ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+
+add_subdirectory(third_party/libaribcaption EXCLUDE_FROM_ALL)
 
 # 1. tsreadex のコアロジック（ソースファイル群）を定義
 set(TSREADEX_CORE_SRC
@@ -27,6 +36,7 @@ find_library(log-lib log)
 target_link_libraries(
     komorebi-native
     ${log-lib}
+    aribcaption::aribcaption
 )
 
 # インクルードディレクトリの設定（カレントディレクトリを参照）

@@ -32,6 +32,7 @@ import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 enum class LiveSubMenuCategory {
@@ -46,6 +47,8 @@ fun LiveTopSubMenuUI(
     availableSources: List<StreamSource>,
     currentAudioMode: AudioMode,
     isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage>,
+    currentSubtitleLanguageId: Int,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
@@ -60,6 +63,7 @@ fun LiveTopSubMenuUI(
     onSourceSelect: (StreamSource, Boolean) -> Unit,
     onAudioToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
@@ -165,6 +169,9 @@ fun LiveTopSubMenuUI(
                 currentStreamSource == StreamSource.MIRAKURUN -> "Mirakurun"
                 else -> "KonomiTV"
             }
+            val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+                it.id == currentSubtitleLanguageId
+            } ?: subtitleLanguages.firstOrNull()
 
             // --- メインタイルメニュー行 ---
             Row(
@@ -199,6 +206,16 @@ fun LiveTopSubMenuUI(
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
                     )
+
+                    if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
+                        LiveMenuTileItem(
+                            title = "字幕言語", icon = Icons.Default.Translate,
+                            subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
+                            onClick = onSubtitleLanguageToggle,
+                            modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                            contentColor = colors.textPrimary
+                        )
+                    }
 
                     LiveMenuTileItem(
                         title = "画質", icon = Icons.Default.Settings,
@@ -258,6 +275,16 @@ fun LiveTopSubMenuUI(
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
                     )
+
+                    if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
+                        LiveMenuTileItem(
+                            title = "字幕言語", icon = Icons.Default.Translate,
+                            subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
+                            onClick = onSubtitleLanguageToggle,
+                            modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                            contentColor = colors.textPrimary
+                        )
+                    }
 
                     LiveMenuTileItem(
                         title = "L字クロップ", icon = Icons.Default.Crop,

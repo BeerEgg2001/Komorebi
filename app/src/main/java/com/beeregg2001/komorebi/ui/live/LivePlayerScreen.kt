@@ -5,8 +5,6 @@ package com.beeregg2001.komorebi.ui.live
 import android.os.Build
 import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
-import android.view.ViewGroup
-import android.webkit.*
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
@@ -44,6 +42,8 @@ import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
+import com.beeregg2001.komorebi.ui.subtitle.rememberNativeCaptionCue
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -151,9 +151,28 @@ fun LivePlayerScreen(
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
 
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
-
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
-    val dualWebViewRef = remember { mutableStateOf<WebView?>(null) }
+    var isMainPlaying by remember { mutableStateOf(false) }
+    var isDualPlaying by remember { mutableStateOf(false) }
+    val mainSubtitleLanguages by livePlayerViewModel.mainSubtitleLanguages.collectAsState()
+    val dualSubtitleLanguages by livePlayerViewModel.dualSubtitleLanguages.collectAsState()
+    val currentSubtitleLanguageId by livePlayerViewModel.currentSubtitleLanguageId.collectAsState()
+    val activeSubtitleLanguages = if (ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1) {
+        dualSubtitleLanguages
+    } else {
+        mainSubtitleLanguages
+    }
+    val mainCaptionCue = rememberNativeCaptionCue(
+        events = livePlayerViewModel.mainSubtitleEvents,
+        enabled = isSubtitleEnabled,
+        resetKey = currentChannelItem.id to currentSubtitleLanguageId,
+        clockRunning = isMainPlaying
+    )
+    val dualCaptionCue = rememberNativeCaptionCue(
+        events = livePlayerViewModel.dualSubtitleEvents,
+        enabled = isSubtitleEnabled,
+        resetKey = ps.dualRightChannel?.id to currentSubtitleLanguageId,
+        clockRunning = isDualPlaying
+    )
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
@@ -252,6 +271,7 @@ fun LivePlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 ps.isPlayerPlaying = isPlaying
+                isMainPlaying = isPlaying
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -264,12 +284,17 @@ fun LivePlayerScreen(
             }
         }
         mainPlayer?.addListener(listener)
+        isMainPlaying = mainPlayer?.isPlaying == true
         isMainBuffering = mainPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { mainPlayer?.removeListener(listener) }
     }
 
     DisposableEffect(dualPlayer) {
         val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                isDualPlaying = isPlaying
+            }
+
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 dualVideoWidth = videoSize.width; dualVideoHeight =
                     videoSize.height; dualPixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
@@ -280,6 +305,7 @@ fun LivePlayerScreen(
             }
         }
         dualPlayer?.addListener(listener)
+        isDualPlaying = dualPlayer?.isPlaying == true
         isDualBuffering = dualPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { dualPlayer?.removeListener(listener) }
     }
@@ -363,40 +389,8 @@ fun LivePlayerScreen(
         livePlayerViewModel.setVolumes(mainVol, dualVol)
     }
 
-    LaunchedEffect(Unit) {
-        livePlayerViewModel.subtitleEvents.collect { (pts, base64) ->
-            webViewRef.value?.evaluateJavascript(
-                "if(window.receiveSubtitleData){ window.receiveSubtitleData($pts, '$base64'); }",
-                null
-            )
-        }
-    }
-
     LaunchedEffect(isSubtitleEnabled) {
         livePlayerViewModel.setSubtitlesEnabled(isSubtitleEnabled)
-        while (true) {
-            if (isSubtitleEnabled) {
-                mainPlayer?.takeIf { it.isPlaying }?.let { player ->
-                    webViewRef.value?.post {
-                        webViewRef.value?.evaluateJavascript(
-                            "if(window.syncClock){ window.syncClock(${player.currentPosition}); }",
-                            null
-                        )
-                    }
-                }
-                if (ps.isDualDisplayMode) {
-                    dualPlayer?.takeIf { it.isPlaying }?.let { player ->
-                        dualWebViewRef.value?.post {
-                            dualWebViewRef.value?.evaluateJavascript(
-                                "if(window.syncClock){ window.syncClock(${player.currentPosition}); }",
-                                null
-                            )
-                        }
-                    }
-                }
-            }
-            delay(100)
-        }
     }
 
     LaunchedEffect(Unit) {
@@ -540,12 +534,12 @@ fun LivePlayerScreen(
                 mainVideoWidth = videoWidth,
                 mainVideoHeight = videoHeight,
                 mainPixelRatio = pixelWidthHeightRatio,
-                mainWebViewRef = webViewRef,
+                mainCaptionCue = mainCaptionCue.value,
                 dualPlayer = dualPlayer,
                 dualVideoWidth = dualVideoWidth,
                 dualVideoHeight = dualVideoHeight,
                 dualPixelRatio = dualPixelWidthHeightRatio,
-                dualWebViewRef = dualWebViewRef,
+                dualCaptionCue = dualCaptionCue.value,
                 isSubtitleEnabled = isSubtitleEnabled
             )
         } else {
@@ -602,26 +596,9 @@ fun LivePlayerScreen(
 
             if (!isPiPMode) {
                 if (isHeavyUiReady) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            view.visibility =
-                                if (isSubtitleEnabled && !isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                        },
-                        onRelease = { view ->
-                            view.destroy()
-                            webViewRef.value = null
-                        },
+                    NativeCaptionOverlay(
+                        cue = mainCaptionCue.value,
+                        visible = isSubtitleEnabled && !isUiVisible,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -782,6 +759,8 @@ fun LivePlayerScreen(
                 availableSources = availableSources,
                 currentAudioMode = ps.currentAudioMode,
                 isSubtitleEnabled = isSubtitleEnabled,
+                subtitleLanguages = activeSubtitleLanguages,
+                currentSubtitleLanguageId = currentSubtitleLanguageId,
                 currentQuality = ps.currentQuality,
                 isCommentEnabled = isCommentEnabled,
                 isLCropEnabled = ps.lCropEnabled,
@@ -873,6 +852,15 @@ fun LivePlayerScreen(
                             AppStrings.TOAST_SUBTITLE_CHANGED,
                             if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
                         )
+                    )
+                },
+                onSubtitleLanguageToggle = {
+                    val nextLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                    livePlayerViewModel.setSubtitleLanguage(nextLanguageId)
+                    val selectedLanguage = activeSubtitleLanguages.firstOrNull { it.id == nextLanguageId }
+                    onShowToast(
+                        "字幕言語: 第${nextLanguageId}言語" +
+                            (selectedLanguage?.let { "・${it.displayName}" } ?: "")
                     )
                 },
                 onQualitySelect = {

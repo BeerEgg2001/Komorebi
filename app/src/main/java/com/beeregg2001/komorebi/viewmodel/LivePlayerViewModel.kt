@@ -31,9 +31,13 @@ import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionDecoder
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -107,8 +111,26 @@ class LivePlayerViewModel @Inject constructor(
     private val _dualSseDetail = MutableStateFlow(AppStrings.SSE_CONNECTING)
     val dualSseDetail: StateFlow<String> = _dualSseDetail.asStateFlow()
 
-    private val _subtitleEvents = MutableSharedFlow<Pair<Long, String>>(extraBufferCapacity = 10)
-    val subtitleEvents: SharedFlow<Pair<Long, String>> = _subtitleEvents.asSharedFlow()
+    private val _mainSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val mainSubtitleEvents: SharedFlow<NativeCaptionCue> = _mainSubtitleEvents.asSharedFlow()
+
+    private val _dualSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val dualSubtitleEvents: SharedFlow<NativeCaptionCue> = _dualSubtitleEvents.asSharedFlow()
+
+    private val _mainSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val mainSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _mainSubtitleLanguages.asStateFlow()
+
+    private val _dualSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val dualSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _dualSubtitleLanguages.asStateFlow()
+
+    private val _currentSubtitleLanguageId = MutableStateFlow(1)
+    val currentSubtitleLanguageId: StateFlow<Int> = _currentSubtitleLanguageId.asStateFlow()
 
     private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
     val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
@@ -133,6 +155,8 @@ class LivePlayerViewModel @Inject constructor(
     val mainBackendType: StateFlow<String> = _mainBackendType.asStateFlow()
 
     private var isSubtitleEnabled = false
+    private val mainCaptionDecoder = NativeCaptionDecoder()
+    private val dualCaptionDecoder = NativeCaptionDecoder()
     private var signalPollJob: Job? = null
 
     private var mainPlaybackJob: Job? = null
@@ -309,6 +333,8 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
+        mainCaptionDecoder.reset(_currentSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
 
         // ★ 修正: KonomiTV等でセッションが残らないよう、確実にstop()とclearMediaItems()を呼ぶ
         _mainPlayer.value?.stop()
@@ -321,6 +347,8 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
+        dualCaptionDecoder.reset(_currentSubtitleLanguageId.value)
+        _dualSubtitleLanguages.value = emptyList()
 
         // ★ 修正: サブプレイヤー側も同様に確実なクリーンアップを行う
         _dualPlayer.value?.stop()
@@ -425,6 +453,7 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (mainCurrentChannel?.id != channel.id) setSubtitleLanguage(1)
         if (!isAutoRetry) {
             mainAutoRetryCount = 0; _mainPlayerError.value = null
         }
@@ -448,11 +477,8 @@ class LivePlayerViewModel @Inject constructor(
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
                             isKonomiTvSource = { mainCurrentSource == StreamSource.KONOMITV },
-                            isSubtitleEnabled = { isSubtitleEnabled },
-                            onSubtitleDataReceived = { pts, base64 ->
-                                viewModelScope.launch(
-                                    Dispatchers.Main
-                                ) { _subtitleEvents.emit(Pair(pts, base64)) }
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitMainSubtitle(pts, data)
                             },
                             onError = { error -> handleMainError(uiContext, error) }
                         )
@@ -481,7 +507,8 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            mainTsDataSourceFactory
+                            mainTsDataSourceFactory,
+                            ::decodeAndEmitMainSubtitle
                         )
                         liveJikkyoManager.startJikkyo(channel, source)
                     }
@@ -524,11 +551,8 @@ class LivePlayerViewModel @Inject constructor(
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
                             isKonomiTvSource = { dualCurrentSource == StreamSource.KONOMITV },
-                            isSubtitleEnabled = { isSubtitleEnabled },
-                            onSubtitleDataReceived = { pts, base64 ->
-                                viewModelScope.launch(
-                                    Dispatchers.Main
-                                ) { _subtitleEvents.emit(Pair(pts, base64)) }
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitDualSubtitle(pts, data)
                             },
                             onError = { error -> handleDualError(uiContext, error) }
                         )
@@ -557,7 +581,8 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            dualTsDataSourceFactory
+                            dualTsDataSourceFactory,
+                            ::decodeAndEmitDualSubtitle
                         )
                     }
                 }
@@ -590,6 +615,29 @@ class LivePlayerViewModel @Inject constructor(
 
     fun setSubtitlesEnabled(enabled: Boolean) {
         this.isSubtitleEnabled = enabled
+        if (!enabled) {
+            mainCaptionDecoder.flush()
+            dualCaptionDecoder.flush()
+        }
+    }
+
+    fun setSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _currentSubtitleLanguageId.value = languageId
+        mainCaptionDecoder.switchLanguage(languageId)
+        dualCaptionDecoder.switchLanguage(languageId)
+    }
+
+    private fun decodeAndEmitMainSubtitle(ptsMs: Long, data: ByteArray) {
+        val cue = mainCaptionDecoder.decode(data, ptsMs, renderCaptions = isSubtitleEnabled)
+        _mainSubtitleLanguages.value = mainCaptionDecoder.availableLanguages()
+        if (isSubtitleEnabled && cue != null) _mainSubtitleEvents.tryEmit(cue)
+    }
+
+    private fun decodeAndEmitDualSubtitle(ptsMs: Long, data: ByteArray) {
+        val cue = dualCaptionDecoder.decode(data, ptsMs, renderCaptions = isSubtitleEnabled)
+        _dualSubtitleLanguages.value = dualCaptionDecoder.availableLanguages()
+        if (isSubtitleEnabled && cue != null) _dualSubtitleEvents.tryEmit(cue)
     }
 
     fun setVolumes(mainVolume: Float, dualVolume: Float) {
@@ -679,7 +727,8 @@ class LivePlayerViewModel @Inject constructor(
         streamUrl: String,
         source: StreamSource,
         isEdcbDirect: Boolean,
-        factory: TsReadExDataSourceFactory
+        factory: TsReadExDataSourceFactory,
+        onSubtitleDataReceived: (Long, ByteArray) -> Unit
     ) {
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
@@ -691,12 +740,8 @@ class LivePlayerViewModel @Inject constructor(
                                 TsExtractor.MODE_SINGLE_PMT,
                                 TimestampAdjuster(C.TIME_UNSET),
                                 DirectSubtitlePayloadReaderFactory(
-                                    onSubtitleDataReceived = { pts, base64 ->
-                                        viewModelScope.launch(
-                                            Dispatchers.Main
-                                        ) { _subtitleEvents.emit(Pair(pts, base64)) }
-                                    },
-                                    isSubtitleEnabled = { isSubtitleEnabled }),
+                                    onSubtitleDataReceived = onSubtitleDataReceived
+                                ),
                                 TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
                             )
                         )
@@ -933,6 +978,8 @@ class LivePlayerViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         releasePlayers()
+        mainCaptionDecoder.close()
+        dualCaptionDecoder.close()
         // ★ 修正: 全通信機能を破壊する自爆スイッチ（shutdown）を撤去し、
         // プレイヤーの releasePlayers() でのクリーンアップに一任する
     }

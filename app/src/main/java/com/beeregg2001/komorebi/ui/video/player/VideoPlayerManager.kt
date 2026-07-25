@@ -4,13 +4,11 @@ package com.beeregg2001.komorebi.ui.video.player
 
 import android.content.Context
 import android.net.Uri
-import android.util.Base64
 import android.util.Log
-import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -50,6 +48,9 @@ import androidx.media3.extractor.PositionHolder
 import androidx.media3.extractor.SeekMap
 import androidx.media3.extractor.SeekPoint
 import com.beeregg2001.komorebi.NativeLib
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionDecoder
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbContextBuilder
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbDataSourceFactory
 import com.beeregg2001.komorebi.data.model.AudioMode
@@ -70,13 +71,30 @@ fun rememberManagedExoPlayer(
     program: RecordedProgram?,
     vs: VideoPlayerState,
     scope: CoroutineScope,
-    webViewRef: MutableState<WebView?>,
+    onSubtitleCue: (NativeCaptionCue) -> Unit,
+    subtitleLanguageId: Int,
+    onSubtitleLanguagesChanged: (List<NativeCaptionLanguage>) -> Unit,
     onVideoSizeChanged: (Int, Int, Float) -> Unit,
     onBufferingChanged: (Boolean) -> Unit,
     onDurationChanged: (Long) -> Unit = {},
     onStopOrDispose: (ExoPlayer) -> Unit,
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ): ExoPlayer {
+    val captionDecoder = remember { NativeCaptionDecoder() }
+    LaunchedEffect(program?.id) {
+        captionDecoder.reset(subtitleLanguageId)
+        onSubtitleLanguagesChanged(emptyList())
+    }
+    LaunchedEffect(subtitleLanguageId) {
+        captionDecoder.switchLanguage(subtitleLanguageId)
+    }
+    LaunchedEffect(vs.isSubtitleEnabled) {
+        if (!vs.isSubtitleEnabled) captionDecoder.flush()
+    }
+    DisposableEffect(Unit) {
+        onDispose { captionDecoder.close() }
+    }
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -300,22 +318,16 @@ fun rememberManagedExoPlayer(
                     }
 
                     override fun onMetadata(metadata: Metadata) {
-                        if (!vs.isSubtitleEnabled) return
                         for (i in 0 until metadata.length()) {
                             val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains(
-                                    "aribb24",
-                                    true
-                                ) || entry.owner.contains("B24", true))
-                            ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                                webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript(
-                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                        null
-                                    )
-                                }
+                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                                val cue = captionDecoder.decode(
+                                    entry.privateData,
+                                    currentPosition,
+                                    renderCaptions = vs.isSubtitleEnabled
+                                )
+                                onSubtitleLanguagesChanged(captionDecoder.availableLanguages())
+                                if (vs.isSubtitleEnabled && cue != null) onSubtitleCue(cue)
                             }
                         }
                     }

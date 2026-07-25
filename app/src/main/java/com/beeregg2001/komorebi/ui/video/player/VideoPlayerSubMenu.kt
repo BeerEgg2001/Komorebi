@@ -39,6 +39,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 @Composable
@@ -46,6 +47,8 @@ fun VideoTopSubMenuUI(
     currentAudioMode: AudioMode,
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
+    currentSubtitleLanguageId: Int = 1,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
@@ -55,6 +58,7 @@ fun VideoTopSubMenuUI(
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit = {},
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
@@ -70,6 +74,9 @@ fun VideoTopSubMenuUI(
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
     val qualityButtonRequester = remember { FocusRequester() }
     val qualityListRequester = remember { FocusRequester() }
+    val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+        it.id == currentSubtitleLanguageId
+    } ?: subtitleLanguages.firstOrNull()
 
     LaunchedEffect(Unit) {
         delay(50)
@@ -155,6 +162,17 @@ fun VideoTopSubMenuUI(
                     contentColor = colors.textPrimary,
                     enabled = isSubtitleSupported // ★ 適用
                 )
+                if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
+                    VideoMenuTileItem(
+                        title = "字幕言語",
+                        icon = Icons.Default.Translate,
+                        subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
+                        onClick = onSubtitleLanguageToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary,
+                        enabled = isSubtitleSupported
+                    )
+                }
                 VideoMenuTileItem(
                     title = "L字クロップ",
                     icon = Icons.Default.Crop,
@@ -331,6 +349,8 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     currentAudioMode: AudioMode,
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
+    currentSubtitleLanguageId: Int = 1,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
@@ -339,6 +359,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit = {},
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
@@ -352,6 +373,9 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
+    val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+        it.id == currentSubtitleLanguageId
+    } ?: subtitleLanguages.firstOrNull()
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
     val initialFocusRequester = remember { FocusRequester() }
     val qualityListRequester = remember { FocusRequester() }
@@ -450,6 +474,15 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             onClick = onSubtitleToggle,
                             enabled = isSubtitleSupported // ★ 適用
                         )
+                        if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
+                            ModernSettingRow(
+                                title = "字幕言語",
+                                value = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
+                                icon = Icons.Default.Translate,
+                                onClick = onSubtitleLanguageToggle,
+                                enabled = isSubtitleSupported
+                            )
+                        }
                         ModernSettingRow(
                             title = "画質",
                             value = currentQuality.label,
