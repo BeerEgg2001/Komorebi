@@ -131,8 +131,11 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
+                FocusRequester(),
+                // ★ 追加: Cloudflare Zero Trust (Client ID / Secret) 用に2個増強
+                FocusRequester(),
                 FocusRequester()
-            ),
+            ), // 1: Connection
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -409,43 +412,70 @@ fun SettingsScreen(
                                 }
                             },
                             edcbPlayMethodR,
+                            prefs.cfAccessClientId,
+                            prefs.cfAccessClientSecret,
                             { t, v ->
-                                uiState.activeDialog = SettingDialogState.Input(t, v) { input ->
+                                uiState.activeDialog = SettingDialogState.Input(
+                                    title = t,
+                                    initialValue = v,
+                                    isLongToken = t == AppStrings.SETTINGS_INPUT_CF_CLIENT_ID || t == AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET,
+                                    placeholder = when (t) {
+                                        AppStrings.SETTINGS_INPUT_CF_CLIENT_ID -> AppStrings.SETTINGS_PLACEHOLDER_CF_CLIENT_ID
+                                        AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET -> AppStrings.SETTINGS_PLACEHOLDER_CF_CLIENT_SECRET
+                                        else -> null
+                                    }
+                                ) { input ->
                                     scope.launch(Dispatchers.IO) {
+                                        // ★ 追加: CF Access のトークンには空白・改行は含まれ得ないため、
+                                        // TV の画面キーボードが誤って挿入した改行等も除去する
+                                        val sanitizedInput =
+                                            if (t == AppStrings.SETTINGS_INPUT_CF_CLIENT_ID || t == AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET)
+                                                input.replace(Regex("\\s+"), "")
+                                            else input
                                         when (t) {
                                             "KonomiTV (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "KonomiTV (ポート)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.EDCB_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (TCPポート)" -> repository.saveString(
                                                 SettingsRepository.EDCB_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
                                                 SettingsRepository.EDCB_HTTP_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "Mirakurun (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.MIRAKURUN_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "Mirakurun (ポート)" -> repository.saveString(
                                                 SettingsRepository.MIRAKURUN_PORT,
-                                                input
+                                                sanitizedInput
+                                            )
+
+                                            AppStrings.SETTINGS_INPUT_CF_CLIENT_ID -> repository.saveString(
+                                                SettingsRepository.CF_ACCESS_CLIENT_ID,
+                                                sanitizedInput
+                                            )
+
+                                            AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET -> repository.saveString(
+                                                SettingsRepository.CF_ACCESS_CLIENT_SECRET,
+                                                sanitizedInput
                                             )
                                         }
                                     }
@@ -517,6 +547,8 @@ fun SettingsScreen(
                             itemFocusRequesters[1][4],
                             itemFocusRequesters[1][5],
                             itemFocusRequesters[1][6],
+                            itemFocusRequesters[1][8],
+                            itemFocusRequesters[1][9],
                             categoryFocusRequesters[1]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1 }
 
@@ -1045,11 +1077,13 @@ fun SettingsScreen(
 
         // --- ダイアログ表示制御 ---
         when (val state = uiState.activeDialog) {
-            is SettingDialogState.Input -> InputDialog(
-                state.title,
-                state.initialValue,
-                { closeDialog() },
-                { state.onConfirm(it); closeDialog() })
+            is SettingDialogState.Input -> com.beeregg2001.komorebi.ui.components.InputDialog(
+                title = state.title,
+                initialValue = state.initialValue,
+                isLongToken = state.isLongToken,
+                placeholder = state.placeholder,
+                onDismiss = { closeDialog() },
+                onConfirm = { state.onConfirm(it); closeDialog() })
 
             is SettingDialogState.BatchInput -> BatchInputDialog(
                 { closeDialog() },

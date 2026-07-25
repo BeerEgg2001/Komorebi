@@ -214,6 +214,18 @@ object AppStrings {
     const val SETTINGS_INPUT_MIRAKURUN_ADDRESS = "Mirakurun IPアドレス"
     const val SETTINGS_INPUT_MIRAKURUN_PORT = "Mirakurun ポート番号"
 
+    // Cloudflare Zero Trust 設定
+    const val SETTINGS_SECTION_CLOUDFLARE = "Cloudflare Zero Trust (オプション)"
+    const val SETTINGS_ITEM_CF_CLIENT_ID = "Access Client ID"
+    const val SETTINGS_ITEM_CF_CLIENT_SECRET = "Access Client Secret"
+    const val SETTINGS_INPUT_CF_CLIENT_ID = "Cloudflare Access Client ID"
+    const val SETTINGS_INPUT_CF_CLIENT_SECRET = "Cloudflare Access Client Secret"
+    const val SETTINGS_VALUE_CF_SET = "設定済み"
+    const val SETTINGS_PLACEHOLDER_CF_CLIENT_ID =
+        "例: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.access"
+    const val SETTINGS_PLACEHOLDER_CF_CLIENT_SECRET =
+        "例: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
     // 再生設定
     const val SETTINGS_SECTION_QUALITY = "画質設定"
     const val SETTINGS_ITEM_LIVE_QUALITY = "ライブ視聴画質"

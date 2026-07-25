@@ -81,6 +81,26 @@ class SettingsRepository @Inject constructor(
         val EPG_COLUMN_COUNT = stringPreferencesKey("epg_column_count")
         val EPG_FONT_SIZE_SCALE = stringPreferencesKey("epg_font_size_scale")
         val EPG_VISIBLE_HOURS = stringPreferencesKey("epg_visible_hours")
+
+        // ★ 追加: Cloudflare Zero Trust (Cloudflare Access) サービストークン
+        val CF_ACCESS_CLIENT_ID = stringPreferencesKey("cf_access_client_id")
+        val CF_ACCESS_CLIENT_SECRET = stringPreferencesKey("cf_access_client_secret")
+
+        const val CF_ACCESS_CLIENT_ID_HEADER = "CF-Access-Client-Id"
+        const val CF_ACCESS_CLIENT_SECRET_HEADER = "CF-Access-Client-Secret"
+
+        // ★ 追加: トークン値からヘッダーMapを組み立てる (未設定なら空Map)
+        // 保存済みの値に改行・空白が混入していても(過去の不具合や手動編集等で)
+        // OkHttp の header() が不正な文字で例外を投げないよう、ここで必ず除去する
+        fun buildCfAccessHeaders(clientId: String, clientSecret: String): Map<String, String> {
+            val sanitizedId = clientId.replace(Regex("\\s+"), "")
+            val sanitizedSecret = clientSecret.replace(Regex("\\s+"), "")
+            if (sanitizedId.isBlank() || sanitizedSecret.isBlank()) return emptyMap()
+            return mapOf(
+                CF_ACCESS_CLIENT_ID_HEADER to sanitizedId,
+                CF_ACCESS_CLIENT_SECRET_HEADER to sanitizedSecret
+            )
+        }
     }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data
@@ -179,6 +199,12 @@ class SettingsRepository @Inject constructor(
     val epgFontSizeScale: Flow<String> = context.dataStore.data.map { it[EPG_FONT_SIZE_SCALE] ?: "1.0" }
     val epgVisibleHours: Flow<String> = context.dataStore.data.map { it[EPG_VISIBLE_HOURS] ?: "6" }
 
+    // ★ 追加: Cloudflare Zero Trust サービストークンのFlow
+    val cfAccessClientId: Flow<String> =
+        context.dataStore.data.map { it[CF_ACCESS_CLIENT_ID] ?: "" }
+    val cfAccessClientSecret: Flow<String> =
+        context.dataStore.data.map { it[CF_ACCESS_CLIENT_SECRET] ?: "" }
+
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,
         value: String
@@ -231,6 +257,27 @@ class SettingsRepository @Inject constructor(
         val scheme = if (isSsl) "https://" else "http://"
 
         return "$scheme$ip:$port"
+    }
+
+    // ★ 追加: Cloudflare Access サービストークンをヘッダーMapとして取得 (未設定なら空Map)
+    suspend fun getCfAccessHeaders(): Map<String, String> {
+        val prefs = context.dataStore.data.first()
+        return buildCfAccessHeaders(
+            prefs[CF_ACCESS_CLIENT_ID] ?: "",
+            prefs[CF_ACCESS_CLIENT_SECRET] ?: ""
+        )
+    }
+
+    // ★ 追加: Mirakurun のベースURLを取得 (未設定なら null)
+    suspend fun getMirakurunBaseUrl(): String? {
+        val prefs = context.dataStore.data.first()
+        var ip = prefs[MIRAKURUN_IP] ?: ""
+        if (ip.isBlank()) return null
+        val port = prefs[MIRAKURUN_PORT] ?: "40772"
+        if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
+            ip = "http://$ip"
+        }
+        return "$ip:$port"
     }
 
     suspend fun getStartupTabOnce(): String {

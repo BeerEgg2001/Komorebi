@@ -32,6 +32,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
@@ -126,6 +127,13 @@ fun VideoPlayerScreen(
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
     val videoSubtitleDefaultStr by settingsViewModel.videoSubtitleDefault.collectAsState()
 
+    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+    val cfAccessClientId by settingsViewModel.cfAccessClientId.collectAsState()
+    val cfAccessClientSecret by settingsViewModel.cfAccessClientSecret.collectAsState()
+    val cfAccessHeaders = remember(cfAccessClientId, cfAccessClientSecret) {
+        SettingsRepository.buildCfAccessHeaders(cfAccessClientId, cfAccessClientSecret)
+    }
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -200,7 +208,8 @@ fun VideoPlayerScreen(
                     if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
-        }
+        },
+        cfAccessHeaders = cfAccessHeaders
     )
 
     val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
@@ -625,7 +634,8 @@ fun VideoPlayerScreen(
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = { performSeek(it); isChapterListOpen = false },
-                    onClose = { isChapterListOpen = false })
+                    onClose = { isChapterListOpen = false },
+                    requestHeaders = cfAccessHeaders)
             }
 
             AnimatedVisibility(visible = isModernSettingsOpen, enter = fadeIn(), exit = fadeOut()) {

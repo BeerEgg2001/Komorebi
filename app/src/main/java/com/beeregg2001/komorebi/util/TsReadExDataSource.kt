@@ -24,7 +24,8 @@ import kotlin.concurrent.withLock
 class TsReadExDataSource(
     private val nativeLib: NativeLib,
     var tsArgs: Array<String>,
-    private val fileSizeBytesRef: AtomicLong? = null // ★ ファイルサイズ格納用
+    private val fileSizeBytesRef: AtomicLong? = null, // ★ ファイルサイズ格納用
+    private val requestHeaders: Map<String, String> = emptyMap() // ★ Cloudflare Access 等のリクエストヘッダー
 ) : BaseDataSource(true) {
 
     private var handle: Long = 0
@@ -95,6 +96,8 @@ class TsReadExDataSource(
             if (dataSpec.position > 0) {
                 setRequestProperty("Range", "bytes=${dataSpec.position}-")
             }
+            // ★ 追加: Cloudflare Access ヘッダーを付与
+            requestHeaders.forEach { (name, value) -> setRequestProperty(name, value) }
         }
         val responseCode = connection?.responseCode ?: -1
         if (responseCode !in 200..299) throw IOException("Server returned code $responseCode")

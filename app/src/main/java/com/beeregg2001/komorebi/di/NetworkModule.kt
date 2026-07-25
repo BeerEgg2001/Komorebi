@@ -3,6 +3,7 @@ package com.beeregg2001.komorebi.di
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.data.api.interceptor.CloudflareAccessInterceptor
 import com.google.gson.Gson
 import dagger.Module
 import dagger.Provides
@@ -30,7 +31,10 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(settingsRepository: SettingsRepository): OkHttpClient {
+    fun provideOkHttpClient(
+        settingsRepository: SettingsRepository,
+        cloudflareAccessInterceptor: CloudflareAccessInterceptor
+    ): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(
                 chain: Array<out X509Certificate>?,
@@ -53,6 +57,8 @@ object NetworkModule {
 
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
+            // Cloudflare Access のシークレットは logcat に平文で残さない
+            redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
         }
 
         return OkHttpClient.Builder()
@@ -85,6 +91,10 @@ object NetworkModule {
                     .build()
                 chain.proceed(newRequest)
             })
+            .addInterceptor(cloudflareAccessInterceptor)
+            // 最後に追加し、実際に送信されるヘッダーとレスポンス本文をログ出力する
+            // (CF Access のブロック/認証ページがHTMLで返ってきていないか確認するため)
+            .addInterceptor(logging)
             .build()
     }
 
