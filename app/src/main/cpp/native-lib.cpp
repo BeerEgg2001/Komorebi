@@ -332,9 +332,22 @@ Java_com_beeregg2001_komorebi_NativeLib_decodeCaption(JNIEnv *env, jobject thiz,
                 &renderResult);
             if (renderStatus != ARIBCC_RENDER_STATUS_GOT_IMAGE &&
                 renderStatus != ARIBCC_RENDER_STATUS_GOT_IMAGE_UNCHANGED) {
-                aribcc_caption_cleanup(&caption);
-                env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
-                return nullptr;
+                const bool isClearOnlyCaption =
+                    renderStatus == ARIBCC_RENDER_STATUS_NO_IMAGE &&
+                    (caption.flags & ARIBCC_CAPTIONFLAGS_CLEARSCREEN) != 0 &&
+                    caption.region_count == 0;
+                if (!isClearOnlyCaption) {
+                    aribcc_caption_cleanup(&caption);
+                    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+                    return nullptr;
+                }
+
+                // A CS-only caption intentionally renders no bitmap. Preserve it as an empty
+                // cue so the Kotlin timeline can clear the previous indefinite caption.
+                renderResult.pts = caption.pts;
+                renderResult.duration = caption.wait_duration;
+                renderResult.images = nullptr;
+                renderResult.image_count = 0;
             }
         }
     }
