@@ -1,5 +1,7 @@
 package com.beeregg2001.komorebi.ui.subtitle
 
+import android.graphics.Bitmap
+
 data class NativeCaptionCue(
     val ptsMs: Long,
     val durationMs: Long,
@@ -14,8 +16,7 @@ data class NativeCaptionImage(
     val y: Int,
     val width: Int,
     val height: Int,
-    val stride: Int,
-    val rgba: ByteArray
+    val bitmap: Bitmap
 )
 
 data class NativeCaptionLanguage(

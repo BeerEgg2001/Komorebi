@@ -32,10 +32,12 @@ add_library(
 
 # 3. ログ出力用のライブラリをリンク（Android の Logcat 用）
 find_library(log-lib log)
+find_library(jnigraphics-lib jnigraphics)
 
 target_link_libraries(
     komorebi-native
     ${log-lib}
+    ${jnigraphics-lib}
     aribcaption::aribcaption
 )
 

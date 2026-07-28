@@ -1,8 +1,8 @@
 #include <jni.h>
+#include <android/bitmap.h>
 #include <string>
 #include <vector>
 #include <unordered_set>
-#include <memory>
 #include <algorithm>
 #include <cstring>
 #include <mutex>
@@ -28,6 +28,88 @@ struct AribCaptionDecoderContext {
     std::mutex mutex;
 };
 
+jobject createAndroidBitmapFromRgba(
+    JNIEnv* env,
+    int width,
+    int height,
+    int sourceStride,
+    const uint8_t* source,
+    size_t sourceSize
+) {
+    if (width <= 0 || height <= 0 || source == nullptr || sourceStride < width * 4) {
+        return nullptr;
+    }
+
+    const size_t rowBytes = static_cast<size_t>(width) * 4;
+    const size_t requiredSize =
+        static_cast<size_t>(height - 1) * static_cast<size_t>(sourceStride) + rowBytes;
+    if (sourceSize < requiredSize) {
+        return nullptr;
+    }
+
+    jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
+    jclass configClass = env->FindClass("android/graphics/Bitmap$Config");
+    if (bitmapClass == nullptr || configClass == nullptr) {
+        if (bitmapClass != nullptr) env->DeleteLocalRef(bitmapClass);
+        if (configClass != nullptr) env->DeleteLocalRef(configClass);
+        return nullptr;
+    }
+
+    jfieldID argb8888Field = env->GetStaticFieldID(
+        configClass,
+        "ARGB_8888",
+        "Landroid/graphics/Bitmap$Config;");
+    jmethodID createBitmapMethod = env->GetStaticMethodID(
+        bitmapClass,
+        "createBitmap",
+        "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+    jobject config = argb8888Field == nullptr
+        ? nullptr
+        : env->GetStaticObjectField(configClass, argb8888Field);
+    jobject bitmap = createBitmapMethod == nullptr || config == nullptr
+        ? nullptr
+        : env->CallStaticObjectMethod(
+            bitmapClass,
+            createBitmapMethod,
+            static_cast<jint>(width),
+            static_cast<jint>(height),
+            config);
+
+    if (config != nullptr) env->DeleteLocalRef(config);
+    env->DeleteLocalRef(configClass);
+    env->DeleteLocalRef(bitmapClass);
+    if (bitmap == nullptr || env->ExceptionCheck()) {
+        return bitmap;
+    }
+
+    AndroidBitmapInfo info{};
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+        info.width != static_cast<uint32_t>(width) ||
+        info.height != static_cast<uint32_t>(height) ||
+        info.stride < rowBytes) {
+        env->DeleteLocalRef(bitmap);
+        return nullptr;
+    }
+
+    void* pixels = nullptr;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        pixels == nullptr) {
+        env->DeleteLocalRef(bitmap);
+        return nullptr;
+    }
+
+    auto* destination = static_cast<uint8_t*>(pixels);
+    for (int row = 0; row < height; ++row) {
+        std::memcpy(
+            destination + static_cast<size_t>(row) * info.stride,
+            source + static_cast<size_t>(row) * static_cast<size_t>(sourceStride),
+            rowBytes);
+    }
+    AndroidBitmap_unlockPixels(env, bitmap);
+    return bitmap;
+}
+
 jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t fallbackPtsMs) {
     int64_t duration = result.duration == ARIBCC_DURATION_INDEFINITE ? -1 : result.duration;
     int64_t pts = result.pts < 0 ? fallbackPtsMs : result.pts;
@@ -38,21 +120,21 @@ jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t f
     jobject images = env->NewObject(arrayListClass, arrayListCtor, static_cast<jint>(result.image_count));
 
     jclass imageClass = env->FindClass("com/beeregg2001/komorebi/ui/subtitle/NativeCaptionImage");
-    jmethodID imageCtor = env->GetMethodID(imageClass, "<init>", "(IIIII[B)V");
+    jmethodID imageCtor = env->GetMethodID(
+        imageClass,
+        "<init>",
+        "(IIIILandroid/graphics/Bitmap;)V");
 
     for (uint32_t i = 0; i < result.image_count; ++i) {
         aribcc_image_t& image = result.images[i];
-        jsize bitmapSize = image.bitmap && image.bitmap_size > 0
-            ? static_cast<jsize>(image.bitmap_size)
-            : 0;
-        jbyteArray rgba = env->NewByteArray(bitmapSize);
-        if (bitmapSize > 0) {
-            env->SetByteArrayRegion(
-                rgba,
-                0,
-                bitmapSize,
-                reinterpret_cast<const jbyte*>(image.bitmap));
-        }
+        jobject bitmap = createAndroidBitmapFromRgba(
+            env,
+            image.width,
+            image.height,
+            image.stride,
+            image.bitmap,
+            image.bitmap_size);
+        if (bitmap == nullptr) continue;
         jobject captionImage = env->NewObject(
             imageClass,
             imageCtor,
@@ -60,11 +142,10 @@ jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t f
             static_cast<jint>(image.dst_y),
             static_cast<jint>(image.width),
             static_cast<jint>(image.height),
-            static_cast<jint>(image.stride),
-            rgba);
+            bitmap);
         env->CallBooleanMethod(images, arrayListAdd, captionImage);
         env->DeleteLocalRef(captionImage);
-        env->DeleteLocalRef(rgba);
+        env->DeleteLocalRef(bitmap);
     }
 
     jclass cueClass = env->FindClass("com/beeregg2001/komorebi/ui/subtitle/NativeCaptionCue");

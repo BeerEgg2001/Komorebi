@@ -1,6 +1,5 @@
 package com.beeregg2001.komorebi.ui.subtitle
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,8 +79,8 @@ fun NativeCaptionOverlay(
     if (!visible || cue == null) return
 
     val bitmaps = remember(cue) {
-        cue.images.mapNotNull { image ->
-            image.toBitmap()?.let { image to it.asImageBitmap() }
+        cue.images.map { image ->
+            image to image.bitmap.asImageBitmap()
         }
     }
 
@@ -102,23 +101,4 @@ fun NativeCaptionOverlay(
             )
         }
     }
-}
-
-private fun NativeCaptionImage.toBitmap(): Bitmap? {
-    if (width <= 0 || height <= 0 || rgba.isEmpty()) return null
-    val pixels = IntArray(width * height)
-    var out = 0
-    for (row in 0 until height) {
-        var offset = row * stride
-        for (col in 0 until width) {
-            if (offset + 3 >= rgba.size) return null
-            val r = rgba[offset].toInt() and 0xff
-            val g = rgba[offset + 1].toInt() and 0xff
-            val b = rgba[offset + 2].toInt() and 0xff
-            val a = rgba[offset + 3].toInt() and 0xff
-            pixels[out++] = (a shl 24) or (r shl 16) or (g shl 8) or b
-            offset += 4
-        }
-    }
-    return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
 }
