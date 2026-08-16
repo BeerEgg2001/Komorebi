@@ -15,14 +15,17 @@ class EpgStationReserveRepository @Inject constructor(
     private val channelCache: EpgStationChannelCache
 ) : ReserveProvider {
     /** EPGStation のチャンネルを共通の予約チャンネルへ変換する。 */
-    private fun mapChannel(channel: EsChannelItem?, allChannels: List<EsChannelItem>): ReserveChannel {
+    private fun mapChannel(
+        channel: EsChannelItem?,
+        index: EpgStationDataMapper.ChannelIndex
+    ): ReserveChannel {
         return ReserveChannel(
             id = channel?.let { EpgStationDataMapper.buildChannelId(it.id) } ?: "",
             network_Id = channel?.networkId ?: 0,
             service_Id = channel?.serviceId ?: 0,
-            channelNumber = channel?.let { EpgStationDataMapper.channelNumber(it, allChannels) } ?: "",
+            channelNumber = channel?.let { index.numberOf(it) } ?: "",
             displayChannelId = channel?.let { EpgStationDataMapper.buildChannelId(it.id) },
-            type = channel?.channelType ?: "",
+            type = channel?.let { EpgStationDataMapper.normalizeChannelType(it.channelType) } ?: "",
             name = channel?.name ?: "不明なチャンネル"
         )
     }
@@ -30,13 +33,12 @@ class EpgStationReserveRepository @Inject constructor(
     /** 予約一覧をチャンネル情報と結合して取得する。 */
     override suspend fun getReserves(): Result<List<ReserveItem>> {
         return try {
-            val channels = channelCache.getChannels()
-            val channelMap = channels.associateBy { it.id }
+            val index = channelCache.getChannelIndex()
             val now = System.currentTimeMillis()
             Result.success(api.getReserves().reserves.map { reserve ->
                 ReserveItem(
                     id = reserve.id,
-                    channel = mapChannel(channelMap[reserve.channelId], channels),
+                    channel = mapChannel(index.byId[reserve.channelId], index),
                     program = ReserveProgramDetail(
                         id = reserve.programId?.toString() ?: "",
                         title = reserve.name.ifBlank { "番組情報なし" },

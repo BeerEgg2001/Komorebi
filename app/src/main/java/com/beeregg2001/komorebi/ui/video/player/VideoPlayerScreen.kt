@@ -48,6 +48,16 @@ import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
 
+/**
+ * EPGStation の無変換再生 URL (`/api/videos/{videoFileId}`) かどうかを判定する。
+ * このURLは HLS ではなく MPEG-TS がそのまま流れてくるため、HLS として解釈させてはいけない。
+ * KonomiTV の `/api/videos/{id}/thumbnail` 等とは違い、数値で終わる点で見分ける。
+ */
+private val EPG_STATION_DIRECT_VIDEO_REGEX = Regex("/api/videos/\\d+$")
+
+private fun isEpgStationDirectVideoUrl(url: String): Boolean =
+    EPG_STATION_DIRECT_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -256,7 +266,10 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
+                    if (isEpgStationDirectVideoUrl(newUrl)) {
+                        // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+                        mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+                    } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
                             "konomi.tv"
                         ) || newUrl.contains("m3u8")
                     ) {
@@ -358,7 +371,10 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
+            if (isEpgStationDirectVideoUrl(url)) {
+                // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+            } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
                     "m3u8"
                 )
             ) {

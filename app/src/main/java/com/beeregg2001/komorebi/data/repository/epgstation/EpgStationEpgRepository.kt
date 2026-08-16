@@ -32,8 +32,8 @@ class EpgStationEpgRepository @Inject constructor(
                 endAt = end,
                 broadcastFlags = EpgStationDataMapper.buildBroadcastFlags(type)
             )
-            val channels = channelCache.getChannels()
-            schedules.map { EpgStationDataMapper.toEpgWrapper(it, channels) }
+            val index = channelCache.getChannelIndex()
+            schedules.map { EpgStationDataMapper.toEpgWrapper(it, index) }
                 .sortedBy { it.channel.channel_number }
         } catch (e: Exception) {
             throw Exception(

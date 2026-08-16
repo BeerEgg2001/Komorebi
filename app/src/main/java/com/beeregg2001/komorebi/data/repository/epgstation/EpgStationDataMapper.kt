@@ -10,16 +10,22 @@ import java.time.format.DateTimeFormatter
 
 /** EPGStation の DTO を Komorebi 共通モデルへ変換するマッパー。 */
 object EpgStationDataMapper {
-    /** 番組表取得に必要な放送波フラグを、指定された種別に応じて組み立てる。 */
+    /**
+     * 番組表取得に必要な放送波フラグを、指定された種別に応じて組み立てる。
+     * /api/schedules は GR/BS/CS/SKY/BS4K/CS4K/NW1〜NW40 が全て必須クエリのため、
+     * 絞り込まない場合も含めて必ず全キーを埋める。
+     */
     fun buildBroadcastFlags(channelType: String? = null): Map<String, Boolean> {
         val type = channelType?.uppercase()
         val broadcastTypes = listOf("GR", "BS", "CS", "SKY", "BS4K", "CS4K") +
             (1..40).map { "NW$it" }
         return broadcastTypes.associateWith { broadcastType ->
-            type == null || when {
-                type == broadcastType -> true
-                type.startsWith("NW") && broadcastType == type -> true
-                else -> false
+            when {
+                // 種別指定なしなら全放送波を対象にする
+                type == null -> true
+                // 地上波指定のときは、他地域の地上波 (NW*) も併せて取得する
+                type == "GR" -> isTerrestrial(broadcastType)
+                else -> type == broadcastType
             }
         }
     }
@@ -61,7 +67,14 @@ object EpgStationDataMapper {
         }
     }
 
-    /** extended または rawExtended を共通の見出し付き詳細へ変換する。 */
+    /**
+     * extended または rawExtended を共通の見出し付き詳細へ変換する。
+     *
+     * rawExtended (Mirakurun 由来の見出し→本文の連想配列) があればそれをそのまま使う。
+     * 無い場合の extended は
+     * 「- 番組内容\n本文…\n- 出演者\n本文…」のように行頭 "- " が見出しになっているため、
+     * その区切りで組み立てる。どちらの形式でもない場合は全文を「番組内容」として扱う。
+     */
     private fun mapDetail(extended: String?, rawExtended: Map<String, String>?): Map<String, String>? {
         if (!rawExtended.isNullOrEmpty()) {
             return rawExtended
@@ -69,14 +82,44 @@ object EpgStationDataMapper {
         if (extended.isNullOrBlank()) {
             return null
         }
+        val body = stripDropLog(extended)
+        if (body.isBlank()) {
+            return null
+        }
+
         val detail = linkedMapOf<String, String>()
-        stripDropLog(extended).lineSequence().forEach { line ->
-            val parts = line.split(Regex("[：:]"), limit = 2)
-            if (parts.size == 2 && parts[0].isNotBlank()) {
-                detail[parts[0].trim()] = parts[1].trim()
+        var currentHeading: String? = null
+        val buffer = StringBuilder()
+
+        fun flush() {
+            val heading = currentHeading ?: return
+            detail[heading] = buffer.toString().trim()
+            buffer.clear()
+        }
+
+        body.lineSequence().forEach { line ->
+            val heading = line.trim().removePrefix("-").trim().takeIf {
+                line.trimStart().startsWith("- ") && it.isNotBlank()
+            }
+            if (heading != null) {
+                flush()
+                currentHeading = heading
+            } else if (currentHeading != null) {
+                buffer.appendLine(line)
             }
         }
-        return if (detail.isEmpty()) mapOf("番組内容" to extended) else detail
+        flush()
+
+        // 見出しが取れなかった場合は「見出し：本文」形式を試し、それも無ければ全文をそのまま返す
+        if (detail.isEmpty()) {
+            body.lineSequence().forEach { line ->
+                val parts = line.split(Regex("[：:]"), limit = 2)
+                if (parts.size == 2 && parts[0].isNotBlank()) {
+                    detail[parts[0].trim()] = parts[1].trim()
+                }
+            }
+        }
+        return if (detail.isEmpty()) mapOf("番組内容" to body) else detail
     }
 
     /**
@@ -105,6 +148,26 @@ object EpgStationDataMapper {
         isTerrestrial(channelType) -> "GR"
         channelType == "CS4K" -> "BS4K"
         else -> channelType
+    }
+
+    /**
+     * チャンネル番号とサブチャンネル判定の計算結果を持ち回るための索引。
+     *
+     * どちらも「チャンネル一覧全体」を見ないと決められないため、素直に書くと
+     * 録画 1 件ごとに全チャンネル (数百件) の絞り込みとソートが走ってしまう。
+     * 録画の全件同期では件数 × チャンネル数の計算量になるので、一度だけ作って使い回す。
+     */
+    class ChannelIndex(channels: List<EsChannelItem>) {
+        private val numbers: Map<Long, String> =
+            channels.associate { it.id to channelNumber(it, channels) }
+        private val subFlags: Map<Long, Boolean> =
+            channels.associate { it.id to isSubChannel(it, channels) }
+        val byId: Map<Long, EsChannelItem> = channels.associateBy { it.id }
+
+        fun numberOf(channel: EsChannelItem): String =
+            numbers[channel.id] ?: channelNumber(channel, byId.values.toList())
+
+        fun isSub(channel: EsChannelItem): Boolean = subFlags[channel.id] ?: false
     }
 
     /** EDCB と同じ規則でチャンネル番号を算出する。 */
@@ -145,21 +208,24 @@ object EpgStationDataMapper {
         schedules: List<EsSchedule> = emptyList()
     ): ChannelApiResponse {
         val now = System.currentTimeMillis()
+        val index = ChannelIndex(channels)
+        // 放送中番組はチャンネル ID から一発で引けるようにしておく
+        val programsByChannel = schedules.associate { it.channel.id to it.programs }
         fun convert(channel: EsChannelItem): Channel {
-            val programs = schedules.firstOrNull { it.channel.id == channel.id }?.programs.orEmpty()
+            val programs = programsByChannel[channel.id].orEmpty()
             val current = programs.firstOrNull { it.startAt <= now && now < it.endAt }
             val next = programs.filter { it.startAt >= now }.minByOrNull { it.startAt }
             return Channel(
                 id = buildChannelId(channel.id),
                 displayChannelId = buildChannelId(channel.id),
                 name = channel.name,
-                channelNumber = channelNumber(channel, channels),
+                channelNumber = index.numberOf(channel),
                 networkId = channel.networkId,
                 serviceId = channel.serviceId,
                 transportStreamId = 0,
                 type = normalizeChannelType(channel.channelType),
                 isWatchable = true,
-                is_subchannel = isSubChannel(channel, channels),
+                is_subchannel = index.isSub(channel),
                 isDisplay = true,
                 programPresent = toProgram(current),
                 programFollowing = toProgram(next),
@@ -169,13 +235,13 @@ object EpgStationDataMapper {
         }
         fun byType(type: String): List<Channel> = channels
             .filter { it.channelType == type }
-            .sortedBy { channelNumber(it, channels) }
+            .sortedBy { index.numberOf(it) }
             .map(::convert)
         return ChannelApiResponse(
             // GR と NW1〜NW40 (他地域の地上波) はまとめて地上波タブに出す。
             terrestrial = channels
                 .filter { isTerrestrial(it.channelType) }
-                .sortedBy { channelNumber(it, channels) }
+                .sortedBy { index.numberOf(it) }
                 .map(::convert),
             bs = byType("BS"),
             cs = byType("CS"),
@@ -202,7 +268,7 @@ object EpgStationDataMapper {
     }
 
     /** EPGStation の番組表を EpgChannelWrapper へ変換する。 */
-    fun toEpgWrapper(schedule: EsSchedule, allChannels: List<EsChannelItem>): EpgChannelWrapper {
+    fun toEpgWrapper(schedule: EsSchedule, index: ChannelIndex): EpgChannelWrapper {
         val channel = schedule.channel
         val epgChannel = EpgChannel(
             id = buildChannelId(channel.id),
@@ -211,11 +277,11 @@ object EpgStationDataMapper {
             service_id = channel.serviceId.toInt(),
             transport_stream_id = 0,
             remocon_id = channel.remoteControlKeyId ?: 0,
-            channel_number = channelNumber(channel, allChannels),
+            channel_number = index.numberOf(channel),
             type = normalizeChannelType(channel.channelType),
             name = channel.name,
             jikkyo_force = 0,
-            is_subchannel = isSubChannel(channel, allChannels),
+            is_subchannel = index.isSub(channel),
             is_radiochannel = false,
             is_watchable = true
         )
@@ -247,7 +313,7 @@ object EpgStationDataMapper {
     fun toRecordedProgram(
         item: EsRecordedItem,
         channel: EsChannelItem?,
-        allChannels: List<EsChannelItem>,
+        index: ChannelIndex,
         mapping: EsSeriesMappingValue? = null,
         chapters: List<EsVideoChapter> = emptyList(),
         durationOverride: Double? = null,
@@ -285,7 +351,7 @@ object EpgStationDataMapper {
                 displayChannelId = buildChannelId(it.id),
                 type = normalizeChannelType(it.channelType),
                 name = item.tsChannelName ?: item.channelName ?: it.name.ifBlank { "不明なチャンネル" },
-                channelNumber = channelNumber(it, allChannels)
+                channelNumber = index.numberOf(it)
             )
         } ?: RecordedChannel(
             id = "",
@@ -331,7 +397,12 @@ object EpgStationDataMapper {
             directThumbnailUrl = null,
             apiThumbnailUrl = item.thumbnails?.firstOrNull()?.let {
                 UrlBuilder.getEpgStationThumbnailUrl(ip, port, it)
-            }
+            },
+            seriesId = series?.seriesId,
+            episodeNumber = series?.episodeNumber,
+            episodeLabel = series?.episodeLabel,
+            episodeTitle = series?.episodeTitle,
+            airType = series?.airType
         )
     }
 }

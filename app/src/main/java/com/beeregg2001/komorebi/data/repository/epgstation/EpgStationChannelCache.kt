@@ -19,6 +19,20 @@ class EpgStationChannelCache @Inject constructor(
     private val mutex = Mutex()
     private var channels: List<EsChannelItem> = emptyList()
     private var fetchedAt = 0L
+    private var index: EpgStationDataMapper.ChannelIndex? = null
+
+    /**
+     * チャンネル番号・サブチャンネル判定の索引を返す。
+     * 一覧が更新されたときだけ作り直し、録画 1 件ごとの再計算を避ける。
+     */
+    suspend fun getChannelIndex(): EpgStationDataMapper.ChannelIndex {
+        val current = getChannels()
+        return mutex.withLock {
+            index?.takeIf { it.byId.size == current.size } ?: EpgStationDataMapper.ChannelIndex(current).also {
+                index = it
+            }
+        }
+    }
 
     /** 有効期限内の一覧を返し、期限切れなら一度だけ再取得する。 */
     suspend fun getChannels(): List<EsChannelItem> {
