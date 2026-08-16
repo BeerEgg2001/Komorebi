@@ -524,6 +524,21 @@ class SettingsViewModel @Inject constructor(
         ); forceSyncStreamQualities()
     }
 
+    fun updateEpgStationIp(ip: String) = viewModelScope.launch(Dispatchers.IO) {
+        val oldIp = settingsRepository.epgStationIp.first()
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_IP, ip)
+        // 接続先が変わったら録画一覧を作り直す必要があるため、全同期をかけ直す
+        if (oldIp.isNotBlank() && oldIp != ip) {
+            syncEngine.launchSyncAllRecords(forceFullSync = true)
+        }
+        forceSyncStreamQualities()
+    }
+
+    fun updateEpgStationPort(port: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_PORT, port)
+        forceSyncStreamQualities()
+    }
+
     fun updateMirakurunIp(ip: String) {
         viewModelScope.launch(Dispatchers.IO) {
             settingsRepository.saveString(

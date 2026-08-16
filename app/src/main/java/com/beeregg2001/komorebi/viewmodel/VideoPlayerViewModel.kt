@@ -102,6 +102,17 @@ class VideoPlayerViewModel @Inject constructor(
                     }
                 } else if (backend == "KONOMITV") {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                } else if (backend == "EPGSTATION") {
+                    val qualities = recordProvider.getStreamQualities()
+                    _availableQualities.value = qualities.ifEmpty {
+                        listOf(
+                            StreamQuality(
+                                label = "そのまま再生 (無変換)",
+                                value = "direct",
+                                isRawTs = true
+                            )
+                        )
+                    }
                 } else {
                     _availableQualities.value = listOf(
                         StreamQuality(

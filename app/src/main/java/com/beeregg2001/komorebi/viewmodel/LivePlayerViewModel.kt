@@ -31,6 +31,8 @@ import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationDataMapper
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -69,6 +71,7 @@ class LivePlayerViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
+    private val epgStationLiveRepository: EpgStationLiveRepository,
     private val settingsRepository: SettingsRepository,
     private val livePlayerFactory: LivePlayerFactory,
     private val liveJikkyoManager: LiveJikkyoManager
@@ -212,6 +215,17 @@ class LivePlayerViewModel @Inject constructor(
                     }
                 } else if (source == StreamSource.KONOMITV) {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                } else if (source == StreamSource.EPGSTATION) {
+                    _availableQualities.value =
+                        epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
+                            listOf(
+                                StreamQuality(
+                                    label = "そのまま視聴 (m2ts)",
+                                    value = "m2ts:0",
+                                    isRawTs = true
+                                )
+                            )
+                        }
                 } else {
                     _availableQualities.value = listOf(
                         StreamQuality(
@@ -284,12 +298,14 @@ class LivePlayerViewModel @Inject constructor(
 
         val mainSource = when (backendStr) {
             "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
             "MIRAKURUN_ONLY", "MIRAKURUN" -> StreamSource.MIRAKURUN
             else -> StreamSource.KONOMITV
         }
 
         val preferredSource = when (prefStr) {
             "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
             "MIRAKURUN" -> StreamSource.MIRAKURUN
             "KONOMITV" -> mainSource
             else -> mainSource
@@ -463,7 +479,10 @@ class LivePlayerViewModel @Inject constructor(
                     _mainPlayer.value = newPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
                         withContext(Dispatchers.Main) {
                             _mainSseDetail.value = "トランスコード開始を待機中..."
                         }
@@ -480,7 +499,11 @@ class LivePlayerViewModel @Inject constructor(
                     )
 
                     withContext(Dispatchers.Main) {
-                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
                             _mainSseStatus.value = "ONAir"; _mainSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
                             startMainSse(
@@ -555,7 +578,10 @@ class LivePlayerViewModel @Inject constructor(
                     _dualPlayer.value = newDualPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
                         withContext(Dispatchers.Main) {
                             _dualSseDetail.value = "トランスコード開始を待機中..."
                         }
@@ -572,7 +598,11 @@ class LivePlayerViewModel @Inject constructor(
                     )
 
                     withContext(Dispatchers.Main) {
-                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
                             _dualSseStatus.value = "ONAir"; _dualSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
                             startDualSse(
@@ -705,6 +735,38 @@ class LivePlayerViewModel @Inject constructor(
                 channel.displayChannelId,
                 quality.value
             )
+
+            StreamSource.EPGSTATION -> {
+                factory.tsArgs = arrayOf(
+                    "-x",
+                    "18/38/39",
+                    "-n",
+                    channel.serviceId.toString(),
+                    "-a",
+                    "13",
+                    "-b",
+                    "4",
+                    "-c",
+                    "5",
+                    "-u",
+                    "1",
+                    "-d",
+                    "13"
+                )
+                factory.requestHeaders = cfAccessHeaders
+                val channelId = EpgStationDataMapper.parseChannelId(channel.id)
+                val mode = quality.value.substringAfter(":", "").toIntOrNull() ?: 0
+                if (config is BackendConfig.EpgStation && channelId != null) {
+                    UrlBuilder.getEpgStationLiveM2tsUrl(
+                        config.ip,
+                        config.port,
+                        channelId,
+                        mode
+                    )
+                } else {
+                    ""
+                }
+            }
         }
     }
 
@@ -721,7 +783,7 @@ class LivePlayerViewModel @Inject constructor(
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
             val mediaSource =
-                if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect)) {
+                if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION || (source == StreamSource.EDCB && isEdcbDirect)) {
                     val extractorsFactory = ExtractorsFactory {
                         arrayOf(
                             TsExtractor(

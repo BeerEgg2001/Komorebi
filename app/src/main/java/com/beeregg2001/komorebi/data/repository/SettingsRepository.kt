@@ -238,6 +238,11 @@ class SettingsRepository @Inject constructor(
                 ip = prefs[EDCB_IP] ?: ""
                 port = prefs[EDCB_PORT] ?: "4510"
             }
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> {
+                ip = prefs[EPGSTATION_IP] ?: ""
+                port = prefs[EPGSTATION_PORT] ?: "8888"
+            }
         }
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
             ip = "http://$ip"
@@ -307,6 +312,10 @@ class SettingsRepository @Inject constructor(
 
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
                 ip = prefs[EDCB_IP] ?: "", port = prefs[EDCB_PORT] ?: "4510"
+            )
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> com.beeregg2001.komorebi.data.model.BackendConfig.EpgStation(
+                ip = prefs[EPGSTATION_IP] ?: "", port = prefs[EPGSTATION_PORT] ?: "8888"
             )
         }
     }
