@@ -139,18 +139,82 @@ data class EsNextUpResult(
     val hasMoreSeries: Boolean = false
 )
 
-data class EsSeriesListResult(val items: List<EsSeriesListItem> = emptyList(), val total: Int = 0)
-data class EsSeriesListItem(val id: Int = 0, val title: String = "")
-data class EsSeriesDetail(val id: Int = 0, val title: String = "", val recorded: List<EsSeriesRecordedRow> = emptyList())
+data class EsSeriesListResult(
+    val items: List<EsSeriesListItem> = emptyList(),
+    val total: Int = 0
+)
+
+data class EsSeriesListItem(
+    val id: Int = 0,
+    val title: String = "",
+    val normalizedTitle: String = "",
+    val titleKana: String? = null,
+    val mediaType: String = "",
+    val preferredChannelId: Long? = null,
+    val updatedAt: Long = 0,
+    val seasonYear: Int? = null,
+    val seasonName: String? = null,
+    val seasonSource: String? = null,
+    val titleSource: String? = null,
+    val recordedCount: Int = 0,
+    val totalFileSize: Long = 0,
+    val firstAiredAt: Long? = null,
+    val lastAiredAt: Long? = null,
+    val unwatchedCount: Int = 0,
+    val totalEpisodes: Int? = null,
+    val missingEpisodeCount: Int = 0,
+    val duplicateEpisodeCount: Int = 0,
+    val isOnAir: Boolean = false,
+    val hasImage: Boolean = false,
+    val imageSource: String? = null,
+    val imageCopyright: String? = null,
+    val origin: String = "local"
+)
+
+data class EsSeriesDetail(
+    val id: Int = 0,
+    val title: String = "",
+    val normalizedTitle: String = "",
+    val titleKana: String? = null,
+    val mediaType: String = "",
+    val preferredChannelId: Long? = null,
+    val updatedAt: Long = 0,
+    val seasonYear: Int? = null,
+    val seasonName: String? = null,
+    val seasonSource: String? = null,
+    val titleSource: String? = null,
+    val recordedCount: Int = 0,
+    val totalFileSize: Long = 0,
+    val firstAiredAt: Long? = null,
+    val lastAiredAt: Long? = null,
+    val unwatchedCount: Int = 0,
+    val totalEpisodes: Int? = null,
+    val missingEpisodeCount: Int = 0,
+    val duplicateEpisodeCount: Int = 0,
+    val isOnAir: Boolean = false,
+    val hasImage: Boolean = false,
+    val imageSource: String? = null,
+    val imageCopyright: String? = null,
+    val origin: String = "local",
+    val recorded: List<EsSeriesRecordedRow> = emptyList()
+)
+
 data class EsSeriesRecordedRow(
     val recordedId: Int = 0,
+    val channelId: Long = 0,
+    val channelName: String? = null,
+    val recordedTitle: String = "",
+    val startAt: Long = 0,
+    val endAt: Long = 0,
+    val episodeId: Int? = null,
     val seasonNumber: Int? = null,
     val episodeNumber: Int? = null,
     val episodeLabel: String? = null,
     val episodeTitle: String? = null,
     val episodeComment: String? = null,
     val episodeCommentSource: String? = null,
-    val airType: String = ""
+    val airType: String = "",
+    val confidence: Double = 0.0
 )
 data class EsSeriesMappingValue(
     val recordedId: Int = 0,

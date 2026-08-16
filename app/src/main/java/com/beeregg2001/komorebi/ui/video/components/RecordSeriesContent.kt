@@ -243,6 +243,42 @@ fun RecordSeriesContent(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val seasonLabel = series.seasonYear?.let { year ->
+                                    val season = when (series.seasonName) {
+                                        "WINTER" -> "冬"
+                                        "SPRING" -> "春"
+                                        "SUMMER" -> "夏"
+                                        "AUTUMN" -> "秋"
+                                        else -> ""
+                                    }
+                                    "${year}年${season}"
+                                }
+                                Text(
+                                    text = listOfNotNull(
+                                        seasonLabel,
+                                        if (series.totalEpisodes != null) "${series.programCount} / ${series.totalEpisodes}話" else "${series.programCount}話"
+                                    ).joinToString("  "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary
+                                )
+                                if (series.unwatchedCount > 0) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "未視聴 ${series.unwatchedCount}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else colors.accent
+                                    )
+                                }
+                                if (series.isOnAir) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "放送中",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isFocused) (if (colors.isDark) Color.Black else Color.White) else Color(0xFFE53935)
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.height(2.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(

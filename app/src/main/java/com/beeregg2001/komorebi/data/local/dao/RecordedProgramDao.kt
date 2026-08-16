@@ -79,6 +79,12 @@ interface RecordedProgramDao {
     @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY start_time DESC")
     fun searchPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
 
+    @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY episode_number IS NULL, episode_number ASC, start_time ASC")
+    fun searchSeriesPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT id FROM recorded_programs WHERE (title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%') ORDER BY CASE WHEN playback_position <= 5.0 THEN 0 ELSE 1 END, episode_number IS NULL, episode_number ASC, start_time ASC LIMIT 1")
+    suspend fun getSeriesFocusProgramId(keyword: String): Int?
+
     @Query("SELECT * FROM recorded_programs WHERE genres LIKE '%' || :genre || '%' ORDER BY start_time DESC")
     fun getPagingSourceByGenre(genre: String): PagingSource<Int, RecordedProgramEntity>
 

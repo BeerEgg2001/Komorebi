@@ -74,6 +74,14 @@ import com.beeregg2001.komorebi.viewmodel.SeriesInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private fun seasonNameJa(name: String): String = when (name) {
+    "WINTER" -> "冬"
+    "SPRING" -> "春"
+    "SUMMER" -> "夏"
+    "AUTUMN" -> "秋"
+    else -> name
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -180,6 +188,10 @@ fun RecordListScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isListView by viewModel.isListView.collectAsState()
     val selectedSeriesGenre by viewModel.selectedSeriesGenre.collectAsState()
+    val availableSeasons by viewModel.availableSeasons.collectAsState()
+    val selectedSeason by viewModel.selectedSeason.collectAsState()
+    val isOnAirOnly by viewModel.isOnAirOnly.collectAsState()
+    val seriesFocusProgramId by viewModel.seriesFocusProgramId.collectAsState()
     val programDetail by viewModel.programDetail.collectAsState()
     val isRecLoading by viewModel.isRecordingLoading.collectAsState()
 
@@ -341,6 +353,10 @@ fun RecordListScreen(
 
             else -> {}
         }
+    }
+
+    LaunchedEffect(seriesFocusProgramId) {
+        seriesFocusProgramId?.let { ticketManager.issue(FocusTicket.TARGET_ID, it) }
     }
 
     LaunchedEffect(Unit) {
@@ -524,6 +540,49 @@ fun RecordListScreen(
                         }
                     }) {
 
+                if (selectedCategory == RecordCategory.SERIES && availableSeasons.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp, end = 28.dp)
+                            .zIndex(2f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = {
+                                val next = if (selectedSeason == null) {
+                                    availableSeasons.firstOrNull()
+                                } else {
+                                    val index = availableSeasons.indexOf(selectedSeason)
+                                    availableSeasons.getOrNull(index + 1)
+                                }
+                                viewModel.setSeasonFilter(next)
+                            },
+                            colors = ClickableSurfaceDefaults.colors(containerColor = colors.surface),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp))
+                        ) {
+                            Text(
+                                text = selectedSeason?.let { "${it.first}年${seasonNameJa(it.second)}" } ?: "クール: すべて",
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                color = colors.textPrimary
+                            )
+                        }
+                        Surface(
+                            onClick = { viewModel.setOnAirOnly(!isOnAirOnly) },
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = if (isOnAirOnly) colors.accent else colors.surface
+                            ),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp))
+                        ) {
+                            Text(
+                                text = if (isOnAirOnly) "放送中のみ: ON" else "放送中のみ",
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                color = if (isOnAirOnly) Color.White else colors.textPrimary
+                            )
+                        }
+                    }
+                }
+
                 key(stateKey, isListView) {
                     if (isListView) {
                         when (selectedCategory) {
@@ -535,7 +594,7 @@ fun RecordListScreen(
                                     seriesList = list,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { executeSearch(it) },
+                                    onSeriesClick = { viewModel.searchSeries(it) },
                                     onOpenNavPane = handleOpenNavPane,
                                     isListView = true,
                                     firstItemFocusRequester = focuses.firstItem,
@@ -609,7 +668,7 @@ fun RecordListScreen(
                                     seriesList = list,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { executeSearch(it) },
+                                    onSeriesClick = { viewModel.searchSeries(it) },
                                     onOpenNavPane = handleOpenNavPane,
                                     firstItemFocusRequester = focuses.firstItem,
                                     contentContainerFocusRequester = focuses.contentContainer,

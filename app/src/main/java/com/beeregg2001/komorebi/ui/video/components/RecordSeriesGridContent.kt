@@ -206,6 +206,38 @@ fun RecordSeriesGridContent(
                                 )
                             )
                     )
+                    if (series.unwatchedCount > 0 || series.isOnAir) {
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (series.unwatchedCount > 0) {
+                                Text(
+                                    text = "未視聴 ${series.unwatchedCount}",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .background(Color(0xFFE53935), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 3.dp)
+                                )
+                            }
+                            if (series.isOnAir) {
+                                Text(
+                                    text = "放送中",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .background(Color(0xFF1E88E5), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -222,7 +254,7 @@ fun RecordSeriesGridContent(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "${series.programCount}",
+                            text = if (series.totalEpisodes != null) "${series.programCount} / ${series.totalEpisodes}" else "${series.programCount}",
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold

@@ -21,6 +21,8 @@ interface EpgStationApi {
         @Query("startAt") startAt: Long,
         @Query("endAt") endAt: Long,
         @Query("isHalfWidth") isHalfWidth: Boolean = false,
+        // 見出し付きの番組詳細 (rawExtended) を受け取るために必ず true で投げる
+        @Query("needsRawExtended") needsRawExtended: Boolean = true,
         @QueryMap broadcastFlags: Map<String, Boolean>
     ): List<EsSchedule>
 
@@ -54,6 +56,26 @@ interface EpgStationApi {
         @Path("recordedId") recordedId: Int,
         @Query("isHalfWidth") isHalfWidth: Boolean = false
     ): EsNextUpResult?
+
+    @GET("api/series")
+    suspend fun getSeries(
+        @Query("keyword") keyword: String? = null,
+        @Query("offset") offset: Int = 0,
+        @Query("limit") limit: Int = 100,
+        @Query("sort") sort: String? = null,
+        @Query("order") order: String? = null,
+        @Query("seasonYear") seasonYear: Int? = null,
+        @Query("seasonName") seasonName: String? = null,
+        @Query("status") status: String? = null,
+        @Query("origin") origin: String? = null,
+        @Query("hasMissing") hasMissing: Boolean? = null
+    ): Response<EsSeriesListResult>
+
+    @GET("api/series/{seriesId}")
+    suspend fun getSeriesDetail(@Path("seriesId") seriesId: Int): Response<EsSeriesDetail>
+
+    @GET("api/series/{seriesId}/image")
+    suspend fun getSeriesImage(@Path("seriesId") seriesId: Int): okhttp3.ResponseBody
 
     @GET("api/series/mappings/{recordedId}")
     suspend fun getSeriesMapping(@Path("recordedId") recordedId: Int): Response<EsSeriesMappingValue>

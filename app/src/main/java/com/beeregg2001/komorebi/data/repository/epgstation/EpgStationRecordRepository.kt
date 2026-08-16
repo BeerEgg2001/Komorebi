@@ -22,10 +22,18 @@ class EpgStationRecordRepository @Inject constructor(
     private var streamId: Int? = null
     private var qualities: List<StreamQuality>? = null
 
+    /**
+     * 録画 ID (recordedId) から再生対象のビデオファイル ID (videoFileId) を引くための対応表。
+     * EPGStation ではこの2つが別の採番なのに対し、アプリ側は呼び出し箇所によって
+     * 録画 ID を渡してくることがある (再生画面のシーク処理など) ため、ここで吸収する。
+     */
+    private val videoFileIdByRecordedId = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+
     /** 録画 DTO を共通モデルへ変換し、詳細時だけ付加情報を取得する。 */
     private suspend fun mapRecorded(item: EsRecordedItem, includeDetails: Boolean): RecordedProgram {
         val file = item.videoFiles?.firstOrNull { it.type == "ts" }
             ?: item.videoFiles?.firstOrNull()
+        file?.let { videoFileIdByRecordedId[item.id] = it.id }
         // 詳細表示のときだけ、チャプター・実尺・シリーズ割当・再生位置を並列で取りに行く。
         // これらはサーバー側で機能を無効化できる (404 が返る) ため、個々の失敗は無視して欠損扱いにする。
         val details = if (includeDetails && file != null) {
@@ -48,11 +56,11 @@ class EpgStationRecordRepository @Inject constructor(
         val duration = details.duration
         val mapping = details.mapping
         val position = details.position
-        val channels = channelCache.getChannels()
+        val index = channelCache.getChannelIndex()
         return EpgStationDataMapper.toRecordedProgram(
             item = item,
-            channel = channels.firstOrNull { it.id == item.channelId },
-            allChannels = channels,
+            channel = index.byId[item.channelId],
+            index = index,
             mapping = mapping,
             chapters = chapters,
             durationOverride = duration,
@@ -60,6 +68,98 @@ class EpgStationRecordRepository @Inject constructor(
             ip = settings.epgStationIp.first(),
             port = settings.epgStationPort.first()
         )
+    }
+
+    private var seriesFeatureDisabled = false
+    private var seriesCacheAt = 0L
+    private var seriesCache: List<EsSeriesListItem>? = null
+
+    /** シリーズ一覧を全件取得する。機能無効時は null を返す。 */
+    suspend fun getSeriesList(
+        seasonYear: Int? = null,
+        seasonName: String? = null,
+        onAirOnly: Boolean = false
+    ): List<EsSeriesListItem>? {
+        if (seriesFeatureDisabled) return null
+        val now = System.currentTimeMillis()
+        val cached = seriesCache
+        if (cached != null && now - seriesCacheAt < 5 * 60 * 1000) {
+            return cached.filterSeries(seasonYear, seasonName, onAirOnly)
+        }
+        return try {
+            val first = api.getSeries(
+                offset = 0,
+                limit = 100,
+                seasonYear = seasonYear,
+                seasonName = seasonName,
+                status = if (onAirOnly) "onair" else null
+            )
+            if (first.code() == 404) {
+                seriesFeatureDisabled = true
+                return null
+            }
+            if (!first.isSuccessful) return emptyList()
+            val result = first.body() ?: return emptyList()
+            val items = result.items.toMutableList()
+            while (items.size < result.total) {
+                val page = api.getSeries(
+                    offset = items.size,
+                    limit = 100,
+                    seasonYear = seasonYear,
+                    seasonName = seasonName,
+                    status = if (onAirOnly) "onair" else null
+                )
+                if (page.code() == 404) {
+                    seriesFeatureDisabled = true
+                    return null
+                }
+                if (!page.isSuccessful) break
+                val body = page.body() ?: break
+                if (body.items.isEmpty()) break
+                items.addAll(body.items)
+            }
+            if (seasonYear == null && seasonName == null && !onAirOnly) {
+                seriesCache = items
+                seriesCacheAt = now
+            }
+            items.filterSeries(seasonYear, seasonName, onAirOnly)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** シリーズ詳細（話数付きの録画一覧つき）を取得する。 */
+    suspend fun getSeriesDetail(seriesId: Int): EsSeriesDetail? {
+        if (seriesFeatureDisabled) return null
+        return try {
+            val response = api.getSeriesDetail(seriesId)
+            if (response.code() == 404) {
+                seriesFeatureDisabled = true
+                null
+            } else {
+                response.body().takeIf { response.isSuccessful }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** シリーズのアイキャッチ画像 URL を生成する。 */
+    suspend fun getSeriesImageUrl(seriesId: Int, hasImage: Boolean): String? {
+        if (!hasImage) return null
+        val ip = settings.epgStationIp.first()
+        val port = settings.epgStationPort.first()
+        return UrlBuilder.getEpgStationSeriesImageUrl(ip, port, seriesId)
+    }
+
+    private fun List<EsSeriesListItem>.filterSeries(
+        seasonYear: Int?,
+        seasonName: String?,
+        onAirOnly: Boolean
+    ): List<EsSeriesListItem> = filter {
+        (seasonYear == null || it.seasonYear == seasonYear) &&
+            (seasonName == null || it.seasonName == seasonName) &&
+            (!onAirOnly || it.isOnAir)
     }
 
     /** 録画一覧を取得する。 */
@@ -101,27 +201,47 @@ class EpgStationRecordRepository @Inject constructor(
         }
     }
 
-    /** videoFileId に対応する録画ストリーム URL を生成する。 */
+    /**
+     * 録画ストリーム URL を生成する。
+     * 引数には videoFileId が渡ってくる想定だが、再生画面のシーク処理などからは
+     * 録画 ID (recordedId) が渡ってくるため、対応表に載っていれば読み替える。
+     */
     override suspend fun getRecordStreamUrl(
         videoId: Int,
         quality: String,
         sessionId: String,
         offsetSeconds: Double
     ): String {
+        val videoFileId = resolveVideoFileId(videoId)
         val parts = quality.split(":", limit = 2)
         val format = parts.firstOrNull()?.lowercase() ?: "direct"
         val mode = parts.getOrNull(1)?.toIntOrNull() ?: 0
         val ip = settings.epgStationIp.first()
         val port = settings.epgStationPort.first()
         return when (format) {
-            "hls" -> api.startRecordedHls(videoId, mode, offsetSeconds.toInt()).also {
+            "hls" -> api.startRecordedHls(videoFileId, mode, offsetSeconds.toInt()).also {
                 streamId = it.streamId
             }.let { UrlBuilder.getEpgStationHlsPlaylistUrl(ip, port, it.streamId) }
             "mp4", "webm" -> UrlBuilder.getEpgStationRecordedStreamUrl(
-                ip, port, videoId, format, mode, offsetSeconds
+                ip, port, videoFileId, format, mode, offsetSeconds
             )
-            else -> UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoId)
+            else -> UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
         }
+    }
+
+    /**
+     * 渡された ID が録画 ID なら対応するビデオファイル ID へ読み替える。
+     * 対応表に無ければ、既にビデオファイル ID だとみなしてそのまま返す。
+     */
+    private suspend fun resolveVideoFileId(videoId: Int): Int {
+        videoFileIdByRecordedId[videoId]?.let { return it }
+        // 一覧・詳細をまだ通っていない場合に備え、録画詳細から引き直す
+        return runCatching {
+            val item = api.getRecordedDetail(videoId)
+            val file = item.videoFiles?.firstOrNull { it.type == "ts" }
+                ?: item.videoFiles?.firstOrNull()
+            file?.id?.also { videoFileIdByRecordedId[videoId] = it }
+        }.getOrNull() ?: videoId
     }
 
     /** EPGStation に実況過去ログがないため空の結果を返す。 */
