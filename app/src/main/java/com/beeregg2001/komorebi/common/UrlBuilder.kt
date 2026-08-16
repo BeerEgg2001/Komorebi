@@ -123,4 +123,31 @@ object UrlBuilder {
         val encodedPath = android.net.Uri.encode(relativePath, "/")
         return "$baseUrl/rec/$encodedPath.jpg"
     }
+
+    fun getEpgStationLogoUrl(ip: String, port: String, channelId: Long): String =
+        "${formatBaseUrl(ip, port, "http")}/api/channels/$channelId/logo"
+
+    fun getEpgStationThumbnailUrl(ip: String, port: String, thumbnailId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/thumbnails/$thumbnailId"
+
+    fun getEpgStationSeriesImageUrl(ip: String, port: String, seriesId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/series/$seriesId/image"
+
+    fun getEpgStationVideoDirectUrl(ip: String, port: String, videoFileId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/videos/$videoFileId"
+
+    fun getEpgStationLiveM2tsUrl(ip: String, port: String, channelId: Long, mode: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/streams/live/$channelId/m2ts?mode=$mode"
+
+    fun getEpgStationHlsPlaylistUrl(ip: String, port: String, streamId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/streamfiles/stream$streamId.m3u8"
+
+    fun getEpgStationRecordedStreamUrl(
+        ip: String,
+        port: String,
+        videoFileId: Int,
+        format: String,
+        mode: Int,
+        ss: Double
+    ): String = "${formatBaseUrl(ip, port, "http")}/api/streams/recorded/$videoFileId/$format?mode=$mode&ss=${ss.toInt()}"
 }

@@ -29,6 +29,22 @@ import javax.net.ssl.X509TrustManager
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
+    private fun trustAllClient(builder: OkHttpClient.Builder): OkHttpClient.Builder {
+        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        })
+        val sslContext = SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+        return builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+    }
+
     @Provides
     @Singleton
     fun provideOkHttpClient(
@@ -120,4 +136,40 @@ object NetworkModule {
     fun provideKonomiApi(retrofit: Retrofit): KonomiApi {
         return retrofit.create(KonomiApi::class.java)
     }
+
+    @Provides
+    @Singleton
+    @EpgStationClient
+    fun provideEpgStationClient(
+        settingsRepository: SettingsRepository,
+        cloudflareAccessInterceptor: CloudflareAccessInterceptor
+    ): OkHttpClient {
+        val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BASIC
+            redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
+        }
+        return trustAllClient(OkHttpClient.Builder())
+            .addInterceptor(Interceptor { chain ->
+                val original = chain.request()
+                val base = runBlocking { settingsRepository.getEpgStationFullUrl() }
+                    .toHttpUrlOrNull() ?: original.url
+                chain.proceed(original.newBuilder().url(original.url.newBuilder()
+                    .scheme(base.scheme).host(base.host).port(base.port).build()).build())
+            })
+            .addInterceptor(cloudflareAccessInterceptor)
+            .addInterceptor(logging)
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    @EpgStationRetrofit
+    fun provideEpgStationRetrofit(@EpgStationClient client: OkHttpClient, gson: Gson): Retrofit =
+        Retrofit.Builder().baseUrl("http://127.0.0.1:8888/").client(client)
+            .addConverterFactory(GsonConverterFactory.create(gson)).build()
+
+    @Provides
+    @Singleton
+    fun provideEpgStationApi(@EpgStationRetrofit retrofit: Retrofit): com.beeregg2001.komorebi.data.api.EpgStationApi =
+        retrofit.create(com.beeregg2001.komorebi.data.api.EpgStationApi::class.java)
 }

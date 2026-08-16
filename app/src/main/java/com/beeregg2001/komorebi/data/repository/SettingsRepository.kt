@@ -259,6 +259,15 @@ class SettingsRepository @Inject constructor(
         return "$scheme$ip:$port"
     }
 
+    suspend fun getEpgStationFullUrl(): String {
+        val prefs = context.dataStore.data.first()
+        val ip = prefs[EPGSTATION_IP] ?: ""
+        val port = prefs[EPGSTATION_PORT] ?: "8888"
+        if (ip.isBlank()) return ""
+        if (ip.startsWith("http://") || ip.startsWith("https://")) return "$ip:$port"
+        return "http://$ip:$port"
+    }
+
     // ★ 追加: Cloudflare Access サービストークンをヘッダーMapとして取得 (未設定なら空Map)
     suspend fun getCfAccessHeaders(): Map<String, String> {
         val prefs = context.dataStore.data.first()
