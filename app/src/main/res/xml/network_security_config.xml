@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Android 7.0の古い証明書ストアでは不足するCAを、アプリ内の全HTTPS接続で補う。 -->
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/gts_root_r4" />
+            <certificates src="@raw/isrg_root_x1" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
