@@ -37,6 +37,7 @@ import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
@@ -172,19 +173,9 @@ fun HomeLauncherScreen(
         }
     }
 
-    // =====================================================================================
-    // ★ 究極の軽量化ロジック: デバウンス・レンダリング（Debounce Rendering）
-    // 連打中は画面を構築せず、指が止まってから60ms後に初めてコンテンツを描画する。
-    // 裏側のタブは完全に破棄するため、フォーカスの迷子や競合は物理的に発生しません。
-    // =====================================================================================
-    var activeRenderIndex by remember { mutableIntStateOf(safeTabIndex) }
-
-    LaunchedEffect(safeTabIndex) {
-        if (activeRenderIndex != safeTabIndex) {
-            delay(60) // 連打中はキャンセルされ続け、指が止まった時だけここを通過する
-            activeRenderIndex = safeTabIndex
-        }
-    }
+    // 切替中にコンテンツをいったん全て消すと、現在のフォーカスノードも
+    // 破棄されて迷子になるため、選択中のタブを常に同じフレームで描画する。
+    val activeRenderIndex = safeTabIndex
 
     var lastHomeRefreshTime by remember { mutableLongStateOf(0L) }
 
@@ -204,6 +195,18 @@ fun HomeLauncherScreen(
         } else {
             channelViewModel.stopPolling()
         }
+    }
+
+    // タブの表示ツリーを再構築した直後は、切替前のフォーカスノードが破棄されて
+    // フォーカスが消えることがある。新しいタブを必ず操作可能な状態に戻す。
+    LaunchedEffect(activeRenderIndex) {
+        delay(160)
+        ui.tabFocusRequesters.getOrNull(activeRenderIndex)?.safeRequestFocusWithRetry(
+            tag = "HomeTab_Rendered",
+            maxRetries = 10,
+            delayMillis = 50,
+            shouldContinue = { activeRenderIndex == safeTabIndex }
+        )
     }
 
     LaunchedEffect(aiFocusReturnTick) {
@@ -346,6 +349,107 @@ fun HomeLauncherScreen(
         }
     }
 
+    // タブ移動では先に表示対象を切り替える。表示ツリーの再構築前に
+    // FocusRequesterへ要求すると、要求先が未接続で失敗することがあるため、
+    // 再構築後にフォーカス要求をリトライする。
+    var pendingTabFocusJob by remember { mutableStateOf<Job?>(null) }
+    var launcherHasFocus by remember { mutableStateOf(false) }
+
+    // 十字キーを高速に操作すると、フォーカス中のカードが破棄された拍子に
+    // LazyColumn/LazyRow の focusGroup()（見た目もキー処理も持たないコンテナ）自身へ
+    // フォーカスが落ちることがある。この状態では画面上にフォーカス枠が一切描画されず、
+    // 十字キーも効かないため、アプリが操作不能になったように見える。
+    // コンテナが持つフォーカスは hasFocus では検知できないので、
+    // 「Column直下のフォーカス対象そのものが Active（isFocused）」を迷子のサインとして扱う。
+    var launcherFocusStranded by remember { mutableStateOf(false) }
+
+    // 番組表はグリッド全体が1つのフォーカス対象（Canvas描画）であり、
+    // そこにフォーカスがあるのは正常な状態なので迷子判定から除外する。
+    val isStrandedDetectable = tabs.getOrNull(safeTabIndex) != "番組表"
+
+    LaunchedEffect(
+        launcherHasFocus,
+        launcherFocusStranded,
+        ui.selectedTabIndex,
+        isFullScreenMode,
+        isReturningFromPlayer,
+        isStrandedDetectable
+    ) {
+        if (isFullScreenMode || isReturningFromPlayer) return@LaunchedEffect
+
+        val isLost = { !launcherHasFocus || (launcherFocusStranded && isStrandedDetectable) }
+        if (!isLost()) return@LaunchedEffect
+
+        Log.i(
+            "KomorebiFocus",
+            "フォーカス迷子を検知（hasFocus=$launcherHasFocus stranded=$launcherFocusStranded）。復帰を試みます"
+        )
+
+        // 一度の要求で復帰できないと操作不能のまま固まるため、復帰するまで数回繰り返す。
+        var attempt = 0
+        while (attempt < 5 && isLost()) {
+            delay(if (attempt == 0) 120 else 220)
+            if (isFullScreenMode || isReturningFromPlayer || !isLost()) return@LaunchedEffect
+
+            val tabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+            // 直前までコンテンツを操作していたなら、コンテンツ先頭へ戻す方が違和感が少ない。
+            val restoredToContent = if (!ui.topNavHasFocus) {
+                ui.contentFirstItemRequesters.getOrNull(tabIndex)
+                    ?.safeRequestFocusWithRetry(
+                        tag = "HomeFocusRecovery_Content",
+                        maxRetries = 4,
+                        delayMillis = 60,
+                        shouldContinue = { isLost() }
+                    ) == true
+            } else false
+
+            if (!restoredToContent) {
+                ui.tabFocusRequesters.getOrNull(tabIndex)
+                    ?.safeRequestFocusWithRetry(
+                        tag = "HomeFocusRecovery_Tab",
+                        maxRetries = 6,
+                        delayMillis = 60,
+                        shouldContinue = { isLost() }
+                    )
+            }
+            attempt++
+        }
+    }
+
+    fun moveTabByDpad(direction: Key): Boolean {
+        val currentIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+        val targetIndex = when (direction) {
+            Key.DirectionRight -> currentIndex + 1
+            Key.DirectionLeft -> currentIndex - 1
+            else -> return false
+        }
+        if (targetIndex !in tabs.indices) return false
+
+        ticketManager.cancelForUserNavigation()
+        pendingTabFocusJob?.cancel()
+        ui.selectedTabIndex = targetIndex
+        ui.onTabSelected(
+            targetIndex,
+            tabs,
+            onTabChange,
+            homeViewModel,
+            channelViewModel,
+            recordViewModel,
+            reserveViewModel
+        )
+
+        pendingTabFocusJob = scope.launch {
+            delay(80)
+            ui.tabFocusRequesters[targetIndex].safeRequestFocusWithRetry(
+                tag = "HomeTab_Dpad",
+                maxRetries = 8,
+                delayMillis = 50,
+                shouldContinue = { ui.selectedTabIndex == targetIndex }
+            )
+        }
+        return true
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -353,9 +457,75 @@ fun HomeLauncherScreen(
                 .graphicsLayer { alpha = 0f }
                 .focusRequester(ui.safeHouseRequester)
                 .focusable()
+                // 画面切替中にフォーカスが退避ノードへ残っても、最初の十字キー操作で
+                // 画面上の操作対象へ復旧させる。退避ノードには通常の隣接フォーカスが
+                // 存在しないため、ここで処理しないとアプリが固まったように見える。
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
+                    when (event.key) {
+                        Key.DirectionRight -> {
+                            if (ui.selectedTabIndex < tabs.lastIndex) {
+                                moveTabByDpad(Key.DirectionRight)
+                            } else {
+                                ui.settingsFocusRequester.safeRequestFocus("SafeHouse_Dpad_Settings")
+                            }
+                            true
+                        }
+
+                        Key.DirectionLeft -> {
+                            if (ui.selectedTabIndex > 0) moveTabByDpad(Key.DirectionLeft)
+                            else ui.tabFocusRequesters[ui.selectedTabIndex].safeRequestFocus("SafeHouse_Dpad_Tab")
+                            true
+                        }
+
+                        Key.DirectionUp -> {
+                            scope.launch {
+                                ui.tabFocusRequesters[ui.selectedTabIndex].safeRequestFocusWithRetry(
+                                    tag = "SafeHouse_Dpad_Tab",
+                                    maxRetries = 8,
+                                    delayMillis = 50
+                                )
+                            }
+                            true
+                        }
+
+                        Key.DirectionDown -> {
+                            scope.launch {
+                                if (ui.isCurrentTabContentReady) {
+                                    ui.contentFirstItemRequesters[ui.selectedTabIndex]
+                                        .safeRequestFocusWithRetry(
+                                            tag = "SafeHouse_Dpad_Content",
+                                            maxRetries = 8,
+                                            delayMillis = 50
+                                        )
+                                } else {
+                                    ui.tabFocusRequesters[ui.selectedTabIndex]
+                                        .safeRequestFocusWithRetry(
+                                            tag = "SafeHouse_Dpad_Tab",
+                                            maxRetries = 8,
+                                            delayMillis = 50
+                                        )
+                                }
+                            }
+                            true
+                        }
+
+                        else -> false
+                    }
+                }
         )
 
-        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onFocusChanged {
+                        launcherHasFocus = it.hasFocus
+                        // isFocused=true は「Column直下のコンテナ自身がフォーカスを持った」ことを意味する。
+                        // 実際に操作できる要素は必ずこれより深い階層にあるため、迷子とみなす。
+                        launcherFocusStranded = it.isFocused
+                    }
+            ) {
             if (!isFullScreenMode) {
                 Row(
                     modifier = Modifier
@@ -365,26 +535,13 @@ fun HomeLauncherScreen(
                         .onFocusChanged { ui.topNavHasFocus = it.hasFocus }
                         .onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown) {
-                                val targetRequester =
-                                    when (event.key) {
-                                        Key.DirectionRight ->
-                                            if (safeTabIndex < tabs.lastIndex) {
-                                                ui.tabFocusRequesters.getOrNull(safeTabIndex + 1)
-                                            } else {
-                                                ui.settingsFocusRequester
-                                            }
-
-                                        Key.DirectionLeft ->
-                                            if (safeTabIndex > 0) {
-                                                ui.tabFocusRequesters.getOrNull(safeTabIndex - 1)
-                                            } else {
-                                                null
-                                            }
-
-                                        else -> null
-                                    }
-                                if (targetRequester != null) {
-                                    targetRequester.safeRequestFocus("HomeTab_Dpad")
+                                if ((event.key == Key.DirectionRight || event.key == Key.DirectionLeft) &&
+                                    moveTabByDpad(event.key)
+                                ) {
+                                    return@onPreviewKeyEvent true
+                                }
+                                if (event.key == Key.DirectionRight && ui.selectedTabIndex == tabs.lastIndex) {
+                                    ui.settingsFocusRequester.safeRequestFocus("HomeTab_Dpad_Settings")
                                     return@onPreviewKeyEvent true
                                 }
                             }
@@ -450,29 +607,34 @@ fun HomeLauncherScreen(
                                         if (event.type != KeyEventType.KeyDown) {
                                             return@onKeyEvent false
                                         }
-                                        val targetRequester =
-                                            when (event.key) {
-                                                Key.DirectionRight ->
-                                                    if (index < tabs.lastIndex) {
-                                                        ui.tabFocusRequesters.getOrNull(index + 1)
-                                                    } else {
-                                                        ui.settingsFocusRequester
-                                                    }
-
-                                                Key.DirectionLeft ->
-                                                    if (index > 0) {
-                                                        ui.tabFocusRequesters.getOrNull(index - 1)
-                                                    } else {
-                                                        null
-                                                    }
-
-                                                else -> null
+                                        if (event.key == Key.DirectionRight || event.key == Key.DirectionLeft) {
+                                            if (moveTabByDpad(event.key)) {
+                                                true
+                                            } else if (event.key == Key.DirectionRight && index == tabs.lastIndex) {
+                                                ui.settingsFocusRequester.safeRequestFocus("HomeTab_Dpad_Settings")
+                                                true
+                                            } else {
+                                                false
                                             }
-                                        if (targetRequester == null) {
-                                            false
-                                        } else {
-                                            targetRequester.safeRequestFocus("HomeTab_Dpad")
+                                        } else if (event.key == Key.DirectionDown && index == ui.selectedTabIndex) {
+                                            // 表示準備フラグの更新を待たず、実体化した先頭アイテムへ
+                                            // リトライ付きで遷移する。高速切替直後でもDefault探索に
+                                            // フォーカスを逃がさない。
+                                            scope.launch {
+                                                ui.contentFirstItemRequesters.getOrNull(index)
+                                                    ?.safeRequestFocusWithRetry(
+                                                        tag = "HomeTab_Dpad_Content",
+                                                        maxRetries = 12,
+                                                        delayMillis = 40,
+                                                        shouldContinue = {
+                                                            ui.selectedTabIndex == index &&
+                                                                activeRenderIndex == index
+                                                        }
+                                                    )
+                                            }
                                             true
+                                        } else {
+                                            false
                                         }
                                     }
                                     .focusRequester(
@@ -480,11 +642,10 @@ fun HomeLauncherScreen(
                                             ?: FocusRequester.Default
                                     )
                                     .focusProperties {
-                                        down =
-                                            if (safeTabIndex == index && ui.isCurrentTabContentReady)
-                                                ui.contentFirstItemRequesters.getOrNull(index)
-                                                    ?: FocusRequester.Default
-                                            else FocusRequester.Default
+                                        down = if (safeTabIndex == index) {
+                                            ui.contentFirstItemRequesters.getOrNull(index)
+                                                ?: FocusRequester.Default
+                                        } else FocusRequester.Default
 
                                         canFocus = !(title == "番組表" && ui.isEpgJumping)
 
@@ -578,9 +739,7 @@ fun HomeLauncherScreen(
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                // ★ 完全に物理的に1つのタブのみを描画する（他はツリーから完全に消去され、フォーカス迷子が100%防がれる）
-                if (activeRenderIndex == safeTabIndex) {
-                    val currentTabLabel = tabs.getOrNull(activeRenderIndex) ?: "ホーム"
+                val currentTabLabel = tabs.getOrNull(activeRenderIndex) ?: "ホーム"
                     val handleUiReady = {
                         onUiReady()
                         ui.isCurrentTabContentReady = true
@@ -766,7 +925,6 @@ fun HomeLauncherScreen(
                                 timeFormat = timeFormat
                             )
                         }
-                    }
                 }
             }
         }

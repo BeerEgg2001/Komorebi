@@ -493,8 +493,7 @@ fun RecordListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 88.dp)
-                .onKeyEvent { if (!paneTransitionState.isIdle) true else false }) {
+                .padding(top = 88.dp)) {
 
             Box(
                 modifier = Modifier
