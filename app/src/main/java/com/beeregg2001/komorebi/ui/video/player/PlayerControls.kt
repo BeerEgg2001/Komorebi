@@ -528,6 +528,7 @@ fun PlayerControls(
                                 icon = Icons.Default.FastRewind,
                                 label = "-10秒",
                                 onClick = onSeekBack,
+                                onLongPress = if (hasChapters) onSkipPreviousChapter else null,
                                 buttonSize = 56.dp,
                                 iconSize = 32.dp,
                                 allowContinuousPress = true
@@ -545,6 +546,7 @@ fun PlayerControls(
                                 icon = Icons.Default.FastForward,
                                 label = "+30秒",
                                 onClick = onSeekForward,
+                                onLongPress = if (hasChapters) onSkipNextChapter else null,
                                 buttonSize = 56.dp,
                                 iconSize = 32.dp,
                                 allowContinuousPress = true
@@ -584,10 +586,12 @@ fun OsdIconButton(
     buttonSize: Dp = 48.dp,
     iconSize: Dp = 24.dp,
     isPrimary: Boolean = false,
-    allowContinuousPress: Boolean = false
+    allowContinuousPress: Boolean = false,
+    onLongPress: (() -> Unit)? = null
 ) {
     val colors = KomorebiTheme.colors
     var lastRepeatTime by remember { mutableLongStateOf(0L) }
+    var isLongPressHandled by remember { mutableStateOf(false) }
 
     Surface(
         onClick = onClick,
@@ -606,6 +610,13 @@ fun OsdIconButton(
             .onPreviewKeyEvent { event ->
                 if (event.key == Key.DirectionCenter || event.key == Key.Enter) {
                     if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
+                        if (onLongPress != null) {
+                            if (!isLongPressHandled) {
+                                onLongPress()
+                                isLongPressHandled = true
+                            }
+                            return@onPreviewKeyEvent true
+                        }
                         if (allowContinuousPress) {
                             val now = System.currentTimeMillis()
                             if (now - lastRepeatTime > 200) {
@@ -613,6 +624,10 @@ fun OsdIconButton(
                                 lastRepeatTime = now
                             }
                         }
+                        return@onPreviewKeyEvent true
+                    }
+                    if (event.type == KeyEventType.KeyUp && isLongPressHandled) {
+                        isLongPressHandled = false
                         return@onPreviewKeyEvent true
                     }
                 }
