@@ -8,10 +8,14 @@ import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.di.EpgStationClient
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -29,6 +33,13 @@ class EpgStationLiveRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) : LiveProvider {
     private val failedLogos = ConcurrentHashMap.newKeySet<Long>()
+
+    /**
+     * 局ロゴの同時取得数を制限するためのセマフォ。
+     * チャンネル数は数百件になることがあり、一覧を開いた瞬間に全件を並列で取りに行くと
+     * サーバー (特にリバースプロキシ越しの構成) に負荷が集中してしまうため絞っている。
+     */
+    private val logoSemaphore = Semaphore(permits = 4)
 
     /** 放送中番組と次番組を含むチャンネル一覧を取得する。 */
     override suspend fun getChannels(): ChannelApiResponse {
@@ -110,27 +121,32 @@ class EpgStationLiveRepository @Inject constructor(
         }
     }
 
-    /** 局ロゴをキャッシュへ保存して file URI を返す。 */
-    override suspend fun getChannelLogoUrl(channelId: String): String {
-        val id = EpgStationDataMapper.parseChannelId(channelId) ?: return ""
+    /**
+     * 局ロゴをキャッシュへ保存して file URI を返す。
+     * UI から直接呼ばれてもメインスレッドを塞がないよう、必ず IO ディスパッチャで実行する。
+     */
+    override suspend fun getChannelLogoUrl(channelId: String): String = withContext(Dispatchers.IO) {
+        val id = EpgStationDataMapper.parseChannelId(channelId) ?: return@withContext ""
         val file = File(context.cacheDir, "channel_logos/$id.png")
-        if (file.exists()) return "file://${file.absolutePath}"
-        if (failedLogos.contains(id)) return ""
-        return try {
+        if (file.exists()) return@withContext "file://${file.absolutePath}"
+        if (failedLogos.contains(id)) return@withContext ""
+        try {
             if (channelCache.getChannels().firstOrNull { it.id == id }?.hasLogoData != true) {
                 failedLogos.add(id)
-                return ""
+                return@withContext ""
             }
             val url = UrlBuilder.getEpgStationLogoUrl(
                 settings.epgStationIp.first(),
                 settings.epgStationPort.first(),
                 id
             )
-            client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                if (!response.isSuccessful) error("HTTP ${response.code}")
-                val bytes = response.body?.bytes() ?: error("空のロゴです")
-                file.parentFile?.mkdirs()
-                file.writeBytes(bytes)
+            logoSemaphore.withPermit {
+                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    val bytes = response.body?.bytes() ?: error("空のロゴです")
+                    file.parentFile?.mkdirs()
+                    file.writeBytes(bytes)
+                }
             }
             "file://${file.absolutePath}"
         } catch (_: Exception) {

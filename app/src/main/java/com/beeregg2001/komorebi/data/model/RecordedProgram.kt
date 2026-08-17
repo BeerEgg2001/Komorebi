@@ -27,7 +27,7 @@ data class RecordedProgram(
     val directThumbnailUrl: String? = null,
     val apiThumbnailUrl: String? = null,
     val seriesId: Int? = null,
-    val episodeNumber: Int? = null,
+    val episodeNumber: Double? = null,
     val episodeLabel: String? = null,
     val episodeTitle: String? = null,
     val airType: String? = null
