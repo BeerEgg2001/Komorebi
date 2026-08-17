@@ -8,6 +8,7 @@ import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationSeriesDictionary
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
 import com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity
 import com.beeregg2001.komorebi.data.local.entity.SyncMetaEntity
@@ -24,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -66,6 +68,7 @@ class RecordSyncEngine @Inject constructor(
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
     private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
+    private val epgStationSeriesDictionary: EpgStationSeriesDictionary,
     @ApplicationContext private val context: Context
 ) {
     private val _syncProgress = MutableStateFlow(SyncProgress())
@@ -589,22 +592,27 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun startDictionaryResolutionLoop() {
+        // EPGStation はサーバー側のシリーズ情報を使うため、辞書生成をスキップする。
+        if (settingsRepository.backendType.first() == "EPGSTATION") {
+            Log.i(TAG, "EPGStation はサーバー側のシリーズ情報を使うため、辞書生成をスキップします。")
+            _syncProgress.value = SyncProgress(
+                isSyncing = false,
+                isInitialBuild = false,
+                isInitialSyncPhase = false
+            )
+            return
+        }
+
         if (!dictionaryMutex.tryLock()) {
             Log.i(TAG, "Dictionary resolution is already running. Skipping.")
             return
         }
 
-        Log.i(TAG, "startDictionaryResolutionLoop: started (Serial + Compliant Mode)")
-
         try {
             withContext(Dispatchers.IO) {
                 val programDao = db.recordedProgramDao()
-
                 val totalUnknown = programDao.getUnknownTitlesCount()
-                Log.i(TAG, "startDictionaryResolutionLoop: totalUnknown=$totalUnknown")
-
                 if (totalUnknown == 0) {
-                    Log.i(TAG, "No unknown titles found. Dictionary is up to date.")
                     _syncProgress.value = SyncProgress(
                         isSyncing = false,
                         isInitialBuild = false,
@@ -623,53 +631,51 @@ class RecordSyncEngine @Inject constructor(
                 )
 
                 var processedCount = 0
-                val CHUNK_SIZE = 100
-
+                val chunkSize = 100
                 while (true) {
                     currentCoroutineContext().ensureActive()
-                    val unknownTitles = programDao.getUnknownTitles(limit = CHUNK_SIZE)
+                    val unknownTitles = programDao.getUnknownTitles(limit = chunkSize)
                     if (unknownTitles.isEmpty()) break
 
-                    val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
-
-                    // ★ 規約遵守の工夫1: ベースタイトルで重複排除し、APIコール回数を極限まで減らす
-                    val baseTitleMap =
-                        unknownTitles.groupBy { TitleNormalizer.extractDisplayTitle(it) }
+                    val baseTitleMap = unknownTitles.groupBy {
+                        TitleNormalizer.extractDisplayTitle(it)
+                    }
                     val resolvedBaseTitles = HashMap<String, String>()
 
-                    // ★ 規約遵守の工夫2: 並列処理(async)をやめ、直列(for)で丁寧にAPIを叩く
                     for (baseTitle in baseTitleMap.keys) {
                         currentCoroutineContext().ensureActive()
+                        val epgStationTitle = epgStationSeriesDictionary.resolve(baseTitle)
+                        if (epgStationTitle != null) {
+                            resolvedBaseTitles[baseTitle] = epgStationTitle
+                            continue
+                        }
+
                         try {
                             val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
                             resolvedBaseTitles[baseTitle] = canonicalTitle ?: baseTitle
                         } catch (e: Exception) {
                             if (e !is CancellationException) {
-                                Log.w(TAG, "Wikipedia lookup failed for '$baseTitle': ${e.message}")
+                                Log.w(TAG, "Wikipedia lookup failed for '" + baseTitle + "': " + e.message)
                             }
                             resolvedBaseTitles[baseTitle] = baseTitle
                         }
-                        // ★ 規約遵守の工夫3: APIコールの間に1000ms(1秒)のポライトディレイを挿入
                         delay(300)
                     }
 
-                    for (title in unknownTitles) {
+                    val newDictEntries = unknownTitles.map { title ->
                         val baseTitle = TitleNormalizer.extractDisplayTitle(title)
                         val finalSeriesName = resolvedBaseTitles[baseTitle] ?: baseTitle
-
                         processedCount++
-                        _syncProgress.value = _syncProgress.value.copy(current = processedCount)
-
-                        newDictEntries.add(
-                            AiSeriesDictionaryEntity(
-                                originalTitle = title,
-                                normalizedSeriesName = finalSeriesName,
-                                updatedAt = System.currentTimeMillis()
-                            )
+                        if (processedCount % 100 == 0 || processedCount == totalUnknown) {
+                            _syncProgress.value = _syncProgress.value.copy(current = processedCount)
+                        }
+                        AiSeriesDictionaryEntity(
+                            originalTitle = title,
+                            normalizedSeriesName = finalSeriesName,
+                            updatedAt = System.currentTimeMillis()
                         )
                     }
 
-                    // DB更新は一括（トランザクション）で行い、端末の処理速度を稼ぐ
                     if (newDictEntries.isNotEmpty()) {
                         db.withTransaction {
                             aiSeriesDictionaryDao.insertAll(newDictEntries)
@@ -682,10 +688,8 @@ class RecordSyncEngine @Inject constructor(
                         }
                     }
 
-                    val hasMore = programDao.getUnknownTitlesCount() > 0
-                    if (hasMore) delay(500)
+                    if (programDao.getUnknownTitlesCount() > 0) delay(500)
                 }
-
                 Log.i(TAG, "Dictionary resolution loop completed successfully.")
             }
         } catch (e: CancellationException) {

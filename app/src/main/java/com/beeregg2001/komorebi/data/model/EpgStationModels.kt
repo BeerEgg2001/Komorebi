@@ -321,3 +321,26 @@ data class EsFormatConfig(
     val webm: List<String>? = null
 )
 data class EsPlaybackPosition(val position: Double = 0.0, val duration: Double = 0.0)
+
+
+/** EPGStation の作品辞書検索結果を表す DTO。 */
+data class EsDictionaryWorkSearchResult(
+    val total: Int = 0,
+    val items: List<EsDictionaryWork> = emptyList()
+)
+
+/** 作品辞書の検索結果 1 件を表す DTO。 */
+data class EsDictionaryWork(
+    val title: String = "",
+    val titleKana: String? = null,
+    val syobocalTid: Int? = null,
+    val annictId: Int? = null,
+    val wikidataQid: String? = null,
+    val tmdbId: Int? = null,
+    val seasonYear: Int? = null,
+    val seasonName: String? = null,
+    val totalEpisodes: Int? = null,
+    val source: String = "",
+    val matchType: String = "",
+    val seriesId: Int? = null
+)

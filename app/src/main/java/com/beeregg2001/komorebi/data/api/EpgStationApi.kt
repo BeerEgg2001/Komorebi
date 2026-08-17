@@ -71,6 +71,12 @@ interface EpgStationApi {
         @Query("hasMissing") hasMissing: Boolean? = null
     ): Response<EsSeriesListResult>
 
+    @GET("api/series/dictionary")
+    suspend fun getDictionaryWorks(
+        @Query("keyword") keyword: String,
+        @Query("limit") limit: Int = 10
+    ): Response<EsDictionaryWorkSearchResult>
+
     @GET("api/series/{seriesId}")
     suspend fun getSeriesDetail(@Path("seriesId") seriesId: Int): Response<EsSeriesDetail>
 
