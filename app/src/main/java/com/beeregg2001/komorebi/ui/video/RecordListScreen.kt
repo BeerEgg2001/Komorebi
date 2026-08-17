@@ -130,6 +130,20 @@ fun RecordListScreen(
     val isOnAirOnly by viewModel.isOnAirOnly.collectAsState()
     val seriesSortType by viewModel.seriesSortType.collectAsState()
     val seriesSortOrder by viewModel.seriesSortOrder.collectAsState()
+    val visibleSeries = remember(
+        groupedSeries,
+        selectedSeriesGenre,
+        seriesSortType,
+        seriesSortOrder
+    ) {
+        viewModel.sortSeriesForDisplay(
+            if (!selectedSeriesGenre.isNullOrEmpty()) {
+                groupedSeries[selectedSeriesGenre] ?: emptyList()
+            } else {
+                groupedSeries.values.flatten()
+            }
+        )
+    }
     val seriesFocusProgramId by viewModel.seriesFocusProgramId.collectAsState()
     val programDetail by viewModel.programDetail.collectAsState()
     val isRecLoading by viewModel.isRecordingLoading.collectAsState()
@@ -226,8 +240,7 @@ fun RecordListScreen(
             if (!isCategoryImplemented) false
             else {
                 when (selectedCategory) {
-                    RecordCategory.SERIES -> (if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                        ?: emptyList() else groupedSeries.values.flatten()).isNotEmpty()
+                    RecordCategory.SERIES -> visibleSeries.isNotEmpty()
 
                     else -> pagedRecordings.itemCount > 0
                 }
@@ -487,14 +500,13 @@ fun RecordListScreen(
                     if (isListView) {
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
                                 RecordSeriesContent(
-                                    seriesList = list,
+                                    seriesList = visibleSeries,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { viewModel.searchSeries(it) },
+                                    onSeriesClick = {
+                                        viewModel.searchSeries(it.seriesId, it.displayTitle)
+                                    },
                                     onOpenNavPane = handleOpenNavPane,
                                     isListView = true,
                                     firstItemFocusRequester = focuses.firstItem,
@@ -561,14 +573,13 @@ fun RecordListScreen(
                     } else {
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
                                 RecordSeriesGridContent(
-                                    seriesList = list,
+                                    seriesList = visibleSeries,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { viewModel.searchSeries(it) },
+                                    onSeriesClick = {
+                                        viewModel.searchSeries(it.seriesId, it.displayTitle)
+                                    },
                                     onOpenNavPane = handleOpenNavPane,
                                     firstItemFocusRequester = focuses.firstItem,
                                     contentContainerFocusRequester = focuses.contentContainer,
@@ -955,8 +966,8 @@ fun BoxScope.RecordSeriesFilterMenuOverlay(
                 Text("並び替え", color = colors.textSecondary, fontSize = 12.sp,
                     modifier = Modifier.padding(start = 8.dp, top = 12.dp))
                 listOf(
-                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.DESC, "最終放送日 (新しい順)"),
-                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.ASC, "最終放送日 (古い順)"),
+                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.DESC, "最終放送日時 (新しい順)"),
+                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.ASC, "最終放送日時 (古い順)"),
                     Triple(SeriesSortType.TITLE, RecordSortOrder.ASC, "タイトル (A→Z)"),
                     Triple(SeriesSortType.TITLE, RecordSortOrder.DESC, "タイトル (Z→A)"),
                     Triple(SeriesSortType.PROGRAM_COUNT, RecordSortOrder.DESC, "録画本数 (多い順)"),

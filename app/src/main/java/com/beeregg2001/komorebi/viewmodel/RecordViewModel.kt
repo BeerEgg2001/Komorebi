@@ -535,6 +535,8 @@ class RecordViewModel @Inject constructor(
         }
     }
 
+    fun sortSeriesForDisplay(series: List<SeriesInfo>): List<SeriesInfo> = sortSeries(series)
+
     fun searchSeries(title: String) = searchSeries(null, title)
 
     fun searchSeries(seriesId: Int?, title: String) {

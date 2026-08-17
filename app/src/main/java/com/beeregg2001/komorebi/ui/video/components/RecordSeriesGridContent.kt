@@ -54,7 +54,7 @@ fun RecordSeriesGridContent(
     konomiIp: String,
     konomiPort: String,
     settingViewModel: SettingsViewModel = hiltViewModel(),
-    onSeriesClick: (String) -> Unit,
+    onSeriesClick: (SeriesInfo) -> Unit,
     onOpenNavPane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
     contentContainerFocusRequester: FocusRequester,
@@ -152,7 +152,7 @@ fun RecordSeriesGridContent(
                 }
 
             Surface(
-                onClick = { onSeriesClick(series.searchKeyword) }, modifier = itemModifier,
+                onClick = { onSeriesClick(series) }, modifier = itemModifier,
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                 colors = ClickableSurfaceDefaults.colors(
                     containerColor = colors.surface, focusedContainerColor = colors.surface

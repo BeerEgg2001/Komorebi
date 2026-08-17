@@ -55,7 +55,7 @@ fun RecordSeriesContent(
     konomiIp: String,
     konomiPort: String,
     settingViewModel: SettingsViewModel = hiltViewModel(),
-    onSeriesClick: (String) -> Unit,
+    onSeriesClick: (SeriesInfo) -> Unit,
     onOpenNavPane: () -> Unit,
     isListView: Boolean,
     firstItemFocusRequester: FocusRequester,
@@ -150,7 +150,7 @@ fun RecordSeriesContent(
                 }
 
                 Surface(
-                    onClick = { onSeriesClick(series.searchKeyword) },
+                    onClick = { onSeriesClick(series) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(64.dp)
