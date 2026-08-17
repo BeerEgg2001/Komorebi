@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
@@ -310,8 +311,16 @@ fun HomeLauncherScreen(
         when (ticketManager.currentTicket) {
             HomeFocusTicket.TAB_BAR -> {
                 delay(200)
+                if (ticketManager.currentTicket != HomeFocusTicket.TAB_BAR) {
+                    return@LaunchedEffect
+                }
                 ui.tabFocusRequesters.getOrNull(safeTabIndex)
-                    ?.safeRequestFocusWithRetry("HomeTicket_TAB_BAR")
+                    ?.safeRequestFocusWithRetry(
+                        "HomeTicket_TAB_BAR",
+                        shouldContinue = {
+                            ticketManager.currentTicket == HomeFocusTicket.TAB_BAR
+                        }
+                    )
                 ticketManager.consume(HomeFocusTicket.TAB_BAR)
 
                 val currentTabName = tabs.getOrNull(safeTabIndex)
@@ -355,6 +364,30 @@ fun HomeLauncherScreen(
                         .padding(top = 8.dp, start = 40.dp, end = 40.dp)
                         .onFocusChanged { ui.topNavHasFocus = it.hasFocus }
                         .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown) {
+                                val targetRequester =
+                                    when (event.key) {
+                                        Key.DirectionRight ->
+                                            if (safeTabIndex < tabs.lastIndex) {
+                                                ui.tabFocusRequesters.getOrNull(safeTabIndex + 1)
+                                            } else {
+                                                ui.settingsFocusRequester
+                                            }
+
+                                        Key.DirectionLeft ->
+                                            if (safeTabIndex > 0) {
+                                                ui.tabFocusRequesters.getOrNull(safeTabIndex - 1)
+                                            } else {
+                                                null
+                                            }
+
+                                        else -> null
+                                    }
+                                if (targetRequester != null) {
+                                    targetRequester.safeRequestFocus("HomeTab_Dpad")
+                                    return@onPreviewKeyEvent true
+                                }
+                            }
                             if (event.type == KeyEventType.KeyDown && (event.key == Key.Back || event.key == Key.Escape)) {
                                 ui.handleBackNavigation(
                                     onTabChange = onTabChange,
@@ -397,6 +430,7 @@ fun HomeLauncherScreen(
                             Tab(
                                 selected = safeTabIndex == index,
                                 onFocus = {
+                                    ticketManager.cancelForUserNavigation()
                                     if (!isReturningFromPlayer) {
                                         ui.selectedTabIndex = index
                                         ui.onTabSelected(
@@ -412,6 +446,35 @@ fun HomeLauncherScreen(
                                     ui.topNavHasFocus = true
                                 },
                                 modifier = Modifier
+                                    .onKeyEvent { event ->
+                                        if (event.type != KeyEventType.KeyDown) {
+                                            return@onKeyEvent false
+                                        }
+                                        val targetRequester =
+                                            when (event.key) {
+                                                Key.DirectionRight ->
+                                                    if (index < tabs.lastIndex) {
+                                                        ui.tabFocusRequesters.getOrNull(index + 1)
+                                                    } else {
+                                                        ui.settingsFocusRequester
+                                                    }
+
+                                                Key.DirectionLeft ->
+                                                    if (index > 0) {
+                                                        ui.tabFocusRequesters.getOrNull(index - 1)
+                                                    } else {
+                                                        null
+                                                    }
+
+                                                else -> null
+                                            }
+                                        if (targetRequester == null) {
+                                            false
+                                        } else {
+                                            targetRequester.safeRequestFocus("HomeTab_Dpad")
+                                            true
+                                        }
+                                    }
                                     .focusRequester(
                                         ui.tabFocusRequesters.getOrNull(index)
                                             ?: FocusRequester.Default
@@ -429,6 +492,13 @@ fun HomeLauncherScreen(
                                         if (index == 0) {
                                             left = FocusRequester.Cancel
                                         }
+                                        right =
+                                            if (index < tabs.lastIndex) {
+                                                ui.tabFocusRequesters.getOrNull(index + 1)
+                                                    ?: FocusRequester.Default
+                                            } else {
+                                                ui.settingsFocusRequester
+                                            }
                                     }) {
                                 Text(
                                     text = title,
