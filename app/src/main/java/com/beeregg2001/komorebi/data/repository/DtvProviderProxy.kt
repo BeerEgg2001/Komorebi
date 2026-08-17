@@ -115,6 +115,9 @@ class DtvProviderProxy @Inject constructor(
     override suspend fun getRecordedPrograms(page: Int) =
         getRecordProvider().getRecordedPrograms(page)
 
+    override suspend fun getRecordedPrograms(page: Int, limit: Int) =
+        getRecordProvider().getRecordedPrograms(page, limit)
+
     override suspend fun getRecordedProgram(videoId: Int) =
         getRecordProvider().getRecordedProgram(videoId)
 

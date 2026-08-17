@@ -10,6 +10,7 @@ import com.beeregg2001.komorebi.data.model.CmSection
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.ui.video.player.ChapterInfo
 import com.google.gson.Gson
@@ -32,7 +33,8 @@ import kotlinx.coroutines.CancellationException
 class VideoPlayerViewModel @Inject constructor(
     private val recordProvider: RecordProvider,
     private val historyRepository: WatchHistoryRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val recordSyncEngine: RecordSyncEngine
 ) : ViewModel() {
 
     companion object {
@@ -169,6 +171,10 @@ class VideoPlayerViewModel @Inject constructor(
                 )
             )
         }
+    }
+
+    fun setPlaybackSyncThrottle(enabled: Boolean) {
+        recordSyncEngine.setThrottled(enabled)
     }
 
     fun saveVideoQuality(qualityValue: String) {
@@ -328,6 +334,7 @@ class VideoPlayerViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         stopStreamMaintenance()
+        recordSyncEngine.setThrottled(false)
         detailFetchJob?.cancel()
     }
 }

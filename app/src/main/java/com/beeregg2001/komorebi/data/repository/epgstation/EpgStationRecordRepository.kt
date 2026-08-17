@@ -162,10 +162,23 @@ class EpgStationRecordRepository @Inject constructor(
             (!onAirOnly || it.isOnAir)
     }
 
+    /** 録画一覧の既定件数。画面表示と検索でも通信回数を抑える。 */
+    private companion object {
+        const val DEFAULT_RECORDED_LIMIT = 100
+    }
+
     /** 録画一覧を取得する。 */
-    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse {
+    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        getRecordedPrograms(page = page, limit = DEFAULT_RECORDED_LIMIT)
+
+    /** 指定件数で録画一覧を取得する。同期時は端末プロファイルから渡す。 */
+    override suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse {
         return try {
-            val response = api.getRecordedList(offset = (page - 1) * 24, limit = 24)
+            val safeLimit = limit.coerceIn(1, 200)
+            val response = api.getRecordedList(
+                offset = (page - 1) * safeLimit,
+                limit = safeLimit
+            )
             RecordedApiResponse(
                 total = response.total,
                 recordedPrograms = response.records.map { mapRecorded(it, false) }
@@ -179,8 +192,8 @@ class EpgStationRecordRepository @Inject constructor(
     override suspend fun searchRecordedPrograms(keyword: String, page: Int): RecordedApiResponse {
         return try {
             val response = api.getRecordedList(
-                offset = (page - 1) * 24,
-                limit = 24,
+                offset = (page - 1) * DEFAULT_RECORDED_LIMIT,
+                limit = DEFAULT_RECORDED_LIMIT,
                 keyword = keyword
             )
             RecordedApiResponse(

@@ -106,70 +106,6 @@ fun RecordListScreen(
     val scope = rememberCoroutineScope()
     val syncProgress by viewModel.syncProgress.collectAsState()
 
-    if (syncProgress.isInitialSyncPhase) {
-        val blockFocusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); blockFocusRequester.safeRequestFocus("InitialSyncBlock") }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.background)
-                .focusRequester(blockFocusRequester)
-                .focusable(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(24.dp)
-            ) {
-                CircularProgressIndicator(
-                    color = colors.accent,
-                    modifier = Modifier.size(64.dp),
-                    strokeWidth = 6.dp
-                )
-                Text(
-                    text = "データベースを構築しています...",
-                    color = colors.textPrimary,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Surface(
-                    colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
-                    ) {
-                        if (syncProgress.total > 0) {
-                            Text(
-                                text = "進捗: ${syncProgress.current} / ${syncProgress.total} 件",
-                                color = colors.textSecondary,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        } else {
-                            Text(
-                                text = "進捗: ${syncProgress.current} 件取得済み",
-                                color = colors.textSecondary,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "※この処理は初回のみ発生します。\n完了するまでビデオタブは操作できませんが、\n「ライブ視聴」など他の機能をご利用いただけます。",
-                            color = colors.textSecondary,
-                            style = MaterialTheme.typography.bodyLarge,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 24.sp
-                        )
-                    }
-                }
-            }
-        }
-        return
-    }
-
     val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val groupedChannels by viewModel.groupedChannels.collectAsState()
@@ -721,7 +657,16 @@ fun RecordListScreen(
                             .background(colors.background),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isLoadingAny) CircularProgressIndicator(color = colors.textPrimary)
+                        if (syncProgress.isInitialSyncPhase && syncProgress.current == 0) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = colors.textPrimary)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "録画リストを取得しています… (${syncProgress.current} / ${syncProgress.total})",
+                                    color = colors.textSecondary
+                                )
+                            }
+                        } else if (isLoadingAny) CircularProgressIndicator(color = colors.textPrimary)
                         else Text(
                             "録画番組がありません",
                             style = MaterialTheme.typography.headlineSmall,

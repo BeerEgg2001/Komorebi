@@ -547,7 +547,7 @@ fun MainRootScreen(
             }
 
             val showMainContent =
-                isSystemReady && isSettingsInitialized && !state.showConnectionErrorDialog && !isSyncingInitial
+                isSystemReady && isSettingsInitialized && !state.showConnectionErrorDialog
 
             if (showMainContent) {
                 Box(modifier = Modifier.fillMaxSize()) {

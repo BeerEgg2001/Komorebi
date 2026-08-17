@@ -16,6 +16,9 @@ import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.util.WikipediaNormalizer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,8 +32,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -73,13 +79,87 @@ class RecordSyncEngine @Inject constructor(
     private val smartSyncMutex = Mutex()
     private var activeSyncJob: Job? = null
 
-    private val isLowRamDevice: Boolean by lazy {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        am.isLowRamDevice
+    private data class SyncProfile(
+        val name: String,
+        val parallelism: Int,
+        val fetchLimit: Int,
+        val batchSize: Int,
+        val initialDelayMs: Long,
+        val normalDelayMs: Long
+    )
+
+    private val isThrottled = AtomicBoolean(false)
+
+    private val syncProfile: SyncProfile by lazy {
+        val activityManager =
+            context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        val totalMemoryMb = memoryInfo.totalMem / (1024L * 1024L)
+        val memoryClassMb = activityManager.memoryClass
+        val cpuCores = Runtime.getRuntime().availableProcessors()
+        val isLowRamDevice = activityManager.isLowRamDevice
+
+        val profile = if (
+            isLowRamDevice ||
+            totalMemoryMb < 1200L ||
+            cpuCores <= 2
+        ) {
+            // 1GB級はレスポンスとDBバッファを小さくしてメモリ使用量を抑える。
+            SyncProfile(
+                name = "low",
+                parallelism = 2,
+                fetchLimit = 50,
+                batchSize = 50,
+                initialDelayMs = 25L,
+                normalDelayMs = 25L
+            )
+        } else if (
+            totalMemoryMb >= 3072L &&
+            cpuCores >= 6
+        ) {
+            // 高性能機は最大6本まで並列化し、通信回数を最小化する。
+            SyncProfile(
+                name = "high",
+                parallelism = 6,
+                fetchLimit = 200,
+                batchSize = 400,
+                initialDelayMs = 0L,
+                normalDelayMs = 0L
+            )
+        } else {
+            // 2GB級を含む大半のTV端末は標準プロファイルで動かす。
+            SyncProfile(
+                name = "standard",
+                parallelism = 4,
+                fetchLimit = 100,
+                batchSize = 200,
+                initialDelayMs = 0L,
+                normalDelayMs = 0L
+            )
+        }
+
+        Log.i(
+            TAG,
+            "Sync profile=" + profile.name +
+                ", totalMemoryMb=" + totalMemoryMb +
+                ", memoryClassMb=" + memoryClassMb +
+                ", cpuCores=" + cpuCores +
+                ", isLowRamDevice=" + isLowRamDevice +
+                ", parallelism=" + profile.parallelism +
+                ", fetchLimit=" + profile.fetchLimit +
+                ", batchSize=" + profile.batchSize +
+                ", initialDelayMs=" + profile.initialDelayMs +
+                ", normalDelayMs=" + profile.normalDelayMs
+        )
+        profile
     }
 
-    private val BATCH_SIZE get() = if (isLowRamDevice) 30 else 100
-    private val GC_DELAY_MS get() = if (isLowRamDevice) 2000L else 1200L
+    // 再生中は通信を1本に絞り、端末とプレイヤーの取り合いを避ける。
+    fun setThrottled(enabled: Boolean) {
+        isThrottled.set(enabled)
+        Log.i(TAG, "Playback sync throttle=" + if (enabled) "on" else "off")
+    }
 
     private fun hasRecordChanged(
         local: RecordedProgramEntity?,
@@ -131,6 +211,7 @@ class RecordSyncEngine @Inject constructor(
             }
             withContext(Dispatchers.IO) {
                 try {
+                    val syncStartedAtNanos = System.nanoTime()
                     Log.i(TAG, "Sync started. FullSync: $forceFullSync")
 
                     val metaDao = db.syncMetaDao()
@@ -173,10 +254,15 @@ class RecordSyncEngine @Inject constructor(
                     var isCompleted = false
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
-                    val needsOrphanDeletion = !isResumed && (isInitial || forceFullSync)
+                    // 省メモリ機では17081件規模のID集合を作らず、孤児削除も省略する。
+                    val needsOrphanDeletion =
+                        !isResumed &&
+                            (isInitial || forceFullSync) &&
+                            syncProfile.name != "low"
                     val allFetchedIds = if (needsOrphanDeletion) mutableSetOf<Int>() else null
 
-                    val dictionary: Map<String, String> = if (isLowRamDevice && isInitial) {
+                    val dictionary: Map<String, String> =
+                        if (syncProfile.name == "low" && isInitial) {
                         Log.i(TAG, "Low RAM device: skipping dictionary preload to save memory.")
                         emptyMap()
                     } else {
@@ -185,22 +271,44 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
+                    val pageSemaphore = Semaphore(syncProfile.parallelism)
                     var knownUnchangedStreak = 0
+                    var lastCompletedPage = currentPage - 1
 
                     while (!isCompleted) {
                         currentCoroutineContext().ensureActive()
+                        val parallelism = if (isThrottled.get()) 1 else syncProfile.parallelism
+                        val windowSize = if (isInitial) parallelism else 1
+                        val windowPages = (currentPage until currentPage + windowSize).toList()
 
-                        Log.i(TAG, "Fetching page: $currentPage")
+                        // DeferredはこのcoroutineScope内で必ずawaitし、
+                        // 同期のキャンセル時も子コルーチンを確実に閉じる。
+                        val fetchedPages = coroutineScope {
+                            windowPages.map { page ->
+                                async {
+                                    pageSemaphore.withPermit {
+                                        page to recordProvider.getRecordedPrograms(
+                                            page = page,
+                                            limit = syncProfile.fetchLimit
+                                        )
+                                    }
+                                }
+                            }.awaitAll().sortedBy { it.first }
+                        }
 
-                        val response = recordProvider.getRecordedPrograms(page = currentPage)
-                        val programs = response.recordedPrograms
-
-                        if (programs.isEmpty()) {
+                        if (fetchedPages.all { it.second.recordedPrograms.isEmpty() }) {
                             isCompleted = true
                             break
                         }
 
-                        run {
+                        for ((page, response) in fetchedPages) {
+                            currentCoroutineContext().ensureActive()
+                            val programs = response.recordedPrograms
+                            if (programs.isEmpty()) {
+                                isCompleted = true
+                                break
+                            }
+
                             val entities = programs.map { RecordDataMapper.toEntity(it) }
                             allFetchedIds?.addAll(entities.map { it.id })
 
@@ -208,32 +316,26 @@ class RecordSyncEngine @Inject constructor(
                                 val pageIds = entities.map { it.id }
                                 val localEntitiesMap =
                                     programDao.getByIds(pageIds).associateBy { it.id }
-
                                 val hasPageChanges = entities.any { entity ->
                                     hasRecordChanged(localEntitiesMap[entity.id], entity)
                                 }
-
                                 val shouldStopAfterPage = entities.any { entity ->
                                     val local = localEntitiesMap[entity.id]
                                     val knownUnchanged =
                                         local != null &&
-                                                !local.isRecording &&
-                                                !hasRecordChanged(local, entity)
-
+                                            !local.isRecording &&
+                                            !hasRecordChanged(local, entity)
                                     knownUnchangedStreak = if (knownUnchanged) {
                                         knownUnchangedStreak + 1
                                     } else {
                                         0
                                     }
-
                                     knownUnchangedStreak >= KNOWN_RECORD_STOP_THRESHOLD
                                 }
-
                                 if (!hasPageChanges && shouldStopAfterPage) {
                                     isCompleted = true
-                                    return@run
+                                    break
                                 }
-
                                 if (shouldStopAfterPage) {
                                     isCompleted = true
                                 }
@@ -244,50 +346,54 @@ class RecordSyncEngine @Inject constructor(
                                 val finalSeriesName = dictionary[entity.title] ?: baseTitle
                                 entity.copy(seriesName = finalSeriesName)
                             }
-
                             entityBuffer.addAll(enrichedEntities)
-                        }
 
-                        val processedThisTime = programs.size
-                        val totalCount = response.total.takeIf { it > 0 } ?: 0
-
-                        if (entityBuffer.size >= BATCH_SIZE) {
-                            db.withTransaction {
-                                programDao.upsertAll(entityBuffer)
-                                val newMeta = currentMeta.copy(
-                                    lastSyncedPage = currentPage,
-                                    lastSyncedAt = System.currentTimeMillis()
-                                )
-                                metaDao.upsert(newMeta)
-                                currentMeta = newMeta
-                            }
-                            entityBuffer.clear()
-
-                            if (_syncProgress.value.isInitialBuild) {
-                                _syncProgress.value =
-                                    _syncProgress.value.copy(isInitialBuild = false)
-                            }
-                        }
-
-                        processedCount += processedThisTime
-
-                        _syncProgress.value = _syncProgress.value.copy(
-                            isSyncing = true,
-                            message = baseMessage,
-                            current = processedCount,
-                            total = totalCount
-                        )
-
-                        if (totalCount > 0 && processedCount >= totalCount) {
-                            isCompleted = true
-                        } else {
-                            currentPage++
-                            if (isInitial) {
-                                System.gc()
-                                delay(GC_DELAY_MS)
+                            // 最初の3ページはページごとに反映し、最新録画をすぐ表示する。
+                            val shouldFlushImmediately = isInitial && page <= 3
+                            if (shouldFlushImmediately || entityBuffer.size >= syncProfile.batchSize) {
+                                db.withTransaction {
+                                    programDao.upsertAll(entityBuffer)
+                                    val newMeta = currentMeta.copy(
+                                        lastSyncedPage = page,
+                                        lastSyncedAt = System.currentTimeMillis()
+                                    )
+                                    metaDao.upsert(newMeta)
+                                    currentMeta = newMeta
+                                }
+                                entityBuffer.clear()
+                                lastCompletedPage = page
+                                if (_syncProgress.value.isInitialBuild && shouldFlushImmediately) {
+                                    _syncProgress.value =
+                                        _syncProgress.value.copy(isInitialBuild = false)
+                                }
                             } else {
-                                delay(if (isLowRamDevice) 500L else 300L)
+                                lastCompletedPage = page
                             }
+
+                            processedCount += programs.size
+                            val totalCount = response.total.takeIf { it > 0 } ?: 0
+                            _syncProgress.value = _syncProgress.value.copy(
+                                isSyncing = true,
+                                message = baseMessage,
+                                current = processedCount,
+                                total = totalCount
+                            )
+                            if (totalCount > 0 && processedCount >= totalCount) {
+                                isCompleted = true
+                                break
+                            }
+                        }
+
+                        if (!isCompleted) {
+                            currentPage = lastCompletedPage + 1
+                            val waitMs = if (isThrottled.get()) {
+                                maxOf(syncProfile.initialDelayMs, 250L)
+                            } else if (isInitial) {
+                                syncProfile.initialDelayMs
+                            } else {
+                                syncProfile.normalDelayMs
+                            }
+                            if (waitMs > 0L) delay(waitMs)
                         }
                     }
 
@@ -295,7 +401,7 @@ class RecordSyncEngine @Inject constructor(
                         db.withTransaction {
                             programDao.upsertAll(entityBuffer)
                             val newMeta = currentMeta.copy(
-                                lastSyncedPage = currentPage,
+                                lastSyncedPage = lastCompletedPage,
                                 lastSyncedAt = System.currentTimeMillis()
                             )
                             metaDao.upsert(newMeta)
@@ -324,6 +430,17 @@ class RecordSyncEngine @Inject constructor(
                             )
                         )
                     }
+
+                    val elapsedSeconds =
+                        (System.nanoTime() - syncStartedAtNanos) / 1_000_000_000.0
+                    val throughput =
+                        if (elapsedSeconds > 0.0) processedCount / elapsedSeconds else 0.0
+                    Log.i(
+                        TAG,
+                        "Sync completed. elapsedSeconds=" + elapsedSeconds +
+                            ", totalCount=" + processedCount +
+                            ", throughputPerSecond=" + throughput
+                    )
 
                     _syncProgress.value = _syncProgress.value.copy(
                         message = "シリーズ辞書を準備中...",

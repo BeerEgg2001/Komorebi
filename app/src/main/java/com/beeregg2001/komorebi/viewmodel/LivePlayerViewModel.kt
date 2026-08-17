@@ -34,6 +34,7 @@ import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationDataMapper
 import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -74,7 +75,8 @@ class LivePlayerViewModel @Inject constructor(
     private val epgStationLiveRepository: EpgStationLiveRepository,
     private val settingsRepository: SettingsRepository,
     private val livePlayerFactory: LivePlayerFactory,
-    private val liveJikkyoManager: LiveJikkyoManager
+    private val liveJikkyoManager: LiveJikkyoManager,
+    private val recordSyncEngine: RecordSyncEngine
 ) : ViewModel() {
 
     companion object {
@@ -348,6 +350,7 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun releasePlayers() {
+        recordSyncEngine.setThrottled(false)
         mainPlaybackJob?.cancel(); dualPlaybackJob?.cancel()
         mainEventSource?.cancel(); dualEventSource?.cancel()
 
@@ -442,6 +445,7 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        recordSyncEngine.setThrottled(true)
         if (!isAutoRetry) {
             mainAutoRetryCount = 0; _mainPlayerError.value = null
         }
@@ -545,6 +549,7 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        recordSyncEngine.setThrottled(true)
         if (!isAutoRetry) dualAutoRetryCount = 0
         dualCurrentChannel = channel; dualCurrentSource = source; dualIsEdcbDirect =
             isEdcbDirect; dualCurrentQuality = quality

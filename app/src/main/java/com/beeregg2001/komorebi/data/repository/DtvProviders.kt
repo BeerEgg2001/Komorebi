@@ -19,6 +19,8 @@ interface LiveProvider {
  */
 interface RecordProvider {
     suspend fun getRecordedPrograms(page: Int = 1): RecordedApiResponse
+    suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse =
+        getRecordedPrograms(page)
     suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram>
     suspend fun searchRecordedPrograms(keyword: String, page: Int = 1): RecordedApiResponse
 

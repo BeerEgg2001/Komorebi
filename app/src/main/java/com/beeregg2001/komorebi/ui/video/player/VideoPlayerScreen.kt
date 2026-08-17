@@ -81,6 +81,11 @@ fun VideoPlayerScreen(
 ) {
     val scope = rememberCoroutineScope()
 
+    DisposableEffect(Unit) {
+        videoPlayerViewModel.setPlaybackSyncThrottle(true)
+        onDispose { videoPlayerViewModel.setPlaybackSyncThrottle(false) }
+    }
+
     var currentProgram by remember { mutableStateOf(program) }
     val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
 
