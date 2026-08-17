@@ -220,12 +220,14 @@ class LivePlayerViewModel @Inject constructor(
                 } else if (source == StreamSource.EPGSTATION) {
                     _availableQualities.value =
                         epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
+                            // EPGStationの一部バージョンでは /api/config の streamConfig が
+                            // 空でも、ライブm2tsのmode 1/2は利用できる。
+                            // mode 0は無変換配信で、サーバー設定によってはデータが流れないため、
+                            // トランスコード配信を先に試す。
                             listOf(
-                                StreamQuality(
-                                    label = "そのまま視聴 (m2ts)",
-                                    value = "m2ts:0",
-                                    isRawTs = true
-                                )
+                                StreamQuality("m2ts mode 1", "m2ts:1"),
+                                StreamQuality("m2ts mode 2", "m2ts:2"),
+                                StreamQuality("そのまま視聴 (m2ts)", "m2ts:0", isRawTs = true)
                             )
                         }
                 } else {
@@ -742,11 +744,14 @@ class LivePlayerViewModel @Inject constructor(
             )
 
             StreamSource.EPGSTATION -> {
+                // EPGStationのmode 1/2はトランスコード後にprogram numberが1へ
+                // 再構成されるため、元チャンネルのserviceIdで絞ると全PIDが除外される。
+                // 配信URL自体がチャンネル単位なので、EPGStationでは全サービスを通す。
                 factory.tsArgs = arrayOf(
                     "-x",
                     "18/38/39",
                     "-n",
-                    channel.serviceId.toString(),
+                    "0",
                     "-a",
                     "13",
                     "-b",

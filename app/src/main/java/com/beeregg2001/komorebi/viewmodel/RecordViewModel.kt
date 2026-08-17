@@ -162,7 +162,7 @@ class RecordViewModel @Inject constructor(
     val isOnAirOnly: StateFlow<Boolean> = _isOnAirOnly.asStateFlow()
     private val _seriesSortType = MutableStateFlow(SeriesSortType.LAST_AIRED)
     val seriesSortType: StateFlow<SeriesSortType> = _seriesSortType.asStateFlow()
-    private val _seriesSortOrder = MutableStateFlow(RecordSortOrder.ASC)
+    private val _seriesSortOrder = MutableStateFlow(RecordSortOrder.DESC)
     val seriesSortOrder: StateFlow<RecordSortOrder> = _seriesSortOrder.asStateFlow()
     private var epgSeriesItems: List<com.beeregg2001.komorebi.data.model.EsSeriesListItem> = emptyList()
     private var epgLocalByTitle: Map<String, SeriesProjection> = emptyMap()
