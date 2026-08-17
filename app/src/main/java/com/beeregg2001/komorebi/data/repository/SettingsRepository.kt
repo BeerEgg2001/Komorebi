@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.data
 
 import android.content.Context
 import android.util.Log
+import com.beeregg2001.komorebi.common.UrlBuilder
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -269,8 +270,7 @@ class SettingsRepository @Inject constructor(
         val ip = prefs[EPGSTATION_IP] ?: ""
         val port = prefs[EPGSTATION_PORT] ?: "8888"
         if (ip.isBlank()) return ""
-        if (ip.startsWith("http://") || ip.startsWith("https://")) return "$ip:$port"
-        return "http://$ip:$port"
+        return UrlBuilder.formatBaseUrl(ip, port, "http")
     }
 
     // ★ 追加: Cloudflare Access サービストークンをヘッダーMapとして取得 (未設定なら空Map)

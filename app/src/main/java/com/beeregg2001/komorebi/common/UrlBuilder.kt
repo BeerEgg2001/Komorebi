@@ -3,19 +3,41 @@ package com.beeregg2001.komorebi.common
 import androidx.annotation.OptIn
 import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 object UrlBuilder {
 
     /**
-     * ベースURLを組み立てる
+     * ホストとポートからベースURLを組み立てる。
+     *
+     * スキーム付きの入力 (例: https://example.com) はそのまま維持する。
+     * URL側にポートが明示されている場合は設定欄のポートより優先し、
+     * ポートがないスキーム付きURLは http/https の標準ポートを使用する。
      */
-    private fun formatBaseUrl(ip: String, port: String, defaultProtocol: String): String {
-        val cleanIp = ip.removeSuffix("/")
-        return if (cleanIp.startsWith("http://") || cleanIp.startsWith("https://")) {
-            "$cleanIp:$port"
+    fun formatBaseUrl(ip: String, port: String, defaultProtocol: String): String {
+        val cleanIp = ip.trim().removeSuffix("/")
+        val normalized = if (
+            cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        ) {
+            cleanIp
         } else {
-            "$defaultProtocol://$cleanIp:$port"
+            "$defaultProtocol://$cleanIp"
         }
+
+        val parsed = normalized.toHttpUrlOrNull() ?: return "$normalized:$port"
+        val hasExplicitScheme = cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        val hasExplicitPort = Regex("^https?://(?:\\[[^]]+\\]|[^/:]+):\\d+(?:/|$)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(normalized)
+        if (hasExplicitPort) return parsed.toString().removeSuffix("/")
+
+        val configuredPort = if (hasExplicitScheme) {
+            if (parsed.scheme.equals("https", ignoreCase = true)) 443 else 80
+        } else {
+            port.toIntOrNull()?.takeIf { it in 1..65535 } ?: return parsed.toString()
+        }
+        return parsed.newBuilder().port(configuredPort).build().toString().removeSuffix("/")
     }
 
     /**
