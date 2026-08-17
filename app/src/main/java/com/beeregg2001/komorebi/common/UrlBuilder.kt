@@ -161,6 +161,9 @@ object UrlBuilder {
     fun getEpgStationLiveM2tsUrl(ip: String, port: String, channelId: Long, mode: Int): String =
         "${formatBaseUrl(ip, port, "http")}/api/streams/live/$channelId/m2ts?mode=$mode"
 
+    fun getEpgStationLiveM2tsLlUrl(ip: String, port: String, channelId: Long, mode: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/streams/live/$channelId/m2tsll?mode=$mode"
+
     fun getEpgStationHlsPlaylistUrl(ip: String, port: String, streamId: Int): String =
         "${formatBaseUrl(ip, port, "http")}/streamfiles/stream$streamId.m3u8"
 

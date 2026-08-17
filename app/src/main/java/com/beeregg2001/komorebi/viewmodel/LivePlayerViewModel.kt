@@ -221,12 +221,15 @@ class LivePlayerViewModel @Inject constructor(
                     _availableQualities.value =
                         epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
                             // EPGStationの一部バージョンでは /api/config の streamConfig が
-                            // 空でも、ライブm2tsのmode 1/2は利用できる。
+                            // 空でも、ライブm2ts/m2tsllのmode 1/2は利用できる。
                             // mode 0は無変換配信で、サーバー設定によってはデータが流れないため、
                             // トランスコード配信を先に試す。
                             listOf(
                                 StreamQuality("m2ts mode 1", "m2ts:1"),
                                 StreamQuality("m2ts mode 2", "m2ts:2"),
+                                StreamQuality("m2tsll mode 1", "m2tsll:1"),
+                                StreamQuality("m2tsll mode 2", "m2tsll:2"),
+                                StreamQuality("HLS", "hls:0"),
                                 StreamQuality("そのまま視聴 (m2ts)", "m2ts:0", isRawTs = true)
                             )
                         }
@@ -385,6 +388,29 @@ class LivePlayerViewModel @Inject constructor(
             }
 
             val errorMsg = analyzePlayerError(error)
+            val epgFallback = if (
+                mainCurrentSource == StreamSource.EPGSTATION &&
+                (mainCurrentQuality?.value?.startsWith("m2ts:") == true ||
+                    mainCurrentQuality?.value?.startsWith("m2tsll:") == true)
+            ) {
+                _availableQualities.value.firstOrNull { it.value.startsWith("hls:") }
+            } else null
+            if (epgFallback != null && mainCurrentChannel != null) {
+                Log.w(TAG, "EPGStation TS playback failed. Falling back to HLS: ${epgFallback.value}")
+                mainCurrentQuality = epgFallback
+                mainAutoRetryCount = 0
+                _mainSseDetail.value = "HLSへ切り替え中..."
+                stopMainPlaybackSafely()
+                playMainChannel(
+                    uiContext,
+                    mainCurrentChannel!!,
+                    mainCurrentSource,
+                    mainIsEdcbDirect,
+                    epgFallback,
+                    true
+                )
+                return@launch
+            }
             if (mainAutoRetryCount < MAX_AUTO_RETRY) {
                 mainAutoRetryCount++; _mainSseDetail.value =
                     "通信復旧中... ($mainAutoRetryCount/$MAX_AUTO_RETRY)"
@@ -767,12 +793,11 @@ class LivePlayerViewModel @Inject constructor(
                 val channelId = EpgStationDataMapper.parseChannelId(channel.id)
                 val mode = quality.value.substringAfter(":", "").toIntOrNull() ?: 0
                 if (config is BackendConfig.EpgStation && channelId != null) {
-                    UrlBuilder.getEpgStationLiveM2tsUrl(
-                        config.ip,
-                        config.port,
-                        channelId,
-                        mode
-                    )
+                    if (quality.value.startsWith("m2tsll:")) {
+                        UrlBuilder.getEpgStationLiveM2tsLlUrl(config.ip, config.port, channelId, mode)
+                    } else {
+                        UrlBuilder.getEpgStationLiveM2tsUrl(config.ip, config.port, channelId, mode)
+                    }
                 } else {
                     ""
                 }
@@ -793,7 +818,14 @@ class LivePlayerViewModel @Inject constructor(
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
             val mediaSource =
-                if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION || (source == StreamSource.EDCB && isEdcbDirect)) {
+                if (streamUrl.contains(".m3u8", ignoreCase = true)) {
+                    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                        .setDefaultRequestProperties(cfAccessHeaders)
+                        .setAllowCrossProtocolRedirects(true)
+                    HlsMediaSource.Factory(httpDataSourceFactory)
+                        .setAllowChunklessPreparation(false)
+                        .createMediaSource(mediaItem)
+                } else if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION || (source == StreamSource.EDCB && isEdcbDirect)) {
                     val extractorsFactory = ExtractorsFactory {
                         arrayOf(
                             TsExtractor(

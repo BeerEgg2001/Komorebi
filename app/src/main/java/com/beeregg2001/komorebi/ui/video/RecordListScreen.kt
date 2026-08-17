@@ -318,13 +318,25 @@ fun RecordListScreen(
     LaunchedEffect(Unit) {
         if (menuState.isInitialFocusRequested) {
             delay(200)
-            if (isReturningFromPlayer && lastPlayedProgramId != null) {
-                ticketManager.issue(FocusTicket.TARGET_ID, lastPlayedProgramId)
-                onReturnFocusConsumed()
-            } else {
+            if (!isReturningFromPlayer) {
                 ticketManager.issue(FocusTicket.LIST_TOP)
             }
             menuState.isInitialFocusRequested = false
+        }
+    }
+
+    // プレイヤー表示中もこの画面は背面で保持されるため、戻るたびに明示的に
+    // 復帰チケットを発行する。これにより録画一覧・シリーズ検索結果の双方で、
+    // 直前に再生していた番組へスクロールとフォーカスを戻せる。
+    LaunchedEffect(isReturningFromPlayer, lastPlayedProgramId) {
+        if (isReturningFromPlayer) {
+            delay(150)
+            if (lastPlayedProgramId != null) {
+                ticketManager.issue(FocusTicket.TARGET_ID, lastPlayedProgramId)
+            } else {
+                ticketManager.issue(FocusTicket.LIST_TOP)
+            }
+            onReturnFocusConsumed()
         }
     }
 

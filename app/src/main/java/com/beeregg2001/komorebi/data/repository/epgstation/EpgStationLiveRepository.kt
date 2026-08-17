@@ -90,6 +90,9 @@ class EpgStationLiveRepository @Inject constructor(
             config?.m2ts.orEmpty().forEachIndexed { index, item ->
                 result += StreamQuality("m2ts: ${item.name}", "m2ts:$index", item.isUnconverted)
             }
+            config?.m2tsll.orEmpty().forEachIndexed { index, label ->
+                result += StreamQuality("m2tsll: $label", "m2tsll:$index")
+            }
             config?.hls.orEmpty().forEachIndexed { index, label ->
                 result += StreamQuality("hls: $label", "hls:$index")
             }
@@ -111,8 +114,13 @@ class EpgStationLiveRepository @Inject constructor(
         return try {
             if (format == "hls") {
                 val stream = api.startLiveHls(id, mode)
+                if (stream.streamId <= 0) {
+                    throw Exception("HLSストリームの開始に失敗しました (streamId=${stream.streamId})")
+                }
                 delay(3000)
                 UrlBuilder.getEpgStationHlsPlaylistUrl(ip, port, stream.streamId)
+            } else if (format == "m2tsll") {
+                UrlBuilder.getEpgStationLiveM2tsLlUrl(ip, port, id, mode)
             } else {
                 UrlBuilder.getEpgStationLiveM2tsUrl(ip, port, id, mode)
             }
