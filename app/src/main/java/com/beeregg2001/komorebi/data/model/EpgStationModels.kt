@@ -128,6 +128,12 @@ data class EsVideoChapters(val chapters: List<EsVideoChapter> = emptyList())
 data class EsAudioTrack(val track: String = "", val name: String = "", val streamIndex: Int = 0)
 data class EsAudioTracks(val tracks: List<EsAudioTrack> = emptyList())
 data class EsDuration(val duration: Double? = null)
+data class EsVideoFileMetadata(
+    val videoFileId: Int = 0,
+    val duration: Double? = null,
+    val startTime: Double? = null,
+    val startAt: Long? = null
+)
 data class EsStartStreamInfo(val streamId: Int = 0)
 
 /** 次に見る候補を表す DTO。 */
@@ -269,13 +275,71 @@ data class EsRuleSearchOption(
     val keyRegExp: Boolean? = null,
     val name: Boolean? = null,
     val description: Boolean? = null,
+    val extended: Boolean? = null,
+    val ignoreKeyCS: Boolean? = null,
+    val ignoreKeyRegExp: Boolean? = null,
+    val ignoreName: Boolean? = null,
+    val ignoreDescription: Boolean? = null,
+    val ignoreExtended: Boolean? = null,
+    val GR: Boolean? = null,
+    val BS: Boolean? = null,
+    val CS: Boolean? = null,
+    val SKY: Boolean? = null,
+    val NW1: Boolean? = null,
+    val NW2: Boolean? = null,
+    val NW3: Boolean? = null,
+    val NW4: Boolean? = null,
+    val NW5: Boolean? = null,
+    val NW6: Boolean? = null,
+    val NW7: Boolean? = null,
+    val NW8: Boolean? = null,
+    val NW9: Boolean? = null,
+    val NW10: Boolean? = null,
+    val NW11: Boolean? = null,
+    val NW12: Boolean? = null,
+    val NW13: Boolean? = null,
+    val NW14: Boolean? = null,
+    val NW15: Boolean? = null,
+    val NW16: Boolean? = null,
+    val NW17: Boolean? = null,
+    val NW18: Boolean? = null,
+    val NW19: Boolean? = null,
+    val NW20: Boolean? = null,
+    val NW21: Boolean? = null,
+    val NW22: Boolean? = null,
+    val NW23: Boolean? = null,
+    val NW24: Boolean? = null,
+    val NW25: Boolean? = null,
+    val NW26: Boolean? = null,
+    val NW27: Boolean? = null,
+    val NW28: Boolean? = null,
+    val NW29: Boolean? = null,
+    val NW30: Boolean? = null,
+    val NW31: Boolean? = null,
+    val NW32: Boolean? = null,
+    val NW33: Boolean? = null,
+    val NW34: Boolean? = null,
+    val NW35: Boolean? = null,
+    val NW36: Boolean? = null,
+    val NW37: Boolean? = null,
+    val NW38: Boolean? = null,
+    val NW39: Boolean? = null,
+    val NW40: Boolean? = null,
+    val BS4K: Boolean? = null,
+    val CS4K: Boolean? = null,
     val channelIds: List<Long>? = null,
     val genres: List<EsRuleGenre>? = null,
+    val times: List<EsRuleTime>? = null,
     val isFree: Boolean? = null,
     val durationMin: Int? = null,
     val durationMax: Int? = null
 )
 data class EsRuleGenre(val genre: Int = 0, val subGenre: Int? = null)
+data class EsRuleTime(
+    val start: Int? = null,
+    val range: Int? = null,
+    val week: Int = 0
+)
 data class EsRuleReserveOption(
     val enable: Boolean = true,
     val allowEndLack: Boolean = true,

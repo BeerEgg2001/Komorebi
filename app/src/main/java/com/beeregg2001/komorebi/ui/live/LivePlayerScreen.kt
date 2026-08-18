@@ -822,13 +822,20 @@ fun LivePlayerScreen(
                 },
                 onRecordToggle = {
                     if (isRecording) {
-                        if (activeReserve != null) {
-                            reserveViewModel.deleteReservation(activeReserve.id) {}
-                            onShowToast("録画を停止しました")
-                        }
+                        reserveViewModel.deleteReservation(
+                            reservationId = requireNotNull(activeReserve).id,
+                            onFailure = { onShowToast(it) }
+                        ) { onShowToast("録画を停止しました") }
                     } else {
-                        reserveViewModel.addReserve(currentChannelItem.id) {}
-                        onShowToast("録画を開始しました")
+                        val programId = currentChannelItem.programPresent?.id
+                        if (programId == null) {
+                            onShowToast("放送中番組の情報がないため録画予約できません")
+                        } else {
+                            reserveViewModel.addReserve(
+                                programId = programId,
+                                onFailure = { onShowToast(it) }
+                            ) { onShowToast("録画を開始しました") }
+                        }
                     }
                     onSubMenuToggle(false)
                 },

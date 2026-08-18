@@ -253,7 +253,10 @@ fun MainRootScreen(
 
                 is AiConciergeAction.ReserveSingle -> {
                     closeAiConcierge(true)
-                    reserveViewModel.addReserve(action.programId) {
+                    reserveViewModel.addReserve(
+                        programId = action.programId,
+                        onFailure = { state.toastMessage = it }
+                    ) {
                         state.toastMessage = "番組の録画予約を完了しました"
                     }
                 }
@@ -278,6 +281,7 @@ fun MainRootScreen(
                         priority = 3,
                         isEventRelay = true,
                         isExactRecord = true,
+                        onFailure = { state.toastMessage = it },
                         onSuccess = {
                             state.toastMessage = "「${action.keyword}」の自動録画条件を登録しました"
                         }

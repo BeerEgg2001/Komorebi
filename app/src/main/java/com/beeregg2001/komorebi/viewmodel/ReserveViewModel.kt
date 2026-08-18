@@ -123,14 +123,21 @@ class ReserveViewModel @Inject constructor(
     /**
      * デフォルト設定で番組を単発予約します（番組表から「録画する」を押した場合など）。
      */
-    fun addReserve(programId: String, onSuccess: () -> Unit) {
+    fun addReserve(
+        programId: String,
+        onFailure: (String) -> Unit = {},
+        onSuccess: () -> Unit
+    ) {
         viewModelScope.launch {
             _isLoading.value = true
             val request =
                 ReserveRequest(programId = programId, recordSettings = ReserveRecordSettings())
             reserveProvider.addReserve(request)
                 .onSuccess { fetchReserves(); onSuccess() }
-                .onFailure { e -> Log.e(TAG, "Failed to add reservation", e); onSuccess() }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to add reservation", e)
+                    onFailure(e.message ?: "予約の追加に失敗しました")
+                }
             _isLoading.value = false
         }
     }
@@ -141,6 +148,7 @@ class ReserveViewModel @Inject constructor(
     fun addReserveWithSettings(
         programId: String,
         settings: ReserveRecordSettings,
+        onFailure: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -148,7 +156,10 @@ class ReserveViewModel @Inject constructor(
             val request = ReserveRequest(programId = programId, recordSettings = settings)
             reserveProvider.addReserve(request)
                 .onSuccess { fetchReserves(); onSuccess() }
-                .onFailure { e -> Log.e(TAG, "Failed to add reservation", e); onSuccess() }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to add reservation", e)
+                    onFailure(e.message ?: "予約の追加に失敗しました")
+                }
             _isLoading.value = false
         }
     }
@@ -159,6 +170,7 @@ class ReserveViewModel @Inject constructor(
     fun updateReservation(
         reserve: ReserveItem,
         newSettings: ReserveRecordSettings,
+        onFailure: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -167,7 +179,10 @@ class ReserveViewModel @Inject constructor(
                 ReserveRequest(programId = reserve.program.id, recordSettings = newSettings)
             reserveProvider.updateReserve(reserve.id, request)
                 .onSuccess { fetchReserves(); onSuccess() }
-                .onFailure { e -> Log.e(TAG, "Failed to update reservation", e); onSuccess() }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to update reservation", e)
+                    onFailure(e.message ?: "予約の更新に失敗しました")
+                }
             _isLoading.value = false
         }
     }
@@ -175,12 +190,19 @@ class ReserveViewModel @Inject constructor(
     /**
      * 予約を削除（キャンセル）します。
      */
-    fun deleteReservation(reservationId: Int, onSuccess: () -> Unit) {
+    fun deleteReservation(
+        reservationId: Int,
+        onFailure: (String) -> Unit = {},
+        onSuccess: () -> Unit
+    ) {
         viewModelScope.launch {
             _isLoading.value = true
             reserveProvider.deleteReservation(reservationId)
                 .onSuccess { fetchReserves(); onSuccess() }
-                .onFailure { e -> Log.e(TAG, "Failed to delete reservation", e); onSuccess() }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to delete reservation", e)
+                    onFailure(e.message ?: "予約の削除に失敗しました")
+                }
             _isLoading.value = false
         }
     }
@@ -230,6 +252,7 @@ class ReserveViewModel @Inject constructor(
         priority: Int,
         isEventRelay: Boolean,
         isExactRecord: Boolean,
+        onFailure: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -303,7 +326,7 @@ class ReserveViewModel @Inject constructor(
                 .onFailure { e ->
                     Log.e(TAG, "Failed to add EPG reservation", e)
                     _isLoading.value = false
-                    onSuccess()
+                    onFailure(e.message ?: "自動予約条件の追加に失敗しました")
                 }
         }
     }
@@ -328,18 +351,11 @@ class ReserveViewModel @Inject constructor(
         priority: Int,
         isEventRelay: Boolean,
         isExactRecord: Boolean,
+        onFailure: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _isLoading.value = true
-
-            // 条件を更新する前に、古い条件によって既に生成されていた予約をいったん削除します。
-            // サーバー側で条件が更新されると新しい予約を作り直しますが、古い予約が残ってしまうことがあるためのフェイルセーフです。
-            val exactComment = "EPG自動予約(${originalCondition.programSearchCondition.keyword})"
-            val relatedReserves = _reserves.value.filter { it.comment == exactComment }
-            relatedReserves.forEach { reserve ->
-                reserveProvider.deleteReservation(reserve.id)
-            }
 
             // 新しい時間帯・曜日の計算
             val isNextDay = endHour < startHour || (endHour == startHour && endMinute < startMinute)
@@ -394,7 +410,7 @@ class ReserveViewModel @Inject constructor(
                 .onFailure { e ->
                     Log.e(TAG, "Failed to update EPG reservation", e)
                     _isLoading.value = false
-                    onSuccess()
+                    onFailure(e.message ?: "自動予約条件の更新に失敗しました")
                 }
         }
     }
@@ -406,26 +422,41 @@ class ReserveViewModel @Inject constructor(
     fun deleteConditionWithCleanup(
         condition: ReservationCondition,
         deleteRelatedReserves: Boolean,
+        onFailure: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _isLoading.value = true
-            // 1. まず条件（ルール）自体を削除
-            reserveProvider.deleteReservationCondition(condition.id)
-
-            // 2. ユーザーが希望した場合は、このルールによって生成された予約も削除
-            if (deleteRelatedReserves) {
-                val keyword = condition.programSearchCondition.keyword
-                val exactComment = "EPG自動予約($keyword)"
-                val relatedReserves = _reserves.value.filter { it.comment == exactComment }
-                relatedReserves.forEach { reserve ->
-                    reserveProvider.deleteReservation(reserve.id)
+            runCatching {
+                val relatedReserveIds = if (deleteRelatedReserves) {
+                    val keyword = condition.programSearchCondition.keyword
+                    val exactComment = "EPG自動予約($keyword)"
+                    _reserves.value.filter { it.comment == exactComment }.map { it.id }.toSet()
+                } else {
+                    emptySet()
                 }
-            }
 
-            fetchConditions()
-            fetchReserves()
-            onSuccess()
+                // 1. まず条件（ルール）自体を削除
+                reserveProvider.deleteReservationCondition(condition.id).getOrThrow()
+
+                // EPGStation はルール削除時に関連予約も自動削除する。
+                // 削除後に残っている予約だけを確認し、二重削除による誤エラーを防ぐ。
+                if (relatedReserveIds.isNotEmpty()) {
+                    val existingReserveIds = reserveProvider.getReserves().getOrThrow()
+                        .map { it.id }
+                        .toSet()
+                    relatedReserveIds.intersect(existingReserveIds).forEach { reserveId ->
+                        reserveProvider.deleteReservation(reserveId).getOrThrow()
+                    }
+                }
+            }.onSuccess {
+                fetchConditions()
+                fetchReserves()
+                onSuccess()
+            }.onFailure {
+                Log.e(TAG, "Failed to delete EPG reservation", it)
+                onFailure(it.message ?: "自動予約条件の削除に失敗しました")
+            }
             _isLoading.value = false
         }
     }

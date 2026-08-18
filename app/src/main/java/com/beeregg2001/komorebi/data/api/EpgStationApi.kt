@@ -89,6 +89,9 @@ interface EpgStationApi {
     @GET("api/videos/{videoFileId}/duration")
     suspend fun getDuration(@Path("videoFileId") videoFileId: Int): Response<EsDuration>
 
+    @GET("api/videos/{videoFileId}/metadata")
+    suspend fun getVideoFileMetadata(@Path("videoFileId") videoFileId: Int): EsVideoFileMetadata
+
     @GET("api/videos/{videoFileId}/chapters")
     suspend fun getChapters(@Path("videoFileId") videoFileId: Int): Response<EsVideoChapters>
 

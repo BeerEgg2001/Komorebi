@@ -173,6 +173,7 @@ fun MainRootBackground(
                                 priority = pri,
                                 isEventRelay = relay,
                                 isExactRecord = exact,
+                                onFailure = { state.toastMessage = it },
                                 onSuccess = {
                                     scope.launch {
                                         state.editingCondition = null
@@ -185,6 +186,7 @@ fun MainRootBackground(
                         onConfirmDelete = { deleteRelated ->
                             reserveViewModel.deleteConditionWithCleanup(
                                 condition = currentCondition, deleteRelatedReserves = deleteRelated,
+                                onFailure = { state.toastMessage = it },
                                 onSuccess = {
                                     scope.launch {
                                         state.editingCondition = null

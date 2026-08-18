@@ -1,14 +1,25 @@
 package com.beeregg2001.komorebi.data.repository.epgstation
 
+import android.content.Context
+import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.EpgStationApi
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,7 +28,9 @@ import javax.inject.Singleton
 class EpgStationRecordRepository @Inject constructor(
     private val settings: SettingsRepository,
     private val api: EpgStationApi,
-    private val channelCache: EpgStationChannelCache
+    private val channelCache: EpgStationChannelCache,
+    private val okHttpClient: OkHttpClient,
+    @param:ApplicationContext private val context: Context
 ) : RecordProvider {
     private var streamId: Int? = null
     private var qualities: List<StreamQuality>? = null
@@ -27,13 +40,31 @@ class EpgStationRecordRepository @Inject constructor(
      * EPGStation ではこの2つが別の採番なのに対し、アプリ側は呼び出し箇所によって
      * 録画 ID を渡してくることがある (再生画面のシーク処理など) ため、ここで吸収する。
      */
-    private val videoFileIdByRecordedId = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+    private val videoFileIdByRecordedId = ConcurrentHashMap<Int, Int>()
+    private val recordedByVideoFileId = ConcurrentHashMap<Int, EsRecordedItem>()
+
+    private val directHttpClient: OkHttpClient by lazy {
+        // バックエンド URL 書換え Interceptor を外し、NX-Jikkyo へ直接接続する。
+        okHttpClient.newBuilder().apply { interceptors().clear() }
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val jikkyoChannels: JSONArray by lazy {
+        runCatching {
+            context.assets.open("jikkyo_channels.json").bufferedReader().use { JSONArray(it.readText()) }
+        }.getOrElse { JSONArray() }
+    }
 
     /** 録画 DTO を共通モデルへ変換し、詳細時だけ付加情報を取得する。 */
     private suspend fun mapRecorded(item: EsRecordedItem, includeDetails: Boolean): RecordedProgram {
         val file = item.videoFiles?.firstOrNull { it.type == "ts" }
             ?: item.videoFiles?.firstOrNull()
-        file?.let { videoFileIdByRecordedId[item.id] = it.id }
+        file?.let {
+            videoFileIdByRecordedId[item.id] = it.id
+            recordedByVideoFileId[it.id] = item
+        }
         // 詳細表示のときだけ、チャプター・実尺・シリーズ割当・再生位置を並列で取りに行く。
         // これらはサーバー側で機能を無効化できる (404 が返る) ため、個々の失敗は無視して欠損扱いにする。
         val details = if (includeDetails && file != null) {
@@ -164,7 +195,22 @@ class EpgStationRecordRepository @Inject constructor(
 
     /** 録画一覧の既定件数。画面表示と検索でも通信回数を抑える。 */
     private companion object {
+        const val TAG = "EpgStationRecordRepo"
         const val DEFAULT_RECORDED_LIMIT = 100
+        const val MAX_RECORDED_LOOKUP = 2_000
+        const val MAX_JIKKYO_DURATION_MS = 3L * 24 * 60 * 60 * 1000
+        const val MAX_JIKKYO_REQUESTS = 16
+        val COMMENT_COLORS = mapOf(
+            "white" to "#FFEAEA", "red" to "#F02840", "pink" to "#FD7E80",
+            "orange" to "#FDA708", "yellow" to "#FFE133", "green" to "#64DD17",
+            "cyan" to "#00D4F5", "blue" to "#4763FF", "purple" to "#D500F9",
+            "black" to "#1E1310", "white2" to "#CCCC99", "niconicowhite" to "#CCCC99",
+            "red2" to "#CC0033", "truered" to "#CC0033", "pink2" to "#FF33CC",
+            "orange2" to "#FF6600", "passionorange" to "#FF6600", "yellow2" to "#999900",
+            "madyellow" to "#999900", "green2" to "#00CC66", "elementalgreen" to "#00CC66",
+            "cyan2" to "#00CCCC", "blue2" to "#3399FF", "marineblue" to "#3399FF",
+            "purple2" to "#6633CC", "nobleviolet" to "#6633CC", "black2" to "#666666"
+        )
     }
 
     /** 録画一覧を取得する。 */
@@ -257,9 +303,139 @@ class EpgStationRecordRepository @Inject constructor(
         }.getOrNull() ?: videoId
     }
 
-    /** EPGStation に実況過去ログがないため空の結果を返す。 */
+    /** EPGStation の録画情報を基準に NX-Jikkyo の実況過去ログを取得する。 */
     override suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> =
-        Result.success(emptyList())
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val recorded = recordedByVideoFileId[videoId]
+                    // 再生画面はローカル DB 由来の recordedId を渡す場合がある。
+                    // videoFileId と決め打ちして全件走査すると、対象が見つからず実況が空になる。
+                    ?: runCatching { api.getRecordedDetail(videoId) }.getOrNull()?.also { item ->
+                        item.videoFiles.orEmpty().forEach { file -> recordedByVideoFileId[file.id] = item }
+                    }
+                    ?: findRecordedByVideoFileId(videoId)
+                    ?: throw Exception("録画ファイルに対応する録画情報が見つかりません。")
+                val channel = channelCache.getChannelIndex().byId[recorded.channelId]
+                    ?: throw Exception("録画番組のチャンネル情報が見つかりません。")
+                val jikkyoId = findJikkyoId(channel.networkId.toInt(), channel.serviceId.toInt())
+                    ?: throw Exception("このチャンネルは実況過去ログに対応していません。")
+                val file = recorded.videoFiles?.firstOrNull { it.id == videoId }
+                    ?: recorded.videoFiles?.firstOrNull { it.type == "ts" }
+                    ?: recorded.videoFiles?.firstOrNull()
+                    ?: throw Exception("再生対象の録画ファイルが見つかりません。")
+                val videoFileId = file.id
+                val metadata = if (file.startAt == null || file.duration == null) {
+                    runCatching { api.getVideoFileMetadata(videoFileId) }.getOrNull()
+                } else {
+                    null
+                }
+                val startAtMs = file.startAt ?: metadata?.startAt ?: recorded.startAt
+                val durationMs = (file.duration ?: metadata?.duration)?.takeIf { it > 0 }
+                    ?.let { (it * 1000).toLong() }
+                    ?: (recorded.endAt - recorded.startAt).coerceAtLeast(0)
+
+                fetchArchivedComments(jikkyoId, startAtMs, startAtMs + durationMs)
+            }.onFailure { Log.e(TAG, "実況過去ログの取得に失敗しました。", it) }
+        }
+
+    /** キャッシュに無い場合は録画一覧をページングし、videoFileId から録画を引き直す。 */
+    private suspend fun findRecordedByVideoFileId(videoFileId: Int): EsRecordedItem? {
+        var offset = 0
+        while (offset < MAX_RECORDED_LOOKUP) {
+            val page = api.getRecordedList(offset = offset, limit = DEFAULT_RECORDED_LIMIT)
+            page.records.forEach { item ->
+                item.videoFiles.orEmpty().forEach { file -> recordedByVideoFileId[file.id] = item }
+            }
+            recordedByVideoFileId[videoFileId]?.let { return it }
+            if (page.records.isEmpty() || offset + page.records.size >= page.total) break
+            offset += page.records.size
+        }
+        return null
+    }
+
+    /** networkId/serviceId を同梱対照表から NX-Jikkyo チャンネル ID へ変換する。 */
+    private fun findJikkyoId(networkId: Int, serviceId: Int): String? {
+        for (index in 0 until jikkyoChannels.length()) {
+            val channel = jikkyoChannels.optJSONObject(index) ?: continue
+            val registeredNetworkId = channel.optInt("network_id", -1)
+            val serviceIdText = channel.opt("service_id")?.toString() ?: continue
+            val registeredServiceId = if (serviceIdText.startsWith("0x", ignoreCase = true)) {
+                serviceIdText.substring(2).toIntOrNull(16)
+            } else {
+                serviceIdText.toIntOrNull()
+            } ?: continue
+            val matched = networkId == registeredNetworkId && serviceId == registeredServiceId ||
+                networkId in 0x7880..0x7FEF && registeredNetworkId == 15 &&
+                serviceId in registeredServiceId..(registeredServiceId + 2)
+            if (matched) {
+                return channel.optInt("jikkyo_id", -1).takeIf { it >= 0 }?.let { "jk$it" }
+            }
+        }
+        return null
+    }
+
+    /** NX-Jikkyo API の上限に合わせ、長時間録画を3日単位で取得する。 */
+    private fun fetchArchivedComments(
+        jikkyoId: String,
+        startAtMs: Long,
+        endAtMs: Long
+    ): List<ArchivedComment> {
+        if (startAtMs >= endAtMs) return emptyList()
+        val comments = mutableListOf<ArchivedComment>()
+        var chunkStartAt = startAtMs
+        var requestCount = 0
+        while (chunkStartAt < endAtMs && requestCount < MAX_JIKKYO_REQUESTS) {
+            val chunkEndAt = minOf(chunkStartAt + MAX_JIKKYO_DURATION_MS, endAtMs)
+            val url = "https://jikkyo.tsukumijima.net/api/kakolog/$jikkyoId" +
+                "?starttime=${chunkStartAt / 1000}&endtime=${chunkEndAt / 1000}&format=json"
+            directHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw Exception("NX-Jikkyo APIエラー: HTTP ${response.code}")
+                }
+                val json = JSONObject(response.body?.string().orEmpty())
+                json.optString("error").takeIf { it.isNotBlank() }?.let { throw Exception(it) }
+                comments += parseArchivedComments(json, startAtMs)
+            }
+            chunkStartAt = chunkEndAt
+            requestCount++
+        }
+        return comments.sortedBy { it.time }
+    }
+
+    /** APIレスポンスをプレイヤー共通の過去ログコメントへ変換する。 */
+    private fun parseArchivedComments(json: JSONObject, startAtMs: Long): List<ArchivedComment> {
+        val packets = json.optJSONArray("packet") ?: return emptyList()
+        return buildList {
+            for (index in 0 until packets.length()) {
+                val chat = packets.optJSONObject(index)?.optJSONObject("chat") ?: continue
+                val text = chat.optString("content")
+                if (text.isBlank() || text.startsWith("/") || chat.optString("deleted") == "1") continue
+                val commands = chat.optString("mail").split(' ')
+                val seconds = chat.optDouble("date", Double.NaN)
+                if (!seconds.isFinite()) continue
+                val usec = chat.optDouble("date_usec", 0.0)
+                add(
+                    ArchivedComment(
+                        time = seconds + usec / 1_000_000.0 - startAtMs / 1000.0,
+                        text = text,
+                        color = commands.firstNotNullOfOrNull { COMMENT_COLORS[it.lowercase()] }
+                            ?: "#FFEAEA",
+                        author = chat.optString("user_id"),
+                        type = when {
+                            "ue" in commands -> "top"
+                            "shita" in commands -> "bottom"
+                            else -> "right"
+                        },
+                        size = when {
+                            "big" in commands -> "big"
+                            "small" in commands -> "small"
+                            else -> "medium"
+                        }
+                    )
+                )
+            }
+        }
+    }
 
     /** 開始済み HLS ストリームを維持する。 */
     @UnstableApi
