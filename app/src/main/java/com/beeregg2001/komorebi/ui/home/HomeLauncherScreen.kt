@@ -197,6 +197,14 @@ fun HomeLauncherScreen(
         }
     }
 
+    // タブ列の右側にある設定ボタン・再生中ボタンにフォーカスがあるかどうか。
+    // タブ切替時の遅延フォーカス要求がこれらのボタンからフォーカスを奪わないように使う。
+    var isSettingsFocused by remember { mutableStateOf(false) }
+    var isReturnPlayerFocused by remember { mutableStateOf(false) }
+
+    // 遅延実行されるフォーカス要求から参照するため、値を確定させず毎回状態を読み直す。
+    val isHeaderActionFocused = { isSettingsFocused || isReturnPlayerFocused }
+
     // タブの表示ツリーを再構築した直後は、切替前のフォーカスノードが破棄されて
     // フォーカスが消えることがある。新しいタブを必ず操作可能な状態に戻す。
     LaunchedEffect(activeRenderIndex) {
@@ -205,7 +213,8 @@ fun HomeLauncherScreen(
             tag = "HomeTab_Rendered",
             maxRetries = 10,
             delayMillis = 50,
-            shouldContinue = { activeRenderIndex == safeTabIndex }
+            // 設定ボタン等へ意図的に移動した後は、タブへ引き戻さない
+            shouldContinue = { activeRenderIndex == safeTabIndex && !isHeaderActionFocused() }
         )
     }
 
@@ -359,9 +368,10 @@ fun HomeLauncherScreen(
     // LazyColumn/LazyRow の focusGroup()（見た目もキー処理も持たないコンテナ）自身へ
     // フォーカスが落ちることがある。この状態では画面上にフォーカス枠が一切描画されず、
     // 十字キーも効かないため、アプリが操作不能になったように見える。
-    // コンテナが持つフォーカスは hasFocus では検知できないので、
-    // 「Column直下のフォーカス対象そのものが Active（isFocused）」を迷子のサインとして扱う。
-    var launcherFocusStranded by remember { mutableStateOf(false) }
+    // コンテナが持つフォーカスは hasFocus では検知できないため、
+    // 「コンテンツ領域直下のフォーカス対象そのものが Active（isFocused）」を迷子のサインとして扱う。
+    // タブ列や設定ボタンは正当なフォーカス先なので、判定対象はコンテンツ領域だけに限定する。
+    var contentFocusStranded by remember { mutableStateOf(false) }
 
     // 番組表はグリッド全体が1つのフォーカス対象（Canvas描画）であり、
     // そこにフォーカスがあるのは正常な状態なので迷子判定から除外する。
@@ -369,7 +379,7 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(
         launcherHasFocus,
-        launcherFocusStranded,
+        contentFocusStranded,
         ui.selectedTabIndex,
         isFullScreenMode,
         isReturningFromPlayer,
@@ -377,12 +387,12 @@ fun HomeLauncherScreen(
     ) {
         if (isFullScreenMode || isReturningFromPlayer) return@LaunchedEffect
 
-        val isLost = { !launcherHasFocus || (launcherFocusStranded && isStrandedDetectable) }
+        val isLost = { !launcherHasFocus || (contentFocusStranded && isStrandedDetectable) }
         if (!isLost()) return@LaunchedEffect
 
         Log.i(
             "KomorebiFocus",
-            "フォーカス迷子を検知（hasFocus=$launcherHasFocus stranded=$launcherFocusStranded）。復帰を試みます"
+            "フォーカス迷子を検知（hasFocus=$launcherHasFocus stranded=$contentFocusStranded）。復帰を試みます"
         )
 
         // 一度の要求で復帰できないと操作不能のまま固まるため、復帰するまで数回繰り返す。
@@ -444,10 +454,18 @@ fun HomeLauncherScreen(
                 tag = "HomeTab_Dpad",
                 maxRetries = 8,
                 delayMillis = 50,
-                shouldContinue = { ui.selectedTabIndex == targetIndex }
+                shouldContinue = { ui.selectedTabIndex == targetIndex && !isHeaderActionFocused() }
             )
         }
         return true
+    }
+
+    // 設定ボタンへ移る際は、直前のタブ移動で仕込まれた遅延フォーカス要求を破棄する。
+    // 残しておくと、設定ボタンへ移った直後にタブへフォーカスを引き戻してしまう。
+    fun focusSettingsButton(tag: String) {
+        pendingTabFocusJob?.cancel()
+        ticketManager.cancelForUserNavigation()
+        ui.settingsFocusRequester.safeRequestFocus(tag)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -468,7 +486,7 @@ fun HomeLauncherScreen(
                             if (ui.selectedTabIndex < tabs.lastIndex) {
                                 moveTabByDpad(Key.DirectionRight)
                             } else {
-                                ui.settingsFocusRequester.safeRequestFocus("SafeHouse_Dpad_Settings")
+                                focusSettingsButton("SafeHouse_Dpad_Settings")
                             }
                             true
                         }
@@ -519,12 +537,7 @@ fun HomeLauncherScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .onFocusChanged {
-                        launcherHasFocus = it.hasFocus
-                        // isFocused=true は「Column直下のコンテナ自身がフォーカスを持った」ことを意味する。
-                        // 実際に操作できる要素は必ずこれより深い階層にあるため、迷子とみなす。
-                        launcherFocusStranded = it.isFocused
-                    }
+                    .onFocusChanged { launcherHasFocus = it.hasFocus }
             ) {
             if (!isFullScreenMode) {
                 Row(
@@ -534,14 +547,17 @@ fun HomeLauncherScreen(
                         .padding(top = 8.dp, start = 40.dp, end = 40.dp)
                         .onFocusChanged { ui.topNavHasFocus = it.hasFocus }
                         .onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown) {
+                            // 左右キーによるタブ切替は、タブ列にフォーカスがあるときだけ行う。
+                            // 設定ボタン・再生中ボタンにフォーカスがある状態で拾ってしまうと、
+                            // ボタンから離れる操作をしていないのにタブだけが切り替わってしまう。
+                            if (event.type == KeyEventType.KeyDown && !isHeaderActionFocused()) {
                                 if ((event.key == Key.DirectionRight || event.key == Key.DirectionLeft) &&
                                     moveTabByDpad(event.key)
                                 ) {
                                     return@onPreviewKeyEvent true
                                 }
                                 if (event.key == Key.DirectionRight && ui.selectedTabIndex == tabs.lastIndex) {
-                                    ui.settingsFocusRequester.safeRequestFocus("HomeTab_Dpad_Settings")
+                                    focusSettingsButton("HomeTab_Dpad_Settings")
                                     return@onPreviewKeyEvent true
                                 }
                             }
@@ -611,7 +627,7 @@ fun HomeLauncherScreen(
                                             if (moveTabByDpad(event.key)) {
                                                 true
                                             } else if (event.key == Key.DirectionRight && index == tabs.lastIndex) {
-                                                ui.settingsFocusRequester.safeRequestFocus("HomeTab_Dpad_Settings")
+                                                focusSettingsButton("HomeTab_Dpad_Settings")
                                                 true
                                             } else {
                                                 false
@@ -681,6 +697,7 @@ fun HomeLauncherScreen(
                             onClick = onReturnToPlayerClick,
                             modifier = Modifier
                                 .focusRequester(returnPlayerFocusRequester)
+                                .onFocusChanged { isReturnPlayerFocused = it.isFocused }
                                 .focusProperties {
                                     left = ui.tabFocusRequesters.getOrNull(tabs.lastIndex)
                                         ?: FocusRequester.Default
@@ -716,6 +733,7 @@ fun HomeLauncherScreen(
                         onClick = { onSettingsToggle(true) },
                         modifier = Modifier
                             .focusRequester(ui.settingsFocusRequester)
+                            .onFocusChanged { isSettingsFocused = it.isFocused }
                             .focusProperties {
                                 val isEpgJumping =
                                     tabs.getOrNull(safeTabIndex) == "番組表" && ui.isEpgJumping
@@ -738,7 +756,13 @@ fun HomeLauncherScreen(
                 }
             }
 
-            Box(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    // isFocused=true は「コンテンツ領域直下のコンテナ自身がフォーカスを持った」状態。
+                    // 実際に操作できるカードは必ずこれより深い階層にあるため、迷子とみなす。
+                    .onFocusChanged { contentFocusStranded = it.isFocused }
+            ) {
                 val currentTabLabel = tabs.getOrNull(activeRenderIndex) ?: "ホーム"
                     val handleUiReady = {
                         onUiReady()
