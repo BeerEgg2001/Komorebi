@@ -91,7 +91,10 @@ fun VideoPlayerScreen(
 
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
-    val isLiveStream by videoPlayerViewModel.isLiveStream.collectAsState()
+    // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
+    // トランスコード再生) かどうか。ViewModel 側の isLiveStream は EDCB xcode 判定という
+    // 別用途の名残りなので、この画面での位置補正・シーク判定にはこちらの専用フラグを使う。
+    val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
@@ -220,7 +223,7 @@ fun VideoPlayerScreen(
         onStopOrDispose = { player ->
             if (smbItem == null) {
                 val posMs =
-                    if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                    if (isOffsetBasedStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
         },
@@ -231,8 +234,10 @@ fun VideoPlayerScreen(
         }
     )
 
-    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
-        { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+    // isOffsetBasedStream はストリーム URL の解決後に変化するため、remember のキーに含めないと
+    // 初回コンポジション時の値 (false) を捕捉したままになり、オフセット補正が効かなくなる。
+    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer, isOffsetBasedStream) {
+        { if (isOffsetBasedStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     }
 
     val backendType by settingsViewModel.backendType.collectAsState()
@@ -258,7 +263,7 @@ fun VideoPlayerScreen(
             }
         }
 
-        if (isLiveStream && smbItem == null) {
+        if (isOffsetBasedStream && smbItem == null) {
             scope.launch {
                 isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
@@ -387,7 +392,7 @@ fun VideoPlayerScreen(
             }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isLiveStream) {
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream) {
                 exoPlayer.seekTo(initialPositionMs)
             }
             isFirstLoad = false

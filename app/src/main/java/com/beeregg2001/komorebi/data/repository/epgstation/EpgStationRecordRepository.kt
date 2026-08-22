@@ -286,9 +286,17 @@ class EpgStationRecordRepository @Inject constructor(
      */
     private suspend fun resolveVideoFileId(videoId: Int): Int {
         videoFileIdByRecordedId[videoId]?.let { return it }
-        // 一覧・詳細をまだ通っていない場合に備え、録画詳細から引き直す
+        // 一覧・詳細をまだ通っていない場合に備え、録画詳細から引き直す。
+        // ただし api.getRecordedDetail() は recordedId 専用の API であり、
+        // videoFileId を渡すと recordedId と videoFileId の採番衝突により
+        // まったく別の録画の詳細が返ってくることがある。
+        // 返ってきた item.id (recordedId) が渡した videoId と一致する場合に限り
+        // 「渡されたのは recordedId だった」と判断して videoFileId へ読み替える。
+        // 一致しない場合は別録画の詳細を誤って掴んだということなので、
+        // 渡された videoId は既に videoFileId だったとみなしてそのまま返す。
         return runCatching {
             val item = api.getRecordedDetail(videoId)
+            if (item.id != videoId) return videoId
             val file = item.videoFiles?.firstOrNull { it.type == "ts" }
                 ?: item.videoFiles?.firstOrNull()
             file?.id?.also { videoFileIdByRecordedId[videoId] = it }
@@ -300,11 +308,18 @@ class EpgStationRecordRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 val recorded = recordedByVideoFileId[videoId]
-                    // 再生画面はローカル DB 由来の recordedId を渡す場合がある。
-                    // videoFileId と決め打ちして全件走査すると、対象が見つからず実況が空になる。
-                    ?: runCatching { api.getRecordedDetail(videoId) }.getOrNull()?.also { item ->
-                        item.videoFiles.orEmpty().forEach { file -> recordedByVideoFileId[file.id] = item }
-                    }
+                    // api.getRecordedDetail() は recordedId 専用の API だが、ここに渡ってくる
+                    // videoId は videoFileId であることが前提になっている。recordedId と
+                    // videoFileId は別採番でどちらも小さい整数のため、たまたま同じ値の
+                    // 別番組の録画が存在すると誤って取得してしまう。
+                    // 取得できた録画の videoFiles に渡した videoId と一致する id が
+                    // 実在するかを検証し、含まれていなければ「別番組を誤って引いた」と判断して
+                    // この結果は採用せず (キャッシュにも入れず)、全件走査のフォールバックに委ねる。
+                    ?: runCatching { api.getRecordedDetail(videoId) }.getOrNull()
+                        ?.takeIf { item -> item.videoFiles.orEmpty().any { it.id == videoId } }
+                        ?.also { item ->
+                            item.videoFiles.orEmpty().forEach { file -> recordedByVideoFileId[file.id] = item }
+                        }
                     ?: findRecordedByVideoFileId(videoId)
                     ?: throw Exception("録画ファイルに対応する録画情報が見つかりません。")
                 val channel = channelCache.getChannelIndex().byId[recorded.channelId]
@@ -326,7 +341,15 @@ class EpgStationRecordRepository @Inject constructor(
                 } else {
                     null
                 }
-                val startAtMs = file.startAt ?: metadata?.startAt ?: recorded.startAt
+                // file.startAt / metadata.startAt が取れない場合、最終手段として番組の
+                // 開始時刻 (recorded.startAt) を使う。しかしこれは「番組」の開始時刻であり、
+                // 録画ファイルの先頭時刻（録画前マージンを含みうる）とは一致しないため、
+                // このフォールバックに入るとコメントの表示タイミングが数秒〜数十秒ズレる
+                // 可能性がある。API 側から実開始時刻が得られない以上正確な補正はできないので、
+                // 少なくともこの経路を通ったことが分かるよう警告ログを残す。
+                val startAtMs = file.startAt ?: metadata?.startAt ?: recorded.startAt.also {
+                    Log.w(TAG, "録画ファイルの実開始時刻が取得できないため、番組の開始時刻で代用します。実況コメントの時刻がズレる可能性があります。 videoFileId=$videoId")
+                }
                 val durationMs = (file.duration ?: metadata?.duration)?.takeIf { it > 0 }
                     ?.let { (it * 1000).toLong() }
                     ?: (recorded.endAt - recorded.startAt).coerceAtLeast(0)
