@@ -1,14 +1,13 @@
 package com.beeregg2001.komorebi.data.repository.epgstation
 
-import android.content.Context
 import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.EpgStationApi
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.RecordProvider
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -16,7 +15,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -30,7 +28,7 @@ class EpgStationRecordRepository @Inject constructor(
     private val api: EpgStationApi,
     private val channelCache: EpgStationChannelCache,
     private val okHttpClient: OkHttpClient,
-    @param:ApplicationContext private val context: Context
+    private val jikkyoChannelResolver: JikkyoChannelResolver
 ) : RecordProvider {
     private var streamId: Int? = null
     private var qualities: List<StreamQuality>? = null
@@ -49,12 +47,6 @@ class EpgStationRecordRepository @Inject constructor(
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
-    }
-
-    private val jikkyoChannels: JSONArray by lazy {
-        runCatching {
-            context.assets.open("jikkyo_channels.json").bufferedReader().use { JSONArray(it.readText()) }
-        }.getOrElse { JSONArray() }
     }
 
     /** 録画 DTO を共通モデルへ変換し、詳細時だけ付加情報を取得する。 */
@@ -317,8 +309,13 @@ class EpgStationRecordRepository @Inject constructor(
                     ?: throw Exception("録画ファイルに対応する録画情報が見つかりません。")
                 val channel = channelCache.getChannelIndex().byId[recorded.channelId]
                     ?: throw Exception("録画番組のチャンネル情報が見つかりません。")
-                val jikkyoId = findJikkyoId(channel.networkId.toInt(), channel.serviceId.toInt())
-                    ?: throw Exception("このチャンネルは実況過去ログに対応していません。")
+                // 録画実況(過去ログ)は JIKKYO_CHANNEL_ID_MAP に無いチャンネルでも
+                // NX-Jikkyo の kakolog API から取得できる可能性があるため、絞り込みを掛けない。
+                val jikkyoId = jikkyoChannelResolver.getJikkyoId(
+                    channel.networkId.toInt(),
+                    channel.serviceId.toInt(),
+                    restrictToKnownChannels = false
+                ) ?: throw Exception("このチャンネルは実況過去ログに対応していません。")
                 val file = recorded.videoFiles?.firstOrNull { it.id == videoId }
                     ?: recorded.videoFiles?.firstOrNull { it.type == "ts" }
                     ?: recorded.videoFiles?.firstOrNull()
@@ -349,27 +346,6 @@ class EpgStationRecordRepository @Inject constructor(
             recordedByVideoFileId[videoFileId]?.let { return it }
             if (page.records.isEmpty() || offset + page.records.size >= page.total) break
             offset += page.records.size
-        }
-        return null
-    }
-
-    /** networkId/serviceId を同梱対照表から NX-Jikkyo チャンネル ID へ変換する。 */
-    private fun findJikkyoId(networkId: Int, serviceId: Int): String? {
-        for (index in 0 until jikkyoChannels.length()) {
-            val channel = jikkyoChannels.optJSONObject(index) ?: continue
-            val registeredNetworkId = channel.optInt("network_id", -1)
-            val serviceIdText = channel.opt("service_id")?.toString() ?: continue
-            val registeredServiceId = if (serviceIdText.startsWith("0x", ignoreCase = true)) {
-                serviceIdText.substring(2).toIntOrNull(16)
-            } else {
-                serviceIdText.toIntOrNull()
-            } ?: continue
-            val matched = networkId == registeredNetworkId && serviceId == registeredServiceId ||
-                networkId in 0x7880..0x7FEF && registeredNetworkId == 15 &&
-                serviceId in registeredServiceId..(registeredServiceId + 2)
-            if (matched) {
-                return channel.optInt("jikkyo_id", -1).takeIf { it >= 0 }?.let { "jk$it" }
-            }
         }
         return null
     }

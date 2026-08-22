@@ -1,9 +1,11 @@
 package com.beeregg2001.komorebi.data.repository.epgstation
 
 import android.content.Context
+import android.util.Log
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.EpgStationApi
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.di.EpgStationClient
@@ -30,8 +32,13 @@ class EpgStationLiveRepository @Inject constructor(
     private val api: EpgStationApi,
     private val channelCache: EpgStationChannelCache,
     @EpgStationClient private val client: OkHttpClient,
+    private val jikkyoChannelResolver: JikkyoChannelResolver,
     @ApplicationContext private val context: Context
 ) : LiveProvider {
+    private companion object {
+        private const val TAG = "EpgStationLiveRepo"
+    }
+
     private val failedLogos = ConcurrentHashMap.newKeySet<Long>()
 
     /**
@@ -44,12 +51,18 @@ class EpgStationLiveRepository @Inject constructor(
     /** 放送中番組と次番組を含むチャンネル一覧を取得する。 */
     override suspend fun getChannels(): ChannelApiResponse {
         return try {
-            val (channels, broadcasting) = coroutineScope {
+            val (channels, broadcasting, forceMap) = coroutineScope {
                 val channelJob = async { channelCache.getChannels() }
                 val broadcastingJob = async {
                     api.getBroadcasting(includeNextProgram = true)
                 }
-                channelJob.await() to broadcastingJob.await()
+                // 実況の勢い取得は失敗してもチャンネル一覧取得を巻き込まないようにする。
+                val forceJob = async(Dispatchers.IO) {
+                    runCatching { jikkyoChannelResolver.fetchForceMap() }
+                        .onFailure { Log.w(TAG, "Failed to fetch jikkyo force map", it) }
+                        .getOrDefault(emptyMap())
+                }
+                Triple(channelJob.await(), broadcastingJob.await(), forceJob.await())
             }
             val now = System.currentTimeMillis()
             val needsFallback = channels.any { channel ->
@@ -71,7 +84,10 @@ class EpgStationLiveRepository @Inject constructor(
             } else {
                 broadcasting
             }
-            EpgStationDataMapper.toChannelApiResponse(channels, schedules)
+            EpgStationDataMapper.toChannelApiResponse(channels, schedules) { networkId, serviceId ->
+                val jkId = jikkyoChannelResolver.getJikkyoId(networkId.toInt(), serviceId.toInt())
+                jkId?.let { forceMap[it] } ?: 0
+            }
         } catch (e: Exception) {
             throw Exception(
                 "チャンネル一覧の取得に失敗しました。\n" +

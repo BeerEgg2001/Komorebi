@@ -202,10 +202,16 @@ object EpgStationDataMapper {
         }
     }
 
-    /** チャンネル一覧と番組表からライブ画面用の共通レスポンスを生成する。 */
+    /**
+     * チャンネル一覧と番組表からライブ画面用の共通レスポンスを生成する。
+     *
+     * [jikkyoForceProvider] は networkId/serviceId から実況の勢い(コメント数/分)を引く関数。
+     * 呼び出し元 (EDCB 側など) との互換のため、指定しない場合は常に 0 を返す。
+     */
     fun toChannelApiResponse(
         channels: List<EsChannelItem>,
-        schedules: List<EsSchedule> = emptyList()
+        schedules: List<EsSchedule> = emptyList(),
+        jikkyoForceProvider: (networkId: Long, serviceId: Long) -> Int = { _, _ -> 0 }
     ): ChannelApiResponse {
         val now = System.currentTimeMillis()
         val index = ChannelIndex(channels)
@@ -230,7 +236,7 @@ object EpgStationDataMapper {
                 programPresent = toProgram(current),
                 programFollowing = toProgram(next),
                 remocon_Id = channel.remoteControlKeyId ?: 0,
-                jikkyoForce = 0
+                jikkyoForce = jikkyoForceProvider(channel.networkId, channel.serviceId)
             )
         }
         fun byType(type: String): List<Channel> = channels
