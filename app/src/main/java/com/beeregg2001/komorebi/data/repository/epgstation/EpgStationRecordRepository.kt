@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 /** EPGStation の録画一覧、詳細、配信 URL を提供するリポジトリ。 */
 @Singleton
@@ -190,6 +191,10 @@ class EpgStationRecordRepository @Inject constructor(
         const val TAG = "EpgStationRecordRepo"
         const val DEFAULT_RECORDED_LIMIT = 100
         const val MAX_RECORDED_LOOKUP = 2_000
+
+        // 録画ファイルの開始時刻が番組開始からこれ以上離れていたら、壊れた値とみなす。
+        // 実際の録画マージンは通常前後数十秒で、数分ずれることは想定しない。
+        private const val MAX_START_AT_GAP_MS = 5 * 60 * 1000L
         const val MAX_JIKKYO_DURATION_MS = 3L * 24 * 60 * 60 * 1000
         const val MAX_JIKKYO_REQUESTS = 16
         val COMMENT_COLORS = mapOf(
@@ -308,15 +313,18 @@ class EpgStationRecordRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 val recorded = recordedByVideoFileId[videoId]
-                    // api.getRecordedDetail() は recordedId 専用の API だが、ここに渡ってくる
-                    // videoId は videoFileId であることが前提になっている。recordedId と
-                    // videoFileId は別採番でどちらも小さい整数のため、たまたま同じ値の
-                    // 別番組の録画が存在すると誤って取得してしまう。
-                    // 取得できた録画の videoFiles に渡した videoId と一致する id が
-                    // 実在するかを検証し、含まれていなければ「別番組を誤って引いた」と判断して
-                    // この結果は採用せず (キャッシュにも入れず)、全件走査のフォールバックに委ねる。
+                    // ここに渡ってくる videoId は、ローカル DB 由来の再生では recordedId、
+                    // API 由来の再生では videoFileId と、呼び出し経路によって異なる。
+                    // api.getRecordedDetail() は recordedId 専用の API なので、
+                    //   ・item.id == videoId              → recordedId が渡された (正当)
+                    //   ・videoFiles に videoId がある    → videoFileId が渡された (正当)
+                    // のどちらかを満たす場合だけ採用する。どちらも満たさない場合は
+                    // recordedId と videoFileId の採番衝突で別番組を引いてしまっているので、
+                    // 採用せず (キャッシュにも入れず) 全件走査のフォールバックに委ねる。
                     ?: runCatching { api.getRecordedDetail(videoId) }.getOrNull()
-                        ?.takeIf { item -> item.videoFiles.orEmpty().any { it.id == videoId } }
+                        ?.takeIf { item ->
+                            item.id == videoId || item.videoFiles.orEmpty().any { it.id == videoId }
+                        }
                         ?.also { item ->
                             item.videoFiles.orEmpty().forEach { file -> recordedByVideoFileId[file.id] = item }
                         }
@@ -341,14 +349,29 @@ class EpgStationRecordRepository @Inject constructor(
                 } else {
                     null
                 }
-                // file.startAt / metadata.startAt が取れない場合、最終手段として番組の
-                // 開始時刻 (recorded.startAt) を使う。しかしこれは「番組」の開始時刻であり、
-                // 録画ファイルの先頭時刻（録画前マージンを含みうる）とは一致しないため、
-                // このフォールバックに入るとコメントの表示タイミングが数秒〜数十秒ズレる
-                // 可能性がある。API 側から実開始時刻が得られない以上正確な補正はできないので、
-                // 少なくともこの経路を通ったことが分かるよう警告ログを残す。
-                val startAtMs = file.startAt ?: metadata?.startAt ?: recorded.startAt.also {
-                    Log.w(TAG, "録画ファイルの実開始時刻が取得できないため、番組の開始時刻で代用します。実況コメントの時刻がズレる可能性があります。 videoFileId=$videoId")
+                // 録画ファイルの先頭時刻。番組開始との差は録画マージン分 (通常は前後数十秒) のはず。
+                // ただし tsreplace 済みの encoded ファイルでは PCR が書き換わる影響で
+                // startAt が数分単位でずれた値になることがあり、そのまま使うと
+                // 実況コメントの時刻が大きくずれてしまう。
+                // 番組開始から極端に離れている場合は壊れた値とみなして番組開始時刻で代用する。
+                val rawStartAtMs = file.startAt ?: metadata?.startAt
+                val startAtMs = when {
+                    rawStartAtMs == null -> {
+                        Log.w(TAG, "録画ファイルの実開始時刻が取得できないため、番組の開始時刻で代用します。実況コメントの時刻が録画マージン分ずれる可能性があります。 videoFileId=$videoId")
+                        recorded.startAt
+                    }
+
+                    abs(rawStartAtMs - recorded.startAt) > MAX_START_AT_GAP_MS -> {
+                        Log.w(
+                            TAG,
+                            "録画ファイルの開始時刻が番組開始から離れすぎているため無視します。" +
+                                " videoFileId=$videoId file.startAt=$rawStartAtMs recorded.startAt=${recorded.startAt}" +
+                                " 差=${(rawStartAtMs - recorded.startAt) / 1000}秒"
+                        )
+                        recorded.startAt
+                    }
+
+                    else -> rawStartAtMs
                 }
                 val durationMs = (file.duration ?: metadata?.duration)?.takeIf { it > 0 }
                     ?.let { (it * 1000).toLong() }
