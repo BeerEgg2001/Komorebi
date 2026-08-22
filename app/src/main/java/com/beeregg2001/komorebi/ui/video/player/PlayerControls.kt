@@ -611,9 +611,13 @@ fun OsdIconButton(
                 if (event.key == Key.DirectionCenter || event.key == Key.Enter) {
                     if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
                         if (onLongPress != null) {
-                            if (!isLongPressHandled) {
+                            // 長押し中は一定間隔で発火させる。
+                            // 1回しか発火しないと押しっぱなしの間だけ操作が死んでしまうため
+                            val now = System.currentTimeMillis()
+                            if (!isLongPressHandled || now - lastRepeatTime > 400) {
                                 onLongPress()
                                 isLongPressHandled = true
+                                lastRepeatTime = now
                             }
                             return@onPreviewKeyEvent true
                         }

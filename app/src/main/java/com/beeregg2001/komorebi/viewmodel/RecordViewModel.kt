@@ -558,17 +558,24 @@ class RecordViewModel @Inject constructor(
         channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
-        // シリーズ一覧は EPGStation 由来だが、チャンネル絞り込みはローカルの録画情報から作る。
-        buildChannelMap(channelsList)
-        val localByTitle = localSeries.associateBy { it.seriesName }
-        _availableSeasons.value = items.mapNotNull { item ->
-            item.seasonYear?.let { year ->
-                item.seasonName?.let { name -> year to name }
-            }
-        }.distinct().sortedWith(compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second })
-        epgLocalByTitle = localByTitle
-        rebuildEpgSeries(localByTitle)
-        _isSeriesLoading.value = false
+        try {
+            // シリーズ一覧は EPGStation 由来だが、チャンネル絞り込みはローカルの録画情報から作る。
+            buildChannelMap(channelsList)
+            val localByTitle = localSeries.associateBy { it.seriesName }
+            _availableSeasons.value = items.mapNotNull { item ->
+                item.seasonYear?.let { year ->
+                    item.seasonName?.let { name -> year to name }
+                }
+            }.distinct()
+                .sortedWith(compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second })
+            epgLocalByTitle = localByTitle
+            rebuildEpgSeries(localByTitle)
+        } catch (e: Exception) {
+            // 例外でローディング表示が固まらないように必ず握って落とす
+            Log.e(TAG, "EPGStation Series Map Build Error", e)
+        } finally {
+            _isSeriesLoading.value = false
+        }
     }
 
     private fun rebuildEpgSeries(localByTitle: Map<String, SeriesProjection> = emptyMap()) {

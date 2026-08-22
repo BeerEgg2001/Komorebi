@@ -183,13 +183,36 @@ class VideoPlayerState {
             return true
         }
 
-        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY ||
-            keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-        ) {
+        // PLAY_PAUSE はトグル、PLAY / PAUSE は方向が決まっているキーなので個別に扱う。
+        // (Bluetooth キーボード等は PLAY と PAUSE を別々に送ってくるため、
+        //  トグル扱いにすると「再生中に Play を押すと一時停止する」逆転が起きる)
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
             if (isActionUp) {
                 onShowControlsChange(true)
                 togglePlayPause(exoPlayerIsPlaying)
                 if (exoPlayerIsPlaying) onPause() else onPlay()
+            }
+            return true
+        }
+
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY) {
+            if (isActionUp) {
+                onShowControlsChange(true)
+                if (!exoPlayerIsPlaying) {
+                    togglePlayPause(false)
+                    onPlay()
+                }
+            }
+            return true
+        }
+
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PAUSE) {
+            if (isActionUp) {
+                onShowControlsChange(true)
+                if (exoPlayerIsPlaying) {
+                    togglePlayPause(true)
+                    onPause()
+                }
             }
             return true
         }

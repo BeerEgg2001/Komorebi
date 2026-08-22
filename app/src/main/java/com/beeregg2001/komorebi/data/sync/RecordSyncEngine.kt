@@ -257,11 +257,13 @@ class RecordSyncEngine @Inject constructor(
                     var isCompleted = false
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
-                    // 省メモリ機では17081件規模のID集合を作らず、孤児削除も省略する。
+                    // 省メモリ機では通常の初期構築で17081件規模のID集合を作らない。
+                    // ただし孤児削除を恒久的に諦めるとサーバー側で消した録画がローカルに残り続けるため、
+                    // 明示的な完全同期 (forceFullSync) のときだけは省メモリ機でも実行する。
                     val needsOrphanDeletion =
                         !isResumed &&
                             (isInitial || forceFullSync) &&
-                            syncProfile.name != "low"
+                            (syncProfile.name != "low" || forceFullSync)
                     val allFetchedIds = if (needsOrphanDeletion) mutableSetOf<Int>() else null
 
                     val dictionary: Map<String, String> =

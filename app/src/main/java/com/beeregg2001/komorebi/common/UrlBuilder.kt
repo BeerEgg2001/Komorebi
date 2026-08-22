@@ -11,8 +11,9 @@ object UrlBuilder {
      * ホストとポートからベースURLを組み立てる。
      *
      * スキーム付きの入力 (例: https://example.com) はそのまま維持する。
-     * URL側にポートが明示されている場合は設定欄のポートより優先し、
-     * ポートがないスキーム付きURLは http/https の標準ポートを使用する。
+     * URL側にポートが明示されている場合はそちらを優先し、
+     * ポートが書かれていない場合はスキームの有無に関わらず設定欄のポートを付与する。
+     * (リバースプロキシ運用などでドメイン名 + 非標準ポートを指定するケースに対応するため)
      */
     fun formatBaseUrl(ip: String, port: String, defaultProtocol: String): String {
         val cleanIp = ip.trim().removeSuffix("/")
@@ -26,17 +27,14 @@ object UrlBuilder {
         }
 
         val parsed = normalized.toHttpUrlOrNull() ?: return "$normalized:$port"
-        val hasExplicitScheme = cleanIp.startsWith("http://", ignoreCase = true) ||
-            cleanIp.startsWith("https://", ignoreCase = true)
         val hasExplicitPort = Regex("^https?://(?:\\[[^]]+\\]|[^/:]+):\\d+(?:/|$)", RegexOption.IGNORE_CASE)
             .containsMatchIn(normalized)
+        // ホスト欄自体にポートが埋め込まれている場合はそれを最優先する
         if (hasExplicitPort) return parsed.toString().removeSuffix("/")
 
-        val configuredPort = if (hasExplicitScheme) {
-            if (parsed.scheme.equals("https", ignoreCase = true)) 443 else 80
-        } else {
-            port.toIntOrNull()?.takeIf { it in 1..65535 } ?: return parsed.toString()
-        }
+        // ポート未指定なら設定欄のポートを付与する。設定欄が空・不正なら標準ポートのままにする
+        val configuredPort = port.trim().toIntOrNull()?.takeIf { it in 1..65535 }
+            ?: return parsed.toString().removeSuffix("/")
         return parsed.newBuilder().port(configuredPort).build().toString().removeSuffix("/")
     }
 

@@ -20,6 +20,8 @@ private const val MAX_INDEX_ITEMS = 20_000
 private const val PAGE_PARALLELISM = 3
 private const val DICTIONARY_DELAY_MS = 75L
 private const val CACHE_TTL_MS = 30 * 60 * 1_000L
+// 一時的な通信エラーで無効化した場合の再試行までの待ち時間
+private const val UNAVAILABLE_RETRY_MS = 10 * 60 * 1_000L
 
 @Singleton
 class EpgStationSeriesDictionary @Inject constructor(
@@ -33,11 +35,16 @@ class EpgStationSeriesDictionary @Inject constructor(
     )
 
     private var cache: Cache? = null
-    private var unavailable = false
+
+    // API 自体が存在しない (フォーク版でない) 場合は恒久的に無効化する
+    private var permanentlyUnavailable = false
+
+    // 一時的な通信エラーの場合は一定時間だけ無効化し、その後は再試行する
+    private var unavailableUntil = 0L
 
     suspend fun resolve(baseTitle: String): String? {
         val keyword = baseTitle.trim()
-        if (keyword.isEmpty() || unavailable) return null
+        if (keyword.isEmpty() || isUnavailable()) return null
 
         val endpoint = settingsRepository.epgStationIp.first().trim()
         if (endpoint.isEmpty()) return null
@@ -56,7 +63,10 @@ class EpgStationSeriesDictionary @Inject constructor(
         return try {
             val first = api.getSeries(offset = 0, limit = SERIES_PAGE_SIZE)
             if (!first.isSuccessful) {
-                markUnavailable("シリーズ一覧の取得に失敗しました。HTTP " + first.code())
+                markUnavailable(
+                    "シリーズ一覧の取得に失敗しました。HTTP " + first.code(),
+                    permanent = isUnsupportedStatus(first.code())
+                )
                 return null
             }
 
@@ -130,7 +140,10 @@ class EpgStationSeriesDictionary @Inject constructor(
         return try {
             val response = api.getDictionaryWorks(keyword = keyword, limit = 10)
             if (!response.isSuccessful) {
-                markUnavailable("作品辞書の取得に失敗しました。HTTP " + response.code())
+                markUnavailable(
+                    "作品辞書の取得に失敗しました。HTTP " + response.code(),
+                    permanent = isUnsupportedStatus(response.code())
+                )
                 return null
             }
 
@@ -159,8 +172,22 @@ class EpgStationSeriesDictionary @Inject constructor(
             .replace(Regex("[\\s　、。，．・:：!！?？「」『』【】［］()（）\\[\\]{}<>＜＞『』「」\\-‐‑‒–—〜～_/／]"), "")
     }
 
-    private fun markUnavailable(message: String, cause: Exception? = null) {
-        unavailable = true
+    private fun isUnavailable(): Boolean =
+        permanentlyUnavailable || System.currentTimeMillis() < unavailableUntil
+
+    // 未実装エンドポイント (フォーク版以外の EPGStation) は再試行しても回復しない
+    private fun isUnsupportedStatus(code: Int): Boolean = code == 404 || code == 501
+
+    private fun markUnavailable(
+        message: String,
+        cause: Exception? = null,
+        permanent: Boolean = false
+    ) {
+        if (permanent) {
+            permanentlyUnavailable = true
+        } else {
+            unavailableUntil = System.currentTimeMillis() + UNAVAILABLE_RETRY_MS
+        }
         cache = null
         if (cause == null) {
             Log.w(TAG, message)
