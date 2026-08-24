@@ -81,10 +81,11 @@ class EpgStationSeriesDictionary @Inject constructor(
                 (MAX_INDEX_ITEMS + SERIES_PAGE_SIZE - 1) / SERIES_PAGE_SIZE
             )
             val pages = coroutineScope {
-                (1 until pageCount).chunked(PAGE_PARALLELISM).flatMap { offsets ->
-                    offsets.map { offset ->
+                // offset は「件数オフセット」なので、ページ番号 (1, 2, 3...) をそのまま渡さず件数に変換する
+                (1 until pageCount).chunked(PAGE_PARALLELISM).flatMap { pageNumbers ->
+                    pageNumbers.map { page ->
                         async {
-                            pageRequest(offset)
+                            pageRequest(page * SERIES_PAGE_SIZE)
                         }
                     }.awaitAll()
                 }

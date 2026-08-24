@@ -56,6 +56,8 @@ class VideoPlayerState {
     var downKeyDownTime = 0L
     var isDownKeyLongPressed = false
     var isMediaSeekLongPressHandled = false
+    // チャプタースキップの長押し連続発火用に、最後に発火した時刻を保持する
+    var lastMediaSeekRepeatTime = 0L
 
     // ★ 新規追加: クイックシーク状態の追跡
     var isQuickSeeking by mutableStateOf(false)
@@ -163,9 +165,12 @@ class VideoPlayerState {
             if (isActionDown) {
                 onShowControlsChange(true)
                 if (keyEvent.nativeKeyEvent.repeatCount > 0 && chapters.size > 1) {
-                    if (!isMediaSeekLongPressHandled) {
+                    // 長押し中は400ms間隔でチャプタースキップを連続発火させる
+                    val now = System.currentTimeMillis()
+                    if (!isMediaSeekLongPressHandled || now - lastMediaSeekRepeatTime > 400) {
                         if (isMediaRewind) onSkipPreviousChapter() else onSkipNextChapter()
                         isMediaSeekLongPressHandled = true
+                        lastMediaSeekRepeatTime = now
                     }
                 } else if (!isMediaSeekLongPressHandled) {
                     val basePos = pendingSeekPositionMs ?: getCurrentPositionMs()
@@ -179,6 +184,7 @@ class VideoPlayerState {
                 }
             } else if (isActionUp) {
                 isMediaSeekLongPressHandled = false
+                lastMediaSeekRepeatTime = 0L
             }
             return true
         }
