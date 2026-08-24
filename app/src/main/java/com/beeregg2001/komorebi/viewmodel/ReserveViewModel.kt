@@ -357,6 +357,17 @@ class ReserveViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
 
+            // ★ 修正: 更新前に、旧条件(旧キーワード)によって生成されていた予約のIDを控えておく。
+            // サーバー側の実装によっては、条件更新で予約を作り直す際に古い予約を残してしまうことがあるため、
+            // 更新完了後に「更新前から存在し、かつ更新後もまだ残っているもの」だけを後始末する。
+            // (更新前に無条件で削除すると、EPGStationではルールから当該番組が除外扱いになってしまうため、
+            //  deleteConditionWithCleanup()と同様に「実行後に残存確認してから消す」方式にしている)
+            val staleComment = "EPG自動予約(${originalCondition.programSearchCondition.keyword})"
+            val staleReserveIdsBefore = _reserves.value
+                .filter { it.comment == staleComment }
+                .map { it.id }
+                .toSet()
+
             // 新しい時間帯・曜日の計算
             val isNextDay = endHour < startHour || (endHour == startHour && endMinute < startMinute)
             val dateRanges = daysOfWeek.map { dayOfWeek ->
@@ -405,6 +416,16 @@ class ReserveViewModel @Inject constructor(
                         delay(3000)
                         fetchConditions(showLoading = false)
                         fetchReserves(showLoading = false)
+
+                        // 更新前から存在し、かつ再構築後もまだ残っている旧予約だけをクリーンアップする
+                        if (staleReserveIdsBefore.isNotEmpty()) {
+                            val stillExistingIds = _reserves.value.map { it.id }.toSet()
+                            val staleReserveIds = staleReserveIdsBefore.intersect(stillExistingIds)
+                            if (staleReserveIds.isNotEmpty()) {
+                                staleReserveIds.forEach { reserveProvider.deleteReservation(it) }
+                                fetchReserves(showLoading = false)
+                            }
+                        }
                     }
                 }
                 .onFailure { e ->

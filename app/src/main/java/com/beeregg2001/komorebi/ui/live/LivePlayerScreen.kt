@@ -220,7 +220,11 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isPiPMode) {
         if (isPiPMode) {
-            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+            // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+            // HLS再生時を除きダウングレード対象に含める
+            val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                !ps.currentQuality.value.startsWith("hls:")
+            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                 ps.previousStreamSource = ps.currentStreamSource
                 if (availableSources.contains(StreamSource.KONOMITV)) {
                     ps.currentStreamSource = StreamSource.KONOMITV
@@ -792,7 +796,11 @@ fun LivePlayerScreen(
                     ps.isDualDisplayMode = !ps.isDualDisplayMode
                     if (ps.isDualDisplayMode) {
                         ps.activeDualPlayerIndex = 1
-                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+                        // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+                        // HLS再生時を除きダウングレード対象に含める
+                        val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                            !ps.currentQuality.value.startsWith("hls:")
+                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                             ps.previousStreamSource = ps.currentStreamSource
                             if (availableSources.contains(StreamSource.KONOMITV)) {
                                 ps.currentStreamSource = StreamSource.KONOMITV

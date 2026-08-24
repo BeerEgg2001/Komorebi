@@ -296,7 +296,10 @@ fun MainRootBackground(
                 }
             }
 
-            if (state.selectedChannel == null && state.selectedProgram == null && !isSyncingInitial) {
+            // ★ 修正: SyncProgressIndicator自身がsyncProgress.isSyncingで表示制御しているため、
+            // ここで!isSyncingInitialを条件に含めると、初回同期を待たずにメイン画面を表示するようになった後
+            // (isSyncingInitial=trueのまま操作可能な間)は進捗表示が一切出なくなってしまう。
+            if (state.selectedChannel == null && state.selectedProgram == null) {
                 SyncProgressIndicator(
                     recordViewModel = recordViewModel,
                     modifier = Modifier

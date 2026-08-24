@@ -20,6 +20,9 @@ class EpgStationChannelCache @Inject constructor(
     private var channels: List<EsChannelItem> = emptyList()
     private var fetchedAt = 0L
     private var index: EpgStationDataMapper.ChannelIndex? = null
+    // ★ 修正: 索引を作った時点のチャンネル一覧を覚えておき、参照が変わった(=再取得された)ときだけ作り直す。
+    // 件数だけを見ていると、件数据え置きでチャンネル構成(ID等)が入れ替わった場合に古い索引を使い続けてしまう。
+    private var indexedChannels: List<EsChannelItem>? = null
 
     /**
      * チャンネル番号・サブチャンネル判定の索引を返す。
@@ -28,8 +31,9 @@ class EpgStationChannelCache @Inject constructor(
     suspend fun getChannelIndex(): EpgStationDataMapper.ChannelIndex {
         val current = getChannels()
         return mutex.withLock {
-            index?.takeIf { it.byId.size == current.size } ?: EpgStationDataMapper.ChannelIndex(current).also {
+            index?.takeIf { indexedChannels === current } ?: EpgStationDataMapper.ChannelIndex(current).also {
                 index = it
+                indexedChannels = current
             }
         }
     }
