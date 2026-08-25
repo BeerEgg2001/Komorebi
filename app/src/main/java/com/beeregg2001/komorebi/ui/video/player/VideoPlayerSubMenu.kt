@@ -36,11 +36,47 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+
+/** サブメニュー内の遷移先と、遷移前後のフォーカス位置を保持する。 */
+@Stable
+internal class SubMenuNavigationState<T : Any> {
+    var destination by mutableStateOf<T?>(null)
+        private set
+
+    private var returnFocusRequester: FocusRequester? = null
+    private var destinationFocusRequester: FocusRequester? = null
+
+    fun navigateTo(
+        destination: T,
+        returnFocusRequester: FocusRequester,
+        destinationFocusRequester: FocusRequester
+    ) {
+        this.returnFocusRequester = returnFocusRequester
+        this.destinationFocusRequester = destinationFocusRequester
+        this.destination = destination
+    }
+
+    fun navigateBack() {
+        destination = null
+        destinationFocusRequester = null
+    }
+
+    fun currentDestinationFocusRequester(): FocusRequester? = destinationFocusRequester
+
+    fun consumeReturnFocusRequester(): FocusRequester? {
+        return returnFocusRequester.also { returnFocusRequester = null }
+    }
+}
+
+@Composable
+internal fun <T : Any> rememberSubMenuNavigationState(): SubMenuNavigationState<T> =
+    remember { SubMenuNavigationState() }
 
 @Composable
 fun VideoTopSubMenuUI(
@@ -376,8 +412,10 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
         it.id == currentSubtitleLanguageId
     } ?: subtitleLanguages.firstOrNull()
-    var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
+    val navigationState = rememberSubMenuNavigationState<SubMenuCategory>()
+    val selectedCategory = navigationState.destination
     val initialFocusRequester = remember { FocusRequester() }
+    val qualityButtonRequester = remember { FocusRequester() }
     val qualityListRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -389,12 +427,12 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     }
 
     LaunchedEffect(selectedCategory) {
-        if (selectedCategory == SubMenuCategory.QUALITY) {
-            delay(100)
-            try {
-                qualityListRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+        if (selectedCategory != null) {
+            navigationState.currentDestinationFocusRequester()
+                ?.safeRequestFocusWithRetry("ModernVideoSettings_Destination")
+        } else {
+            navigationState.consumeReturnFocusRequester()
+                ?.safeRequestFocusWithRetry("ModernVideoSettings_Return")
         }
     }
 
@@ -408,11 +446,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
                 ) {
                     if (selectedCategory != null) {
-                        selectedCategory = null
-                        try {
-                            initialFocusRequester.requestFocus()
-                        } catch (e: Exception) {
-                        }
+                        navigationState.navigateBack()
                         true
                     } else {
                         onClose()
@@ -488,8 +522,15 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             value = currentQuality.label,
                             icon = Icons.Default.HighQuality,
                             onClick = {
-                                if (isQualitySupported) selectedCategory = SubMenuCategory.QUALITY
+                                if (isQualitySupported) {
+                                    navigationState.navigateTo(
+                                        destination = SubMenuCategory.QUALITY,
+                                        returnFocusRequester = qualityButtonRequester,
+                                        destinationFocusRequester = qualityListRequester
+                                    )
+                                }
                             }, // ★ 無効時は開かない
+                            modifier = Modifier.focusRequester(qualityButtonRequester),
                             enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
                         )
                         ModernSettingRow(
@@ -529,11 +570,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                                 icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
                                 onClick = {
                                     onQualitySelect(quality)
-                                    selectedCategory = null
-                                    try {
-                                        initialFocusRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    navigationState.navigateBack()
                                 },
                                 highlight = isSelected,
                                 modifier = if (isSelected) Modifier.focusRequester(

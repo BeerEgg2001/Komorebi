@@ -65,5 +65,6 @@ DI は Dagger Hilt。モジュールは `di/`（`NetworkModule`, `DatabaseModule
 
 - `KomorebiConfigurator/` — .NET(Avalonia)製のセットアップツール。EDCB連携（`resolver.lua`等）を配置する。
 - `KomorebiThumbnailer/` — 録画ファイルからシークバー用サムネイル（`.tile.webp`）を生成するツール。
+- `tools/ts_pmt_monitor/` — 録画TSファイルのPMT（音声トラック等のPID構成）が時間経過でどう変化したかを調査する診断CLI。`app/src/main/cpp`の`servicefilter.cpp`/`util.cpp`をそのまま参照し、Android NDK不要・CMakeのみでmacOS/Linux/Windows向けにビルド可能。映像・音声データは出力せず、PID構成とタイムスタンプ等のメタ情報のみをログ出力する。
 
 これらは Android アプリ本体（`app/`）とはビルド系統が異なる独立ツール。

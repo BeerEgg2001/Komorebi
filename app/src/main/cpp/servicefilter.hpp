@@ -18,6 +18,17 @@ public:
     const std::vector<uint8_t> &GetPackets() const { return m_packets; }
     void ClearPackets() { m_packets.clear(); }
 
+    // ★ 診断ツール(tools/ts_pmt_monitor)向けに追加した読み取り専用アクセサ。
+    // AddPmt() が解決した現在のPID構成を外部から観測するためのもので、
+    // 通常のフィルタ動作(AddPacket/AddPmt)には一切影響しない。
+    int GetVideoPid() const { return m_videoPid; }
+    int GetAudio1Pid() const { return m_audio1Pid; }
+    int GetAudio2Pid() const { return m_audio2Pid; }
+    int GetCaptionPid() const { return m_captionPid; }
+    int GetPcrPid() const { return m_pcrPid; }
+    int64_t GetPcr() const { return m_pcr; }
+    bool IsAudio1DualMono() const { return m_isAudio1DualMono; }
+
 private:
     const uint8_t H_262_VIDEO = 0x02;
     const uint8_t MPEG2_AUDIO = 0x04;
