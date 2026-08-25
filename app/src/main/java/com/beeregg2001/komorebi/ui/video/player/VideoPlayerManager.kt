@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Metadata
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -85,15 +86,25 @@ fun rememberManagedExoPlayer(
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ): ExoPlayer {
     val captionDecoder = remember { NativeCaptionDecoder() }
+    val clearSubtitle = {
+        captionDecoder.flush()
+        onSubtitleCue(
+            NativeCaptionCue(
+                ptsMs = Long.MIN_VALUE,
+                durationMs = 0L,
+                clearScreen = true,
+                planeWidth = 1,
+                planeHeight = 1,
+                images = emptyList()
+            )
+        )
+    }
     LaunchedEffect(program?.id) {
         captionDecoder.reset(subtitleLanguageId)
         onSubtitleLanguagesChanged(emptyList())
     }
     LaunchedEffect(subtitleLanguageId) {
         captionDecoder.switchLanguage(subtitleLanguageId)
-    }
-    LaunchedEffect(vs.isSubtitleEnabled) {
-        if (!vs.isSubtitleEnabled) captionDecoder.flush()
     }
     DisposableEffect(Unit) {
         onDispose { captionDecoder.close() }
@@ -322,7 +333,21 @@ fun rememberManagedExoPlayer(
                             onDurationChanged(duration)
                             // ★ 正常に再生再開できたのでリトライ回数をリセット
                             playerRetryCount = 0
+                        } else if (playbackState == Player.STATE_ENDED) {
+                            clearSubtitle()
                         }
+                    }
+
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        clearSubtitle()
+                    }
+
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        clearSubtitle()
                     }
 
                     override fun onPlayerError(error: PlaybackException) {

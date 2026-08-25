@@ -198,17 +198,17 @@ fun VideoTopSubMenuUI(
                     contentColor = colors.textPrimary,
                     enabled = isSubtitleSupported // ★ 適用
                 )
-                if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
-                    VideoMenuTileItem(
-                        title = "字幕言語",
-                        icon = Icons.Default.Translate,
-                        subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
-                        onClick = onSubtitleLanguageToggle,
-                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                        contentColor = colors.textPrimary,
-                        enabled = isSubtitleSupported
-                    )
-                }
+                VideoMenuTileItem(
+                    title = "字幕言語",
+                    icon = Icons.Default.Translate,
+                    subtitle = currentSubtitleLanguage?.let {
+                        "第${it.id}言語・${it.displayName}"
+                    } ?: "利用不可",
+                    onClick = onSubtitleLanguageToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = isSubtitleSupported && subtitleLanguages.size > 1
+                )
                 VideoMenuTileItem(
                     title = "L字クロップ",
                     icon = Icons.Default.Crop,
@@ -508,15 +508,15 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             onClick = onSubtitleToggle,
                             enabled = isSubtitleSupported // ★ 適用
                         )
-                        if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
-                            ModernSettingRow(
-                                title = "字幕言語",
-                                value = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
-                                icon = Icons.Default.Translate,
-                                onClick = onSubtitleLanguageToggle,
-                                enabled = isSubtitleSupported
-                            )
-                        }
+                        ModernSettingRow(
+                            title = "字幕言語",
+                            value = currentSubtitleLanguage?.let {
+                                "第${it.id}言語・${it.displayName}"
+                            } ?: "利用不可",
+                            icon = Icons.Default.Translate,
+                            onClick = onSubtitleLanguageToggle,
+                            enabled = isSubtitleSupported && subtitleLanguages.size > 1
+                        )
                         ModernSettingRow(
                             title = "画質",
                             value = currentQuality.label,

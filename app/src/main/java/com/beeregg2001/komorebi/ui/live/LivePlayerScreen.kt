@@ -151,36 +151,37 @@ fun LivePlayerScreen(
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
 
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
-    var isMainPlaying by remember { mutableStateOf(false) }
-    var isDualPlaying by remember { mutableStateOf(false) }
+    val mainPlayer by livePlayerViewModel.mainPlayer.collectAsState()
+    val dualPlayer by livePlayerViewModel.dualPlayer.collectAsState()
     val mainSubtitleLanguages by livePlayerViewModel.mainSubtitleLanguages.collectAsState()
     val dualSubtitleLanguages by livePlayerViewModel.dualSubtitleLanguages.collectAsState()
-    val currentSubtitleLanguageId by livePlayerViewModel.currentSubtitleLanguageId.collectAsState()
+    val mainSubtitleLanguageId by livePlayerViewModel.mainSubtitleLanguageId.collectAsState()
+    val dualSubtitleLanguageId by livePlayerViewModel.dualSubtitleLanguageId.collectAsState()
+    val isDualSubtitleActive = ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1
     val activeSubtitleLanguages = if (ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1) {
         dualSubtitleLanguages
     } else {
         mainSubtitleLanguages
     }
+    val currentSubtitleLanguageId =
+        if (isDualSubtitleActive) dualSubtitleLanguageId else mainSubtitleLanguageId
     val mainCaptionCue = rememberNativeCaptionCue(
         events = livePlayerViewModel.mainSubtitleEvents,
         enabled = isSubtitleEnabled,
-        resetKey = currentChannelItem.id to currentSubtitleLanguageId,
-        clockRunning = isMainPlaying
+        resetKey = Triple(currentChannelItem.id, mainSubtitleLanguageId, mainPlayer),
+        positionMs = { mainPlayer?.currentPosition ?: 0L }
     )
     val dualCaptionCue = rememberNativeCaptionCue(
         events = livePlayerViewModel.dualSubtitleEvents,
         enabled = isSubtitleEnabled,
-        resetKey = ps.dualRightChannel?.id to currentSubtitleLanguageId,
-        clockRunning = isDualPlaying
+        resetKey = Triple(ps.dualRightChannel?.id, dualSubtitleLanguageId, dualPlayer),
+        positionMs = { dualPlayer?.currentPosition ?: 0L }
     )
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val scrollState = rememberScrollState()
-
-    val mainPlayer by livePlayerViewModel.mainPlayer.collectAsState()
-    val dualPlayer by livePlayerViewModel.dualPlayer.collectAsState()
 
     val mainError by livePlayerViewModel.mainPlayerError.collectAsState()
     val mainStatus by livePlayerViewModel.mainSseStatus.collectAsState()
@@ -271,7 +272,6 @@ fun LivePlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 ps.isPlayerPlaying = isPlaying
-                isMainPlaying = isPlaying
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -284,17 +284,12 @@ fun LivePlayerScreen(
             }
         }
         mainPlayer?.addListener(listener)
-        isMainPlaying = mainPlayer?.isPlaying == true
         isMainBuffering = mainPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { mainPlayer?.removeListener(listener) }
     }
 
     DisposableEffect(dualPlayer) {
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                isDualPlaying = isPlaying
-            }
-
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 dualVideoWidth = videoSize.width; dualVideoHeight =
                     videoSize.height; dualPixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
@@ -305,7 +300,6 @@ fun LivePlayerScreen(
             }
         }
         dualPlayer?.addListener(listener)
-        isDualPlaying = dualPlayer?.isPlaying == true
         isDualBuffering = dualPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { dualPlayer?.removeListener(listener) }
     }
@@ -856,7 +850,11 @@ fun LivePlayerScreen(
                 },
                 onSubtitleLanguageToggle = {
                     val nextLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
-                    livePlayerViewModel.setSubtitleLanguage(nextLanguageId)
+                    if (isDualSubtitleActive) {
+                        livePlayerViewModel.setDualSubtitleLanguage(nextLanguageId)
+                    } else {
+                        livePlayerViewModel.setMainSubtitleLanguage(nextLanguageId)
+                    }
                     val selectedLanguage = activeSubtitleLanguages.firstOrNull { it.id == nextLanguageId }
                     onShowToast(
                         "字幕言語: 第${nextLanguageId}言語" +

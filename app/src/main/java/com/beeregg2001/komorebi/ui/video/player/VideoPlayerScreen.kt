@@ -172,12 +172,6 @@ fun VideoPlayerScreen(
         mutableStateOf(emptyList<NativeCaptionLanguage>())
     }
     var currentSubtitleLanguageId by remember(currentProgram.id) { mutableIntStateOf(1) }
-    val subtitleCue = rememberNativeCaptionCue(
-        events = subtitleEvents,
-        enabled = vs.isSubtitleEnabled,
-        resetKey = currentProgram.id to currentSubtitleLanguageId,
-        clockRunning = vs.isPlayerPlaying
-    )
 
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
@@ -197,7 +191,7 @@ fun VideoPlayerScreen(
     val isSubOverlayOpen =
         isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
     val isSubtitleBlockingOverlayOpen =
-        isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
     val subtitleOffset by animateDpAsState(
         targetValue = if (
             showControls &&
@@ -260,6 +254,12 @@ fun VideoPlayerScreen(
     val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
         { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     }
+    val subtitleCue = rememberNativeCaptionCue(
+        events = subtitleEvents,
+        enabled = vs.isSubtitleEnabled,
+        resetKey = currentProgram.id to currentSubtitleLanguageId,
+        positionMs = { exoPlayer.currentPosition }
+    )
 
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()

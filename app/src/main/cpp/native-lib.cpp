@@ -48,8 +48,11 @@ jobject createAndroidBitmapFromRgba(
     }
 
     jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
+    if (bitmapClass == nullptr || env->ExceptionCheck()) {
+        return nullptr;
+    }
     jclass configClass = env->FindClass("android/graphics/Bitmap$Config");
-    if (bitmapClass == nullptr || configClass == nullptr) {
+    if (configClass == nullptr || env->ExceptionCheck()) {
         if (bitmapClass != nullptr) env->DeleteLocalRef(bitmapClass);
         if (configClass != nullptr) env->DeleteLocalRef(configClass);
         return nullptr;
@@ -63,9 +66,20 @@ jobject createAndroidBitmapFromRgba(
         bitmapClass,
         "createBitmap",
         "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+    if (argb8888Field == nullptr || createBitmapMethod == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(configClass);
+        env->DeleteLocalRef(bitmapClass);
+        return nullptr;
+    }
     jobject config = argb8888Field == nullptr
         ? nullptr
         : env->GetStaticObjectField(configClass, argb8888Field);
+    if (config == nullptr || env->ExceptionCheck()) {
+        if (config != nullptr) env->DeleteLocalRef(config);
+        env->DeleteLocalRef(configClass);
+        env->DeleteLocalRef(bitmapClass);
+        return nullptr;
+    }
     jobject bitmap = createBitmapMethod == nullptr || config == nullptr
         ? nullptr
         : env->CallStaticObjectMethod(
@@ -79,7 +93,8 @@ jobject createAndroidBitmapFromRgba(
     env->DeleteLocalRef(configClass);
     env->DeleteLocalRef(bitmapClass);
     if (bitmap == nullptr || env->ExceptionCheck()) {
-        return bitmap;
+        if (bitmap != nullptr) env->DeleteLocalRef(bitmap);
+        return nullptr;
     }
 
     AndroidBitmapInfo info{};
@@ -110,20 +125,47 @@ jobject createAndroidBitmapFromRgba(
     return bitmap;
 }
 
-jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t fallbackPtsMs) {
+jobject renderResultToCue(
+    JNIEnv* env,
+    aribcc_render_result_t& result,
+    int64_t fallbackPtsMs,
+    bool clearScreen
+) {
     int64_t duration = result.duration == ARIBCC_DURATION_INDEFINITE ? -1 : result.duration;
     int64_t pts = result.pts < 0 ? fallbackPtsMs : result.pts;
+    if (result.image_count == 0 && !clearScreen) return nullptr;
 
     jclass arrayListClass = env->FindClass("java/util/ArrayList");
+    if (arrayListClass == nullptr || env->ExceptionCheck()) return nullptr;
     jmethodID arrayListCtor = env->GetMethodID(arrayListClass, "<init>", "(I)V");
     jmethodID arrayListAdd = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+    if (arrayListCtor == nullptr || arrayListAdd == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
     jobject images = env->NewObject(arrayListClass, arrayListCtor, static_cast<jint>(result.image_count));
+    if (images == nullptr || env->ExceptionCheck()) {
+        if (images != nullptr) env->DeleteLocalRef(images);
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
 
     jclass imageClass = env->FindClass("com/beeregg2001/komorebi/ui/subtitle/NativeCaptionImage");
+    if (imageClass == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(images);
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
     jmethodID imageCtor = env->GetMethodID(
         imageClass,
         "<init>",
         "(IIIILandroid/graphics/Bitmap;)V");
+    if (imageCtor == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(imageClass);
+        env->DeleteLocalRef(images);
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
 
     for (uint32_t i = 0; i < result.image_count; ++i) {
         aribcc_image_t& image = result.images[i];
@@ -134,7 +176,12 @@ jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t f
             image.stride,
             image.bitmap,
             image.bitmap_size);
-        if (bitmap == nullptr) continue;
+        if (bitmap == nullptr) {
+            env->DeleteLocalRef(imageClass);
+            env->DeleteLocalRef(images);
+            env->DeleteLocalRef(arrayListClass);
+            return nullptr;
+        }
         jobject captionImage = env->NewObject(
             imageClass,
             imageCtor,
@@ -143,22 +190,55 @@ jobject renderResultToCue(JNIEnv* env, aribcc_render_result_t& result, int64_t f
             static_cast<jint>(image.width),
             static_cast<jint>(image.height),
             bitmap);
+        if (captionImage == nullptr || env->ExceptionCheck()) {
+            if (captionImage != nullptr) env->DeleteLocalRef(captionImage);
+            env->DeleteLocalRef(bitmap);
+            env->DeleteLocalRef(imageClass);
+            env->DeleteLocalRef(images);
+            env->DeleteLocalRef(arrayListClass);
+            return nullptr;
+        }
         env->CallBooleanMethod(images, arrayListAdd, captionImage);
+        if (env->ExceptionCheck()) {
+            env->DeleteLocalRef(captionImage);
+            env->DeleteLocalRef(bitmap);
+            env->DeleteLocalRef(imageClass);
+            env->DeleteLocalRef(images);
+            env->DeleteLocalRef(arrayListClass);
+            return nullptr;
+        }
         env->DeleteLocalRef(captionImage);
         env->DeleteLocalRef(bitmap);
     }
 
     jclass cueClass = env->FindClass("com/beeregg2001/komorebi/ui/subtitle/NativeCaptionCue");
+    if (cueClass == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(imageClass);
+        env->DeleteLocalRef(images);
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
     jmethodID cueCtor = env->GetMethodID(cueClass, "<init>", "(JJZIILjava/util/List;)V");
+    if (cueCtor == nullptr || env->ExceptionCheck()) {
+        env->DeleteLocalRef(cueClass);
+        env->DeleteLocalRef(imageClass);
+        env->DeleteLocalRef(images);
+        env->DeleteLocalRef(arrayListClass);
+        return nullptr;
+    }
     jobject cue = env->NewObject(
         cueClass,
         cueCtor,
         static_cast<jlong>(pts),
         static_cast<jlong>(duration),
-        result.image_count == 0 ? JNI_TRUE : JNI_FALSE,
+        clearScreen ? JNI_TRUE : JNI_FALSE,
         static_cast<jint>(ARIBCC_RENDER_FRAME_WIDTH),
         static_cast<jint>(ARIBCC_RENDER_FRAME_HEIGHT),
         images);
+    if (cue == nullptr || env->ExceptionCheck()) {
+        if (cue != nullptr) env->DeleteLocalRef(cue);
+        cue = nullptr;
+    }
 
     env->DeleteLocalRef(images);
     env->DeleteLocalRef(imageClass);
@@ -389,7 +469,7 @@ Java_com_beeregg2001_komorebi_NativeLib_decodeCaption(JNIEnv *env, jobject thiz,
     if (!ctx || !ctx->decoder || !ctx->renderer || !data) return nullptr;
 
     jsize length = env->GetArrayLength(data);
-    if (length <= 0) return nullptr;
+    if (length <= 0 || env->ExceptionCheck()) return nullptr;
 
     jbyte* bytes = env->GetByteArrayElements(data, nullptr);
     if (!bytes) return nullptr;
@@ -423,8 +503,8 @@ Java_com_beeregg2001_komorebi_NativeLib_decodeCaption(JNIEnv *env, jobject thiz,
                     return nullptr;
                 }
 
-                // A CS-only caption intentionally renders no bitmap. Preserve it as an empty
-                // cue so the Kotlin timeline can clear the previous indefinite caption.
+                // CS 単独の字幕は意図的に bitmap を生成しない。Kotlin の時間線へ
+                // 明示的な消去 cue として渡し、直前の無期限字幕を消去する。
                 renderResult.pts = caption.pts;
                 renderResult.duration = caption.wait_duration;
                 renderResult.images = nullptr;
@@ -438,7 +518,8 @@ Java_com_beeregg2001_komorebi_NativeLib_decodeCaption(JNIEnv *env, jobject thiz,
         return nullptr;
     }
 
-    jobject cue = renderResultToCue(env, renderResult, ptsMs);
+    const bool clearScreen = (caption.flags & ARIBCC_CAPTIONFLAGS_CLEARSCREEN) != 0;
+    jobject cue = renderResultToCue(env, renderResult, ptsMs, clearScreen);
     aribcc_render_result_cleanup(&renderResult);
     aribcc_caption_cleanup(&caption);
     return cue;
@@ -447,7 +528,10 @@ Java_com_beeregg2001_komorebi_NativeLib_decodeCaption(JNIEnv *env, jobject thiz,
 JNIEXPORT jintArray JNICALL
 Java_com_beeregg2001_komorebi_NativeLib_getCaptionLanguageCodes(JNIEnv *env, jobject thiz, jlong handle) {
     auto* ctx = reinterpret_cast<AribCaptionDecoderContext*>(handle);
-    if (!ctx || !ctx->decoder) return env->NewIntArray(0);
+    if (!ctx || !ctx->decoder) {
+        jintArray empty = env->NewIntArray(0);
+        return env->ExceptionCheck() ? nullptr : empty;
+    }
 
     jint codes[ARIBCC_LANGUAGEID_MAX] = {};
     {
@@ -462,7 +546,14 @@ Java_com_beeregg2001_komorebi_NativeLib_getCaptionLanguageCodes(JNIEnv *env, job
 
     jsize count = codes[1] != 0 ? 2 : (codes[0] != 0 ? 1 : 0);
     jintArray result = env->NewIntArray(count);
-    if (count > 0) env->SetIntArrayRegion(result, 0, count, codes);
+    if (result == nullptr || env->ExceptionCheck()) return nullptr;
+    if (count > 0) {
+        env->SetIntArrayRegion(result, 0, count, codes);
+        if (env->ExceptionCheck()) {
+            env->DeleteLocalRef(result);
+            return nullptr;
+        }
+    }
     return result;
 }
 

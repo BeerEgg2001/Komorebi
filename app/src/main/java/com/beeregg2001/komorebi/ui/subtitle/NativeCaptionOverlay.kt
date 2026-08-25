@@ -7,65 +7,39 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 
-private const val MAX_AUTO_HIDE_DURATION_MS = 60_000L
-private const val INDEFINITE_AUTO_HIDE_DURATION_MS = 5_000L
-private const val UNKNOWN_AUTO_HIDE_DURATION_MS = 5_000L
-private const val AUTO_HIDE_TICK_MS = 250L
+private const val TIMELINE_TICK_MS = 50L
 
 @Composable
 fun rememberNativeCaptionCue(
     events: Flow<NativeCaptionCue>,
     enabled: Boolean,
     resetKey: Any? = null,
-    clockRunning: Boolean = true
+    positionMs: () -> Long
 ): MutableState<NativeCaptionCue?> {
     val cueState = remember { mutableStateOf<NativeCaptionCue?>(null) }
-    val currentClockRunning = rememberUpdatedState(clockRunning)
-    LaunchedEffect(resetKey) {
+    val timeline = remember { NativeCaptionTimeline() }
+    val currentPositionMs = rememberUpdatedState(positionMs)
+    LaunchedEffect(resetKey, enabled) {
+        timeline.reset()
         cueState.value = null
     }
-    LaunchedEffect(events, enabled, resetKey) {
-        if (!enabled) {
-            cueState.value = null
-            return@LaunchedEffect
-        }
+    LaunchedEffect(events, resetKey, enabled) {
         events.collect { cue ->
-            cueState.value = if (cue.clearScreen || cue.images.isEmpty()) null else cue
+            if (enabled) timeline.offer(cue)
         }
     }
-    LaunchedEffect(cueState.value, enabled) {
-        val cue = cueState.value ?: return@LaunchedEffect
-        if (!enabled) return@LaunchedEffect
-        val duration = when (cue.durationMs) {
-            -1L -> INDEFINITE_AUTO_HIDE_DURATION_MS
-            in 1..MAX_AUTO_HIDE_DURATION_MS -> cue.durationMs
-            else -> UNKNOWN_AUTO_HIDE_DURATION_MS
+    LaunchedEffect(enabled, resetKey) {
+        while (enabled) {
+            cueState.value = timeline.advanceTo(currentPositionMs.value.invoke())
+            delay(TIMELINE_TICK_MS)
         }
-        var remainingMs = duration
-        while (remainingMs > 0 && cueState.value === cue) {
-            if (!currentClockRunning.value) {
-                snapshotFlow { currentClockRunning.value }
-                    .filter { it }
-                    .first()
-                continue
-            }
-            val tickMs = minOf(remainingMs, AUTO_HIDE_TICK_MS)
-            delay(tickMs)
-            if (currentClockRunning.value) {
-                remainingMs -= tickMs
-            }
-        }
-        if (cueState.value === cue) cueState.value = null
     }
     return cueState
 }

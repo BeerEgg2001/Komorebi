@@ -1,9 +1,9 @@
 package com.beeregg2001.komorebi.ui.subtitle
 
-/** Minimal inspection of an ARIB STD-B24 PES data payload. */
+/** ARIB STD-B24 PES データを必要最小限だけ検査する。 */
 internal object AribCaptionData {
     fun isManagementPacket(data: ByteArray): Boolean {
-        // data_identifier=0x80 is caption; 0x81 is superimpose.
+        // data_identifier=0x80 は字幕、0x81 は文字スーパー。
         if (data.size < 8 || data[0].toInt() and 0xff != 0x80) return false
         if (data[1].toInt() and 0xff != 0xff) return false
 

@@ -207,15 +207,16 @@ fun LiveTopSubMenuUI(
                         contentColor = colors.textPrimary
                     )
 
-                    if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
-                        LiveMenuTileItem(
-                            title = "字幕言語", icon = Icons.Default.Translate,
-                            subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
-                            onClick = onSubtitleLanguageToggle,
-                            modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                            contentColor = colors.textPrimary
-                        )
-                    }
+                    LiveMenuTileItem(
+                        title = "字幕言語", icon = Icons.Default.Translate,
+                        subtitle = currentSubtitleLanguage?.let {
+                            "第${it.id}言語・${it.displayName}"
+                        } ?: "利用不可",
+                        onClick = onSubtitleLanguageToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary,
+                        enabled = subtitleLanguages.size > 1
+                    )
 
                     LiveMenuTileItem(
                         title = "画質", icon = Icons.Default.Settings,
@@ -276,15 +277,16 @@ fun LiveTopSubMenuUI(
                         contentColor = colors.textPrimary
                     )
 
-                    if (subtitleLanguages.size > 1 && currentSubtitleLanguage != null) {
-                        LiveMenuTileItem(
-                            title = "字幕言語", icon = Icons.Default.Translate,
-                            subtitle = "第${currentSubtitleLanguage.id}言語・${currentSubtitleLanguage.displayName}",
-                            onClick = onSubtitleLanguageToggle,
-                            modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
-                            contentColor = colors.textPrimary
-                        )
-                    }
+                    LiveMenuTileItem(
+                        title = "字幕言語", icon = Icons.Default.Translate,
+                        subtitle = currentSubtitleLanguage?.let {
+                            "第${it.id}言語・${it.displayName}"
+                        } ?: "利用不可",
+                        onClick = onSubtitleLanguageToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary,
+                        enabled = subtitleLanguages.size > 1
+                    )
 
                     LiveMenuTileItem(
                         title = "L字クロップ", icon = Icons.Default.Crop,

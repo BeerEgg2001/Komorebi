@@ -130,8 +130,11 @@ class LivePlayerViewModel @Inject constructor(
     private val _dualSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
     val dualSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _dualSubtitleLanguages.asStateFlow()
 
-    private val _currentSubtitleLanguageId = MutableStateFlow(1)
-    val currentSubtitleLanguageId: StateFlow<Int> = _currentSubtitleLanguageId.asStateFlow()
+    private val _mainSubtitleLanguageId = MutableStateFlow(1)
+    val mainSubtitleLanguageId: StateFlow<Int> = _mainSubtitleLanguageId.asStateFlow()
+
+    private val _dualSubtitleLanguageId = MutableStateFlow(1)
+    val dualSubtitleLanguageId: StateFlow<Int> = _dualSubtitleLanguageId.asStateFlow()
 
     private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
     val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
@@ -155,6 +158,7 @@ class LivePlayerViewModel @Inject constructor(
     private val _mainBackendType = MutableStateFlow("KONOMITV")
     val mainBackendType: StateFlow<String> = _mainBackendType.asStateFlow()
 
+    @Volatile
     private var isSubtitleEnabled = false
     private val mainCaptionDecoder = NativeCaptionDecoder()
     private val dualCaptionDecoder = NativeCaptionDecoder()
@@ -334,7 +338,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
-        mainCaptionDecoder.reset(_currentSubtitleLanguageId.value)
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
         _mainSubtitleLanguages.value = emptyList()
 
         // ★ 修正: KonomiTV等でセッションが残らないよう、確実にstop()とclearMediaItems()を呼ぶ
@@ -348,7 +352,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
-        dualCaptionDecoder.reset(_currentSubtitleLanguageId.value)
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
         _dualSubtitleLanguages.value = emptyList()
 
         // ★ 修正: サブプレイヤー側も同様に確実なクリーンアップを行う
@@ -371,6 +375,11 @@ class LivePlayerViewModel @Inject constructor(
         _dualPlayer.value?.stop()
         _dualPlayer.value?.clearMediaItems()
         _dualPlayer.value?.release(); _dualPlayer.value = null
+
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
+        _dualSubtitleLanguages.value = emptyList()
 
         _mainSseStatus.value = "Standby"; _dualSseStatus.value = "Standby"
         liveJikkyoManager.stopJikkyo()
@@ -454,7 +463,7 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
-        if (mainCurrentChannel?.id != channel.id) setSubtitleLanguage(1)
+        if (mainCurrentChannel?.id != channel.id) setMainSubtitleLanguage(1)
         if (!isAutoRetry) {
             mainAutoRetryCount = 0; _mainPlayerError.value = null
         }
@@ -549,6 +558,7 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (dualCurrentChannel?.id != channel.id) setDualSubtitleLanguage(1)
         if (!isAutoRetry) dualAutoRetryCount = 0
         dualCurrentChannel = channel; dualCurrentSource = source; dualIsEdcbDirect =
             isEdcbDirect; dualCurrentQuality = quality
@@ -648,29 +658,52 @@ class LivePlayerViewModel @Inject constructor(
 
     fun setSubtitlesEnabled(enabled: Boolean) {
         this.isSubtitleEnabled = enabled
-        if (!enabled) {
-            mainCaptionDecoder.flush()
-            dualCaptionDecoder.flush()
-        }
     }
 
-    fun setSubtitleLanguage(languageId: Int) {
+    fun setMainSubtitleLanguage(languageId: Int) {
         if (languageId !in 1..2) return
-        _currentSubtitleLanguageId.value = languageId
+        _mainSubtitleLanguageId.value = languageId
         mainCaptionDecoder.switchLanguage(languageId)
+    }
+
+    fun setDualSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _dualSubtitleLanguageId.value = languageId
         dualCaptionDecoder.switchLanguage(languageId)
     }
 
     private fun decodeAndEmitMainSubtitle(ptsMs: Long, data: ByteArray) {
-        val cue = mainCaptionDecoder.decode(data, ptsMs, renderCaptions = isSubtitleEnabled)
-        _mainSubtitleLanguages.value = mainCaptionDecoder.availableLanguages()
-        if (isSubtitleEnabled && cue != null) _mainSubtitleEvents.tryEmit(cue)
+        decodeAndEmitSubtitle(
+            decoder = mainCaptionDecoder,
+            languagesState = _mainSubtitleLanguages,
+            events = _mainSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
     }
 
     private fun decodeAndEmitDualSubtitle(ptsMs: Long, data: ByteArray) {
-        val cue = dualCaptionDecoder.decode(data, ptsMs, renderCaptions = isSubtitleEnabled)
-        _dualSubtitleLanguages.value = dualCaptionDecoder.availableLanguages()
-        if (isSubtitleEnabled && cue != null) _dualSubtitleEvents.tryEmit(cue)
+        decodeAndEmitSubtitle(
+            decoder = dualCaptionDecoder,
+            languagesState = _dualSubtitleLanguages,
+            events = _dualSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
+    }
+
+    private fun decodeAndEmitSubtitle(
+        decoder: NativeCaptionDecoder,
+        languagesState: MutableStateFlow<List<NativeCaptionLanguage>>,
+        events: MutableSharedFlow<NativeCaptionCue>,
+        ptsMs: Long,
+        data: ByteArray
+    ) {
+        val renderCaptions = isSubtitleEnabled
+        val cue = decoder.decode(data, ptsMs, renderCaptions = renderCaptions)
+        val languages = decoder.availableLanguages()
+        if (languages != languagesState.value) languagesState.value = languages
+        if (renderCaptions && cue != null) events.tryEmit(cue)
     }
 
     fun setVolumes(mainVolume: Float, dualVolume: Float) {
@@ -775,7 +808,7 @@ class LivePlayerViewModel @Inject constructor(
                         arrayOf(
                             TsExtractor(
                                 TsExtractor.MODE_SINGLE_PMT,
-                                TimestampAdjuster(C.TIME_UNSET),
+                                TimestampAdjuster(0L),
                                 DirectSubtitlePayloadReaderFactory(
                                     onSubtitleDataReceived = onSubtitleDataReceived
                                 ),

@@ -8,6 +8,8 @@ class NativeCaptionDecoder(
 ) : AutoCloseable {
     private var handle: Long = nativeLib.openCaptionDecoder()
     private var languages: List<NativeCaptionLanguage> = emptyList()
+    private var lastPtsMs: Long? = null
+    private var lastManagementData: ByteArray? = null
 
     @Synchronized
     fun decode(
@@ -17,19 +19,26 @@ class NativeCaptionDecoder(
     ): NativeCaptionCue? {
         val activeHandle = handle
         if (activeHandle == 0L) return null
-        // Caption management data carries the language table. Keep feeding it while
-        // subtitles are hidden, but skip statement packets to avoid background rendering.
-        if (!renderCaptions && !AribCaptionData.isManagementPacket(data)) return null
         return try {
+            if (lastPtsMs?.let { ptsMs < it } == true) {
+                nativeLib.flushCaptionDecoder(activeHandle)
+            }
+            lastPtsMs = ptsMs
             val cue = nativeLib.decodeCaption(activeHandle, data, ptsMs)
-            val detectedLanguages = nativeLib.getCaptionLanguageCodes(activeHandle)
-                .mapIndexed { index, code ->
-                    NativeCaptionLanguage(
-                        id = index + 1,
-                        iso6392Code = code.toIso6392Code()
-                    )
+            // 管理データが言語表を更新したときだけ JNI 問い合わせを行う。
+            val managementChanged = AribCaptionData.isManagementPacket(data) &&
+                lastManagementData?.contentEquals(data) != true
+            if (managementChanged) {
+                val detectedLanguages = nativeLib.getCaptionLanguageCodes(activeHandle)
+                    .mapIndexed { index, code ->
+                        NativeCaptionLanguage(
+                            id = index + 1,
+                            iso6392Code = code.toIso6392Code()
+                        )
                 }
-            if (detectedLanguages.isNotEmpty()) languages = detectedLanguages
+                if (detectedLanguages.isNotEmpty()) languages = detectedLanguages
+                lastManagementData = data.copyOf()
+            }
             if (renderCaptions) cue else null
         } catch (e: Exception) {
             Log.e(TAG, "Failed to decode ARIB caption", e)
@@ -45,12 +54,15 @@ class NativeCaptionDecoder(
         val activeHandle = handle
         if (activeHandle == 0L || languageId !in 1..2) return
         nativeLib.switchCaptionLanguage(activeHandle, languageId)
+        lastPtsMs = null
     }
 
     @Synchronized
     fun flush() {
         val activeHandle = handle
         if (activeHandle != 0L) nativeLib.flushCaptionDecoder(activeHandle)
+        lastPtsMs = null
+        lastManagementData = null
     }
 
     @Synchronized
@@ -59,6 +71,8 @@ class NativeCaptionDecoder(
         if (activeHandle != 0L) nativeLib.closeCaptionDecoder(activeHandle)
         handle = nativeLib.openCaptionDecoder()
         languages = emptyList()
+        lastPtsMs = null
+        lastManagementData = null
         if (handle != 0L && languageId != 1) {
             nativeLib.switchCaptionLanguage(handle, languageId)
         }
@@ -69,6 +83,8 @@ class NativeCaptionDecoder(
         val activeHandle = handle
         handle = 0L
         languages = emptyList()
+        lastPtsMs = null
+        lastManagementData = null
         if (activeHandle != 0L) nativeLib.closeCaptionDecoder(activeHandle)
     }
 
