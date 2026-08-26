@@ -48,6 +48,16 @@ import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
 
+/**
+ * EPGStation の無変換再生 URL (`/api/videos/{videoFileId}`) かどうかを判定する。
+ * このURLは HLS ではなく MPEG-TS がそのまま流れてくるため、HLS として解釈させてはいけない。
+ * KonomiTV の `/api/videos/{id}/thumbnail` 等とは違い、数値で終わる点で見分ける。
+ */
+private val EPG_STATION_DIRECT_VIDEO_REGEX = Regex("/api/videos/\\d+$")
+
+private fun isEpgStationDirectVideoUrl(url: String): Boolean =
+    EPG_STATION_DIRECT_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -71,12 +81,20 @@ fun VideoPlayerScreen(
 ) {
     val scope = rememberCoroutineScope()
 
+    DisposableEffect(Unit) {
+        videoPlayerViewModel.setPlaybackSyncThrottle(true)
+        onDispose { videoPlayerViewModel.setPlaybackSyncThrottle(false) }
+    }
+
     var currentProgram by remember { mutableStateOf(program) }
     val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
 
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
-    val isLiveStream by videoPlayerViewModel.isLiveStream.collectAsState()
+    // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
+    // トランスコード再生) かどうか。ViewModel 側の isLiveStream は EDCB xcode 判定という
+    // 別用途の名残りなので、この画面での位置補正・シーク判定にはこちらの専用フラグを使う。
+    val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
@@ -205,7 +223,7 @@ fun VideoPlayerScreen(
         onStopOrDispose = { player ->
             if (smbItem == null) {
                 val posMs =
-                    if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                    if (isOffsetBasedStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
         },
@@ -216,8 +234,10 @@ fun VideoPlayerScreen(
         }
     )
 
-    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
-        { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+    // isOffsetBasedStream はストリーム URL の解決後に変化するため、remember のキーに含めないと
+    // 初回コンポジション時の値 (false) を捕捉したままになり、オフセット補正が効かなくなる。
+    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer, isOffsetBasedStream) {
+        { if (isOffsetBasedStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     }
 
     val backendType by settingsViewModel.backendType.collectAsState()
@@ -243,7 +263,7 @@ fun VideoPlayerScreen(
             }
         }
 
-        if (isLiveStream && smbItem == null) {
+        if (isOffsetBasedStream && smbItem == null) {
             scope.launch {
                 isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
@@ -256,7 +276,10 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
+                    if (isEpgStationDirectVideoUrl(newUrl)) {
+                        // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+                        mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+                    } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
                             "konomi.tv"
                         ) || newUrl.contains("m3u8")
                     ) {
@@ -358,7 +381,10 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
+            if (isEpgStationDirectVideoUrl(url)) {
+                // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+            } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
                     "m3u8"
                 )
             ) {
@@ -366,7 +392,7 @@ fun VideoPlayerScreen(
             }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isLiveStream) {
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream) {
                 exoPlayer.seekTo(initialPositionMs)
             }
             isFirstLoad = false
@@ -480,7 +506,9 @@ fun VideoPlayerScreen(
                     onSubMenuToggle = onSubMenuToggle,
                     exoPlayerIsPlaying = exoPlayer.playWhenReady,
                     onPause = { exoPlayer.pause() },
-                    onPlay = { exoPlayer.play() }
+                    onPlay = { exoPlayer.play() },
+                    onSkipPreviousChapter = skipToPreviousChapter,
+                    onSkipNextChapter = skipToNextChapter
                 )
             }
     ) {

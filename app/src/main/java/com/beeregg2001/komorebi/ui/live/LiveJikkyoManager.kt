@@ -1,12 +1,11 @@
 package com.beeregg2001.komorebi.ui.live
 
-import android.content.Context
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
 import com.beeregg2001.komorebi.data.model.BackendConfig
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,7 +15,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Collections
 import javax.inject.Inject
@@ -34,25 +32,10 @@ data class LiveComment(
  */
 @Singleton
 class LiveJikkyoManager @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val jikkyoChannelResolver: JikkyoChannelResolver
 ) {
-    companion object {
-        private val JIKKYO_CHANNEL_ID_MAP = mapOf(
-            "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
-            "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
-            "jk8" to "ch2646442", "jk9" to "ch2646485", "jk10" to null,
-            "jk11" to null, "jk12" to null, "jk13" to null, "jk14" to null,
-            "jk101" to "ch2647992", "jk103" to null, "jk141" to null,
-            "jk151" to null, "jk161" to null, "jk171" to null, "jk181" to null,
-            "jk191" to null, "jk192" to null, "jk193" to null, "jk200" to null,
-            "jk201" to null, "jk211" to "ch2646846", "jk222" to null,
-            "jk236" to null, "jk252" to null, "jk260" to null, "jk263" to null,
-            "jk265" to null, "jk333" to null
-        )
-    }
-
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _liveComments = MutableSharedFlow<LiveComment>(extraBufferCapacity = 100)
@@ -63,7 +46,6 @@ class LiveJikkyoManager @Inject constructor(
 
     private var jikkyoClient: JikkyoClient? = null
     private val processedCommentIds = Collections.synchronizedSet(LinkedHashSet<String>())
-    private var jikkyoChannelsCache: JSONArray? = null
 
     fun startJikkyo(channel: Channel, source: StreamSource) {
         stopJikkyo()
@@ -109,58 +91,12 @@ class LiveJikkyoManager @Inject constructor(
             val networkId = channel.networkId.toInt()
             val serviceId = channel.serviceId.toInt()
 
-            val jkId = getJikkyoId(networkId, serviceId)
+            val jkId = jikkyoChannelResolver.getJikkyoId(networkId, serviceId)
             if (jkId != null) {
                 return "wss://nx-jikkyo.tsukumijima.net/api/v1/channels/$jkId/ws/watch"
             }
             return null
         }
-    }
-
-    private fun getJikkyoChannels(): JSONArray {
-        if (jikkyoChannelsCache != null) return jikkyoChannelsCache!!
-        return try {
-            val jsonString =
-                context.assets.open("jikkyo_channels.json").bufferedReader().use { it.readText() }
-            val array = JSONArray(jsonString)
-            jikkyoChannelsCache = array
-            array
-        } catch (e: Exception) {
-            JSONArray()
-        }
-    }
-
-    private fun getJikkyoId(networkId: Int, serviceId: Int): String? {
-        val channels = getJikkyoChannels()
-        for (i in 0 until channels.length()) {
-            val jc = channels.optJSONObject(i) ?: continue
-            val jcNid = jc.optInt("network_id", -1)
-
-            val sidRaw = jc.opt("service_id")?.toString() ?: "-1"
-            val jcSid = if (sidRaw.startsWith("0x", ignoreCase = true)) {
-                sidRaw.substring(2).toIntOrNull(16) ?: -1
-            } else {
-                sidRaw.toIntOrNull() ?: -1
-            }
-            val jkJikkyoId = jc.optInt("jikkyo_id", -1)
-
-            var matched = false
-            if (networkId == jcNid && serviceId == jcSid) {
-                matched = true
-            } else if (networkId in 0x7880..0x7FEF && jcNid == 15) {
-                if (serviceId == jcSid || serviceId - 1 == jcSid || serviceId - 2 == jcSid) {
-                    matched = true
-                }
-            }
-
-            if (matched && jkJikkyoId != -1) {
-                val jkId = "jk$jkJikkyoId"
-                if (JIKKYO_CHANNEL_ID_MAP.containsKey(jkId)) {
-                    return jkId
-                }
-            }
-        }
-        return null
     }
 
     private fun parseAndEmitComment(jsonText: String) {

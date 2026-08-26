@@ -15,7 +15,7 @@ import javax.inject.Singleton
  * リクエストヘッダーに付与するインターセプター。
  *
  * トークンが未設定の場合は何もしない。
- * 認証情報の漏洩を防ぐため、設定された KonomiTV / Mirakurun サーバーの
+ * 認証情報の漏洩を防ぐため、設定された KonomiTV / Mirakurun / EPGStation サーバーの
  * ホスト宛のリクエストにのみヘッダーを付与する。
  */
 @Singleton
@@ -38,7 +38,10 @@ class CloudflareAccessInterceptor @Inject constructor(
             }
             listOfNotNull(
                 konomiBaseUrl.toHttpUrlOrNull()?.host,
-                settingsRepository.getMirakurunBaseUrl()?.toHttpUrlOrNull()?.host
+                settingsRepository.getMirakurunBaseUrl()?.toHttpUrlOrNull()?.host,
+                // ★ 追加: EPGStation も Cloudflare Access 配下に置かれることがあるため対象に含める
+                settingsRepository.getEpgStationFullUrl().takeIf { it.isNotBlank() }
+                    ?.toHttpUrlOrNull()?.host
             )
         }
         if (request.url.host !in protectedHosts) {

@@ -182,6 +182,7 @@ fun MainRootDialogs(
                     endHour = endH, endMinute = endM, excludeKeyword = exc, isTitleOnly = tOnly,
                     broadcastType = bType, isFuzzySearch = fuzzy, duplicateScope = dup,
                     priority = pri, isEventRelay = relay, isExactRecord = exact,
+                    onFailure = { state.toastMessage = it },
                     onSuccess = {
                         scope.launch {
                             state.selectedProgramForAutoReserve = null
@@ -245,7 +246,10 @@ fun MainRootDialogs(
                 }
             },
             onRecordClick = { program ->
-                reserveViewModel.addReserve(program.id) {
+                reserveViewModel.addReserve(
+                    programId = program.id,
+                    onFailure = { state.toastMessage = it }
+                ) {
                     scope.launch {
                         state.epgSelectedProgram = null; delay(300)
                         state.toastMessage = AppStrings.TOAST_RESERVED
@@ -296,6 +300,7 @@ fun MainRootDialogs(
                     priority = pri,
                     isEventRelay = relay,
                     isExactRecord = exact,
+                    onFailure = { state.toastMessage = it },
                     onSuccess = {
                         scope.launch {
                             state.epgSelectedProgram = null; delay(300)
@@ -324,8 +329,13 @@ fun MainRootDialogs(
             programTitle = state.editingReserveItem!!.program.title,
             initialSettings = state.editingReserveItem!!.recordSettings,
             isNewReservation = false,
+            isEpgStation = state.backendType == "EPGSTATION",
             onConfirm = { newSettings ->
-                reserveViewModel.updateReservation(state.editingReserveItem!!, newSettings) {
+                reserveViewModel.updateReservation(
+                    reserve = state.editingReserveItem!!,
+                    newSettings = newSettings,
+                    onFailure = { state.toastMessage = it }
+                ) {
                     scope.launch {
                         state.editingReserveItem = null; state.toastMessage =
                         AppStrings.TOAST_RESERVE_UPDATED
@@ -353,8 +363,13 @@ fun MainRootDialogs(
             programTitle = state.editingNewProgram!!.title,
             initialSettings = defaultSettings,
             isNewReservation = true,
+            isEpgStation = state.backendType == "EPGSTATION",
             onConfirm = { newSettings ->
-                reserveViewModel.addReserveWithSettings(state.editingNewProgram!!.id, newSettings) {
+                reserveViewModel.addReserveWithSettings(
+                    programId = state.editingNewProgram!!.id,
+                    settings = newSettings,
+                    onFailure = { state.toastMessage = it }
+                ) {
                     scope.launch {
                         state.editingNewProgram = null; state.epgSelectedProgram = null
                         delay(300); state.toastMessage = AppStrings.TOAST_RESERVED
@@ -377,7 +392,10 @@ fun MainRootDialogs(
             ),
             onConfirm = {
                 val id = state.reserveToDelete!!.id
-                reserveViewModel.deleteReservation(id) {
+                reserveViewModel.deleteReservation(
+                    reservationId = id,
+                    onFailure = { state.toastMessage = it }
+                ) {
                     scope.launch {
                         state.reserveToDelete = null
                         if (state.selectedReserve != null) state.selectedReserve = null

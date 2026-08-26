@@ -72,7 +72,7 @@ fun RecordListContent(
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
-    onSeriesSearch: (String) -> Unit,
+    onSeriesSearch: (RecordedProgram) -> Unit,
     isDetailVisible: Boolean,
     onDetailStateChange: (Boolean) -> Unit,
     onBackPress: () -> Unit,
@@ -385,9 +385,7 @@ fun RecordListContent(
                                     },
                                     onClick = {
                                         focusedProgram?.let {
-                                            val keyword =
-                                                TitleNormalizer.toSqlSearchQuery(displayTitle)
-                                            onSeriesSearch(keyword)
+                                            onSeriesSearch(it)
                                             isSideMenuOpen = false
                                         }
                                     })

@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -58,16 +59,19 @@ fun MainRootBackground(
     val scope = rememberCoroutineScope()
     val colors = KomorebiTheme.colors
 
-    // ★ 修正: SMBアイテムが選択されている場合も背面を非表示（ホームレイヤー維持）にする
-    val showHomeLayer =
-        (state.selectedChannel == null && state.selectedProgram == null && state.selectedSmbItem == null) || state.isMiniPlayerMode
+    // プレイヤー表示中も背面画面をComposeツリーに保持する。
+    // 画面を破棄するとLazyList/LazyGridのスクロール位置とFocusRequesterが失われ、
+    // 戻る操作で先頭項目へフォーカスが戻ってしまう。
+    val isFullScreenPlayerVisible =
+        !state.isMiniPlayerMode &&
+            (state.selectedChannel != null || state.selectedProgram != null || state.selectedSmbItem != null)
 
-    if (showHomeLayer) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(0f)
-        ) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(0f)
+            .focusProperties { canFocus = !isFullScreenPlayerVisible }
+    ) {
             when {
                 state.isRecordListOpen -> {
                     RecordListScreen(
@@ -169,6 +173,7 @@ fun MainRootBackground(
                                 priority = pri,
                                 isEventRelay = relay,
                                 isExactRecord = exact,
+                                onFailure = { state.toastMessage = it },
                                 onSuccess = {
                                     scope.launch {
                                         state.editingCondition = null
@@ -181,6 +186,7 @@ fun MainRootBackground(
                         onConfirmDelete = { deleteRelated ->
                             reserveViewModel.deleteConditionWithCleanup(
                                 condition = currentCondition, deleteRelatedReserves = deleteRelated,
+                                onFailure = { state.toastMessage = it },
                                 onSuccess = {
                                     scope.launch {
                                         state.editingCondition = null
@@ -290,7 +296,10 @@ fun MainRootBackground(
                 }
             }
 
-            if (state.selectedChannel == null && state.selectedProgram == null && !isSyncingInitial) {
+            // ★ 修正: SyncProgressIndicator自身がsyncProgress.isSyncingで表示制御しているため、
+            // ここで!isSyncingInitialを条件に含めると、初回同期を待たずにメイン画面を表示するようになった後
+            // (isSyncingInitial=trueのまま操作可能な間)は進捗表示が一切出なくなってしまう。
+            if (state.selectedChannel == null && state.selectedProgram == null) {
                 SyncProgressIndicator(
                     recordViewModel = recordViewModel,
                     modifier = Modifier
@@ -298,6 +307,5 @@ fun MainRootBackground(
                         .padding(end = 40.dp, bottom = 40.dp)
                 )
             }
-        }
     }
 }

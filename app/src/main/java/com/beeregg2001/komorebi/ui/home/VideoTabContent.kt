@@ -5,6 +5,7 @@ package com.beeregg2001.komorebi.ui.home
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -215,7 +216,9 @@ fun VideoTabContent(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusGroup(),
                 contentPadding = PaddingValues(bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
             ) {
@@ -281,6 +284,7 @@ fun VideoTabContent(
                             )
                             LazyRow(
                                 state = recentRowState,
+                                modifier = Modifier.focusGroup(),
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
@@ -369,6 +373,7 @@ fun VideoTabContent(
                             )
                             LazyRow(
                                 state = historyRowState,
+                                modifier = Modifier.focusGroup(),
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
@@ -445,6 +450,7 @@ fun VideoTabContent(
                                 modifier = Modifier.padding(horizontal = 48.dp)
                             )
                             LazyRow(
+                                modifier = Modifier.focusGroup(),
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
@@ -508,6 +514,7 @@ fun VideoTabContent(
                                 if (selectedGenre == null) groupedSeries.values.flatten() else groupedSeries[selectedGenre]
                                     ?: emptyList()
                             LazyRow(
+                                modifier = Modifier.focusGroup(),
                                 contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {

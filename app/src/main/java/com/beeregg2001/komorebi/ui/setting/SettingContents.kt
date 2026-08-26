@@ -300,6 +300,7 @@ fun ConnectionSettingsContent(
         SettingsSection("メインシステム設定") {
             val backendLabel = when (backendType) {
                 "EDCB" -> "EDCB (EpgTimerSrv)"
+                "EPGSTATION" -> "EPGStation"
                 "MIRAKURUN_ONLY" -> "Mirakurun (録画なし)"
                 else -> "KonomiTV"
             }
@@ -320,21 +321,25 @@ fun ConnectionSettingsContent(
 
             val currentIp = when (backendType) {
                 "EDCB" -> edcbIp
+                "EPGSTATION" -> epgStationIp
                 "MIRAKURUN_ONLY" -> mIp
                 else -> kIp
             }
             val currentPort = when (backendType) {
                 "EDCB" -> edcbPort
+                "EPGSTATION" -> epgStationPort
                 "MIRAKURUN_ONLY" -> mPort
                 else -> kPort
             }
             val ipTitle = when (backendType) {
                 "EDCB" -> "EDCB (IPアドレス)"
+                "EPGSTATION" -> "EPGStation (IPアドレス)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (IPアドレス)"
                 else -> "KonomiTV (IPアドレス)"
             }
             val portTitle = when (backendType) {
                 "EDCB" -> "EDCB (TCPポート)"
+                "EPGSTATION" -> "EPGStation (ポート)"
                 "MIRAKURUN_ONLY" -> "Mirakurun (ポート)"
                 else -> "KonomiTV (ポート)"
             }

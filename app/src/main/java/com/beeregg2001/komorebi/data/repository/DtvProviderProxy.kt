@@ -9,6 +9,10 @@ import com.beeregg2001.komorebi.data.repository.edcb.EdcbLiveRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbRecordRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbReserveRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbEpgRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationEpgRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationRecordRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationReserveRepository
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,7 +25,10 @@ import javax.inject.Singleton
 class DtvProviderProxy @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val konomiRepository: KonomiRepository,
-    private val epgStationRepository: EpgStationRepository,
+    private val epgStationLiveRepository: EpgStationLiveRepository,
+    private val epgStationRecordRepository: EpgStationRecordRepository,
+    private val epgStationReserveRepository: EpgStationReserveRepository,
+    private val epgStationEpgRepository: EpgStationEpgRepository,
     // ★ 修正: 旧 EdcbRepository を削除し、分割した4つのRepositoryをInjectする
     private val edcbLiveRepository: EdcbLiveRepository,
     private val edcbRecordRepository: EdcbRecordRepository,
@@ -34,7 +41,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getLiveProvider(): LiveProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbLiveRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationLiveRepository
             else -> konomiRepository
         }
     }
@@ -42,7 +49,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getRecordProvider(): RecordProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbRecordRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationRecordRepository
             else -> konomiRepository
         }
     }
@@ -50,7 +57,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getReserveProvider(): ReserveProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbReserveRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationReserveRepository
             else -> konomiRepository
         }
     }
@@ -58,7 +65,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getEpgProvider(): EpgProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbEpgRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationEpgRepository
             else -> konomiRepository
         }
     }
@@ -107,6 +114,9 @@ class DtvProviderProxy @Inject constructor(
 
     override suspend fun getRecordedPrograms(page: Int) =
         getRecordProvider().getRecordedPrograms(page)
+
+    override suspend fun getRecordedPrograms(page: Int, limit: Int) =
+        getRecordProvider().getRecordedPrograms(page, limit)
 
     override suspend fun getRecordedProgram(videoId: Int) =
         getRecordProvider().getRecordedProgram(videoId)

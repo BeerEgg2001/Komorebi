@@ -220,7 +220,11 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isPiPMode) {
         if (isPiPMode) {
-            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+            // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+            // HLS再生時を除きダウングレード対象に含める
+            val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                !ps.currentQuality.value.startsWith("hls:")
+            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                 ps.previousStreamSource = ps.currentStreamSource
                 if (availableSources.contains(StreamSource.KONOMITV)) {
                     ps.currentStreamSource = StreamSource.KONOMITV
@@ -792,7 +796,11 @@ fun LivePlayerScreen(
                     ps.isDualDisplayMode = !ps.isDualDisplayMode
                     if (ps.isDualDisplayMode) {
                         ps.activeDualPlayerIndex = 1
-                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+                        // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+                        // HLS再生時を除きダウングレード対象に含める
+                        val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                            !ps.currentQuality.value.startsWith("hls:")
+                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                             ps.previousStreamSource = ps.currentStreamSource
                             if (availableSources.contains(StreamSource.KONOMITV)) {
                                 ps.currentStreamSource = StreamSource.KONOMITV
@@ -822,13 +830,20 @@ fun LivePlayerScreen(
                 },
                 onRecordToggle = {
                     if (isRecording) {
-                        if (activeReserve != null) {
-                            reserveViewModel.deleteReservation(activeReserve.id) {}
-                            onShowToast("録画を停止しました")
-                        }
+                        reserveViewModel.deleteReservation(
+                            reservationId = requireNotNull(activeReserve).id,
+                            onFailure = { onShowToast(it) }
+                        ) { onShowToast("録画を停止しました") }
                     } else {
-                        reserveViewModel.addReserve(currentChannelItem.id) {}
-                        onShowToast("録画を開始しました")
+                        val programId = currentChannelItem.programPresent?.id
+                        if (programId == null) {
+                            onShowToast("放送中番組の情報がないため録画予約できません")
+                        } else {
+                            reserveViewModel.addReserve(
+                                programId = programId,
+                                onFailure = { onShowToast(it) }
+                            ) { onShowToast("録画を開始しました") }
+                        }
                     }
                     onSubMenuToggle(false)
                 },
