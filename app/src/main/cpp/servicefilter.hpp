@@ -29,6 +29,32 @@ public:
     int64_t GetPcr() const { return m_pcr; }
     bool IsAudio1DualMono() const { return m_isAudio1DualMono; }
 
+    // ★ 録画TS直接再生でシークのたびにインスタンスが作り直される問題への対処用に追加。
+    // AddPmt() が解決したPID構成と、音声PESから学習したPTS-PCR差分を丸ごと退避/復元する。
+    // 通常のフィルタ動作(AddPacket/AddPmt)には一切影響しない。
+    struct State {
+        bool valid = false;
+        int videoPid = 0;
+        int audio1Pid = 0;
+        int audio2Pid = 0;
+        int captionPid = 0;
+        int superimposePid = 0;
+        int pcrPid = 0;
+        uint8_t audio1StreamType = 0;
+        uint8_t audio2StreamType = 0;
+        int64_t audio1PtsPcrDiff = 0;
+        int64_t audio2PtsPcrDiff = -1;
+        bool isAudio1DualMono = false;
+    };
+    // 現在のPID構成/学習済みPTS-PCR差分を取り出す。PMT未解決(pcrPid==0)なら valid=false を返す。
+    State ExportState() const;
+    // シーク直後に新規生成したフィルタへ、直前のフィルタが学習済みの値を注入する。
+    // state.valid が false の場合は何もしない。
+    // 特に audio2PtsPcrDiff を非負値で復元することで、AddPacket() 内の
+    // 「m_audio2PtsPcrDiff < 0 なら m_audio1PtsPcrDiff(=学習前は0)へ永久ラッチする」処理が
+    // 発火しなくなり、副音声合成の音ズレが再発しなくなる。
+    void ImportState(const State &state);
+
 private:
     const uint8_t H_262_VIDEO = 0x02;
     const uint8_t MPEG2_AUDIO = 0x04;

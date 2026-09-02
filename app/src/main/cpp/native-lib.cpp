@@ -170,6 +170,59 @@ Java_com_beeregg2001_komorebi_NativeLib_processDataBuffer(JNIEnv *env, jobject t
     return 0;
 }
 
+// ★ 録画TS直接再生のシークで CServiceFilter が作り直されるたびに音声のPTS-PCR学習が
+// リセットされる問題への対処。ExportState/ImportState の内容を固定長 jlongArray でやり取りする
+// (フィールド順は servicefilter.hpp の State と一致させること)。
+static const int FILTER_STATE_FIELD_COUNT = 11;
+
+JNIEXPORT jlongArray JNICALL
+Java_com_beeregg2001_komorebi_NativeLib_exportFilterState(JNIEnv *env, jobject thiz, jlong handle) {
+    auto* ctx = reinterpret_cast<TsReadExContext*>(handle);
+    jlongArray result = env->NewLongArray(FILTER_STATE_FIELD_COUNT);
+    if (!ctx || !result) return result;
+
+    CServiceFilter::State state = ctx->servicefilter.ExportState();
+    jlong buf[FILTER_STATE_FIELD_COUNT] = {
+        state.valid ? 1 : 0,
+        state.videoPid,
+        state.audio1Pid,
+        state.audio2Pid,
+        state.captionPid,
+        state.superimposePid,
+        state.pcrPid,
+        state.audio1StreamType,
+        state.audio2StreamType,
+        state.audio1PtsPcrDiff,
+        state.audio2PtsPcrDiff,
+    };
+    env->SetLongArrayRegion(result, 0, FILTER_STATE_FIELD_COUNT, buf);
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_beeregg2001_komorebi_NativeLib_importFilterState(JNIEnv *env, jobject thiz, jlong handle, jlongArray stateArray) {
+    auto* ctx = reinterpret_cast<TsReadExContext*>(handle);
+    if (!ctx || !stateArray || env->GetArrayLength(stateArray) < FILTER_STATE_FIELD_COUNT) return;
+
+    jlong buf[FILTER_STATE_FIELD_COUNT];
+    env->GetLongArrayRegion(stateArray, 0, FILTER_STATE_FIELD_COUNT, buf);
+
+    CServiceFilter::State state;
+    state.valid = buf[0] != 0;
+    state.videoPid = (int)buf[1];
+    state.audio1Pid = (int)buf[2];
+    state.audio2Pid = (int)buf[3];
+    state.captionPid = (int)buf[4];
+    state.superimposePid = (int)buf[5];
+    state.pcrPid = (int)buf[6];
+    state.audio1StreamType = (uint8_t)buf[7];
+    state.audio2StreamType = (uint8_t)buf[8];
+    state.audio1PtsPcrDiff = buf[9];
+    state.audio2PtsPcrDiff = buf[10];
+    // isAudio1DualMono は AccumulatePesPackets() が実データから即座に再判定するため引き継がない。
+    ctx->servicefilter.ImportState(state);
+}
+
 JNIEXPORT void JNICALL
 Java_com_beeregg2001_komorebi_NativeLib_closeFilter(JNIEnv *env, jobject thiz, jlong handle) {
     auto* ctx = reinterpret_cast<TsReadExContext*>(handle);

@@ -208,7 +208,15 @@ fun VideoPlayerScreen(
     val isBackground = remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val exoPlayer = rememberManagedExoPlayer(
+    val backendType by settingsViewModel.backendType.collectAsState()
+    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
+    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+
+    // ★ 修正: 録画直接TS再生(isEdcbDirect)は、ExoPlayerのSeekMap機構(seekTo())に頼らず、
+    // シーク要求のたびにアプリ側で目標バイト位置を計算してMediaItemを作り直す方式にした
+    // (VideoPlayerManager.ktのコメント参照)。fileSizeBytesRef はその計算に必要なファイル全体
+    // サイズを、pendingSeekByteRef は次回open()時に読み始めるバイト位置の予約値を保持する。
+    val (exoPlayer, fileSizeBytesRef, pendingSeekByteRef) = rememberManagedExoPlayer(
         program = program,
         vs = vs,
         scope = scope,
@@ -223,7 +231,7 @@ fun VideoPlayerScreen(
         onStopOrDispose = { player ->
             if (smbItem == null) {
                 val posMs =
-                    if (isOffsetBasedStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                    if (isOffsetBasedStream || isEdcbDirect) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
         },
@@ -234,15 +242,26 @@ fun VideoPlayerScreen(
         }
     )
 
-    // isOffsetBasedStream はストリーム URL の解決後に変化するため、remember のキーに含めないと
-    // 初回コンポジション時の値 (false) を捕捉したままになり、オフセット補正が効かなくなる。
-    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer, isOffsetBasedStream) {
-        { if (isOffsetBasedStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
-    }
+    // ★ 修正: 以前は remember(vs, exoPlayer) でメモ化していたが、isEdcbDirect/isOffsetBasedStream
+    // (どちらも非同期に確定する値)がキーに含まれておらず、アプリ起動直後の読み込み中の一瞬に
+    // この関数が初回メモ化されると、その後正しい値になっても古いクロージャのままシークバー/
+    // 実況コメントの追従位置がズレ続ける不具合があった。performSeek等と同様、毎回の
+    // リコンポジションで最新の値を捕捉する普通のラムダにする(memo化するほど重い処理ではない)。
+    val getCurrentPositionMs: () -> Long =
+        { if (isOffsetBasedStream || isEdcbDirect) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
 
-    val backendType by settingsViewModel.backendType.collectAsState()
-    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
-    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+    // ★ 追加: 直接TS再生でシーク先バイト位置を計算するためのヘルパー。番組全体時間(秒)に対する
+    // 目標時刻の比率と、直近に取得済みのファイル全体サイズから、HTTP Rangeの開始位置を概算する
+    // (線形補間のため、可変ビットレートのファイルでは数秒〜十数秒程度の誤差が生じ得る)。
+    val computeSeekByteOffset: (Long) -> Long? = { targetMs: Long ->
+        val durationSec = currentProgram.recordedVideo.duration
+        val size = fileSizeBytesRef.get()
+        if (durationSec > 0.0 && size > 0L) {
+            ((targetMs / 1000.0 / durationSec) * size).toLong().coerceIn(0L, size)
+        } else {
+            null
+        }
+    }
 
     val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
@@ -291,6 +310,24 @@ fun VideoPlayerScreen(
                 } else {
                     if (fetchedDetail != null) onShowToast("シーク先ストリームの取得に失敗しました")
                 }
+            }
+        } else if (isEdcbDirect && smbItem == null) {
+            // ★ 追加: 録画直接TS再生のシークはExoPlayerネイティブのseekTo()に頼らず、
+            // 目標バイト位置を計算してMediaItemを作り直す(VideoPlayerManager.kt参照)
+            val byteOffset = computeSeekByteOffset(safeTarget)
+            if (byteOffset != null) {
+                val currentItem = exoPlayer.currentMediaItem
+                if (currentItem != null) {
+                    vs.playbackOffsetMs = safeTarget
+                    pendingSeekByteRef.set(byteOffset)
+                    isBuffering = true
+                    exoPlayer.stop()
+                    exoPlayer.setMediaItem(currentItem)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }
+            } else {
+                onShowToast("ファイルサイズを取得できていないためシークできません")
             }
         } else {
             exoPlayer.seekTo(safeTarget)
@@ -392,12 +429,29 @@ fun VideoPlayerScreen(
             }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream) {
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect) {
                 exoPlayer.seekTo(initialPositionMs)
             }
+            // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、初回再生位置の
+            // 復元はここではできない。ファイルサイズが判明してからバイト位置ベースで
+            // シークし直す(下のscope.launch参照)。
+            val shouldResumeViaByteSeek =
+                isEdcbDirect && isFirstLoad && initialPositionMs > 0
             isFirstLoad = false
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
+            if (shouldResumeViaByteSeek) {
+                scope.launch {
+                    var waitedMs = 0L
+                    while (fileSizeBytesRef.get() <= 0L && waitedMs < 8000L) {
+                        delay(200L)
+                        waitedMs += 200L
+                    }
+                    if (fileSizeBytesRef.get() > 0L) {
+                        performSeek(initialPositionMs)
+                    }
+                }
+            }
         } else {
             if (fetchedDetail != null) onShowToast("ストリームURLの取得に失敗しました")
         }
@@ -709,16 +763,21 @@ fun VideoPlayerScreen(
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
                             if (isEdcbDirect) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
-                                    isBuffering = true;
+                                    isBuffering = true
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
                                         it.value,
                                         currentSessionId,
                                         0.0
-                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
-                                    currentPos
-                                ); player.play()
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
                                 }
                             } else {
                                 vs.playbackOffsetMs =
@@ -806,16 +865,21 @@ fun VideoPlayerScreen(
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
                             if (isEdcbDirect) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
-                                    isBuffering = true;
+                                    isBuffering = true
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
                                         it.value,
                                         currentSessionId,
                                         0.0
-                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
-                                    currentPos
-                                ); player.play()
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
                                 }
                             } else {
                                 vs.playbackOffsetMs =

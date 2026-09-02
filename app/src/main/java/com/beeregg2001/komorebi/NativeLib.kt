@@ -23,6 +23,11 @@ class NativeLib {
     // インスタンスの破棄
     external fun closeFilter(handle: Long)
 
+    // 録画TS直接再生のシークでフィルタが作り直される際、PID構成とPTS-PCR学習値を
+    // 引き継ぐための状態退避/復元(servicefilter.hpp の CServiceFilter::State 参照)。
+    external fun exportFilterState(handle: Long): LongArray
+    external fun importFilterState(handle: Long, state: LongArray)
+
     external fun pushDataBuffer(handle: Long, inputBuffer: ByteBuffer, inputLength: Int)
     external fun popDataBuffer(handle: Long, outputBuffer: ByteBuffer, maxLen: Int): Int
 }
