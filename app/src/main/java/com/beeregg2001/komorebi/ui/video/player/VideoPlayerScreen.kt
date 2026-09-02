@@ -6,11 +6,12 @@ import android.os.Build
 import android.util.Log
 import android.view.SurfaceView
 import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -39,14 +41,21 @@ import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.AudioMode
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
+import com.beeregg2001.komorebi.ui.subtitle.rememberNativeCaptionCue
 import com.beeregg2001.komorebi.ui.video.smb.SmbItem
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
+private val PLAYER_CONTROLS_SUBTITLE_OFFSET = 96.dp
 
 /**
  * EPGStation の無変換再生 URL (`/api/videos/{videoFileId}`) かどうかを判定する。
@@ -171,7 +180,16 @@ fun VideoPlayerScreen(
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(vs.currentQuality) { UUID.randomUUID().toString() }
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val subtitleEvents = remember {
+        MutableSharedFlow<NativeCaptionCue>(
+            extraBufferCapacity = 10,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
+    var subtitleLanguages by remember(currentProgram.id) {
+        mutableStateOf(emptyList<NativeCaptionLanguage>())
+    }
+    var currentSubtitleLanguageId by remember(currentProgram.id) { mutableIntStateOf(1) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
@@ -190,6 +208,21 @@ fun VideoPlayerScreen(
 
     val isSubOverlayOpen =
         isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+    val isSubtitleBlockingOverlayOpen =
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+    val subtitleOffset by animateDpAsState(
+        targetValue = if (
+            showControls &&
+            !isSubOverlayOpen &&
+            vs.lCropMode == LCropMode.HIDDEN
+        ) {
+            PLAYER_CONTROLS_SUBTITLE_OFFSET
+        } else {
+            0.dp
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "playerControlsSubtitleOffset"
+    )
 
     val triggerSeekingPreview: () -> Unit = {
         isSeekingPreviewVisible = true
@@ -220,7 +253,9 @@ fun VideoPlayerScreen(
         program = program,
         vs = vs,
         scope = scope,
-        webViewRef = webViewRef,
+        onSubtitleCue = { subtitleEvents.tryEmit(it) },
+        subtitleLanguageId = currentSubtitleLanguageId,
+        onSubtitleLanguagesChanged = { subtitleLanguages = it },
         onVideoSizeChanged = { w, h, ratio ->
             videoWidth = w
             videoHeight = h
@@ -249,6 +284,12 @@ fun VideoPlayerScreen(
     // リコンポジションで最新の値を捕捉する普通のラムダにする(memo化するほど重い処理ではない)。
     val getCurrentPositionMs: () -> Long =
         { if (isOffsetBasedStream || isEdcbDirect) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+    val subtitleCue = rememberNativeCaptionCue(
+        events = subtitleEvents,
+        enabled = vs.isSubtitleEnabled,
+        resetKey = currentProgram.id to currentSubtitleLanguageId,
+        positionMs = { exoPlayer.currentPosition }
+    )
 
     // ★ 追加: 直接TS再生でシーク先バイト位置を計算するためのヘルパー。番組全体時間(秒)に対する
     // 目標時刻の比率と、直近に取得済みのファイル全体サイズから、HTTP Rangeの開始位置を概算する
@@ -621,27 +662,12 @@ fun VideoPlayerScreen(
             }
             val subtitleLayer = @Composable {
                 if (isHeavyUiReady) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            val targetAlpha =
-                                if (vs.isSubtitleEnabled && !isSubOverlayOpen) 1f else 0f
-                            if (view.alpha != targetAlpha) {
-                                view.alpha = targetAlpha
-                            }
-                        },
-                        onRelease = { view -> view.destroy(); webViewRef.value = null },
-                        modifier = Modifier.fillMaxSize()
+                    NativeCaptionOverlay(
+                        cue = subtitleCue.value,
+                        visible = vs.isSubtitleEnabled && !isSubtitleBlockingOverlayOpen,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset(y = -subtitleOffset)
                     )
                 }
             }
@@ -729,6 +755,8 @@ fun VideoPlayerScreen(
                     currentAudioMode = vs.currentAudioMode,
                     currentSpeed = vs.currentSpeed,
                     isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
@@ -749,6 +777,16 @@ fun VideoPlayerScreen(
                     onSubtitleToggle = {
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
+                    },
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull {
+                            it.id == currentSubtitleLanguageId
+                        }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
                     },
                     onQualitySelect = {
                         if (smbItem != null) {
@@ -830,6 +868,8 @@ fun VideoPlayerScreen(
                     currentAudioMode = vs.currentAudioMode,
                     currentSpeed = vs.currentSpeed,
                     isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
@@ -851,6 +891,14 @@ fun VideoPlayerScreen(
                     onSubtitleToggle = {
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
+                    },
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull { it.id == currentSubtitleLanguageId }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
                     },
                     onQualitySelect = {
                         if (smbItem != null) {

@@ -35,7 +35,7 @@ android {
         externalNativeBuild {
             cmake {
                 // 必要に応じて C++ コンパイラ引数を追加
-                cppFlags("-std=c++11")
+                cppFlags("-std=c++17")
             }
         }
         ndk {
@@ -49,6 +49,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.30.5"
         }
     }
 

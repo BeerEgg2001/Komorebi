@@ -6,8 +6,6 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.os.Build
-import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -23,7 +21,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +43,8 @@ import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 
@@ -65,12 +64,12 @@ fun DualDisplayPlayer(
     mainVideoWidth: Int,
     mainVideoHeight: Int,
     mainPixelRatio: Float,
-    mainWebViewRef: MutableState<WebView?>,
+    mainCaptionCue: NativeCaptionCue?,
     dualPlayer: ExoPlayer?,
     dualVideoWidth: Int,
     dualVideoHeight: Int,
     dualPixelRatio: Float,
-    dualWebViewRef: MutableState<WebView?>,
+    dualCaptionCue: NativeCaptionCue?,
     isSubtitleEnabled: Boolean
 ) {
     val colors = KomorebiTheme.colors
@@ -206,25 +205,9 @@ fun DualDisplayPlayer(
             }
 
             if (isSubtitleEnabled) {
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(-1, -1)
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
-                            loadUrl("file:///android_asset/subtitle_renderer.html")
-                            mainWebViewRef.value = this
-                        }
-                    },
-                    update = { view ->
-                        view.visibility =
-                            if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                    },
-                    // ★ 修正2: 破棄時にWebViewのメモリを確実にお掃除
-                    onRelease = { view ->
-                        view.destroy()
-                        mainWebViewRef.value = null
-                    },
+                NativeCaptionOverlay(
+                    cue = mainCaptionCue,
+                    visible = !isUiVisible,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -333,27 +316,9 @@ fun DualDisplayPlayer(
                 }
 
                 if (isSubtitleEnabled) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                dualWebViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            view.visibility =
-                                if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                        },
-                        // ★ 修正2: 破棄時にWebViewのメモリを確実にお掃除
-                        onRelease = { view ->
-                            view.destroy()
-                            dualWebViewRef.value = null
-                        },
+                    NativeCaptionOverlay(
+                        cue = dualCaptionCue,
+                        visible = !isUiVisible,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
