@@ -38,6 +38,9 @@ class EdcbRecordRepository @Inject constructor(
 
     companion object {
         private const val TAG = "EdcbRecordRepository"
+
+        // 呼び出し側から limit の指定がない場合のページサイズ
+        private const val DEFAULT_RECORDED_PAGE_SIZE = 50
         private const val MAX_ALLOWED_DROPS = 1000L
     }
 
@@ -222,6 +225,11 @@ class EdcbRecordRepository @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        getRecordedPrograms(page = page, limit = DEFAULT_RECORDED_PAGE_SIZE)
+
+    // 端末プロファイルごとのフェッチ数に合わせてページサイズを可変にする
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse =
         withContext(Dispatchers.IO) {
             recordMutex.withLock {
                 try {
@@ -243,10 +251,11 @@ class EdcbRecordRepository @Inject constructor(
 
                     val all = cachedRecInfos ?: emptyList()
                     val total = all.size
-                    val from = (page - 1) * 50
+                    val pageSize = limit.takeIf { it in 1..1000 } ?: DEFAULT_RECORDED_PAGE_SIZE
+                    val from = (page - 1) * pageSize
                     if (from >= total) return@withContext RecordedApiResponse(total, emptyList())
 
-                    val to = (from + 50).coerceAtMost(total)
+                    val to = (from + pageSize).coerceAtMost(total)
                     val baseUrl = getHttpBaseUrl()
 
                     val programs = all.subList(from, to).map { info ->

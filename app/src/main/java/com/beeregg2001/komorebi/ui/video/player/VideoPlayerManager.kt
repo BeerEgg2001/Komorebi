@@ -14,6 +14,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -348,16 +349,21 @@ fun rememberManagedExoPlayer(
         applyAudioSelectionAndMatrix(vs.currentAudioMode, exoPlayer)
     }
 
+    // DisposableEffect はキーが変わらない限り初回のラムダを保持し続けるため、
+    // onStopOrDispose を直接captureすると再生開始後に変化した状態 (再生位置のオフセット判定など) が
+    // 反映されない。常に最新のラムダを呼ぶよう rememberUpdatedState を挟む。
+    val currentOnStopOrDispose by rememberUpdatedState(onStopOrDispose)
+
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 exoPlayer.pause()
-                onStopOrDispose(exoPlayer)
+                currentOnStopOrDispose(exoPlayer)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            onStopOrDispose(exoPlayer)
+            currentOnStopOrDispose(exoPlayer)
             lifecycleOwner.lifecycle.removeObserver(observer)
             exoPlayer.release()
         }

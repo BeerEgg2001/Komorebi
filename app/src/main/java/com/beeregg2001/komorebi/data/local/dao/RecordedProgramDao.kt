@@ -79,6 +79,18 @@ interface RecordedProgramDao {
     @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY start_time DESC")
     fun searchPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
 
+    @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY episode_number IS NULL, episode_number ASC, start_time ASC")
+    fun searchSeriesPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE series_id = :seriesId ORDER BY episode_number IS NULL, episode_number ASC, start_time ASC")
+    fun searchSeriesPagingSourceById(seriesId: Int): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT id FROM recorded_programs WHERE (title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%') ORDER BY CASE WHEN playback_position <= 5.0 THEN 0 ELSE 1 END, episode_number IS NULL, episode_number ASC, start_time ASC LIMIT 1")
+    suspend fun getSeriesFocusProgramId(keyword: String): Int?
+
+    @Query("SELECT id FROM recorded_programs WHERE series_id = :seriesId ORDER BY CASE WHEN playback_position <= 5.0 THEN 0 ELSE 1 END, episode_number IS NULL, episode_number ASC, start_time ASC LIMIT 1")
+    suspend fun getSeriesFocusProgramIdById(seriesId: Int): Int?
+
     @Query("SELECT * FROM recorded_programs WHERE genres LIKE '%' || :genre || '%' ORDER BY start_time DESC")
     fun getPagingSourceByGenre(genre: String): PagingSource<Int, RecordedProgramEntity>
 
@@ -121,7 +133,8 @@ interface RecordedProgramDao {
             MAX(is_episodic) as isEpisodic,
             MAX(genres) as genres,
             MAX(direct_thumbnail_url) as directThumbnailUrl,
-            MAX(api_thumbnail_url) as apiThumbnailUrl
+            MAX(api_thumbnail_url) as apiThumbnailUrl,
+            MAX(end_time) as lastAiredAt
         FROM recorded_programs 
         WHERE series_name != '' 
         GROUP BY series_name
@@ -197,7 +210,8 @@ data class SeriesProjection(
     val isEpisodic: Boolean,
     val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?,
     val directThumbnailUrl: String?,
-    val apiThumbnailUrl: String?
+    val apiThumbnailUrl: String?,
+    val lastAiredAt: String?
 )
 
 data class ProgramTitleProjection(

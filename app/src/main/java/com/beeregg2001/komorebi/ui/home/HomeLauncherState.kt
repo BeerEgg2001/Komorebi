@@ -26,6 +26,10 @@ class HomeFocusTicketManager {
         private set
 
     fun issue(ticket: HomeFocusTicket) {
+        if (currentTicket == ticket) {
+            Log.w("KomorebiFocus", "HomeTicket 重複発行を抑止: $ticket")
+            return
+        }
         currentTicket = ticket
         issueTime = System.currentTimeMillis()
         Log.i("KomorebiFocus", "🎟️ HomeTicket ISSUED: $ticket")
@@ -45,6 +49,18 @@ class HomeFocusTicketManager {
     fun consume(ticket: HomeFocusTicket) {
         if (currentTicket == ticket) {
             Log.i("KomorebiFocus", "🗑️ HomeTicket CONSUMED: $ticket")
+            currentTicket = HomeFocusTicket.NONE
+            targetSection = null
+            targetItemId = null
+        }
+    }
+
+    fun cancelForUserNavigation() {
+        if (currentTicket != HomeFocusTicket.NONE) {
+            Log.i(
+                "KomorebiFocus",
+                "ユーザー操作により保留中のHomeTicketをキャンセル: $currentTicket"
+            )
             currentTicket = HomeFocusTicket.NONE
             targetSection = null
             targetItemId = null

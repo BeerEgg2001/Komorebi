@@ -70,6 +70,11 @@ fun RecordedCard(
 
     val totalDuration = program.recordedVideo.duration.toLong()
     val currentPosition = program.playbackPosition.toLong()
+    // 番組名は常に残し、EPGStation から取れたサブタイトルがあれば後ろに補足する。
+    val displayTitle = program.episodeTitle
+        ?.takeIf { it.isNotBlank() && !program.title.contains(it) }
+        ?.let { "${program.title}　${it}" }
+        ?: program.title
 
     val durationDisplay = if (showResumeLabel && currentPosition > 5) {
         "続きから見る ${formatTime(currentPosition)}"
@@ -206,7 +211,7 @@ fun RecordedCard(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = program.title,
+                    text = displayTitle,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = colors.textPrimary,

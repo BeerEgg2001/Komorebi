@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.data
 
 import android.content.Context
 import android.util.Log
+import com.beeregg2001.komorebi.common.UrlBuilder
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -238,6 +239,11 @@ class SettingsRepository @Inject constructor(
                 ip = prefs[EDCB_IP] ?: ""
                 port = prefs[EDCB_PORT] ?: "4510"
             }
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> {
+                ip = prefs[EPGSTATION_IP] ?: ""
+                port = prefs[EPGSTATION_PORT] ?: "8888"
+            }
         }
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
             ip = "http://$ip"
@@ -257,6 +263,14 @@ class SettingsRepository @Inject constructor(
         val scheme = if (isSsl) "https://" else "http://"
 
         return "$scheme$ip:$port"
+    }
+
+    suspend fun getEpgStationFullUrl(): String {
+        val prefs = context.dataStore.data.first()
+        val ip = prefs[EPGSTATION_IP] ?: ""
+        val port = prefs[EPGSTATION_PORT] ?: "8888"
+        if (ip.isBlank()) return ""
+        return UrlBuilder.formatBaseUrl(ip, port, "http")
     }
 
     // ★ 追加: Cloudflare Access サービストークンをヘッダーMapとして取得 (未設定なら空Map)
@@ -298,6 +312,10 @@ class SettingsRepository @Inject constructor(
 
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
                 ip = prefs[EDCB_IP] ?: "", port = prefs[EDCB_PORT] ?: "4510"
+            )
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> com.beeregg2001.komorebi.data.model.BackendConfig.EpgStation(
+                ip = prefs[EPGSTATION_IP] ?: "", port = prefs[EPGSTATION_PORT] ?: "8888"
             )
         }
     }

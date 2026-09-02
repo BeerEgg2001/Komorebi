@@ -156,6 +156,7 @@ fun LiveTopSubMenuUI(
                 currentStreamSource == StreamSource.EDCB && isEdcbDirect -> "EDCB (TCP)"
                 currentStreamSource == StreamSource.EDCB && !isEdcbDirect -> "EDCB (トランスコード)"
                 currentStreamSource == StreamSource.MIRAKURUN -> "Mirakurun"
+                currentStreamSource == StreamSource.EPGSTATION -> "EPGStation"
                 else -> "KonomiTV"
             }
 
@@ -163,6 +164,7 @@ fun LiveTopSubMenuUI(
                 currentStreamSource == StreamSource.EDCB && isEdcbDirect -> "EDCB (TCPダイレクト)"
                 currentStreamSource == StreamSource.EDCB && !isEdcbDirect -> "EDCB (トランスコード)"
                 currentStreamSource == StreamSource.MIRAKURUN -> "Mirakurun"
+                currentStreamSource == StreamSource.EPGSTATION -> "EPGStation"
                 else -> "KonomiTV"
             }
 
@@ -408,6 +410,11 @@ fun LiveTopSubMenuUI(
                         if (availableSources.contains(StreamSource.MIRAKURUN)) {
                             sourceOptions.add("Mirakurun" to {
                                 onSourceSelect(StreamSource.MIRAKURUN, false)
+                            })
+                        }
+                        if (availableSources.contains(StreamSource.EPGSTATION)) {
+                            sourceOptions.add("EPGStation" to {
+                                onSourceSelect(StreamSource.EPGSTATION, false)
                             })
                         }
 

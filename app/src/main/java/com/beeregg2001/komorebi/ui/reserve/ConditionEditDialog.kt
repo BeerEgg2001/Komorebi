@@ -742,7 +742,7 @@ fun ConditionEditDialog(
                                 Column {
                                     Text("関連する録画予約も削除する", fontWeight = FontWeight.Bold)
                                     Text(
-                                        "既にリストに登録されている${condition.reservationCount}件の予約も一括で取り消します。",
+                                        "既にリストに登録されている${relatedReserves.size}件の予約も一括で取り消します。",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = LocalContentColor.current.copy(alpha = 0.7f)
                                     )

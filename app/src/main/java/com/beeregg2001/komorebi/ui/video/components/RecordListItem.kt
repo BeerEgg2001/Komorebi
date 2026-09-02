@@ -112,6 +112,12 @@ fun RecordListItem(
     }
 
     val channelName = program.channel?.name ?: ""
+    // 番組名は常に残しつつ、EPGStation から取れたサブタイトルがあれば後ろに補足する。
+    // (話数はもともと番組名に含まれていることが多いため、重複する場合は付け足さない)
+    val displayTitle = program.episodeTitle
+        ?.takeIf { it.isNotBlank() && !program.title.contains(it) }
+        ?.let { "${program.title}　${it}" }
+        ?: program.title
 
     Surface(
         onClick = { if (isAnalyzed) onClick() },
@@ -209,7 +215,7 @@ fun RecordListItem(
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    text = program.title,
+                    text = displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
