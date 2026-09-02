@@ -468,6 +468,16 @@ fun SettingsScreen(
                                                 sanitizedInput
                                             )
 
+                                            "EPGStation (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.EPGSTATION_IP,
+                                                sanitizedInput
+                                            )
+
+                                            "EPGStation (ポート)" -> repository.saveString(
+                                                SettingsRepository.EPGSTATION_PORT,
+                                                sanitizedInput
+                                            )
+
                                             AppStrings.SETTINGS_INPUT_CF_CLIENT_ID -> repository.saveString(
                                                 SettingsRepository.CF_ACCESS_CLIENT_ID,
                                                 sanitizedInput
@@ -487,6 +497,9 @@ fun SettingsScreen(
                                         "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(
                                             input
                                         )
+
+                                        "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(input)
+                                        "EPGStation (ポート)" -> viewModel.updateEpgStationPort(input)
                                     }
                                 }
                             },
@@ -496,11 +509,13 @@ fun SettingsScreen(
                                     listOf(
                                         "KonomiTV" to "KONOMITV",
                                         "EDCB (EpgTimerSrv)" to "EDCB",
+                                        "EPGStation" to "EPGSTATION",
                                         "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
                                     ),
                                     if (listOf(
                                             "KONOMITV",
                                             "EDCB",
+                                            "EPGSTATION",
                                             "MIRAKURUN_ONLY"
                                         ).any { it == prefs.backendType }
                                     ) prefs.backendType else "KONOMITV"

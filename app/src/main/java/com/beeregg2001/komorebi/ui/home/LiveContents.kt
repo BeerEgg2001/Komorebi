@@ -14,6 +14,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -243,11 +244,11 @@ fun LiveContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(0.45f)
-                        .focusRequester(contentFirstItemRequester),
+                        .focusGroup(),
                     contentPadding = PaddingValues(bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(liveRows, key = { it.genreId }) { row ->
+                    itemsIndexed(liveRows, key = { _, row -> row.genreId }) { rowIndex, row ->
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -266,6 +267,7 @@ fun LiveContent(
                                 contentPadding = PaddingValues(horizontal = 48.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusGroup()
                                     .graphicsLayer(clip = false)
                             ) {
                                 itemsIndexed(
@@ -279,6 +281,11 @@ fun LiveContent(
                                         channelViewModel = channelViewModel,
                                         onClick = { onChannelClick(uiState.channel) },
                                         modifier = Modifier
+                                            .then(
+                                                if (rowIndex == 0 && index == 0) Modifier.focusRequester(
+                                                    contentFirstItemRequester
+                                                ) else Modifier
+                                            )
                                             .then(
                                                 if (isTarget) Modifier.focusRequester(
                                                     targetChannelFocusRequester

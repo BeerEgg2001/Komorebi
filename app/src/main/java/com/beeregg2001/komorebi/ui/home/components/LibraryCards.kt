@@ -65,12 +65,18 @@ fun VideoRecentRecordCard(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    val fallbackUrl = program.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
-        backendType,
-        konomiIp,
-        konomiPort,
-        program.id.toString()
-    )
+    // EPGStation はサムネイル ID が録画 ID と別採番で、ホストも KonomiTV とは異なるため、
+    // ここで URL を組み立て直すと必ず誤ったリクエストになる。用意済みの URL だけを使う。
+    val fallbackUrl = program.apiThumbnailUrl ?: if (backendType == "EPGSTATION") {
+        null
+    } else {
+        UrlBuilder.getThumbnailUrl(
+            backendType,
+            konomiIp,
+            konomiPort,
+            program.id.toString()
+        )
+    }
     val primaryUrl = program.directThumbnailUrl ?: fallbackUrl
     var currentThumbnailUrl by remember(program.id, primaryUrl) { mutableStateOf(primaryUrl) }
 
@@ -233,12 +239,17 @@ fun VideoWatchHistoryCard(
         0
     }
 
-    val fallbackUrl = matchedProgram?.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
-        backendType,
-        konomiIp,
-        konomiPort,
-        videoId.toString()
-    )
+    // EPGStation はサムネイル ID が録画 ID と別採番のため、URL を組み立て直さない (上と同じ理由)
+    val fallbackUrl = matchedProgram?.apiThumbnailUrl ?: if (backendType == "EPGSTATION") {
+        null
+    } else {
+        UrlBuilder.getThumbnailUrl(
+            backendType,
+            konomiIp,
+            konomiPort,
+            videoId.toString()
+        )
+    }
     val primaryUrl = matchedProgram?.directThumbnailUrl ?: fallbackUrl
     var currentThumbnailUrl by remember(videoId, primaryUrl) { mutableStateOf(primaryUrl) }
 
@@ -373,9 +384,14 @@ fun VideoSeriesCard(
     val colors = KomorebiTheme.colors
     var isFocused by remember { mutableStateOf(false) }
 
-    val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
-        backendType, konomiIp, konomiPort, series.representativeVideoId.toString()
-    )
+    // EPGStation ではシリーズのアイキャッチ URL が既に入っているため、組み立て直さない (上と同じ理由)
+    val fallbackUrl = series.apiThumbnailUrl ?: if (backendType == "EPGSTATION") {
+        null
+    } else {
+        UrlBuilder.getThumbnailUrl(
+            backendType, konomiIp, konomiPort, series.representativeVideoId.toString()
+        )
+    }
     val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
     var currentThumbnailUrl by remember(series.representativeVideoId, primaryUrl) {
         mutableStateOf(

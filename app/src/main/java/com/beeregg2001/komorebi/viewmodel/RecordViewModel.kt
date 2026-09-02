@@ -18,6 +18,7 @@ import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationRecordRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.repository.ReserveProvider
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
@@ -25,6 +26,7 @@ import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.sync.SyncProgress
 import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 import com.beeregg2001.komorebi.util.TitleNormalizer
+import com.beeregg2001.komorebi.common.UrlBuilder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +39,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.time.Instant
+import java.time.OffsetDateTime
 import javax.inject.Inject
 
 private const val TAG = "Komorebi_RecordVM"
@@ -46,6 +50,7 @@ private const val KEY_HISTORY = "history_list"
 // ★ 追加: 録画リスト用のソート列挙型
 enum class RecordSortType { DATE, TITLE, DURATION }
 enum class RecordSortOrder { ASC, DESC }
+enum class SeriesSortType { LAST_AIRED, TITLE, PROGRAM_COUNT, UNWATCHED_COUNT }
 
 private data class FilterState(
     val category: RecordCategory,
@@ -54,7 +59,8 @@ private data class FilterState(
     val day: String?,
     val query: String,
     val sortType: RecordSortType,  // ★ 追加
-    val sortOrder: RecordSortOrder // ★ 追加
+    val sortOrder: RecordSortOrder, // ★ 追加
+    val seriesId: Int? = null
 )
 
 data class SeriesInfo(
@@ -64,7 +70,14 @@ data class SeriesInfo(
     val representativeVideoId: Int,
     val isEpisodic: Boolean = false,
     val directThumbnailUrl: String? = null,
-    val apiThumbnailUrl: String? = null
+    val apiThumbnailUrl: String? = null,
+    val lastAiredAt: String? = null,
+    val seriesId: Int? = null,
+    val seasonYear: Int? = null,
+    val seasonName: String? = null,
+    val unwatchedCount: Int = 0,
+    val totalEpisodes: Int? = null,
+    val isOnAir: Boolean = false
 )
 
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
@@ -72,6 +85,7 @@ data class SeriesInfo(
 class RecordViewModel @Inject constructor(
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
+    private val epgStationRecordRepository: EpgStationRecordRepository,
     private val reserveProvider: ReserveProvider,
     private val historyRepository: WatchHistoryRepository,
     private val settingsRepository: SettingsRepository,
@@ -140,6 +154,23 @@ class RecordViewModel @Inject constructor(
     private val _groupedSeries = MutableStateFlow<Map<String, List<SeriesInfo>>>(emptyMap())
     val groupedSeries: StateFlow<Map<String, List<SeriesInfo>>> = _groupedSeries.asStateFlow()
 
+    private val _availableSeasons = MutableStateFlow<List<Pair<Int, String>>>(emptyList())
+    val availableSeasons: StateFlow<List<Pair<Int, String>>> = _availableSeasons.asStateFlow()
+    private val _selectedSeason = MutableStateFlow<Pair<Int, String>?>(null)
+    val selectedSeason: StateFlow<Pair<Int, String>?> = _selectedSeason.asStateFlow()
+    private val _isOnAirOnly = MutableStateFlow(false)
+    val isOnAirOnly: StateFlow<Boolean> = _isOnAirOnly.asStateFlow()
+    private val _seriesSortType = MutableStateFlow(SeriesSortType.LAST_AIRED)
+    val seriesSortType: StateFlow<SeriesSortType> = _seriesSortType.asStateFlow()
+    private val _seriesSortOrder = MutableStateFlow(RecordSortOrder.DESC)
+    val seriesSortOrder: StateFlow<RecordSortOrder> = _seriesSortOrder.asStateFlow()
+    private var epgSeriesItems: List<com.beeregg2001.komorebi.data.model.EsSeriesListItem> = emptyList()
+    private var epgLocalByTitle: Map<String, SeriesProjection> = emptyMap()
+    private val _seriesSearch = MutableStateFlow(false)
+    private val _selectedSeriesId = MutableStateFlow<Int?>(null)
+    private val _seriesFocusProgramId = MutableStateFlow<Int?>(null)
+    val seriesFocusProgramId: StateFlow<Int?> = _seriesFocusProgramId.asStateFlow()
+
     private val _groupedChannels =
         MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
     val groupedChannels: StateFlow<Map<String, List<Pair<String, String>>>> =
@@ -147,6 +178,8 @@ class RecordViewModel @Inject constructor(
 
     private var currentSearchQuery: String = ""
     private var streamMaintenanceJob: Job? = null
+    private var epgStationIp: String = ""
+    private var epgStationPort: String = "8888"
 
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
@@ -188,8 +221,20 @@ class RecordViewModel @Inject constructor(
                     if (!isSyncing) {
                         val seriesList = programDao.getGroupedSeries()
                         val channelsList = programDao.getDistinctChannels()
-                        if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
-                            buildSeriesAndChannelMaps(seriesList, channelsList)
+                        if (settingsRepository.backendType.first() == "EPGSTATION" || seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
+                            if (settingsRepository.backendType.first() == "EPGSTATION") {
+                                epgStationIp = settingsRepository.epgStationIp.first()
+                                epgStationPort = settingsRepository.epgStationPort.first()
+                                val apiSeries = epgStationRecordRepository.getSeriesList()
+                                if (apiSeries != null) {
+                                    epgSeriesItems = apiSeries
+                                    buildEpgSeriesAndChannelMaps(apiSeries, seriesList, channelsList)
+                                } else {
+                                    buildSeriesAndChannelMaps(seriesList, channelsList)
+                                }
+                            } else {
+                                buildSeriesAndChannelMaps(seriesList, channelsList)
+                            }
                         }
                     }
                 }
@@ -222,8 +267,8 @@ class RecordViewModel @Inject constructor(
             _selectedDay,
             _activeSearchQuery
         ) { c, ch, g, d, q ->
-            FilterState(c, ch, g, d, q, RecordSortType.DATE, RecordSortOrder.DESC) // 仮の初期値
-        },
+            FilterState(c, ch, g, d, q, RecordSortType.DATE, RecordSortOrder.DESC)
+        }.combine(_selectedSeriesId) { state, seriesId -> state.copy(seriesId = seriesId) },
         _sortType,
         _sortOrder
     ) { partialState, type, order ->
@@ -244,8 +289,9 @@ class RecordViewModel @Inject constructor(
                 val isDesc = state.sortOrder == RecordSortOrder.DESC
 
                 when {
+                    state.seriesId != null && _seriesSearch.value -> programDao.searchSeriesPagingSourceById(state.seriesId)
                     // 検索やカテゴリ指定時はソートボタンを非表示にするため、デフォルトの降順クエリを使う
-                    state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
+                    state.query.isNotBlank() -> if (_seriesSearch.value) programDao.searchSeriesPagingSource(state.query) else programDao.searchPagingSource(state.query)
                     state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
                         state.channelId
                     )
@@ -312,6 +358,7 @@ class RecordViewModel @Inject constructor(
         _selectedGenre.value = null
         _selectedChannelId.value = null
         _selectedDay.value = null
+        _selectedSeriesId.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
@@ -337,6 +384,8 @@ class RecordViewModel @Inject constructor(
         if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) {
             _categoryBeforeSearch.value = _selectedCategory.value
         }
+        _seriesSearch.value = false
+        _selectedSeriesId.value = null
         _activeSearchQuery.value = query
         _searchQuery.value = query
         currentSearchQuery = query
@@ -348,6 +397,8 @@ class RecordViewModel @Inject constructor(
     }
 
     fun clearSearch() {
+        _seriesSearch.value = false
+        _selectedSeriesId.value = null
         _activeSearchQuery.value = ""
         _searchQuery.value = ""
         currentSearchQuery = ""
@@ -464,36 +515,150 @@ class RecordViewModel @Inject constructor(
 
     fun buildSeriesIndex() {}
 
+    fun setSeasonFilter(season: Pair<Int, String>?) {
+        _selectedSeason.value = season
+        rebuildEpgSeries()
+    }
+
+    fun setOnAirOnly(enabled: Boolean) {
+        _isOnAirOnly.value = enabled
+        rebuildEpgSeries()
+    }
+
+    fun setSeriesSort(type: SeriesSortType, order: RecordSortOrder) {
+        _seriesSortType.value = type
+        _seriesSortOrder.value = order
+        if (epgSeriesItems.isEmpty()) {
+            _groupedSeries.value = _groupedSeries.value.mapValues { (_, series) -> sortSeries(series) }
+        } else {
+            rebuildEpgSeries()
+        }
+    }
+
+    fun sortSeriesForDisplay(series: List<SeriesInfo>): List<SeriesInfo> = sortSeries(series)
+
+    fun searchSeries(title: String) = searchSeries(null, title)
+
+    fun searchSeries(seriesId: Int?, title: String) {
+        _seriesSearch.value = true
+        _selectedSeriesId.value = seriesId
+        _activeSearchQuery.value = TitleNormalizer.toSqlSearchQuery(title)
+        _searchQuery.value = _activeSearchQuery.value
+        currentSearchQuery = _activeSearchQuery.value
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesFocusProgramId.value = seriesId?.let { programDao.getSeriesFocusProgramIdById(it) }
+                ?: programDao.getSeriesFocusProgramId(_activeSearchQuery.value)
+        }
+        _selectedCategory.value = RecordCategory.ALL
+    }
+
+    private fun buildEpgSeriesAndChannelMaps(
+        items: List<com.beeregg2001.komorebi.data.model.EsSeriesListItem>,
+        localSeries: List<SeriesProjection>,
+        channelsList: List<ChannelProjection>
+    ) {
+        _isSeriesLoading.value = true
+        try {
+            // シリーズ一覧は EPGStation 由来だが、チャンネル絞り込みはローカルの録画情報から作る。
+            buildChannelMap(channelsList)
+            val localByTitle = localSeries.associateBy { it.seriesName }
+            _availableSeasons.value = items.mapNotNull { item ->
+                item.seasonYear?.let { year ->
+                    item.seasonName?.let { name -> year to name }
+                }
+            }.distinct()
+                .sortedWith(compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second })
+            epgLocalByTitle = localByTitle
+            rebuildEpgSeries(localByTitle)
+        } catch (e: Exception) {
+            // 例外でローディング表示が固まらないように必ず握って落とす
+            Log.e(TAG, "EPGStation Series Map Build Error", e)
+        } finally {
+            _isSeriesLoading.value = false
+        }
+    }
+
+    private fun rebuildEpgSeries(localByTitle: Map<String, SeriesProjection> = emptyMap()) {
+        if (epgSeriesItems.isEmpty()) return
+        val localMap = if (localByTitle.isEmpty()) epgLocalByTitle else localByTitle
+        val selected = _selectedSeason.value
+        val filtered = epgSeriesItems.filter { item ->
+            (selected == null || item.seasonYear == selected.first && item.seasonName == selected.second) &&
+                (!_isOnAirOnly.value || item.isOnAir)
+        }
+        val grouped = mutableMapOf<String, MutableList<SeriesInfo>>()
+        filtered.forEach { item ->
+            val local = localMap[item.title]
+            val genre = local?.genres?.firstOrNull()?.major ?: "その他"
+            grouped.getOrPut(genre) { mutableListOf() }.add(
+                SeriesInfo(
+                    displayTitle = item.title,
+                    searchKeyword = TitleNormalizer.toSqlSearchQuery(item.title),
+                    programCount = item.recordedCount,
+                    representativeVideoId = local?.representativeVideoId ?: 0,
+                    isEpisodic = true,
+                    directThumbnailUrl = null,
+                    apiThumbnailUrl = if (item.hasImage) {
+                        UrlBuilder.getEpgStationSeriesImageUrl(
+                            epgStationIp,
+                            epgStationPort,
+                            item.id
+                        )
+                    } else null,
+                    seriesId = item.id,
+                    lastAiredAt = item.lastAiredAt?.toString(),
+                    seasonYear = item.seasonYear,
+                    seasonName = item.seasonName,
+                    unwatchedCount = item.unwatchedCount,
+                    totalEpisodes = item.totalEpisodes,
+                    isOnAir = item.isOnAir
+                )
+            )
+        }
+        _availableGenres.value = grouped.keys.sorted()
+        _groupedSeries.value = grouped
+            .toSortedMap()
+            .mapValues { (_, series) -> sortSeries(series) }
+    }
+
+    /**
+     * 録画のチャンネル絞り込みペイン用のマップを組み立てる。
+     * シリーズ一覧をどこから作るか (ローカル集計 / EPGStation API) に関係なく必要なので切り出してある。
+     */
+    private fun buildChannelMap(channelsList: List<ChannelProjection>) {
+        val allChannelMap =
+            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+        channelsList.forEach { ch ->
+            val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
+            val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+            if (!channelTypeMap.containsKey(ch.channelId)) {
+                channelTypeMap[ch.channelId] =
+                    Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
+            }
+        }
+
+        val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
+        val extractNumber = { idStr: String ->
+            Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+        }
+        _groupedChannels.value = allChannelMap.entries
+            .sortedBy { (type, _) ->
+                typePriority.indexOf(type).let { if (it != -1) it else typePriority.size }
+            }
+            .associate { entry ->
+                entry.key to entry.value.values.sortedWith(
+                    compareBy({ extractNumber(it.third) }, { it.third })
+                ).map { Pair(it.first, it.second) }
+            }
+    }
+
     private suspend fun buildSeriesAndChannelMaps(
         seriesList: List<SeriesProjection>,
         channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
         try {
-            val allChannelMap =
-                mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
-            channelsList.forEach { ch ->
-                val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
-                val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
-                if (!channelTypeMap.containsKey(ch.channelId)) {
-                    channelTypeMap[ch.channelId] =
-                        Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
-                }
-            }
-
-            val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
-            val extractNumber = { idStr: String ->
-                Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
-            }
-            _groupedChannels.value = allChannelMap.entries
-                .sortedBy { (type, _) ->
-                    typePriority.indexOf(type).let { if (it != -1) it else typePriority.size }
-                }
-                .associate { entry ->
-                    entry.key to entry.value.values.sortedWith(
-                        compareBy({ extractNumber(it.third) }, { it.third })
-                    ).map { Pair(it.first, it.second) }
-                }
+            buildChannelMap(channelsList)
 
             val genresSet = mutableSetOf<String>()
             val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
@@ -512,7 +677,8 @@ class RecordViewModel @Inject constructor(
                         representativeVideoId = proj.representativeVideoId,
                         isEpisodic = proj.isEpisodic,
                         directThumbnailUrl = proj.directThumbnailUrl,
-                        apiThumbnailUrl = proj.apiThumbnailUrl
+                        apiThumbnailUrl = proj.apiThumbnailUrl,
+                        lastAiredAt = proj.lastAiredAt
                     )
 
                     val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }
@@ -522,8 +688,8 @@ class RecordViewModel @Inject constructor(
 
             _availableGenres.value = genresSet.sorted()
 
-            _groupedSeries.value = finalGroupedSeries.mapValues { entry ->
-                entry.value.sortedBy { it.displayTitle }
+            _groupedSeries.value = finalGroupedSeries.toSortedMap().mapValues { (_, series) ->
+                sortSeries(series)
             }.filterValues { it.isNotEmpty() }
 
         } catch (e: Exception) {
@@ -531,5 +697,26 @@ class RecordViewModel @Inject constructor(
         } finally {
             _isSeriesLoading.value = false
         }
+    }
+
+    private fun sortSeries(series: List<SeriesInfo>): List<SeriesInfo> {
+        val comparator = when (_seriesSortType.value) {
+            SeriesSortType.LAST_AIRED -> compareBy<SeriesInfo> { lastAiredAtKey(it.lastAiredAt) }
+            SeriesSortType.TITLE -> compareBy<SeriesInfo> { it.displayTitle.lowercase() }
+            SeriesSortType.PROGRAM_COUNT -> compareBy { it.programCount }
+            SeriesSortType.UNWATCHED_COUNT -> compareBy { it.unwatchedCount }
+        }
+        return if (_seriesSortOrder.value == RecordSortOrder.ASC) {
+            series.sortedWith(comparator)
+        } else {
+            series.sortedWith(comparator.reversed())
+        }
+    }
+
+    private fun lastAiredAtKey(value: String?): Long {
+        value?.toLongOrNull()?.let { return it }
+        return runCatching { Instant.parse(value).toEpochMilli() }
+            .recoverCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+            .getOrDefault(0L)
     }
 }

@@ -55,7 +55,7 @@ data class Genre(
 
 enum class AudioMode { MAIN, SUB }
 enum class SubMenuCategory { AUDIO, VIDEO, SUBTITLE, QUALITY, COMMENT, RECORD } // ★RECORD追加
-enum class StreamSource { MIRAKURUN, KONOMITV, EDCB }
+enum class StreamSource { MIRAKURUN, KONOMITV, EDCB, EPGSTATION }
 
 // ★追加: サーバー設定をポリモーフィズムで扱うためのSealed Class
 sealed class BackendConfig {
@@ -66,6 +66,7 @@ sealed class BackendConfig {
     data class KonomiTv(override val ip: String, override val port: String) : BackendConfig()
     data class Mirakurun(override val ip: String, override val port: String) : BackendConfig()
     data class Edcb(override val ip: String, override val port: String) : BackendConfig()
+    data class EpgStation(override val ip: String, override val port: String) : BackendConfig()
 }
 
 object LivePlayerConstants {

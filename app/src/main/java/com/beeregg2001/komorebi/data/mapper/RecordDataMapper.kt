@@ -46,7 +46,12 @@ object RecordDataMapper {
             tileHeight = tile?.tileHeight,
             // ★ 追加: マッピングにURLを含める
             directThumbnailUrl = program.directThumbnailUrl,
-            apiThumbnailUrl = program.apiThumbnailUrl
+            apiThumbnailUrl = program.apiThumbnailUrl,
+            seriesId = program.seriesId,
+            episodeNumber = program.episodeNumber,
+            episodeLabel = program.episodeLabel,
+            episodeTitle = program.episodeTitle,
+            airType = program.airType
         )
     }
 
@@ -109,7 +114,12 @@ object RecordDataMapper {
             playbackPosition = entity.playbackPosition,
             // ★ 追加: マッピングにURLを含める
             directThumbnailUrl = entity.directThumbnailUrl,
-            apiThumbnailUrl = entity.apiThumbnailUrl
+            apiThumbnailUrl = entity.apiThumbnailUrl,
+            seriesId = entity.seriesId,
+            episodeNumber = entity.episodeNumber,
+            episodeLabel = entity.episodeLabel,
+            episodeTitle = entity.episodeTitle,
+            airType = entity.airType
         )
     }
 }

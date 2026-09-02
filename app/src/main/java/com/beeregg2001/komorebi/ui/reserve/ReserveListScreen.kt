@@ -10,7 +10,7 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 // ★ 追加・変更: 標準の Lazy系のインポート。items も明示的にインポートすることで Argument type mismatch を防ぎます
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
@@ -469,11 +469,11 @@ fun ReserveListScreen(
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .focusRequester(listFocusRequester)
+                                    .focusGroup()
                                     .focusProperties { up = tabFocusRequesters[0] }
                             ) {
                                 // ★ items(reserves) が上でインポートしたことにより正しく型解決されます
-                                items(reserves, key = { "all_res_${it.id}" }) { program ->
+                                itemsIndexed(reserves, key = { _, item -> "all_res_${item.id}" }) { index, program ->
                                     val specificRequester = remember { FocusRequester() }
                                     LaunchedEffect(
                                         ticketManager.currentTicket,
@@ -496,6 +496,7 @@ fun ReserveListScreen(
                                             onProgramClick(program)
                                         },
                                         modifier = Modifier
+                                            .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier)
                                             .focusRequester(specificRequester)
                                             .focusProperties {
                                                 left = FocusRequester.Cancel
@@ -534,10 +535,10 @@ fun ReserveListScreen(
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .focusRequester(listFocusRequester)
+                                    .focusGroup()
                                     .focusProperties { up = tabFocusRequesters[1] }
                             ) {
-                                items(normalReserves, key = { "norm_${it.id}" }) { program ->
+                                itemsIndexed(normalReserves, key = { _, item -> "norm_${item.id}" }) { index, program ->
                                     val specificRequester = remember { FocusRequester() }
                                     LaunchedEffect(
                                         ticketManager.currentTicket,
@@ -560,6 +561,7 @@ fun ReserveListScreen(
                                             onProgramClick(program)
                                         },
                                         modifier = Modifier
+                                            .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier)
                                             .focusRequester(specificRequester)
                                             .focusProperties {
                                                 left = FocusRequester.Cancel
@@ -598,10 +600,10 @@ fun ReserveListScreen(
                                 contentPadding = PaddingValues(top = 20.dp, bottom = 40.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .focusRequester(listFocusRequester)
+                                    .focusGroup()
                                     .focusProperties { up = tabFocusRequesters[2] }
                             ) {
-                                items(conditions, key = { "cond_${it.id}" }) { condition ->
+                                itemsIndexed(conditions, key = { _, item -> "cond_${item.id}" }) { index, condition ->
                                     val specificRequester = remember { FocusRequester() }
                                     LaunchedEffect(
                                         ticketManager.currentTicket,
@@ -626,6 +628,7 @@ fun ReserveListScreen(
                                         groupedChannels = groupedChannels,
                                         reserves = reserves,
                                         modifier = Modifier
+                                            .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier)
                                             .focusRequester(specificRequester)
                                             .focusProperties {
                                                 left = FocusRequester.Cancel

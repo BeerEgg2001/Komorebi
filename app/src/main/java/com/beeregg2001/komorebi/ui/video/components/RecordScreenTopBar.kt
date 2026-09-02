@@ -246,8 +246,9 @@ fun RecordScreenTopBar(
                     }
                 }
 
-                // ★ 追加: 「全ての録画」と「未視聴」の時のみソートボタンを表示する
-                val showSortButton = selectedCategory == RecordCategory.ALL || selectedCategory == RecordCategory.UNWATCHED
+                val showSortButton = selectedCategory == RecordCategory.ALL ||
+                        selectedCategory == RecordCategory.UNWATCHED ||
+                        selectedCategory == RecordCategory.SERIES
                 if (showSortButton) {
                     IconButton(
                         onClick = onSortOpen,
@@ -259,7 +260,7 @@ fun RecordScreenTopBar(
                             },
                         colors = iconButtonColors
                     ) {
-                        Icon(Icons.Default.Sort, "並び替え")
+                        Icon(Icons.Default.Sort, if (selectedCategory == RecordCategory.SERIES) "並び替え・絞り込み" else "並び替え")
                     }
                     Spacer(Modifier.width(16.dp))
                 }
