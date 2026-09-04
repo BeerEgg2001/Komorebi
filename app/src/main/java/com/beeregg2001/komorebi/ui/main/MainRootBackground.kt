@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -70,7 +71,25 @@ fun MainRootBackground(
         modifier = Modifier
             .fillMaxSize()
             .zIndex(0f)
-            .focusProperties { canFocus = !isFullScreenPlayerVisible }
+            // フルスクリーンのプレイヤー表示中は、背面ツリーへフォーカスが入り込まないよう完全に封鎖する。
+            //
+            // focusProperties { canFocus = false } だけでは不十分。Composeはフォーカス対象ノードが
+            // 自身の親をさかのぼる際「最初に見つかったフォーカス対象ノード」で打ち切って
+            // focusPropertiesを収集するため、間にLazyList等のfocusGroupが挟まる深い階層の項目
+            // (ホームのチャンネルカード等)にはcanFocus=falseが一切届かず、フォーカス可能なまま残る。
+            // 実際、プレイヤー側のフォーカスノードが破棄された(サブメニューを閉じた・二画面へ切り替えた等)
+            // タイミングでAndroidがフォーカスを再探索すると、背面ホーム画面の項目が選ばれてしまい、
+            // 「十字キーが無反応・決定キーだけ背面の項目に効く」という操作不能状態になっていた。
+            //
+            // onEnter { cancelFocusChange() } を持つフォーカスグループ(canFocus=false + focusTarget)に
+            // することで、このBox配下へのフォーカス侵入をフォーカス探索・明示的なrequestFocusの両方で拒否する。
+            .focusProperties {
+                canFocus = false
+                if (isFullScreenPlayerVisible) {
+                    onEnter = { cancelFocusChange() }
+                }
+            }
+            .focusTarget()
     ) {
             when {
                 state.isRecordListOpen -> {
@@ -291,7 +310,9 @@ fun MainRootBackground(
                         hasActivePlayer = state.isMiniPlayerMode,
                         onReturnToPlayerClick = { state.isMiniPlayerMode = false },
                         aiFocusReturnTick = state.aiFocusReturnTick,
-                        onAiReturnConsumed = { state.aiFocusReturnTick = 0 }
+                        onAiReturnConsumed = { state.aiFocusReturnTick = 0 },
+                        // プレイヤー表示中はホーム画面が見えないため、定期取得を止めさせる
+                        isPlayerActiveFullScreen = isFullScreenPlayerVisible
                     )
                 }
             }

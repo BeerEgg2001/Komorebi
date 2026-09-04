@@ -587,6 +587,7 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
+                            quality,
                             mainTsDataSourceFactory,
                             ::decodeAndEmitMainSubtitle,
                             cfAccessHeaders
@@ -686,6 +687,7 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
+                            quality,
                             dualTsDataSourceFactory,
                             ::decodeAndEmitDualSubtitle,
                             cfAccessHeaders
@@ -843,12 +845,41 @@ class LivePlayerViewModel @Inject constructor(
                 } else ""
             }
 
-            StreamSource.KONOMITV -> UrlBuilder.getKonomiTvLiveStreamUrl(
-                config.ip,
-                config.port,
-                channel.displayChannelId,
-                quality.value
-            )
+            StreamSource.KONOMITV -> {
+                // ★ 追加: original画質はサーバー側で再エンコードせず、tsreadexを通しただけの
+                // 生MPEG-TSがそのまま流れてくる。サーバー側tsreadexは-a/-b/-c/-uでPID存在保証は
+                // 行うがID3変換(-d)や音声デュアルモノ分離は行わないため、EDCB/Mirakurunの生放送波
+                // 直接再生と同じ状態(生PESの字幕・未分離の音声)。再エンコードを挟まないぶん
+                // program_number/service_idは放送そのままのはずなので、EDCB/Mirakurunと同様に
+                // channel.serviceIdでCServiceFilterに正しく対象サービスを絞らせ、音声デュアルモノ
+                // 分離とID3変換(id3convは独立してPMTからPIDを検出するためservice絞り込みの影響を
+                // 受けない)の両方を有効にする
+                if (quality.value == "original") {
+                    factory.tsArgs = arrayOf(
+                        "-x",
+                        "18/38/39",
+                        "-n",
+                        channel.serviceId.toString(),
+                        "-a",
+                        "13",
+                        "-b",
+                        "4",
+                        "-c",
+                        "5",
+                        "-u",
+                        "1",
+                        "-d",
+                        "13"
+                    )
+                    factory.requestHeaders = cfAccessHeaders
+                }
+                UrlBuilder.getKonomiTvLiveStreamUrl(
+                    config.ip,
+                    config.port,
+                    channel.displayChannelId,
+                    quality.value
+                )
+            }
 
             StreamSource.EPGSTATION -> {
                 // EPGStationのmode 1/2はトランスコード後にprogram numberが1へ
@@ -893,6 +924,7 @@ class LivePlayerViewModel @Inject constructor(
         streamUrl: String,
         source: StreamSource,
         isEdcbDirect: Boolean,
+        quality: StreamQuality,
         factory: TsReadExDataSourceFactory,
         onSubtitleDataReceived: (Long, ByteArray) -> Unit,
         cfAccessHeaders: Map<String, String> = emptyMap()
@@ -907,7 +939,12 @@ class LivePlayerViewModel @Inject constructor(
                     HlsMediaSource.Factory(httpDataSourceFactory)
                         .setAllowChunklessPreparation(false)
                         .createMediaSource(mediaItem)
-                } else if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION || (source == StreamSource.EDCB && isEdcbDirect)) {
+                } else if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION ||
+                    (source == StreamSource.EDCB && isEdcbDirect) ||
+                    // ★ 追加: KonomiTVのoriginal画質も生MPEG-TSなので同じ経路(TsReadExDataSource +
+                    // 直接PESパース)で再生する
+                    (source == StreamSource.KONOMITV && quality.value == "original")
+                ) {
                     val extractorsFactory = ExtractorsFactory {
                         arrayOf(
                             TsExtractor(

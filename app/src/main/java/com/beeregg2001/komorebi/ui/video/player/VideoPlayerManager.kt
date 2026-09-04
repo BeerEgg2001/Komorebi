@@ -20,13 +20,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.Metadata
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -36,13 +36,16 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
-import androidx.media3.extractor.metadata.id3.PrivFrame
+import androidx.media3.extractor.Extractor
+import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.upstream.DefaultAllocator
 import com.beeregg2001.komorebi.NativeLib
+import com.beeregg2001.komorebi.ui.live.DirectSubtitlePayloadReaderFactory
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionDecoder
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
@@ -96,6 +99,23 @@ fun rememberManagedExoPlayer(
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ): ManagedPlayerHandles {
     val captionDecoder = remember { NativeCaptionDecoder() }
+
+    // ★ 追加: HTTPレスポンスから得たファイル全体サイズ(シーク先バイト位置の計算に必要)。
+    // VideoPlayerScreen.kt側のシーク処理からも参照できるよう、ExoPlayer本体とは別にremember する。
+    val fileSizeBytesRef = remember { AtomicLong(0L) }
+
+    // ★ 追加: 直接TS再生のシーク先バイト位置の予約値(-1=予約なし)。ExoPlayerのSeekMap機構には
+    // 頼らず、シーク要求のたびにアプリ側でこの値をセットしてからMediaItemを作り直すことで、
+    // TsReadExDataSource.open()がposition=0の代わりにこの値から読み始めるようにする。
+    val pendingSeekByteRef = remember { AtomicLong(-1L) }
+
+    // ★ 修正: シークのたびに作り直される CServiceFilter の学習済み状態(PID構成/音声PTS-PCR差分)を
+    // DataSourceの再オープンをまたいで引き継ぐための共有変数。音声トラック切替時にMedia3内部が
+    // 発火させる「隠れシーク」で TsReadExDataSource.open() が再実行されても音ズレが再発しないようにする。
+    // 以前は exoPlayer の remember{} ブロック内で生成していたため、番組が切り替わってもクリアできず、
+    // 別番組の学習値が残り続けていた。番組切替時にクリアできるようComposable関数トップレベルに置く。
+    val filterStateRef = remember { AtomicReference<TsFilterStateSnapshot?>(null) }
+
     val clearSubtitle = {
         captionDecoder.flush()
         onSubtitleCue(
@@ -110,6 +130,17 @@ fun rememberManagedExoPlayer(
         )
     }
     LaunchedEffect(program?.id) {
+        // ★ 追加: 番組が切り替わったら、前番組のTS解析状態を必ず捨てる。
+        // これらは remember{} のライフタイム(=この画面が破棄されるまで)保持されるため、
+        // ミニプレイヤー表示中に別番組を選ぶなど「画面を破棄せずに番組だけが変わる」経路では
+        // 前番組の値が残り続け、
+        //  ・filterStateRef  … 別番組のPID構成/PTS-PCR差分を新しいCServiceFilterへ誤注入する
+        //  ・fileSizeBytesRef … 別番組のファイルサイズでシーク先バイト位置を誤計算する
+        //  ・pendingSeekByteRef … 消費されずに残った予約値で無関係なバイト位置から読み始める
+        // といった形で「再生が始まらない」不具合の原因になる。
+        filterStateRef.set(null)
+        fileSizeBytesRef.set(0L)
+        pendingSeekByteRef.set(-1L)
         captionDecoder.reset(subtitleLanguageId)
         onSubtitleLanguagesChanged(emptyList())
     }
@@ -126,6 +157,18 @@ fun rememberManagedExoPlayer(
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+
+    // ★ 修正: 下の exoPlayer は キー無しの remember{} で生成されるため、そのブロック内のラムダ
+    // (dataSourceFactory)は「初回コンポジション時点の値」を永久にキャプチャしてしまう。
+    // program / isEdcbDirect / cfAccessHeaders はいずれも後から変わり得る値なので、
+    // rememberUpdatedState 経由で常に最新値を読むようにする。
+    //  ・program: tsreadex の -n(サービスID)に使う。番組が変わったのに古いサービスIDを渡すと
+    //    CServiceFilter が PAT 内に該当 program_number を見つけられず、全PIDを0にリセットし続け、
+    //    映像・音声を一切出力しない(=再生が永久に始まらない)。
+    //  ・isEdcbDirect / cfAccessHeaders: 設定の非同期読み込み完了前に確定してしまうのを防ぐ。
+    val currentProgramState by rememberUpdatedState(program)
+    val currentIsEdcbDirect by rememberUpdatedState(isEdcbDirect)
+    val currentCfAccessHeaders by rememberUpdatedState(cfAccessHeaders)
 
     val applyAudioSelectionAndMatrix = { mode: AudioMode, player: ExoPlayer ->
         val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
@@ -164,15 +207,6 @@ fun rememberManagedExoPlayer(
         }
     }
 
-    // ★ 追加: HTTPレスポンスから得たファイル全体サイズ(シーク先バイト位置の計算に必要)。
-    // VideoPlayerScreen.kt側のシーク処理からも参照できるよう、ExoPlayer本体とは別にremember する。
-    val fileSizeBytesRef = remember { AtomicLong(0L) }
-
-    // ★ 追加: 直接TS再生のシーク先バイト位置の予約値(-1=予約なし)。ExoPlayerのSeekMap機構には
-    // 頼らず、シーク要求のたびにアプリ側でこの値をセットしてからMediaItemを作り直すことで、
-    // TsReadExDataSource.open()がposition=0の代わりにこの値から読み始めるようにする。
-    val pendingSeekByteRef = remember { AtomicLong(-1L) }
-
     val exoPlayer = remember {
         val renderersFactory = DefaultRenderersFactory(context).apply {
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
@@ -193,11 +227,6 @@ fun rememberManagedExoPlayer(
         // ★ 追加: 再生エラーの連続リトライ回数を保持(ファイル消失以外の一時的エラー用)
         var playerRetryCount = 0
 
-        // ★ 追加: シークのたびに作り直される CServiceFilter の学習済み状態(PID構成/音声PTS-PCR差分)を
-        // DataSourceの再オープンをまたいで引き継ぐための共有変数。音声トラック切替時にMedia3内部が
-        // 発火させる「隠れシーク」で TsReadExDataSource.open() が再実行されても音ズレが再発しないようにする。
-        val filterStateRef = AtomicReference<TsFilterStateSnapshot?>(null)
-
         val dataSourceFactory = DataSource.Factory {
             object : DataSource {
                 private var activeDataSource: DataSource? = null
@@ -213,8 +242,21 @@ fun rememberManagedExoPlayer(
                         ".ts",
                         ignoreCase = true
                     ) == true || dataSpec.uri.path?.endsWith("m2ts", ignoreCase = true) == true
+                    // ★ 追加: KonomiTVのoriginal画質(MPEG-2直接再生)は、録画ファイルダウンロードAPI
+                    // (/api/videos/{id}/download)をそのまま生MPEG-TSソースとして使う。拡張子が
+                    // .ts/.m2tsではないURL形式のため、isDirectTsとは別に判定する。
+                    val isKonomiOriginal = dataSpec.uri.path?.let {
+                        it.contains("/api/videos/") && it.endsWith("/download")
+                    } == true
 
-                    val sid = program?.channel?.serviceId ?: -1
+                    // ★ 修正(再修正): 一度 "0"(フィルタなし)にフォールバックさせたが、KonomiTV
+                    // サーバー側(VideoEncodingTask.py)を確認したところ、channelがnull(SDT解析失敗)の
+                    // 録画でも同じ"-1"(PMTの1番目のプログラムを選ぶ)にフォールバックしており、
+                    // それで実際に字幕が出ている(HLS側で確認済み)。つまり"-1"自体は正しい選択で、
+                    // 元の実装が正しかった。字幕欠落の原因は別にあるため、"-1"に戻す。
+                    // ★ 修正: 初回コンポジション時にキャプチャした古い program ではなく、
+                    // 常に最新の番組のサービスIDを tsreadex へ渡す(上のrememberUpdatedStateのコメント参照)
+                    val sid = currentProgramState?.channel?.serviceId ?: -1
                     val nValue = sid.toString()
 
                     val dynamicTsArgs = arrayOf(
@@ -222,14 +264,14 @@ fun rememberManagedExoPlayer(
                         "-a", "13", "-b", "5", "-c", "5", "-u", "1", "-d", "13"
                     )
 
-                    val source = if (isEdcbScheme || isDirectTs || isEdcbDirect) {
+                    val source = if (isEdcbScheme || isDirectTs || currentIsEdcbDirect || isKonomiOriginal) {
                         // ★ 修正: ファイルサイズ格納用の参照とCloudflare Accessヘッダー、
                         // 音声PTS-PCR学習状態の引き継ぎ用参照、シーク先バイト位置の予約値を渡す
                         TsReadExDataSource(
                             nativeLib,
                             dynamicTsArgs,
                             fileSizeBytesRef,
-                            cfAccessHeaders,
+                            currentCfAccessHeaders,
                             filterStateRef,
                             pendingSeekByteRef
                         )
@@ -261,11 +303,39 @@ fun rememberManagedExoPlayer(
         // 実機で確認された。この方式は廃止し、TsExtractorの自動判定(sniff)・初期化をそのまま信頼する。
         // シークは ExoPlayer の SeekMap 経由ではなく、アプリ側(VideoPlayerScreen.kt)で目標バイト位置を
         // 計算して MediaItem を作り直す方式(pendingSeekByteRef 経由)で行う。
-        val extractorsFactory = DefaultExtractorsFactory().apply {
-            setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
-            setTsExtractorTimestampSearchBytes(2 * 1024 * 1024)
-            setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
-            setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
+
+        // ★ 修正: 字幕不具合の根本原因が判明したため対応。Media3標準のId3Reader(stream_type 0x15)
+        // /onMetadataに頼る経路は、id3conv.cppが生成するID3化PESに対して機能しない(native側は
+        // CheckPrivateDataPes ACCEPTEDが出続けており変換自体は正常なのに、onMetadataが一度も
+        // 呼ばれないことを実機ログで確認済み)。一方、ライブ視聴(LivePlayerViewModel.kt)は元々
+        // Media3標準経路を使わず、TsPayloadReader.consume()でPESペイロードを自前バイトスキャンする
+        // DirectSubtitlePayloadReaderFactory方式を採用しており、二画面ライブでも字幕表示が実機で
+        // 確認できている。録画/EDCB直接/KonomiTV Original再生もこの実績のある方式に統一する。
+        val onSubtitleDataReceived: (Long, ByteArray) -> Unit = { ptsMs, privateData ->
+            val cue = captionDecoder.decode(privateData, ptsMs, renderCaptions = vs.isSubtitleEnabled)
+            onSubtitleLanguagesChanged(captionDecoder.availableLanguages())
+            if (vs.isSubtitleEnabled && cue != null) onSubtitleCue(cue)
+        }
+
+        val extractorsFactory = ExtractorsFactory {
+            // stream_type 0x06/0x15(字幕/ID3)以外は従来通りDefaultTsPayloadReaderFactory等に委譲する。
+            // TsExtractorの重複を避けるため、フォールバック配列からは除外しておく
+            // (このExoPlayerインスタンスでProgressiveMediaSourceが選ばれるのは直接TS再生時のみのため、
+            // 実質的にフォールバックが使われることはない想定だが、安全側に倒して残しておく)。
+            val fallbackExtractors = DefaultExtractorsFactory().apply {
+                setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS)
+                setTsExtractorTimestampSearchBytes(2 * 1024 * 1024)
+                setTsExtractorMode(TsExtractor.MODE_SINGLE_PMT)
+                setMatroskaExtractorFlags(MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES)
+            }.createExtractors().filterNot { it is TsExtractor }.toTypedArray()
+            arrayOf<Extractor>(
+                TsExtractor(
+                    TsExtractor.MODE_SINGLE_PMT,
+                    TimestampAdjuster(0L),
+                    DirectSubtitlePayloadReaderFactory(onSubtitleDataReceived = onSubtitleDataReceived),
+                    2 * 1024 * 1024
+                )
+            ) + fallbackExtractors
         }
 
         val mediaSourceFactory =
@@ -364,20 +434,6 @@ fun rememberManagedExoPlayer(
                         }
                     }
 
-                    override fun onMetadata(metadata: Metadata) {
-                        for (i in 0 until metadata.length()) {
-                            val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
-                                val cue = captionDecoder.decode(
-                                    entry.privateData,
-                                    currentPosition,
-                                    renderCaptions = vs.isSubtitleEnabled
-                                )
-                                onSubtitleLanguagesChanged(captionDecoder.availableLanguages())
-                                if (vs.isSubtitleEnabled && cue != null) onSubtitleCue(cue)
-                            }
-                        }
-                    }
                 })
             }
     }

@@ -73,6 +73,10 @@ class LivePlayerState(
 
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
 
+    // ★ 追加: KonomiTVのoriginal画質選択中にデュアル表示/PiPへ入った際の自動ダウングレード用。
+    // originalはソース自体はKonomiTVのままなので、previousStreamSourceと違い画質のみを退避・復元する
+    var previousQuality by mutableStateOf<StreamQuality?>(null)
+
     var lCropEnabled by mutableStateOf(false)
     var lCropMode by mutableStateOf(LCropMode.HIDDEN)
     var lCropZoom by mutableFloatStateOf(100f)

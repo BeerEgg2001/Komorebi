@@ -332,6 +332,12 @@ class KonomiRepository @Inject constructor(
     ): String {
         val ip = settingsRepository.konomiIp.first()
         val port = settingsRepository.konomiPort.first()
+        // ★ 追加: original画質はHLS(VideoEncodingTask)を経由せず、録画ファイルダウンロードAPIを
+        // 生MPEG-TS直接再生ソースとしてそのまま使う(KonomiTVサーバー側もoriginal指定時はHLS系
+        // APIを422で拒否する実装になっている)。session_id/offsetSecはHLS専用のため使用しない。
+        if (quality == "original") {
+            return UrlBuilder.getKonomiTvVideoDownloadUrl(ip, port, videoId)
+        }
         return UrlBuilder.getVideoPlaylistUrl(ip, port, videoId, sessionId, quality)
     }
 

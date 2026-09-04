@@ -399,7 +399,8 @@ fun MainRootScreen(
         state.isSettingsOpen = false; state.isDataReady = false; state.isUiReady =
         false; state.showConnectionErrorDialog = false
         state.currentTabIndex = 0
-        channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData()
+        // 設定変更を確実に反映させるため、間引きを無視して更新する。
+        channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData(force = true)
         recordViewModel.fetchRecentRecordings(forceRefresh = false); reserveViewModel.fetchReserves()
         state.settingsInitialCategoryIndex = 0
         state.settingsInitialFocusItemIndex = null

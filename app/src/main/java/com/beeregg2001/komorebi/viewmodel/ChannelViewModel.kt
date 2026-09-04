@@ -303,6 +303,12 @@ class ChannelViewModel @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     fun startPolling() {
+        // stopPolling() は progressUpdateJob も止めるが、以前はこちらを再開していなかったため、
+        // 一度でもライブ以外のタブへ移ると番組の進捗バーが二度と更新されなくなっていた。
+        if (progressUpdateJob?.isActive != true) {
+            startProgressUpdater()
+        }
+
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
             if (System.currentTimeMillis() - lastFetchedTimeMillis > 60_000L && !isPollingPaused) {

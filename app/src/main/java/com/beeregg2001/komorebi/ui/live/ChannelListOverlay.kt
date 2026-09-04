@@ -71,8 +71,27 @@ fun ChannelListOverlay(
 
     val selectedTabIndex = availableTabKeys.indexOf(selectedTab).coerceAtLeast(0)
 
-    LaunchedEffect(selectedTab) {
-        val index = currentChannels.indexOfFirst { it.id == currentChannelId }
+    // ★ 修正: フォーカス要求先(呼び出し側のfocusRequester)を必ずレイアウト上に存在させる。
+    // 以前は「currentChannelIdと一致する項目」だけに結び付けていたため、
+    // 一致する項目が現在のタブに無い(2画面目が未選局・別タブ・一覧が未取得など)場合は
+    // どのノードにも接続されず、requestFocus()が失敗してフォーカスが迷子になっていた。
+    val focusTargetChannelId = remember(currentChannels, currentChannelId) {
+        if (currentChannels.any { it.id == currentChannelId }) currentChannelId
+        else currentChannels.firstOrNull()?.id
+    }
+
+    // チャンネル一覧の取得が遅れてタブが決まらなかった場合に、有効なタブへ復帰させる
+    LaunchedEffect(availableTabKeys) {
+        if (availableTabKeys.isNotEmpty() && selectedTab !in availableTabKeys) {
+            selectedTab = initialTab
+        }
+    }
+
+    // 一覧の取得完了でフォーカス先が確定した場合にも、その項目まで確実にスクロールする
+    // (LazyRowは可視範囲外の項目を生成しないため、スクロールしないとFocusRequesterが接続されない)。
+    // キーはIDのみとし、定期更新でリストが作り直されてもスクロール位置を奪わないようにする。
+    LaunchedEffect(selectedTab, focusTargetChannelId) {
+        val index = currentChannels.indexOfFirst { it.id == focusTargetChannelId }
         if (index >= 0) {
             listState.scrollToItem(index)
         } else {
@@ -170,7 +189,8 @@ fun ChannelListOverlay(
             items(currentChannels, key = { it.id }) { channel ->
                 val isSelected = channel.id == currentChannelId
                 val itemRequester =
-                    if (isSelected) focusRequester else remember { FocusRequester() }
+                    if (channel.id == focusTargetChannelId) focusRequester
+                    else remember { FocusRequester() }
 
                 ChannelCardItem(
                     channel = channel,

@@ -78,7 +78,7 @@ class VideoPlayerViewModel @Inject constructor(
     private var detailFetchJob: Job? = null
     private var streamMaintenanceJob: Job? = null
 
-    fun fetchAvailableQualities() {
+    fun fetchAvailableQualities(videoId: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             _isQualitiesLoaded.value = false
             try {
@@ -112,7 +112,25 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                     }
                 } else if (backend == "KONOMITV") {
-                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                    // ★ 追加: original画質(MPEG-2 直接再生)は、録画完了済み・かつ
+                    // コンテナがMPEG-TS・映像コーデックがMPEG-2の録画番組でのみ選択可能にする
+                    // (tsreplace等で既にH.264/HEVCへ変換済みの録画では利用不可。KonomiTVサーバー
+                    // 側もこの条件を満たさない場合は録画ダウンロードAPIをoriginal用途に使えない)。
+                    // 一覧画面のRoom DBキャッシュはcontainerFormat/videoCodecを保持していないため、
+                    // 必ずここでAPIから最新の詳細を取得して判定する。
+                    val isOriginalAvailable = recordProvider.getRecordedProgram(videoId)
+                        .getOrNull()
+                        ?.recordedVideo
+                        ?.let { video ->
+                            video.status != "Recording" &&
+                                video.containerFormat.equals("MPEG-TS", ignoreCase = true) &&
+                                video.videoCodec.equals("MPEG-2", ignoreCase = true)
+                        } ?: false
+                    _availableQualities.value = if (isOriginalAvailable) {
+                        StreamQuality.DEFAULT_QUALITIES
+                    } else {
+                        StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
+                    }
                 } else if (backend == "EPGSTATION") {
                     val qualities = recordProvider.getStreamQualities()
                     _availableQualities.value = qualities.ifEmpty {
@@ -326,6 +344,11 @@ class VideoPlayerViewModel @Inject constructor(
         currentPositionProvider: () -> Double
     ) {
         streamMaintenanceJob?.cancel()
+        // ★ 追加: KonomiTVのoriginal画質はHLS(VideoEncodingTask)のセッションを持たない単純な
+        // ファイルダウンロードのため、keep-alive API自体が存在しない(サーバー側は
+        // ValidateQualityで quality == 'original' を422で拒否する)。維持すべきセッションが
+        // ないので、無意味な失敗リクエストを4秒おきに送り続けないようループ自体を起動しない。
+        if (quality == "original") return
         streamMaintenanceJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
