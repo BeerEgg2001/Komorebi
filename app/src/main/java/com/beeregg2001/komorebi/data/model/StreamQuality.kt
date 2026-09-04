@@ -11,6 +11,9 @@ data class StreamQuality(
     companion object {
         // KonomiTVなどのバックエンド用のデフォルト（固定）リスト
         val DEFAULT_QUALITIES = listOf(
+            // ★ 追加: サーバー側で再エンコードせず、放送波のMPEG-2映像+MPEG-TSをtsreadex経由でそのまま
+            // 配信する画質。クライアント側でtsreadex相当の処理(NativeLib)を通す必要があるためisRawTs=true
+            StreamQuality("オリジナル (MPEG-2)", "original", isRawTs = true),
             StreamQuality("1080p (60fps)", "1080p-60fps"),
             StreamQuality("1080p", "1080p"),
             StreamQuality("810p", "810p"),

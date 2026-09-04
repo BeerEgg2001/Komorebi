@@ -26,6 +26,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
@@ -115,7 +116,11 @@ fun HomeLauncherScreen(
     hasActivePlayer: Boolean = false,
     onReturnToPlayerClick: () -> Unit = {},
     aiFocusReturnTick: Int = 0,
-    onAiReturnConsumed: () -> Unit = {}
+    onAiReturnConsumed: () -> Unit = {},
+    // フルスクリーンのプレイヤーが手前に出ている間は true。
+    // ホーム画面はプレイヤー表示中も(スクロール位置とフォーカスを保つため)
+    // Compose ツリーに残り続けるので、見えていない間の定期通信を明示的に止める。
+    isPlayerActiveFullScreen: Boolean = false
 ) {
     val ui = rememberHomeLauncherState(
         initialTabIndex,
@@ -149,6 +154,10 @@ fun HomeLauncherScreen(
         isSettingsOpen, isRecordListOpen, isReserveOverlayOpen
     ) && !hasActivePlayer
 
+    // ★ 追加: PR #103でプレイヤー表示中もこのホーム画面自体が破棄されず常駐するようになった影響で、
+    // プレイヤーを開く直前にフォーカスしていた項目の論理フォーカスが残留し、プレイヤーから戻った際の
+    // 復元用requestFocus()を阻害することがある。明示的にクリアしてから要求し直す。
+    val focusManager = LocalFocusManager.current
     val returnPlayerFocusRequester = remember { FocusRequester() }
     val displayFlatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
@@ -179,9 +188,17 @@ fun HomeLauncherScreen(
 
     var lastHomeRefreshTime by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(activeRenderIndex) {
+    LaunchedEffect(activeRenderIndex, isPlayerActiveFullScreen) {
         val currentLabel = tabs.getOrNull(activeRenderIndex) ?: "ホーム"
         ui.isCurrentTabContentReady = false
+
+        // プレイヤーが前面に出ている間、ホーム画面は見えていない。
+        // ここで定期取得を走らせると、再生と帯域・CPU を奪い合って
+        // 再生も UI 操作ももたつく原因になる。
+        if (isPlayerActiveFullScreen) {
+            channelViewModel.stopPolling()
+            return@LaunchedEffect
+        }
 
         if (currentLabel == "ホーム") {
             channelViewModel.startPolling()
@@ -251,6 +268,7 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(isReturningFromPlayer) {
         if (isReturningFromPlayer && !isFullScreenMode) {
+            focusManager.clearFocus(force = true)
             ui.safeHouseRequester.safeRequestFocusWithRetry("SafeHouse_Return")
             delay(150)
 
@@ -786,7 +804,10 @@ fun HomeLauncherScreen(
                             },
                             onHistoryClick = { historyItem ->
                                 val programId = historyItem.program.id.toIntOrNull()
-                                val betterProgram = ui.recentRecordings.find { it.id == programId }
+                                // クリック時にのみ必要な値なので、composition では購読せず
+                                // ここで ViewModel の最新値を直接読み出す。
+                                val betterProgram =
+                                    recordViewModel.recentRecordings.value.find { it.id == programId }
                                 onProgramSelected(
                                     betterProgram?.copy(playbackPosition = historyItem.playback_position)
                                         ?: KonomiDataMapper.toDomainModel(historyItem)

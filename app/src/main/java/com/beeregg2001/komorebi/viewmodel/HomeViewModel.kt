@@ -22,6 +22,7 @@ import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
@@ -62,6 +63,18 @@ class HomeViewModel @Inject constructor(
 
     private val _isFallbackTriggered = MutableStateFlow(false)
     val isFallbackTriggered: StateFlow<Boolean> = _isFallbackTriggered.asStateFlow()
+
+    // refreshHomeData() は「バックエンド疎通確認 + 視聴履歴同期(Room書き込み) + EPG3日分の
+    // ジャンル再抽出」を行う重い処理。タブのフォーカス操作などから無制限に呼ばれると、
+    // 同じ処理が何本も並走して Android TV の非力な CPU / ネットワークを食い潰し、
+    // 画面全体の操作が緩慢になる。実行中の重複起動を弾き、直近実行からの経過時間でも間引く。
+    private var homeRefreshJob: Job? = null
+    private var lastHomeRefreshAt = 0L
+
+    companion object {
+        // ホーム更新の最小間隔。これより短い連続要求は無視する。
+        private const val HOME_REFRESH_MIN_INTERVAL_MS = 60_000L
+    }
 
     fun clearFocusMemory() {
         lastClickedSection = null
@@ -374,8 +387,25 @@ class HomeViewModel @Inject constructor(
         appUpdater.resetState()
     }
 
-    fun refreshHomeData() {
-        viewModelScope.launch {
+    /**
+     * ホーム画面のデータを更新する。
+     *
+     * @param force 設定変更後など、間引きを無視して必ず更新したい場合に true を指定する。
+     */
+    fun refreshHomeData(force: Boolean = false) {
+        // 実行中のものがあれば、それに任せて二重起動しない。
+        if (homeRefreshJob?.isActive == true) {
+            Log.d("HomeViewModel", "refreshHomeData: 実行中のため要求をスキップします")
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (!force && now - lastHomeRefreshAt < HOME_REFRESH_MIN_INTERVAL_MS) {
+            Log.d("HomeViewModel", "refreshHomeData: 直近に実行済みのため要求をスキップします")
+            return
+        }
+        lastHomeRefreshAt = now
+
+        homeRefreshJob = viewModelScope.launch {
             _isLoading.value = true
             try {
                 performBackendHealthCheck()

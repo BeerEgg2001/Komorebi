@@ -100,8 +100,35 @@ class RecordListMenuState {
     var isNavFocused by mutableStateOf(false)
     var isPaneListReady by mutableStateOf(false)
 
+    // ★ 追加: リスト項目の右側に出るサブメニュー（再生する／最初から再生 等）の開閉状態。
+    // 以前は RecordListContent 内の remember で保持していたが、プレイヤー表示中も
+    // 録画一覧が Compose ツリーに残るようになったため、画面側から明示的に
+    // 閉じられるようここへホイストしている。
+    var isSideMenuOpen by mutableStateOf(false)
+
     val isPaneOpen: Boolean
         get() = isGenrePaneOpen || isSeriesGenrePaneOpen || isChannelPaneOpen || isDayPaneOpen
+
+    /**
+     * 開いているメニュー・ペイン類をすべて閉じる。
+     *
+     * プレイヤーへ遷移する直前と、プレイヤーから戻った直後に呼び出す。
+     * 録画一覧はプレイヤー表示中も破棄されずコンポーズされ続けるため、
+     * これを行わないとサブメニューが開いたまま復帰し、
+     * リスト側のフォーカス（LazyColumn の canFocus）がブロックされたままになる。
+     *
+     * 検索バーの表示状態（isSearchBarVisible）は検索結果の文脈を保つため意図的に触らない。
+     */
+    fun closeAllMenus() {
+        isNavPaneOpen = false
+        isGenrePaneOpen = false
+        isSeriesGenrePaneOpen = false
+        isChannelPaneOpen = false
+        isDayPaneOpen = false
+        isDetailActive = false
+        isSortMenuOpen = false
+        isSideMenuOpen = false
+    }
 }
 
 @Composable

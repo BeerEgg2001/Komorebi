@@ -50,7 +50,6 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.UiChannelState
-import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.*
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -90,12 +89,6 @@ fun LiveContent(
     val targetChannelFocusRequester = remember { FocusRequester() }
     val isPlayerActive = selectedChannel != null
     val colors = KomorebiTheme.colors
-
-    var isMiniListOpen by remember { mutableStateOf(false) }
-    var showOverlay by remember { mutableStateOf(true) }
-    var isManualOverlay by remember { mutableStateOf(false) }
-    var isPinnedOverlay by remember { mutableStateOf(false) }
-    var isSubMenuOpen by remember { mutableStateOf(false) }
 
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
@@ -213,15 +206,12 @@ fun LiveContent(
                 CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f))
             }
         } else {
+            // ★ 修正: フルスクリーン再生中に上下左右をCancelする指定を削除した。
+            // 背面ツリーへのフォーカス侵入はMainRootBackground側で遮断済みであり、
+            // 万一フォーカスがここへ残ってしまった場合、この指定があると
+            // 十字キーが完全に無反応(脱出不能)になり操作不能に見えてしまうため。
             Column(
-                modifier = modifier
-                    .fillMaxSize()
-                    .then(if (isPlayerActive && !isPiPMode) Modifier.focusProperties {
-                        up = FocusRequester.Cancel
-                        down = FocusRequester.Cancel
-                        left = FocusRequester.Cancel
-                        right = FocusRequester.Cancel
-                    } else Modifier)
+                modifier = modifier.fillMaxSize()
             ) {
                 Box(
                     modifier = Modifier
@@ -313,25 +303,17 @@ fun LiveContent(
             }
         }
 
-        if (selectedChannel != null && !isPiPMode) {
-            LivePlayerScreen(
-                channel = selectedChannel,
-                onChannelSelect = { onChannelClick(it) },
-                onBackPressed = { onChannelClick(null) },
-                isMiniListOpen = isMiniListOpen,
-                onMiniListToggle = { isMiniListOpen = it },
-                showOverlay = showOverlay,
-                onShowOverlayChange = { showOverlay = it },
-                isManualOverlay = isManualOverlay,
-                onManualOverlayChange = { isManualOverlay = it },
-                isPinnedOverlay = isPinnedOverlay,
-                onPinnedOverlayChange = { isPinnedOverlay = it },
-                isSubMenuOpen = isSubMenuOpen,
-                onSubMenuToggle = { isSubMenuOpen = it },
-                reserveViewModel = reserveViewModel,
-                onShowToast = { }
-            )
-        }
+        // ★ 削除: ここに2つ目のLivePlayerScreenを生成していたが、ライブ再生は
+        // MainRootScreenの前面レイヤー(zIndex=1)が唯一の担当であり、完全な重複だった。
+        //
+        // 以前は「プレイヤー表示中はホーム画面自体をComposeツリーから破棄する」実装だったため
+        // この分岐は事実上到達不能な死にコードだったが、スクロール位置とフォーカスを保持するため
+        // ホーム画面を破棄しない実装へ変更したことで生成されるようになり、
+        // ・前面プレイヤーと同じLivePlayerViewModel(Activityスコープ)を二重に操作する
+        // ・背面に隠れた2つ目のプレイヤーUIがフォーカスを奪い合う
+        //   (十字キーは見えない背面リストの中で動くため無反応に見え、
+        //    決定キーはそのリストのonChannelSelect→onChannelClickでメイン画面の選局が起きる)
+        // という不具合を起こしていた。
     }
 }
 

@@ -22,10 +22,13 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
-// ★ CServiceFilterの学習済み状態(PID構成/PTS-PCR差分)と、それを取得した時点でのファイル内バイト位置を
-// セットで保持する。position はトラック切替時の「隠れリシーク」(=ほぼ同じ位置での再オープン)か、
-// 本物のシーク(=離れた位置への再オープン)かを判定するために使う(TsReadExDataSource.open()参照)。
-data class TsFilterStateSnapshot(val position: Long, val state: LongArray)
+// ★ CServiceFilterの学習済み状態(PID構成/PTS-PCR差分)と、それを取得した時点のストリームURL/
+// ファイル内バイト位置をセットで保持する。
+// - uri: 学習元のストリーム。別番組(=別URL)の学習値を誤って引き継がないための照合キー。
+//   PID構成もPTS-PCR差分も番組(TSファイル)ごとに異なるため、URLが違えば絶対に引き継いではいけない。
+// - position: トラック切替時の「隠れリシーク」(=ほぼ同じ位置での再オープン)か、
+//   本物のシーク(=離れた位置への再オープン)かを判定するために使う(TsReadExDataSource.open()参照)。
+data class TsFilterStateSnapshot(val uri: String, val position: Long, val state: LongArray)
 
 @UnstableApi
 class TsReadExDataSource(
@@ -55,7 +58,8 @@ class TsReadExDataSource(
     private var uri: Uri? = null
     private var opened = false
 
-    // ★ 診断用: open()時のバイト位置と、そこからの生バイト読み込み量(=現在のファイル内位置の推定)
+    // open()時のバイト位置と、そこからの生バイト読み込み量(=現在のファイル内位置の推定)。
+    // close()時にCServiceFilterの学習済み状態と合わせてfilterStateRefへ退避する際に使う。
     private var openPosition: Long = 0
     private var rawBytesRead: Long = 0
 
@@ -118,10 +122,16 @@ class TsReadExDataSource(
         // ただし、これはトラック切替時の「ほぼ同じ位置での再オープン」を想定した引き継ぎなので、
         // 離れた位置への本物のシークでは適用しない(別区間の学習値を誤って使うと、そこだけ
         // 音ズレが悪化したりデコードエラーの原因になり得るため)。
+        // さらに、退避元と今回のストリームURLが完全一致することも条件にする。番組を切り替えた場合は
+        // PID構成もPTS-PCR差分も全く別物になるため、位置がたまたま近くても引き継いではいけない
+        // (別番組のPID構成を注入すると、正しいPMTを拾い直すまで映像/音声が一切出力されず、
+        //  「再生が始まらない」不具合になる)。
+        val currentUri = dataSpec.uri.toString()
         val pending = filterStateRef?.get()
+        val isSameSource = pending != null && pending.uri == currentUri
         val isNearSamePosition = pending != null &&
             kotlin.math.abs(pending.position - effectivePosition) <= HIDDEN_RESEEK_TOLERANCE_BYTES
-        if (pending != null && isNearSamePosition) {
+        if (pending != null && isSameSource && isNearSamePosition) {
             nativeLib.importFilterState(handle, pending.state)
         }
 
@@ -320,6 +330,8 @@ class TsReadExDataSource(
     }
 
     override fun close() {
+        // ★ 学習済み状態の退避先(TsFilterStateSnapshot)に記録するため、uriをクリアされる前に控えておく
+        val closedUri = uri
         if (opened) {
             transferEnded(); opened = false
         }
@@ -341,7 +353,9 @@ class TsReadExDataSource(
                 // 次にこのDataSourceがほぼ同じ位置で開かれた際(隠れリシーク)に引き継げるようにする
                 val exported = nativeLib.exportFilterState(handle)
                 val finalPosition = openPosition + rawBytesRead
-                filterStateRef?.set(TsFilterStateSnapshot(finalPosition, exported))
+                filterStateRef?.set(
+                    TsFilterStateSnapshot(closedUri?.toString().orEmpty(), finalPosition, exported)
+                )
                 nativeLib.closeFilter(handle); handle = 0L
             }
         }

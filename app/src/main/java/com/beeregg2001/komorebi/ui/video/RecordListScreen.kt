@@ -325,11 +325,24 @@ fun RecordListScreen(
         }
     }
 
+    // ★ 追加: プレイヤーへ遷移する直前に、開いているサブメニュー・ペイン類をすべて閉じる。
+    // この画面はプレイヤー表示中も破棄されずコンポーズされ続けるため（MainRootBackground参照）、
+    // 閉じずに再生を始めると復帰時にサブメニューが開いたまま残り、
+    // リスト側（LazyColumn の canFocus）へフォーカスを戻せなくなる。
+    val handleProgramClick: (RecordedProgram, Double?) -> Unit = { program, forcedPosition ->
+        menuState.closeAllMenus()
+        viewModel.clearProgramDetail()
+        onProgramClick(program, forcedPosition)
+    }
+
     // プレイヤー表示中もこの画面は背面で保持されるため、戻るたびに明示的に
     // 復帰チケットを発行する。これにより録画一覧・シリーズ検索結果の双方で、
     // 直前に再生していた番組へスクロールとフォーカスを戻せる。
     LaunchedEffect(isReturningFromPlayer, lastPlayedProgramId) {
         if (isReturningFromPlayer) {
+            // ★ 追加: onProgramClick を経由しない遷移（AIコンシェルジュ等）に備えた保険。
+            // メニューが開いたままだとフォーカス復帰チケットが効かない。
+            menuState.closeAllMenus()
             delay(150)
             if (lastPlayedProgramId != null) {
                 ticketManager.issue(FocusTicket.TARGET_ID, lastPlayedProgramId)
@@ -550,7 +563,7 @@ fun RecordListScreen(
                                     contentContainerFocusRequester = focuses.contentContainer,
                                     searchInputFocusRequester = focuses.searchInput,
                                     backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
+                                    onProgramClick = handleProgramClick,
                                     onSeriesSearch = { program ->
                                         viewModel.searchSeries(
                                             seriesId = program.seriesId,
@@ -561,6 +574,8 @@ fun RecordListScreen(
                                     },
                                     isDetailVisible = menuState.isDetailActive,
                                     onDetailStateChange = { menuState.isDetailActive = it },
+                                    isSideMenuOpen = menuState.isSideMenuOpen,
+                                    onSideMenuStateChange = { menuState.isSideMenuOpen = it },
                                     onBackPress = handleBackPress,
                                     ticketManager = ticketManager,
                                     listState = listState,
@@ -620,7 +635,7 @@ fun RecordListScreen(
                                     contentContainerFocusRequester = focuses.contentContainer,
                                     searchInputFocusRequester = focuses.searchInput,
                                     backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
+                                    onProgramClick = handleProgramClick,
                                     onOpenNavPane = handleOpenNavPane,
                                     ticketManager = ticketManager,
                                     onFocusedItemChanged = {

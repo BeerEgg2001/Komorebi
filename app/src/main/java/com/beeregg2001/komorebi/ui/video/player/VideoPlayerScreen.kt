@@ -67,6 +67,16 @@ private val EPG_STATION_DIRECT_VIDEO_REGEX = Regex("/api/videos/\\d+$")
 private fun isEpgStationDirectVideoUrl(url: String): Boolean =
     EPG_STATION_DIRECT_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
 
+/**
+ * KonomiTV の original画質(MPEG-2直接再生)用URL (`/api/videos/{id}/download`) かどうかを判定する。
+ * EPGStationの無変換再生URLと同様、HLSではなく生MPEG-TSがそのまま流れてくるため、
+ * (下のURLパターンマッチで)HLSとして誤解釈させてはいけない。
+ */
+private val KONOMI_TV_ORIGINAL_VIDEO_REGEX = Regex("/api/videos/\\d+/download$")
+
+private fun isKonomiTvOriginalVideoUrl(url: String): Boolean =
+    KONOMI_TV_ORIGINAL_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -116,7 +126,7 @@ fun VideoPlayerScreen(
     LaunchedEffect(program.id) {
         if (smbItem == null) {
             videoPlayerViewModel.fetchProgramDetail(program.id)
-            videoPlayerViewModel.fetchAvailableQualities()
+            videoPlayerViewModel.fetchAvailableQualities(program.id)
         }
     }
 
@@ -244,6 +254,9 @@ fun VideoPlayerScreen(
     val backendType by settingsViewModel.backendType.collectAsState()
     val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+    // ★ 追加: KonomiTVのoriginal画質(MPEG-2直接再生)も、EDCB直接再生と同じくExoPlayerの
+    // SeekMapに頼らないバイト位置計算シーク方式で扱う必要がある
+    val isKonomiOriginal = (backendType == "KONOMITV" && vs.currentQuality.value == "original")
 
     // ★ 修正: 録画直接TS再生(isEdcbDirect)は、ExoPlayerのSeekMap機構(seekTo())に頼らず、
     // シーク要求のたびにアプリ側で目標バイト位置を計算してMediaItemを作り直す方式にした
@@ -266,7 +279,7 @@ fun VideoPlayerScreen(
         onStopOrDispose = { player ->
             if (smbItem == null) {
                 val posMs =
-                    if (isOffsetBasedStream || isEdcbDirect) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                    if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
         },
@@ -283,7 +296,7 @@ fun VideoPlayerScreen(
     // 実況コメントの追従位置がズレ続ける不具合があった。performSeek等と同様、毎回の
     // リコンポジションで最新の値を捕捉する普通のラムダにする(memo化するほど重い処理ではない)。
     val getCurrentPositionMs: () -> Long =
-        { if (isOffsetBasedStream || isEdcbDirect) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+        { if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
     val subtitleCue = rememberNativeCaptionCue(
         events = subtitleEvents,
         enabled = vs.isSubtitleEnabled,
@@ -336,8 +349,8 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (isEpgStationDirectVideoUrl(newUrl)) {
-                        // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+                    if (isEpgStationDirectVideoUrl(newUrl) || isKonomiTvOriginalVideoUrl(newUrl)) {
+                        // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
                         mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
                     } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
                             "konomi.tv"
@@ -352,7 +365,7 @@ fun VideoPlayerScreen(
                     if (fetchedDetail != null) onShowToast("シーク先ストリームの取得に失敗しました")
                 }
             }
-        } else if (isEdcbDirect && smbItem == null) {
+        } else if ((isEdcbDirect || isKonomiOriginal) && smbItem == null) {
             // ★ 追加: 録画直接TS再生のシークはExoPlayerネイティブのseekTo()に頼らず、
             // 目標バイト位置を計算してMediaItemを作り直す(VideoPlayerManager.kt参照)
             val byteOffset = computeSeekByteOffset(safeTarget)
@@ -424,7 +437,16 @@ fun VideoPlayerScreen(
 
     var isFirstLoad by remember { mutableStateOf(true) }
 
-    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities) {
+    // ★ 修正: 以前は isQualitiesLoaded がキーに含まれておらず、本文中でガード条件にだけ
+    // 使われていた。availableQualities の更新(再取得完了)と isQualitiesLoaded が true に
+    // 戻るタイミングがわずかにズレるレースがあり、
+    //  1. availableQualities の参照更新でこのeffectが再起動される
+    //  2. その瞬間はまだ isQualitiesLoaded=false(再取得の過渡状態)のため早期return
+    //  3. 直後に isQualitiesLoaded が true に戻るが、キーに含まれていないため
+    //     effectは再発火せず、再生開始処理(setMediaItem/prepare/play)が永久に走らない
+    // という不具合があった(実機ログで確認済み)。isQualitiesLoaded をキーに追加し、
+    // trueに戻った時点で確実にeffectが再評価されるようにする。
+    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities, isQualitiesLoaded) {
         if (smbItem != null) {
             isBuffering = true
             vs.playbackOffsetMs = 0L
@@ -459,8 +481,8 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (isEpgStationDirectVideoUrl(url)) {
-                // EPGStation の無変換再生は MPEG-TS がそのまま流れてくる (HLS ではない)
+            if (isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url)) {
+                // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
                 mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
             } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
                     "m3u8"
@@ -470,14 +492,14 @@ fun VideoPlayerScreen(
             }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect) {
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
                 exoPlayer.seekTo(initialPositionMs)
             }
             // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、初回再生位置の
             // 復元はここではできない。ファイルサイズが判明してからバイト位置ベースで
             // シークし直す(下のscope.launch参照)。
             val shouldResumeViaByteSeek =
-                isEdcbDirect && isFirstLoad && initialPositionMs > 0
+                (isEdcbDirect || isKonomiOriginal) && isFirstLoad && initialPositionMs > 0
             isFirstLoad = false
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
@@ -800,7 +822,11 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            if (isEdcbDirect) {
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
                                 // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
                                 // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
@@ -912,7 +938,11 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            if (isEdcbDirect) {
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
                                 // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
                                 // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {

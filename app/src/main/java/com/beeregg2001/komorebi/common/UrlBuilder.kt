@@ -115,6 +115,17 @@ object UrlBuilder {
     }
 
     /**
+     * 録画番組のoriginal画質 (MPEG-2 直接再生) 用URL。
+     * サーバー側での再エンコードを一切行わず、録画ファイルダウンロードAPIをそのまま
+     * HTTP Rangeリクエスト対応のTS直接再生ソースとして流用する(KonomiTV本家のmpeg2toh264と同じ発想)。
+     * URL: /api/videos/{id}/download
+     */
+    fun getKonomiTvVideoDownloadUrl(ip: String, port: String, videoId: Int): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/videos/$videoId/download"
+    }
+
+    /**
      * シークバー用タイル画像取得 (KonomiTV API)
      * URL: /api/videos/{id}/thumbnail/tiled
      * パラメータなしで巨大なシート画像を取得する仕様
