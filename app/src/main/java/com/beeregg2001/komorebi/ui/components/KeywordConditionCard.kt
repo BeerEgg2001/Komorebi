@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.ReservationCondition
 import com.beeregg2001.komorebi.data.model.ReserveItem
@@ -96,15 +97,20 @@ fun KeywordConditionCard(
     }
 
     // ★修正: EDCB/KonomiTV両対応の非同期ロゴ取得
-    var logoUrl by remember(displayId) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得（チラつき・再解決の防止）
+    var logoUrl by remember(displayId) {
+        mutableStateOf(ChannelLogoUrlCache.peek(displayId) ?: "")
+    }
     LaunchedEffect(displayId) {
-        if (displayId.isNotEmpty()) {
+        if (displayId.isEmpty()) {
+            logoUrl = ""
+        } else if (logoUrl.isEmpty()) {
+            // キャッシュヒット時は再解決しない（ヒット時にここへ来ると URL を空へ戻してしまうため
+            // 元の if/else 構造のままガードを足さないこと）
             val fetchedUrl = getLogoUrl(displayId)
             logoUrl = fetchedUrl.ifEmpty {
                 UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, displayId)
             }
-        } else {
-            logoUrl = ""
         }
     }
 

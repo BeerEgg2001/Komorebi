@@ -71,6 +71,14 @@ class HomeViewModel @Inject constructor(
     private var homeRefreshJob: Job? = null
     private var lastHomeRefreshAt = 0L
 
+    // ジャンルピックアップ / プロ野球カードの取得ジョブ。起動直後に複数経路から
+    // 同時に呼ばれても EPG 取得を 1 本にまとめるために保持する。
+    private var genrePickupJob: Job? = null
+
+    // バックエンド疎通確認は EDCB / EPGStation ではチャンネル一覧の取得そのもの。
+    // 起動直後に init 側と refreshHomeData 側の両方から呼ばれて二重に通信していた。
+    private var healthCheckJob: Job? = null
+
     companion object {
         // ホーム更新の最小間隔。これより短い連続要求は無視する。
         private const val HOME_REFRESH_MIN_INTERVAL_MS = 60_000L
@@ -166,8 +174,26 @@ class HomeViewModel @Inject constructor(
         _sharedEpgData.value = data
     }
 
-    private fun fetchAllTypeGenrePickup() {
-        viewModelScope.launch {
+    /**
+     * ジャンルピックアップ / プロ野球カードの元データを取得する。
+     *
+     * GR / BS / CS それぞれについて 3 日分の EPG を取りに行くため、1 回でも十分に重い。
+     * 起動直後は
+     *   - init の combine(...).debounce(1500) 経由
+     *   - refreshHomeData() 経由 (ホームタブの初回表示)
+     * の 2 経路からほぼ同時に呼ばれ、同じ EPG 取得と数千件のフィルタ処理が
+     * まるごと二重に走っていた。実行中の要求は既存ジョブに合流させる。
+     *
+     * @param force 設定 (ピックアップジャンル・時間帯・ひいきの球団) が変わった場合など、
+     *              実行中のジョブを捨ててでも新しい条件で取り直したい場合に true。
+     */
+    private fun fetchAllTypeGenrePickup(force: Boolean = false) {
+        if (!force && genrePickupJob?.isActive == true) {
+            Log.d("HomeViewModel", "fetchAllTypeGenrePickup: 実行中のため要求をスキップします")
+            return
+        }
+        genrePickupJob?.cancel()
+        genrePickupJob = viewModelScope.launch {
             val genre = pickupGenreLabel.value
             val timeSetting = pickupTimeSetting.value
             val isExcludePaid = excludePaidBroadcasts.value == "ON"
@@ -328,6 +354,21 @@ class HomeViewModel @Inject constructor(
         }.sortedBy { it.first.start_time }.take(15)
     }
 
+    /**
+     * バックエンドの疎通確認。実行中の要求があればその完了を待って合流し、
+     * 同じチャンネル一覧取得を二重に走らせない。
+     */
+    private suspend fun performBackendHealthCheckOnce() {
+        healthCheckJob?.takeIf { it.isActive }?.let {
+            Log.d("Komorebi_Failsafe", "Health check already running. Joining.")
+            it.join()
+            return
+        }
+        val job = viewModelScope.launch { performBackendHealthCheck() }
+        healthCheckJob = job
+        job.join()
+    }
+
     private suspend fun performBackendHealthCheck() {
         val currentBackend = settingsRepository.backendType.first()
 
@@ -359,7 +400,8 @@ class HomeViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .debounce(1500L)
                 .collectLatest {
-                    fetchAllTypeGenrePickup()
+                    // 設定変更を確実に反映させるため、実行中のジョブは捨てて取り直す。
+                    fetchAllTypeGenrePickup(force = true)
                 }
         }
 
@@ -373,7 +415,7 @@ class HomeViewModel @Inject constructor(
         // ★ 修正: バックエンドのヘルスチェックも、UIが立ち上がってから（1.5秒後）実行
         viewModelScope.launch {
             delay(1500)
-            performBackendHealthCheck()
+            performBackendHealthCheckOnce()
         }
     }
 
@@ -408,7 +450,7 @@ class HomeViewModel @Inject constructor(
         homeRefreshJob = viewModelScope.launch {
             _isLoading.value = true
             try {
-                performBackendHealthCheck()
+                performBackendHealthCheckOnce()
 
                 try {
                     val backend = settingsRepository.backendType.first()

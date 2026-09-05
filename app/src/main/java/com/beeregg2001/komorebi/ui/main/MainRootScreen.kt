@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.ColdStartDiag
 import com.beeregg2001.komorebi.ui.home.LoadingScreen
 import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
@@ -400,7 +401,7 @@ fun MainRootScreen(
         false; state.showConnectionErrorDialog = false
         state.currentTabIndex = 0
         // 設定変更を確実に反映させるため、間引きを無視して更新する。
-        channelViewModel.fetchChannels(); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData(force = true)
+        channelViewModel.fetchChannels(force = true); epgViewModel.preloadAllEpgData(); homeViewModel.refreshHomeData(force = true)
         recordViewModel.fetchRecentRecordings(forceRefresh = false); reserveViewModel.fetchReserves()
         state.settingsInitialCategoryIndex = 0
         state.settingsInitialFocusItemIndex = null
@@ -425,6 +426,14 @@ fun MainRootScreen(
                 null
 
             state.showDeleteConfirmDialog -> state.showDeleteConfirmDialog = false
+
+            // ★ 修正: 設定画面はプレイヤーより手前(MainRootDialogs)で画面全体を覆って描画される。
+            // プレイヤー系の分岐より後ろに置いていたため、ミニプレイヤー表示中に設定画面を開くと
+            // 戻るキーを押しても設定画面が閉じず、isMiniPlayerModeの解除→プレイヤーの終了…と
+            // 背面の状態だけが消化されてしまい、最後にはホーム画面の戻る処理まで到達して
+            // アプリ終了確認ダイアログが表示されていた。前面にあるものから閉じる順序へ修正する。
+            state.isSettingsOpen -> closeSettingsAndRefresh()
+
             state.isMiniPlayerMode -> {
                 state.isMiniPlayerMode = false; state.toastMessage = "フルスクリーンに戻りました"
             }
@@ -449,7 +458,6 @@ fun MainRootScreen(
                 state.isMiniPlayerMode = false
             }
 
-            state.isSettingsOpen -> closeSettingsAndRefresh()
             state.epgSelectedProgram != null -> state.epgSelectedProgram = null
             state.selectedReserve != null -> state.selectedReserve = null
             state.isEpgJumpMenuOpen -> state.isEpgJumpMenuOpen = false
@@ -474,28 +482,42 @@ fun MainRootScreen(
         }
     }
 
+    // 起動シーケンスの判定。
+    //
+    // 以前はここに delay(300) → delay(300)(または delay(500))が直列に積まれており、
+    // 「チャンネル一覧の取得が終わっているのに600ms何も起きない」時間が生まれていた。
+    // さらに下のLaunchedEffectはisEpgReady/isSettingsInitializedをキーに持つため、
+    // 番組表の初回読み込みが完了するたびにdelayがやり直され、待ち時間が伸びていた。
+    //
+    // isChannelLoadingはChannelViewModelの初期値がtrueで、取得完了時に一度だけ
+    // falseになる(取得の重複起動もChannelViewModel側で抑止済み)ため、
+    // この時点でチャンネル一覧・エラー状態はどちらも確定している。待つ必要はない。
     LaunchedEffect(isChannelLoading, isHomeLoading) {
         if (!isChannelLoading && !isHomeLoading) {
-            delay(300)
             if (isChannelError) {
                 state.showConnectionErrorDialog = true; state.isDataReady = false
             } else {
                 state.showConnectionErrorDialog = false; state.isDataReady = true
+                ColdStartDiag.mark("isDataReady=true (channel+home data loaded)")
             }
         }
     }
 
     LaunchedEffect(isEpgReady, state.isDataReady, isSettingsInitialized, state.currentTabIndex) {
         if (!isSettingsInitialized) {
-            delay(500); state.isSplashFinished = true
+            // 初期設定が未完了なら、セットアップ画面をできるだけ早く出す。
+            state.isSplashFinished = true
         } else if (state.currentTabIndex == tabs.indexOf("番組表")) {
             if (isEpgReady && state.isDataReady) {
-                delay(300); state.isSplashFinished = true
+                state.isSplashFinished = true
             }
         } else {
             if (state.isDataReady) {
-                delay(300); state.isSplashFinished = true
+                state.isSplashFinished = true
             }
+        }
+        if (state.isSplashFinished) {
+            ColdStartDiag.mark("isSplashFinished=true")
         }
     }
 

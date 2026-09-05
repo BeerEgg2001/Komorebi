@@ -127,6 +127,12 @@ class ChannelViewModel @Inject constructor(
     private var pollingJob: Job? = null
     private var progressUpdateJob: Job? = null
     private var fetchJob: Job? = null
+
+    // ポーリング開始時の「データが古いので即時取得」用ジョブ。
+    // startPolling() はタブ移動のたびに呼ばれるため、ポーリングループ本体
+    // (pollingJob) と同じジョブに入れておくと、取得中でも cancel → やり直しに
+    // なってしまう。取得そのものは別ジョブに分けて途中で捨てないようにする。
+    private var initialPollFetchJob: Job? = null
     private var lastFetchedTimeMillis = 0L
 
     private var isPollingPaused = false
@@ -278,14 +284,41 @@ class ChannelViewModel @Inject constructor(
         }
     }
 
+    /**
+     * チャンネル一覧を取得する。
+     *
+     * アプリ起動直後は
+     *   1. init → startPolling() の「データが古いので即時取得」
+     *   2. MainRootScreen の起動シーケンス
+     *   3. HomeLauncherScreen の初回表示
+     * という 3 箇所から、ほぼ同時に本メソッド相当の取得が要求されていた。
+     * いずれも同じエンドポイントを叩くだけなので、同一の通信が最大 3 本並走し、
+     * 非力な Android TV では起動直後の帯域と CPU を無駄に食い潰していた。
+     *
+     * 取得中の要求は既存のジョブに合流させ、通信を 1 本にまとめる。
+     *
+     * @param force 設定変更直後など、実行中のジョブを捨ててでも取り直したい場合に true。
+     */
     @RequiresApi(Build.VERSION_CODES.O)
-    fun fetchChannels() {
+    fun fetchChannels(force: Boolean = false) {
+        // 取得中の要求は既存ジョブに任せる(_isLoadingは既に true のまま)。
+        if (!force && isFetchInFlight()) {
+            Log.d("ChannelViewModel", "fetchChannels: 取得中のため要求をスキップします")
+            return
+        }
         _isLoading.value = true
         fetchJob?.cancel()
         fetchJob = viewModelScope.launch {
             fetchChannelsInternal()
         }
     }
+
+    /**
+     * fetchChannels() 由来・startPolling() 由来のどちらかで取得処理が進行中かどうか。
+     * ポーリング側の初回取得も同じ通信なので、二重取得の判定に含める。
+     */
+    private fun isFetchInFlight(): Boolean =
+        fetchJob?.isActive == true || initialPollFetchJob?.isActive == true
 
     fun fetchRecentRecordings() {
         _isRecordingLoading.value = true

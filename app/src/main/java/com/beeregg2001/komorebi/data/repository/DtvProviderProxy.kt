@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.data.repository
 
 import android.util.Log
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.*
 // ★ 追加: 分割された新しいEDCBリポジトリ群をインポート
@@ -99,9 +100,31 @@ class DtvProviderProxy @Inject constructor(
         }
     }
 
+    /**
+     * ★ 最適化: 局ロゴ URL をプロセス全体で共有するメモリキャッシュ経由で返す。
+     *
+     * 従来は呼び出し元ごと(ChannelViewModel のみ)にキャッシュがあり、EpgViewModel /
+     * HomeViewModel / LivePlayerViewModel、および各 Composable の LaunchedEffect からの
+     * 呼び出しは毎回バックエンドまで到達していた。バックエンド実装は DataStore 読み出しや
+     * Dispatchers.IO 切り替え + ファイル存在確認を伴うため、リスト描画のたびに
+     * 数十回のコルーチン往復が発生していた。
+     *
+     * キャッシュはバックエンド種別が変わると自動で破棄され、接続先(IP/ポート)変更時は
+     * SettingsRepository.saveString から明示的にクリアされる。
+     */
     override suspend fun getChannelLogoUrl(channelId: String): String {
         return try {
-            getLiveProvider().getChannelLogoUrl(channelId)
+            val backend = settingsRepository.backendType.first()
+            ChannelLogoUrlCache.get(backend, channelId)?.let { return it }
+
+            val provider = when (backend) {
+                "EDCB" -> edcbLiveRepository
+                "EPGSTATION" -> epgStationLiveRepository
+                else -> konomiRepository
+            }
+            provider.getChannelLogoUrl(channelId).also {
+                ChannelLogoUrlCache.put(backend, channelId, it)
+            }
         } catch (e: Exception) {
             Log.w("DtvProviderProxy", "getChannelLogoUrl failed or not implemented. Skipping.")
             ""

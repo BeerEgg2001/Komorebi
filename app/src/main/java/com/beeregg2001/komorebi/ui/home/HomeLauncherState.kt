@@ -175,16 +175,34 @@ class HomeLauncherState(
         }
     }
 
+    /**
+     * ホーム画面が前面の別UIに覆われていて、操作対象ではない状態かどうか。
+     *
+     * ★ 重要: ミニプレイヤー(PiP)表示中はプレイヤーが画面の一部しか占有しないため、
+     * 「プレイヤー起因のフルスクリーン判定」だけを無効化する。
+     * 設定画面・録画リスト・番組詳細などのオーバーレイは、ミニプレイヤー表示中であっても
+     * 画面全体を覆うので、必ずフルスクリーン扱いにしなければならない。
+     *
+     * 以前は呼び出し側で `isFullScreen(...) && !hasActivePlayer` としていたため、
+     * ミニプレイヤー表示中に設定画面を開くとisFullScreenModeがfalseのままになり、
+     * 背面のホーム画面がフォーカス復帰処理を走らせて設定画面からフォーカスを奪ってしまっていた。
+     */
     fun isFullScreen(
         selectedChannel: Channel?,
         selectedProgram: RecordedProgram?,
         epgSelectedProgram: EpgProgram?,
         isSettingsOpen: Boolean,
         isRecordListOpen: Boolean,
-        isReserveOverlayOpen: Boolean
+        isReserveOverlayOpen: Boolean,
+        hasActivePlayer: Boolean = false
     ): Boolean {
-        return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null ||
-                isSettingsOpen || isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
+        // プレイヤー起因のフルスクリーン。ミニプレイヤー表示中は該当しない。
+        val isPlayerFullScreen =
+            !hasActivePlayer && (selectedChannel != null || selectedProgram != null)
+        // 画面全体を覆うオーバーレイ。ミニプレイヤーの有無に関わらずホーム画面は裏に隠れる。
+        val isOverlayVisible = epgSelectedProgram != null || isSettingsOpen ||
+                isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
+        return isPlayerFullScreen || isOverlayVisible
     }
 
     fun handleBackNavigation(

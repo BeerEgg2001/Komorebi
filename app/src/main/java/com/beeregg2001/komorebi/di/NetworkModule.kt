@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.di
 
+import com.beeregg2001.komorebi.BuildConfig
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.model.StreamSource
@@ -71,8 +72,22 @@ object NetworkModule {
             init(null, trustAllCerts, SecureRandom())
         }
 
+        // ★ 重要 (起動速度): 以前はここが Level.BODY だった。
+        // BODY はレスポンス本文を丸ごとメモリへ読み切ってから文字列化し logcat へ流すため、
+        // 数MB規模の JSON を返す EPG API では
+        //   ・本文全体の二重デコード (ログ用 + Gson 用)
+        //   ・巨大文字列の生成による GC 多発
+        //   ・logd への大量書き込み
+        // が発生する。起動直後は EPG / チャンネル一覧の取得が集中するため、
+        // これが「起動直後だけ操作が絶望的に重い」最大の要因になっていた。
+        // Cloudflare Access の診断はヘッダーが見えれば足りるので、
+        // デバッグビルドでも HEADERS までに留め、リリースでは完全に無効化する。
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.HEADERS
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
             // Cloudflare Access のシークレットは logcat に平文で残さない
             redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
         }
@@ -145,7 +160,11 @@ object NetworkModule {
         cloudflareAccessInterceptor: CloudflareAccessInterceptor
     ): OkHttpClient {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
             redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
         }
         return trustAllClient(OkHttpClient.Builder())

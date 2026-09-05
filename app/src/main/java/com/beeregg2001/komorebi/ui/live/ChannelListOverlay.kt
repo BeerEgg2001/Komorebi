@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
@@ -246,9 +247,13 @@ fun ChannelCardItem(
     val borderWidth = if (isFocused) 3.dp else 0.dp
     val borderColor = if (isFocused) colors.accent else Color.Transparent
 
-    var logoUrl by remember(channel.id) { mutableStateOf<String>("") }
+    // ★ 最適化: 解決済み URL を同期的に初期値へ。LazyRow のスクロールで
+    //   アイテムが再生成されるたびに走っていたコルーチン往復とチラつきを解消する。
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
     LaunchedEffect(channel.id) {
-        logoUrl = getLogoUrl(channel.id)
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
     }
 
     Box(

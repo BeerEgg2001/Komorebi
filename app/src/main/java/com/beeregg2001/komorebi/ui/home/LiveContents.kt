@@ -48,6 +48,7 @@ import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.UiChannelState
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -331,9 +332,14 @@ fun HeroDashboard(
     val isHot = (uiState.jikkyoForce ?: 0) > 500
 
     // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
-    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(uiState.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(uiState.channel.displayChannelId) ?: "")
+    }
     LaunchedEffect(uiState.channel.id) {
-        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        if (logoUrl.isEmpty()) {
+            logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        }
     }
 
     val formatTime = { timeStr: String? ->
@@ -568,9 +574,14 @@ fun CompactChannelCard(
     )
 
     // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
-    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(uiState.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(uiState.channel.displayChannelId) ?: "")
+    }
     LaunchedEffect(uiState.channel.id) {
-        logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        if (logoUrl.isEmpty()) {
+            logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        }
     }
 
     Surface(

@@ -30,6 +30,7 @@ import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
@@ -53,9 +54,12 @@ fun LastWatchedChannelCard(
     val typeLabels =
         mapOf("GR" to "地デジ", "BS" to "BS", "CS" to "CS", "BS4K" to "BS4K", "SKY" to "スカパー")
 
-    var logoUrl by remember(channel.id) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得（チラつき・再解決の防止）
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
     LaunchedEffect(channel.id) {
-        logoUrl = getLogoUrl(channel.id)
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
     }
 
     Surface(
@@ -152,9 +156,12 @@ fun HotChannelCard(
     var isFocused by remember { mutableStateOf(false) }
     val colors = KomorebiTheme.colors
 
-    var logoUrl by remember(uiState.channel.id) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得（チラつき・再解決の防止）
+    var logoUrl by remember(uiState.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(uiState.channel.id) ?: "")
+    }
     LaunchedEffect(uiState.channel.id) {
-        logoUrl = getLogoUrl(uiState.channel.id)
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(uiState.channel.id)
     }
 
     Surface(

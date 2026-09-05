@@ -33,8 +33,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_Komorebi)
         super.onCreate(savedInstanceState)
+        ColdStartDiag.mark("MainActivity.onCreate")
 
         setContent {
+            LaunchedEffect(Unit) { ColdStartDiag.mark("setContent (first composition)") }
             KomorebiTheme {
                 var showExitDialog by remember { mutableStateOf(false) }
 

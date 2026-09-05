@@ -50,26 +50,55 @@ fun SeasonalDecor(season: String, isDark: Boolean, modifier: Modifier = Modifier
         else -> season
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "kyle_swim")
-    val kyleX by infiniteTransition.animateFloat(
-        initialValue = 2400f,
-        targetValue = -600f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 45000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ), label = "kyle_x"
-    )
+    // ★ 最適化(アプリ全体に効く最重要修正):
+    //
+    // この装飾はプレイヤー起動中以外の「ほぼ全画面」の背面に常時表示されている。
+    // 従来はここで rememberInfiniteTransition の値を `by` でコンポーズ段階から読んでいたため、
+    //   - 無限アニメーションが常に走り続けて毎フレーム SeasonalDecor が再コンポーズされ
+    //   - そのたびに Canvas の描画ラムダが作り直されて全画面 Canvas が毎フレーム再描画され
+    //   - 描画では Random を作り直して 25〜40 個の花びら／星をパスで描き直していた
+    // という状態だった。しかも kyleX / kyleYOffset を実際に使うのは KYLE_* の 4 系統だけで、
+    // 桜・星・紅葉・雪・木漏れ日の各季節では「毎フレーム同じ絵を描き直すだけ」の完全な無駄。
+    //
+    // 対策は 2 つ:
+    //  (1) KYLE 系のとき以外は無限アニメーション自体を生成しない。
+    //      無限アニメーションは値が読まれなくてもフレーム要求を出し続けるため、
+    //      作らないこと自体が省電力・省 CPU になる。
+    //  (2) アニメーション値の読み取りを描画ラムダの中（＝描画フェーズ）まで遅延させる。
+    //      これにより KYLE 系でも再コンポーズは発生せず、再描画のみで済む。
+    //      KYLE 以外の分岐では値を一切読まないので、描画の無効化自体が起こらなくなり、
+    //      Canvas は初回に 1 度描かれたあと静止する。
+    val isKyleSeason = actualSeason.startsWith("KYLE")
 
-    val kyleYOffset by infiniteTransition.animateFloat(
-        initialValue = -30f,
-        targetValue = 30f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ), label = "kyle_y"
-    )
+    val kyleXState: State<Float>?
+    val kyleYState: State<Float>?
+    if (isKyleSeason) {
+        val infiniteTransition = rememberInfiniteTransition(label = "kyle_swim")
+        kyleXState = infiniteTransition.animateFloat(
+            initialValue = 2400f,
+            targetValue = -600f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 45000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ), label = "kyle_x"
+        )
+        kyleYState = infiniteTransition.animateFloat(
+            initialValue = -30f,
+            targetValue = 30f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ), label = "kyle_y"
+        )
+    } else {
+        kyleXState = null
+        kyleYState = null
+    }
 
     Canvas(modifier = modifierWithConstraint) {
+        // ★ ここで初めてアニメーション値を読む（描画フェーズでの遅延読み取り）
+        val kyleX = kyleXState?.value ?: 0f
+        val kyleYOffset = kyleYState?.value ?: 0f
         val random = Random(actualSeason.hashCode() + (if (isDark) 1 else 0))
 
         when (actualSeason) {

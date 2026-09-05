@@ -231,17 +231,59 @@ class LivePlayerViewModel @Inject constructor(
                             )
                         )
                     } else {
-                        val json = settingsRepository.availableStreamQualities.first()
-                        if (json.isNotBlank()) {
-                            try {
-                                val type = object : TypeToken<List<StreamQuality>>() {}.type
-                                val list = gson.fromJson<List<StreamQuality>>(json, type)
-                                if (!list.isNullOrEmpty()) _availableQualities.value = list
-                                else fetchFromApiAndSave()
-                            } catch (e: Exception) {
-                                fetchFromApiAndSave()
+                        // ★ 修正(再修正): 以前はキャッシュ済みJSONを最優先し、キャッシュが空/不正な
+                        // 場合しかresolver.luaへ動的取得しに行かなかったため、EDCBサーバー側で
+                        // トランスコード(xcode)プロファイルの設定を変更しても、Komorebi側の設定
+                        // (IP/ポート/再生方式)を変更しない限りキャッシュが更新されず、
+                        // 「トランスコードを設定しても画質が動的に取得できない」不具合があった。
+                        //
+                        // そこで一度「常にresolver.luaへ動的取得し、失敗時のみキャッシュへ
+                        // フォールバック」に変更したが、これは再生開始のたびに毎回ネットワーク
+                        // 往復を待つ形になり、resolver.luaが遅い/不安定な環境では逆に
+                        // 「画質がオリジナルしか取得できない(取得失敗のフォールバックに
+                        // 落ちてしまう)」regressionを引き起こした。1.1.0-beta6まではキャッシュ
+                        // 優先で確実に動いていたため、キャッシュがあればまずそれを即座に反映して
+                        // 表示をブロックしないようにしつつ、裏で最新値を取得して更新する
+                        // (stale-while-revalidate)方式にする。
+                        val cached = readCachedQualities()
+                        if (!cached.isNullOrEmpty()) {
+                            // キャッシュがあれば即座に表示し、再生開始をブロックしない
+                            // (beta6までの挙動)。裏で最新値を取得し、取得できれば差し替える。
+                            _availableQualities.value = cached
+                            viewModelScope.launch(Dispatchers.IO) {
+                                try {
+                                    val fetched = recordProvider.getStreamQualities()
+                                    if (fetched.isNotEmpty()) {
+                                        settingsRepository.saveString(
+                                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                            gson.toJson(fetched)
+                                        )
+                                        _availableQualities.value = fetched
+                                    }
+                                    // 空の場合は取得失敗とみなし、表示済みのキャッシュを維持する。
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Background quality refresh failed. Keeping cache.", e)
+                                }
                             }
-                        } else fetchFromApiAndSave()
+                        } else {
+                            // キャッシュが無い(初回起動等)場合のみ、最低限選べる状態にするため
+                            // 動的取得の完了を待つ。
+                            try {
+                                val fetched = recordProvider.getStreamQualities()
+                                if (fetched.isNotEmpty()) {
+                                    settingsRepository.saveString(
+                                        SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                        gson.toJson(fetched)
+                                    )
+                                    _availableQualities.value = fetched
+                                } else {
+                                    useDefaultQuality()
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Initial quality fetch failed.", e)
+                                useDefaultQuality()
+                            }
+                        }
                     }
                 } else if (source == StreamSource.KONOMITV) {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
@@ -286,36 +328,28 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun fetchFromApiAndSave() {
-        try {
-            Log.i(TAG, "Cache empty. Interrupting EPG to fetch qualities from API.")
-            val fetched = recordProvider.getStreamQualities()
-            if (fetched.isNotEmpty()) {
-                settingsRepository.saveString(
-                    SettingsRepository.AVAILABLE_STREAM_QUALITIES,
-                    gson.toJson(fetched)
-                )
-                _availableQualities.value = fetched
-            } else {
-                val currentLive = settingsRepository.liveQuality.first()
-                _availableQualities.value = listOf(
-                    StreamQuality(
-                        label = "設定値 ($currentLive)",
-                        value = currentLive,
-                        isRawTs = false
-                    )
-                )
-            }
+    // EDCB(トランスコード)の画質キャッシュを読み出す。無ければ/壊れていればnullを返す。
+    private suspend fun readCachedQualities(): List<StreamQuality>? {
+        val json = settingsRepository.availableStreamQualities.first()
+        if (json.isBlank()) return null
+        return try {
+            val type = object : TypeToken<List<StreamQuality>>() {}.type
+            gson.fromJson<List<StreamQuality>>(json, type)
         } catch (e: Exception) {
-            val currentLive = settingsRepository.liveQuality.first()
-            _availableQualities.value = listOf(
-                StreamQuality(
-                    label = "設定値 ($currentLive)",
-                    value = currentLive,
-                    isRawTs = false
-                )
-            )
+            null
         }
+    }
+
+    // キャッシュも動的取得も両方失敗した場合の最終フォールバック。
+    private suspend fun useDefaultQuality() {
+        val currentLive = settingsRepository.liveQuality.first()
+        _availableQualities.value = listOf(
+            StreamQuality(
+                label = "設定値 ($currentLive)",
+                value = currentLive,
+                isRawTs = false
+            )
+        )
     }
 
     fun saveLiveQuality(qualityValue: String) {

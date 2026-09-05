@@ -67,6 +67,13 @@ fun MainRootBackground(
         !state.isMiniPlayerMode &&
             (state.selectedChannel != null || state.selectedProgram != null || state.selectedSmbItem != null)
 
+    // ★ 追加: 設定画面(MainRootDialogs側で描画)は画面全体を覆うため、表示中は背面ツリーを操作できない。
+    // 特にミニプレイヤー表示中はisFullScreenPlayerVisibleがfalseになるので、
+    // 設定画面を開いても背面のホーム画面がフォーカス可能なまま残り、
+    // 設定画面のボタンにフォーカスできない・戻るキーがホーム画面側に吸われて
+    // アプリ終了確認ダイアログが出る、という操作不能状態になっていた。
+    val isBackgroundFocusBlocked = isFullScreenPlayerVisible || state.isSettingsOpen
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -85,7 +92,7 @@ fun MainRootBackground(
             // することで、このBox配下へのフォーカス侵入をフォーカス探索・明示的なrequestFocusの両方で拒否する。
             .focusProperties {
                 canFocus = false
-                if (isFullScreenPlayerVisible) {
+                if (isBackgroundFocusBlocked) {
                     onEnter = { cancelFocusChange() }
                 }
             }

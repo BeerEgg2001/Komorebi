@@ -340,6 +340,8 @@ class EpgViewModel @OptIn(UnstableApi::class)
                 result.onSuccess { data ->
                     fullEpgData = data
                     epgMemoryCache[typeToFetch] = data
+                    // ★ 時刻解析メモが無制限に膨らまないよう、元データ更新時に破棄する
+                    if (timeParseCache.size > 100_000) timeParseCache.clear()
 
                     fullLogoUrls =
                         withContext(Dispatchers.Default) { data.map { getLogoUrl(it.channel) } }
@@ -369,22 +371,54 @@ class EpgViewModel @OptIn(UnstableApi::class)
         return if (time.hour < 4) base.minusDays(1) else base
     }
 
+    /**
+     * ★ 最適化: ISO8601 文字列 -> エポックミリ秒 の解析結果メモ。
+     *
+     * [sliceAndEmitEpgData] は日付移動のたびに fullEpgData 全件を走査し、
+     * 1 番組につき start_time / end_time を 2 回 OffsetDateTime.parse していた。
+     * 100 チャンネル × 200 番組なら 1 回の日付移動で 4 万回の parse になり、
+     * 番組表の日付切り替えが目に見えて待たされる原因になっていた。
+     *
+     * 日付移動では fullEpgData 自体は変わらないため、同じ文字列を何度も解析している。
+     * メモ化により 2 回目以降の日付移動は数値比較だけで済む。
+     */
+    private val timeParseCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun parseEpochMillis(text: String?): Long {
+        if (text.isNullOrEmpty()) return Long.MIN_VALUE
+        return timeParseCache.getOrPut(text) {
+            try {
+                OffsetDateTime.parse(text).toInstant().toEpochMilli()
+            } catch (e: Exception) {
+                Long.MIN_VALUE
+            }
+        }
+    }
+
+    /** ★ 追加: 連続した日付移動で古いスライス処理が走り続けないようキャンセルするためのジョブ */
+    private var sliceJob: Job? = null
+
     private fun sliceAndEmitEpgData() {
         if (fullEpgData.isEmpty()) return
-        viewModelScope.launch(Dispatchers.Default) {
+        // ★ 最適化 + 競合の修正:
+        //   従来は呼ばれるたびに新しいコルーチンを起動しっぱなしだったため、
+        //   日付を素早く連打すると同じデータに対する重いスライス処理が多重に走り、
+        //   さらに完了順が前後すると古い結果が新しい結果を上書きする可能性があった。
+        sliceJob?.cancel()
+        sliceJob = viewModelScope.launch(Dispatchers.Default) {
 
             val tvDayStart = getTvDayStart(currentTargetTime)
             val tvDayEnd = tvDayStart.plusHours(24)
+            val tvDayStartMs = tvDayStart.toInstant().toEpochMilli()
+            val tvDayEndMs = tvDayEnd.toInstant().toEpochMilli()
 
             val slicedData = fullEpgData.map { wrapper ->
                 val filteredPrograms = wrapper.programs.filter { prog ->
-                    try {
-                        val pStart = OffsetDateTime.parse(prog.start_time)
-                        val pEnd = OffsetDateTime.parse(prog.end_time)
-                        pEnd.isAfter(tvDayStart) && pStart.isBefore(tvDayEnd)
-                    } catch (e: Exception) {
-                        false
-                    }
+                    val startMs = parseEpochMillis(prog.start_time)
+                    val endMs = parseEpochMillis(prog.end_time)
+                    // 解析に失敗した番組は従来どおり除外する
+                    startMs != Long.MIN_VALUE && endMs != Long.MIN_VALUE &&
+                        endMs > tvDayStartMs && startMs < tvDayEndMs
                 }
                 wrapper.copy(programs = filteredPrograms)
             }

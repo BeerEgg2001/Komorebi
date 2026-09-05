@@ -35,6 +35,19 @@ class SettingsRepository @Inject constructor(
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
+
+        /**
+         * ★ 追加: これらのキーが更新されたら局ロゴ URL の共有キャッシュを破棄する。
+         * バックエンド種別と各接続先(IP/ポート)が URL の決定要素になっているため。
+         */
+        val LOGO_URL_AFFECTING_KEYS = setOf(
+            BACKEND_TYPE,
+            EDCB_IP, EDCB_PORT, EDCB_HTTP_PORT,
+            EPGSTATION_IP, EPGSTATION_PORT,
+            KONOMI_IP, KONOMI_PORT,
+            MIRAKURUN_IP, MIRAKURUN_PORT
+        )
+
         val PREFERRED_STREAM_SOURCE = stringPreferencesKey("preferred_stream_source")
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
@@ -211,6 +224,11 @@ class SettingsRepository @Inject constructor(
         value: String
     ) {
         context.dataStore.edit { settings -> settings[key] = value }
+        // ★ 最適化に伴う整合性維持: 接続先が変わると局ロゴ URL も変わるため、
+        //   共有 URL キャッシュを破棄して古い URL を返さないようにする。
+        if (key in LOGO_URL_AFFECTING_KEYS) {
+            ChannelLogoUrlCache.clear()
+        }
     }
 
     suspend fun saveBoolean(
