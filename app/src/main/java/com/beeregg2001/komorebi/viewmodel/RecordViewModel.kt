@@ -241,7 +241,17 @@ class RecordViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            delay(2000)
+            // 録画一覧の同期はネットワーク・Room 書き込みともに重い。
+            //
+            // 初回構築が終わっていない場合はこの同期自体が起動のクリティカルパス
+            // (ローディング画面に進捗が出る) なので早めに始める。
+            // 一方、構築済みの通常起動では差分確認にすぎないため、ホーム画面が
+            // 描画されてフォーカスが落ち着くまで待ってから始める。ここで
+            // 起動直後に走らせると、Room への書き込みのたびに録画一覧の Flow が
+            // 発火し、ホーム画面の初回描画と CPU / ディスクを奪い合って
+            // 「起動直後だけ操作が極端に重い」状態を作っていた。
+            val alreadyBuilt = syncEngine.isInitialBuildCompleted()
+            delay(if (alreadyBuilt) 6000L else 1500L)
             syncEngine.launchSyncAllRecords()
         }
     }

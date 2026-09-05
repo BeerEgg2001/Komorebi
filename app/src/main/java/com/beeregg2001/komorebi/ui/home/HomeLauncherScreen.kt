@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.ColdStartDiag
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.epg.EpgNavigationContainer
@@ -46,6 +47,61 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val TAG = "HomeLauncher"
+
+/**
+ * タブのコンテンツが「表示できる状態になった」ことを通知するヘルパー。
+ *
+ * 以前は各タブで一律 `delay(500)`〜`delay(800)` を挟んでから準備完了を通知していた。
+ * これはコンテンツが描画される前にローディング表示が消えてしまう「一瞬の空表示」を
+ * 避けるための対症療法だったが、実際のデータ取得がどれだけ速く終わっても
+ * 必ずその時間だけ待たされるため、起動直後や設定画面から戻った直後の
+ * ローディング表示が不必要に長引く原因になっていた。
+ *
+ * ここでは固定時間の代わりに、
+ *  1. そのタブが表示に必要とするデータが揃ったか（[isDataAvailable]）
+ *  2. 揃った後、実際に1フレーム描画されたか（[withFrameNanos]）
+ * の2点を条件にする。データが空のまま（録画0件・予約0件など）でも
+ * ローディング表示に固定されないよう、[fallbackTimeoutMs] の保険も併用する。
+ *
+ * この関数自体が独立したリコンポーズ範囲になるため、内部での状態購読が
+ * 巨大な HomeLauncherScreen 全体のリコンポーズを誘発しない点も重要。
+ */
+@Composable
+private fun TabReadyNotifier(
+    isDataAvailable: Boolean,
+    fallbackTimeoutMs: Long = 1000L,
+    onReady: () -> Unit
+) {
+    LaunchedEffect(isDataAvailable) {
+        if (isDataAvailable) {
+            // データ到達直後はまだレイアウト・描画が済んでいない。
+            // 次フレームまで待ってから通知することで、固定 delay に頼らずに
+            // 「中身が出る前にローディングが消える」ちらつきを防ぐ。
+            withFrameNanos { }
+            onReady()
+        }
+    }
+
+    // データが最後まで空のままでも操作可能にするための保険。
+    LaunchedEffect(Unit) {
+        delay(fallbackTimeoutMs)
+        onReady()
+    }
+}
+
+/**
+ * 録画予約タブ用。予約一覧の読み込み状態に連動させる。
+ * `isLoading` の購読をこの小さな関数の中に閉じ込め、
+ * HomeLauncherScreen 全体のリコンポーズを誘発しないようにしている。
+ */
+@Composable
+private fun ReserveTabReadyNotifier(
+    reserveViewModel: ReserveViewModel,
+    onReady: () -> Unit
+) {
+    val isReserveLoading by reserveViewModel.isLoading.collectAsState()
+    TabReadyNotifier(isDataAvailable = !isReserveLoading, onReady = onReady)
+}
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -122,6 +178,9 @@ fun HomeLauncherScreen(
     // Compose ツリーに残り続けるので、見えていない間の定期通信を明示的に止める。
     isPlayerActiveFullScreen: Boolean = false
 ) {
+    // ★ 追加(診断用): コールドブート計測用。詳細はhandleUiReady定義箇所を参照。
+    var hasLoggedFirstUiReady by remember { mutableStateOf(false) }
+
     val ui = rememberHomeLauncherState(
         initialTabIndex,
         channelViewModel,
@@ -149,10 +208,17 @@ fun HomeLauncherScreen(
 
     val safeTabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
 
+    // ★ 修正: 以前は `isFullScreen(...) && !hasActivePlayer` としていたため、
+    // ミニプレイヤー(PiP)表示中は設定画面などのオーバーレイが開いていても
+    // isFullScreenMode が false のままになっていた。
+    // その結果、設定画面が前面に出ているのに背面のホーム画面がフォーカス迷子検知を
+    // 走らせ、設定画面からフォーカスを奪い返してしまい操作不能になっていた。
+    // ミニプレイヤーの例外はプレイヤー起因の判定にだけ効かせる(isFullScreen側で処理)。
     val isFullScreenMode = ui.isFullScreen(
         selectedChannel, selectedProgram, epgSelectedProgram,
-        isSettingsOpen, isRecordListOpen, isReserveOverlayOpen
-    ) && !hasActivePlayer
+        isSettingsOpen, isRecordListOpen, isReserveOverlayOpen,
+        hasActivePlayer = hasActivePlayer
+    )
 
     // ★ 追加: PR #103でプレイヤー表示中もこのホーム画面自体が破棄されず常駐するようになった影響で、
     // プレイヤーを開く直前にフォーカスしていた項目の論理フォーカスが残留し、プレイヤーから戻った際の
@@ -290,10 +356,10 @@ fun HomeLauncherScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (ui.selectedTabIndex == 0) {
-            homeViewModel.refreshHomeData()
-            channelViewModel.fetchChannels()
-        }
+        // ホームタブのデータ取得 (refreshHomeData / チャンネル一覧) は、この直上の
+        // LaunchedEffect(activeRenderIndex, isPlayerActiveFullScreen) が初回コンポーズ時に
+        // 必ず実行している。ここで重ねて呼ぶと、起動直後の一番重いタイミングで
+        // 同じ通信・同じ EPG 集計が二重に走ることになるため呼ばない。
         if (!isReturningFromPlayer && !isFullScreenMode) {
             delay(300)
             ticketManager.issue(HomeFocusTicket.TAB_BAR)
@@ -478,12 +544,25 @@ fun HomeLauncherScreen(
         return true
     }
 
-    // 設定ボタンへ移る際は、直前のタブ移動で仕込まれた遅延フォーカス要求を破棄する。
-    // 残しておくと、設定ボタンへ移った直後にタブへフォーカスを引き戻してしまう。
+    // 設定ボタン(または再生中ボタン)へ移る際は、直前のタブ移動で仕込まれた
+    // 遅延フォーカス要求を破棄する。残しておくと、移った直後にタブへフォーカスを
+    // 引き戻してしまう。
+    //
+    // ★ 修正: このメソッドは「最後のタブで右キーを押した」際の着地先を決める目的で
+    // 3箇所(このComposable内のonKeyEvent/onPreviewKeyEventハンドラ)から呼ばれている。
+    // これらはComposeの標準的なフォーカス探索(focusProperties { right = ... })より先に
+    // キーイベントを消費して自前でフォーカス遷移させているため、focusProperties側だけを
+    // hasActivePlayer対応させても実際には効かなかった。
+    // 再生中(PiPから復帰可能な状態)の場合は、設定ボタンではなく「再生中」ボタンへ
+    // 着地させる(再生中ボタン自体のfocusProperties.rightで設定ボタンへは行ける)。
     fun focusSettingsButton(tag: String) {
         pendingTabFocusJob?.cancel()
         ticketManager.cancelForUserNavigation()
-        ui.settingsFocusRequester.safeRequestFocus(tag)
+        if (hasActivePlayer) {
+            returnPlayerFocusRequester.safeRequestFocus(tag)
+        } else {
+            ui.settingsFocusRequester.safeRequestFocus(tag)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -691,6 +770,12 @@ fun HomeLauncherScreen(
                                             if (index < tabs.lastIndex) {
                                                 ui.tabFocusRequesters.getOrNull(index + 1)
                                                     ?: FocusRequester.Default
+                                            } else if (hasActivePlayer) {
+                                                // ★ 修正: 再生中(PiPから復帰可能な状態)は、最後のタブから
+                                                // 右へ進むと「再生中」ボタンに止まるべきだが、常に設定ボタンを
+                                                // 指していたため、設定ボタンを一度通過してから左キーで
+                                                // 戻らないと「再生中」ボタンを選択できない不具合があった。
+                                                returnPlayerFocusRequester
                                             } else {
                                                 ui.settingsFocusRequester
                                             }
@@ -783,6 +868,12 @@ fun HomeLauncherScreen(
             ) {
                 val currentTabLabel = tabs.getOrNull(activeRenderIndex) ?: "ホーム"
                     val handleUiReady = {
+                        // ★ 追加(診断用): コールドブートで最初のタブの中身が実際に描画され、
+                        // 操作可能になった瞬間を計測する(以降のタブ切替では再発火させない)。
+                        if (!hasLoggedFirstUiReady) {
+                            hasLoggedFirstUiReady = true
+                            ColdStartDiag.mark("HomeLauncherScreen first tab content ready")
+                        }
                         onUiReady()
                         ui.isCurrentTabContentReady = true
                     }
@@ -868,7 +959,13 @@ fun HomeLauncherScreen(
                                 aiFocusReturnTick = if (currentTabLabel == "ライブ") aiFocusReturnTick else 0,
                                 onAiReturnConsumed = onAiReturnConsumed
                             )
-                            LaunchedEffect(Unit) { delay(500); handleUiReady() }
+                            // ライブタブが表示に必要とするチャンネル一覧・グループ化データは
+                            // 呼び出し元で取得済みのものが groupedChannels として渡ってくる。
+                            // そのため取得完了を待つ必要はなく、揃っていれば次フレームで準備完了。
+                            TabReadyNotifier(
+                                isDataAvailable = groupedChannels.isNotEmpty(),
+                                onReady = handleUiReady
+                            )
                         }
 
                         "ビデオ" -> {
@@ -893,7 +990,16 @@ fun HomeLauncherScreen(
                                 aiFocusReturnTick = if (currentTabLabel == "ビデオ") aiFocusReturnTick else 0,
                                 onAiReturnConsumed = onAiReturnConsumed
                             )
-                            LaunchedEffect(Unit) { delay(500); handleUiReady() }
+                            // 録画一覧は Room の Flow から供給され、ローカル DB からの
+                            // 読み出しなので待ち合わせが必要なほど遅くはない。
+                            // ここで recentRecordings を購読すると
+                            // 初回同期中の大量の Flow 発火で HomeLauncherScreen 全体が
+                            // 作り直されてしまう（HomeLauncherState のコメント参照）ため、
+                            // 購読はせず次フレームで準備完了とする。
+                            TabReadyNotifier(
+                                isDataAvailable = true,
+                                onReady = handleUiReady
+                            )
                         }
 
                         "番組表" -> {
@@ -924,7 +1030,16 @@ fun HomeLauncherScreen(
                                 onClearSearch = { epgViewModel.clearSearch() },
                                 timeFormat = timeFormat
                             )
-                            LaunchedEffect(Unit) { delay(800); handleUiReady() }
+                            // 番組表は Canvas でグリッド全体を描画するため他タブより重い。
+                            // 他タブが 500ms なのに対しここだけ 800ms だったのはその描画コストを
+                            // 固定時間で吸収しようとしたためだが、EPG の読み込み完了状態
+                            // (EpgUiState) を直接見れば実態に即した待ち合わせになる。
+                            // グリッド描画が重い分、保険のタイムアウトだけ長めに取る。
+                            TabReadyNotifier(
+                                isDataAvailable = ui.epgUiState is EpgUiState.Success,
+                                fallbackTimeoutMs = 1500L,
+                                onReady = handleUiReady
+                            )
                         }
 
                         "録画予約" -> {
@@ -948,7 +1063,11 @@ fun HomeLauncherScreen(
                                 aiFocusReturnTick = if (currentTabLabel == "録画予約") aiFocusReturnTick else 0,
                                 onAiReturnConsumed = onAiReturnConsumed
                             )
-                            LaunchedEffect(Unit) { delay(500); handleUiReady() }
+                            // 予約一覧の読み込み状態に連動させる。
+                            ReserveTabReadyNotifier(
+                                reserveViewModel = reserveViewModel,
+                                onReady = handleUiReady
+                            )
                         }
 
                         "プロ野球" -> {
@@ -966,7 +1085,10 @@ fun HomeLauncherScreen(
                                 onProgramClick = { onEpgProgramSelected(it) },
                                 topNavFocusRequester = ui.tabFocusRequesters[activeRenderIndex],
                                 contentFirstItemRequester = ui.contentFirstItemRequesters[activeRenderIndex],
-                                onUiReady = { delay(500); handleUiReady() },
+                                // 野球データ(favoriteBaseballGames)は呼び出し元で
+                                // 取得済みのものを渡しているため待ち合わせは不要。
+                                // 1フレーム描画されてから準備完了を通知する。
+                                onUiReady = { withFrameNanos { }; handleUiReady() },
                                 timeFormat = timeFormat
                             )
                         }

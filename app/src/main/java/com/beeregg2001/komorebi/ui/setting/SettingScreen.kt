@@ -182,6 +182,14 @@ fun SettingsScreen(
         if (initialFocusItemIndex == null || uiState.selectedCategoryIndex != initialCategoryIndex) {
             mainScrollState.scrollTo(0)
         }
+        // ★ 追加: 「再生設定」タブ(画質選択ダイアログがある)を開いたタイミングで、
+        // EDCBのトランスコード画質リストを確実に再取得する。アプリ起動1.5秒後の
+        // 自動同期が失敗すると、以後リトライされずダイアログの選択肢が
+        // 「設定値」ベースの縮退リストに固定されてしまっていたため、
+        // ユーザーが実際にこの画面を見るタイミングで取り直す。
+        if (uiState.selectedCategoryIndex == 2) {
+            viewModel.refreshStreamQualities()
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -506,11 +514,14 @@ fun SettingsScreen(
                             {
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     "バックエンドシステムの選択",
+                                    // ★ 修正: "Mirakurun (録画なし)" はまだ未対応のため選択肢から非表示にする。
+                                    // 既にこれを選択している既存ユーザーがいる可能性を考慮し、
+                                    // SettingsRepository側の判定・分岐(MIRAKURUN_ONLY)自体は残したまま、
+                                    // 新規に選べないようにするだけに留める。
                                     listOf(
                                         "KonomiTV" to "KONOMITV",
                                         "EDCB (EpgTimerSrv)" to "EDCB",
-                                        "EPGStation" to "EPGSTATION",
-                                        "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
+                                        "EPGStation" to "EPGSTATION"
                                     ),
                                     if (listOf(
                                             "KONOMITV",

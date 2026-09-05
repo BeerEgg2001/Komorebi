@@ -42,6 +42,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
@@ -583,10 +584,13 @@ fun DualChannelInfoOverlay(
     shouldCropLogo: Boolean,
     modifier: Modifier = Modifier
 ) {
-    var logoUrl by remember(channel.id) { mutableStateOf<String>("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
 
     LaunchedEffect(channel.id) {
-        logoUrl = getLogoUrl(channel.id)
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
     }
 
     val displayType =

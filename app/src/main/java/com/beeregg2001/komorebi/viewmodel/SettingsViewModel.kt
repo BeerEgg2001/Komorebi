@@ -411,6 +411,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // ★ 追加: init内の自動同期は「アプリ起動後1.5秒経過時点で1回だけ」しか行われないため、
+    // その瞬間にEDCBのresolver.lua取得がたまたま失敗すると(サーバー起動タイミング・
+    // 一時的な通信不調等)、以後リトライされず、_dynamicQualities が空のまま固定されてしまう。
+    // 結果、設定画面の「再生設定」の画質選択ダイアログが「設定値」ベースの
+    // ダミー1〜2件だけの縮退リストになり、実質選べない状態になっていた
+    // (Komorebi側の設定変更(IP/ポート/再生方式)を行わない限り再同期のきっかけが無かった)。
+    // ユーザーが実際に設定画面(再生設定タブ)を開いたタイミングは「今まさにこのデータを
+    // 見ようとしている」という強いシグナルなので、そのタイミングで確実に取り直せるよう
+    // 公開関数として用意する。
+    fun refreshStreamQualities() {
+        viewModelScope.launch {
+            forceSyncStreamQualities()
+        }
+    }
+
     private suspend fun forceSyncStreamQualities() {
         withContext(Dispatchers.IO) {
             try {

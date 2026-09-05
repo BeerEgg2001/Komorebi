@@ -245,13 +245,26 @@ fun ModernEpgCanvasEngine_Smooth(
             stiffness = 2500f
         )
 
-        val scrollX by animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
-        val scrollY by animateFloatAsState(epgState.targetScrollY, scrollSpec, label = "sY")
-        val animX by animateFloatAsState(epgState.targetAnimX, scrollSpec, label = "aX")
-        val animY by animateFloatAsState(epgState.targetAnimY, scrollSpec, label = "aY")
-        val animH by animateFloatAsState(epgState.targetAnimH, scrollSpec, label = "aH")
-
-        val animValues = EpgAnimValues(scrollX, scrollY, animX, animY, animH)
+        // ★ 最適化(最重要): アニメーション値を「コンポーズ段階では読まない」。
+        //
+        // 従来は `val scrollX by animateFloatAsState(...)` のように委譲プロパティで
+        // 値を読んでいたため、スクロール／フォーカス移動のアニメーション中は
+        // 毎フレーム BoxWithConstraints 配下の巨大な Composable ツリー全体が
+        // 再コンポーズされていた。1 フレームごとに
+        //   - filteredLogoPainters の map と rememberAsyncImagePainter の再実行
+        //   - EpgHeaderSection を含む全子要素の再評価
+        //   - 全 remember キーの再比較と onKeyEvent ラムダの再生成
+        // が走るため、非力な Android TV では番組表のスクロールが露骨に重くなる。
+        //
+        // State オブジェクトのまま保持し、`.value` の読み取りを onDrawBehind の中
+        // （＝描画フェーズ）まで遅延させることで、アニメーション中の無効化を
+        // 「描画のみ」に限定できる。アニメーション自体は内部のコルーチンで進むため、
+        // コンポーズ段階で読まなくても正しく動作する。
+        val scrollXState = animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
+        val scrollYState = animateFloatAsState(epgState.targetScrollY, scrollSpec, label = "sY")
+        val animXState = animateFloatAsState(epgState.targetAnimX, scrollSpec, label = "aX")
+        val animYState = animateFloatAsState(epgState.targetAnimY, scrollSpec, label = "aY")
+        val animHState = animateFloatAsState(epgState.targetAnimH, scrollSpec, label = "aH")
 
         Column(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
@@ -414,17 +427,27 @@ fun ModernEpgCanvasEngine_Smooth(
                             .fillMaxSize()
                             .drawWithCache {
                                 onDrawBehind {
+                                    // ★ アニメーション値はここ（描画フェーズ）で初めて読む。
+                                    //   これにより値の変化は再コンポーズではなく再描画のみを誘発する。
                                     drawer.draw(
                                         drawScope = this,
                                         state = epgState,
-                                        animValues = animValues,
+                                        animValues = EpgAnimValues(
+                                            scrollXState.value,
+                                            scrollYState.value,
+                                            animXState.value,
+                                            animYState.value,
+                                            animHState.value
+                                        ),
                                         logoPainters = filteredLogoPainters,
                                         isGridFocused = isContentFocused || epgState.hasData,
                                         reserveMap = reserveMap,
                                         clockPainter = clockPainter,
                                         timeFormat = timeFormat
                                     )
-                                    hasRenderedFirstFrame = true
+                                    // 初回フレーム到達フラグ。毎フレーム書き込むと
+                                    // 描画フェーズからの state 書き込みが繰り返されるためガードする。
+                                    if (!hasRenderedFirstFrame) hasRenderedFirstFrame = true
                                 }
                             })
                 }
