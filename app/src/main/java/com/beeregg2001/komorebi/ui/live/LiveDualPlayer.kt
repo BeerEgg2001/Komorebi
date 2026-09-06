@@ -6,8 +6,8 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.os.Build
+import android.view.SurfaceView
 import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -23,7 +23,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,15 +38,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
+
+/**
+ * 映像の表示アスペクト比（横 / 縦）を求める。
+ *
+ * ExoPlayer が通知するピクセルアスペクト比（1440x1080 のアナモルフィック等）を加味する。
+ * 映像サイズがまだ取得できていない場合は 16:9 とみなす。
+ */
+private fun calcVideoAspectRatio(width: Int, height: Int, pixelRatio: Float): Float {
+    if (width <= 0 || height <= 0) return 16f / 9f
+    val par = if (pixelRatio > 0f) pixelRatio else 1f
+    val ratio = (width.toFloat() * par) / height.toFloat()
+    return if (ratio.isFinite() && ratio > 0f) ratio else 16f / 9f
+}
 
 // ==============================================
 // 本物のプレイヤーを配置した DualDisplayPlayer コンポーネント
@@ -65,13 +79,18 @@ fun DualDisplayPlayer(
     mainVideoWidth: Int,
     mainVideoHeight: Int,
     mainPixelRatio: Float,
-    mainWebViewRef: MutableState<WebView?>,
+    mainCaptionCue: NativeCaptionCue?,
     dualPlayer: ExoPlayer?,
     dualVideoWidth: Int,
     dualVideoHeight: Int,
     dualPixelRatio: Float,
-    dualWebViewRef: MutableState<WebView?>,
-    isSubtitleEnabled: Boolean
+    dualCaptionCue: NativeCaptionCue?,
+    isSubtitleEnabled: Boolean,
+    // ★ 追加: 二画面表示中のフォーカス受け皿。単画面時のPlayerView(AndroidView)と同じ役割で、
+    // 呼び出し側からFocusRequesterを結び付けられるようにする。
+    modifier: Modifier = Modifier,
+    // ★ 追加: ミニリスト/サブメニュー表示中はプレイヤー本体をフォーカス対象から外す(単画面時と同じ挙動)
+    isFocusable: Boolean = true
 ) {
     val colors = KomorebiTheme.colors
     val animatedLeftWeight by animateFloatAsState(
@@ -113,10 +132,14 @@ fun DualDisplayPlayer(
 
     val showInfo = !isIdle || isMiniListOpen
 
+    // 映像の表示アスペクト比。取得できるまでは 16:9 とみなす
+    val mainAspectRatio = calcVideoAspectRatio(mainVideoWidth, mainVideoHeight, mainPixelRatio)
+    val dualAspectRatio = calcVideoAspectRatio(dualVideoWidth, dualVideoHeight, dualPixelRatio)
+
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .focusable()
+            .focusable(isFocusable)
     ) {
         // --- 左画面 (メインプレイヤー) ---
         Box(
@@ -129,25 +152,39 @@ fun DualDisplayPlayer(
         ) {
             if (mainPlayer != null) {
                 AndroidView(
-                    factory = {
-                        PlayerView(it).apply {
-                            player = mainPlayer
-                            useController = false
+                    factory = { ctx ->
+                        AspectRatioFrameLayout(ctx).apply {
+                            // ビュー自体のサイズを Compose 側 (aspectRatio) で映像の矩形そのものに
+                            // 合わせるため、ビュー内部でのレターボックス計算は行わない (FILL)
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                             keepScreenOn = true
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            addView(
+                                SurfaceView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                }
+                            )
                         }
                     },
                     update = { view ->
-                        if (view.player != mainPlayer) {
-                            view.player = mainPlayer
-                        }
-                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        // 全画面表示から二画面表示へ切り替えた直後に、映像の出力先が
+                        // 全画面用の古い Surface に残ったままになると、映像が全画面サイズの
+                        // まま描画され一部だけを切り出したズーム表示になる。
+                        // 毎回この二画面用の SurfaceView へ明示的に結び付け直して防ぐ。
+                        val surfaceView = view.getChildAt(0) as SurfaceView
+                        mainPlayer.setVideoSurfaceView(surfaceView)
                     },
                     // ★ 修正2: 破棄時に参照を外す
                     onRelease = { view ->
-                        view.player = null
+                        (view.getChildAt(0) as? SurfaceView)?.let {
+                            mainPlayer.clearVideoSurfaceView(it)
+                        }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(mainAspectRatio)
                 )
 
                 var isMainBuffering by remember { mutableStateOf(false) }
@@ -206,26 +243,13 @@ fun DualDisplayPlayer(
             }
 
             if (isSubtitleEnabled) {
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(-1, -1)
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
-                            loadUrl("file:///android_asset/subtitle_renderer.html")
-                            mainWebViewRef.value = this
-                        }
-                    },
-                    update = { view ->
-                        view.visibility =
-                            if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                    },
-                    // ★ 修正2: 破棄時にWebViewのメモリを確実にお掃除
-                    onRelease = { view ->
-                        view.destroy()
-                        mainWebViewRef.value = null
-                    },
-                    modifier = Modifier.fillMaxSize()
+                // 字幕は映像の矩形に重ねる (枠いっぱいに広げるとレターボックス分だけ縦に伸びてしまう)
+                NativeCaptionOverlay(
+                    cue = mainCaptionCue,
+                    visible = !isUiVisible,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(mainAspectRatio)
                 )
             }
 
@@ -256,25 +280,34 @@ fun DualDisplayPlayer(
             if (state.dualRightChannel != null) {
                 if (dualPlayer != null) {
                     AndroidView(
-                        factory = {
-                            PlayerView(it).apply {
-                                player = dualPlayer
-                                useController = false
+                        factory = { ctx ->
+                            AspectRatioFrameLayout(ctx).apply {
+                                // 左画面と同様、レターボックスは Compose 側で行う
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                                 keepScreenOn = true
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                addView(
+                                    SurfaceView(ctx).apply {
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                    }
+                                )
                             }
                         },
                         update = { view ->
-                            if (view.player != dualPlayer) {
-                                view.player = dualPlayer
-                            }
-                            view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            val surfaceView = view.getChildAt(0) as SurfaceView
+                            dualPlayer.setVideoSurfaceView(surfaceView)
                         },
                         // ★ 修正2: 破棄時に参照を外す
                         onRelease = { view ->
-                            view.player = null
+                            (view.getChildAt(0) as? SurfaceView)?.let {
+                                dualPlayer.clearVideoSurfaceView(it)
+                            }
                         },
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .aspectRatio(dualAspectRatio)
                     )
 
                     var isDualBuffering by remember { mutableStateOf(false) }
@@ -333,28 +366,13 @@ fun DualDisplayPlayer(
                 }
 
                 if (isSubtitleEnabled) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                dualWebViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            view.visibility =
-                                if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                        },
-                        // ★ 修正2: 破棄時にWebViewのメモリを確実にお掃除
-                        onRelease = { view ->
-                            view.destroy()
-                            dualWebViewRef.value = null
-                        },
-                        modifier = Modifier.fillMaxSize()
+                    // 左画面と同様、字幕は映像の矩形に重ねる
+                    NativeCaptionOverlay(
+                        cue = dualCaptionCue,
+                        visible = !isUiVisible,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .aspectRatio(dualAspectRatio)
                     )
                 }
 
@@ -566,10 +584,13 @@ fun DualChannelInfoOverlay(
     shouldCropLogo: Boolean,
     modifier: Modifier = Modifier
 ) {
-    var logoUrl by remember(channel.id) { mutableStateOf<String>("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
 
     LaunchedEffect(channel.id) {
-        logoUrl = getLogoUrl(channel.id)
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
     }
 
     val displayType =

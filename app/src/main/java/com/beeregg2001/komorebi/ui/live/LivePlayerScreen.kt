@@ -5,8 +5,7 @@ package com.beeregg2001.komorebi.ui.live
 import android.os.Build
 import android.util.Log
 import android.view.KeyEvent as NativeKeyEvent
-import android.view.ViewGroup
-import android.webkit.*
+import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
@@ -24,6 +23,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -40,10 +40,13 @@ import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
+import com.beeregg2001.komorebi.ui.subtitle.rememberNativeCaptionCue
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -85,6 +88,13 @@ fun LivePlayerScreen(
     val uiContext = LocalContext.current
     val colors = KomorebiTheme.colors
     val scope = rememberCoroutineScope()
+    // ★ 追加: PR #103でホーム画面の背面レイヤーが破棄されず常駐するようになった影響で、
+    // プレイヤー表示直前にホーム側のリスト項目等が持っていた論理フォーカスが残留し、
+    // その後のrequestFocus()が正しく機能しない(=方向キー/決定キーが効かない)ケースがある。
+    // これはComposeのフォーカスシステムの既知の癖で、canFocus=falseになった祖先を持つ
+    // ノードが元々フォーカスを保持していると、新規のrequestFocus()呼び出しが失敗しうる。
+    // clearFocus(force = true)で明示的にフォーカス参照をリセットしてから要求し直す。
+    val focusManager = LocalFocusManager.current
 
     val ps = rememberLivePlayerState(uiContext)
 
@@ -121,6 +131,36 @@ fun LivePlayerScreen(
     val liveSubtitleDefaultStr by settingsViewModel.liveSubtitleDefault.collectAsState()
     val allowMirakurunDual by settingsViewModel.labAllowMirakurunDual.collectAsState()
 
+    // ★ 追加: 二画面表示を解除する処理を共通化。従来はサブメニューのトグルボタンからしか
+    // 呼び出せなかったが、下のBackHandlerからも同じ後片付け(ソース/画質の復元含む)を
+    // 行えるようにする。
+    val exitDualDisplayMode: () -> Unit = {
+        ps.isDualDisplayMode = false
+        ps.activeDualPlayerIndex = 0
+        ps.dualRightChannel = null
+        ps.leftScreenWeight = 1f
+        ps.rightScreenWeight = 1f
+        if (ps.previousStreamSource != null) {
+            if (availableSources.contains(ps.previousStreamSource!!)) {
+                ps.currentStreamSource = ps.previousStreamSource!!
+                onShowToast("元のストリーミングソースに復帰しました")
+            }
+            ps.previousStreamSource = null
+        }
+        if (ps.previousQuality != null) {
+            ps.currentQuality = ps.previousQuality!!
+            onShowToast("元の画質に復帰しました")
+            ps.previousQuality = null
+        }
+    }
+
+    // ★ 追加: 二画面表示中は戻るキーの1段階目として単画面表示に戻す。
+    // これまでBackHandlerが存在せず、戻るキーが直接MainRootScreen側のグローバルハンドラーに
+    // 突き抜けてホーム画面まで戻ってしまっていた(二画面表示自体は解除されない)不具合を修正する。
+    BackHandler(enabled = ps.isDualDisplayMode) {
+        exitDualDisplayMode()
+    }
+
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
     val isModern = playerUiMode == "MODERN"
 
@@ -151,17 +191,37 @@ fun LivePlayerScreen(
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") || Build.PRODUCT == "google_sdk" }
 
     val danmakuViewRef = remember { mutableStateOf<IDanmakuView?>(null) }
-
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
-    val dualWebViewRef = remember { mutableStateOf<WebView?>(null) }
+    val mainPlayer by livePlayerViewModel.mainPlayer.collectAsState()
+    val dualPlayer by livePlayerViewModel.dualPlayer.collectAsState()
+    val mainSubtitleLanguages by livePlayerViewModel.mainSubtitleLanguages.collectAsState()
+    val dualSubtitleLanguages by livePlayerViewModel.dualSubtitleLanguages.collectAsState()
+    val mainSubtitleLanguageId by livePlayerViewModel.mainSubtitleLanguageId.collectAsState()
+    val dualSubtitleLanguageId by livePlayerViewModel.dualSubtitleLanguageId.collectAsState()
+    val isDualSubtitleActive = ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1
+    val activeSubtitleLanguages = if (ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1) {
+        dualSubtitleLanguages
+    } else {
+        mainSubtitleLanguages
+    }
+    val currentSubtitleLanguageId =
+        if (isDualSubtitleActive) dualSubtitleLanguageId else mainSubtitleLanguageId
+    val mainCaptionCue = rememberNativeCaptionCue(
+        events = livePlayerViewModel.mainSubtitleEvents,
+        enabled = isSubtitleEnabled,
+        resetKey = Triple(currentChannelItem.id, mainSubtitleLanguageId, mainPlayer),
+        positionMs = { mainPlayer?.currentPosition ?: 0L }
+    )
+    val dualCaptionCue = rememberNativeCaptionCue(
+        events = livePlayerViewModel.dualSubtitleEvents,
+        enabled = isSubtitleEnabled,
+        resetKey = Triple(ps.dualRightChannel?.id, dualSubtitleLanguageId, dualPlayer),
+        positionMs = { dualPlayer?.currentPosition ?: 0L }
+    )
 
     val mainFocusRequester = remember { FocusRequester() }
     val listFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
     val scrollState = rememberScrollState()
-
-    val mainPlayer by livePlayerViewModel.mainPlayer.collectAsState()
-    val dualPlayer by livePlayerViewModel.dualPlayer.collectAsState()
 
     val mainError by livePlayerViewModel.mainPlayerError.collectAsState()
     val mainStatus by livePlayerViewModel.mainSseStatus.collectAsState()
@@ -220,11 +280,32 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isPiPMode) {
         if (isPiPMode) {
-            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+            // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+            // HLS再生時を除きダウングレード対象に含める
+            val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                !ps.currentQuality.value.startsWith("hls:")
+            if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                 ps.previousStreamSource = ps.currentStreamSource
                 if (availableSources.contains(StreamSource.KONOMITV)) {
                     ps.currentStreamSource = StreamSource.KONOMITV
                     onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
+                }
+            } else if (ps.currentStreamSource == StreamSource.KONOMITV &&
+                ps.currentQuality.value == "original" && allowMirakurunDual != "ON"
+            ) {
+                // ★ 追加: KonomiTVのoriginal画質もMIRAKURUN/EDCB同様の重量な生TSパイプラインを
+                // 使うため、ソース切替の代わりに画質を通常画質へダウングレードする
+                // ★ 修正: 単に「originalではない最初の画質」を選ぶと、DEFAULT_QUALITIESの並び順
+                // (original, 1080p-60fps, 1080p, ...)により1080p(60fps)が選ばれてしまい、
+                // 二画面表示の負荷軽減という目的に反していた。LivePlayerSubMenu.ktの
+                // デュアル表示時フォールバックと同じ基準(720p)に揃える。
+                val fallback = availableQualities.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: availableQualities.firstOrNull { it.value != "original" }
+                if (fallback != null) {
+                    ps.previousQuality = ps.currentQuality
+                    ps.currentQuality = fallback
+                    onShowToast("負荷軽減のため画質を ${fallback.label} に変更しました")
                 }
             }
         } else {
@@ -234,6 +315,11 @@ fun LivePlayerScreen(
                     onShowToast("元のストリーミングソースに復帰しました")
                 }
                 ps.previousStreamSource = null
+            }
+            if (!ps.isDualDisplayMode && ps.previousQuality != null) {
+                ps.currentQuality = ps.previousQuality!!
+                onShowToast("元の画質に復帰しました")
+                ps.previousQuality = null
             }
         }
     }
@@ -264,6 +350,14 @@ fun LivePlayerScreen(
             }
         }
         mainPlayer?.addListener(listener)
+        // リスナー登録時点で既に映像サイズが確定している場合は onVideoSizeChanged が
+        // 呼ばれないため、ここで現在値を取り込んでおく
+        mainPlayer?.videoSize?.let { size ->
+            if (size.width > 0 && size.height > 0) {
+                videoWidth = size.width; videoHeight =
+                    size.height; pixelWidthHeightRatio = size.pixelWidthHeightRatio
+            }
+        }
         isMainBuffering = mainPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { mainPlayer?.removeListener(listener) }
     }
@@ -280,6 +374,13 @@ fun LivePlayerScreen(
             }
         }
         dualPlayer?.addListener(listener)
+        // メイン側と同様、登録時点の映像サイズを取り込んでおく
+        dualPlayer?.videoSize?.let { size ->
+            if (size.width > 0 && size.height > 0) {
+                dualVideoWidth = size.width; dualVideoHeight =
+                    size.height; dualPixelWidthHeightRatio = size.pixelWidthHeightRatio
+            }
+        }
         isDualBuffering = dualPlayer?.playbackState == Player.STATE_BUFFERING
         onDispose { dualPlayer?.removeListener(listener) }
     }
@@ -363,40 +464,8 @@ fun LivePlayerScreen(
         livePlayerViewModel.setVolumes(mainVol, dualVol)
     }
 
-    LaunchedEffect(Unit) {
-        livePlayerViewModel.subtitleEvents.collect { (pts, base64) ->
-            webViewRef.value?.evaluateJavascript(
-                "if(window.receiveSubtitleData){ window.receiveSubtitleData($pts, '$base64'); }",
-                null
-            )
-        }
-    }
-
     LaunchedEffect(isSubtitleEnabled) {
         livePlayerViewModel.setSubtitlesEnabled(isSubtitleEnabled)
-        while (true) {
-            if (isSubtitleEnabled) {
-                mainPlayer?.takeIf { it.isPlaying }?.let { player ->
-                    webViewRef.value?.post {
-                        webViewRef.value?.evaluateJavascript(
-                            "if(window.syncClock){ window.syncClock(${player.currentPosition}); }",
-                            null
-                        )
-                    }
-                }
-                if (ps.isDualDisplayMode) {
-                    dualPlayer?.takeIf { it.isPlaying }?.let { player ->
-                        dualWebViewRef.value?.post {
-                            dualWebViewRef.value?.evaluateJavascript(
-                                "if(window.syncClock){ window.syncClock(${player.currentPosition}); }",
-                                null
-                            )
-                        }
-                    }
-                }
-            }
-            delay(100)
-        }
     }
 
     LaunchedEffect(Unit) {
@@ -487,15 +556,38 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
-            channelViewModel.fetchChannels(); delay(200); listFocusRequester.safeRequestFocus(TAG)
+            channelViewModel.fetchChannels(); delay(200)
+            // ★ 修正: 単発のsafeRequestFocus()だと、ホーム画面がプレイヤー表示中も破棄されず
+            // 常駐するようになった影響で、レイアウト確定前にフォーカス要求が来て失敗すると
+            // そのまま復帰しない(=方向キー/決定キーが効かない)ことがあったため、リトライ版に変更する。
+            // さらに、ホーム画面側の項目が持っていた古い論理フォーカスがcanFocus=false化後も
+            // 内部的に残留し、新規のrequestFocus()を阻害することがあるため、まず明示的にクリアする。
+            focusManager.clearFocus(force = true)
+            listFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 10, delayMillis = 50)
         } else if (!currentIsManualOverlay && !currentIsSubMenuOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
-            delay(100); mainFocusRequester.safeRequestFocus(TAG)
+            delay(100)
+            focusManager.clearFocus(force = true)
+            mainFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 10, delayMillis = 50)
         }
     }
 
     LaunchedEffect(isSubMenuOpen) {
         if (isSubMenuOpen && !isPiPMode) {
             delay(150); subMenuFocusRequester.safeRequestFocus(TAG)
+        } else if (!isSubMenuOpen && !isMiniListOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
+            // ★ 追加: サブメニューを閉じるとフォーカスを持っていた項目ごと破棄されるため、
+            // 明示的にプレイヤー本体へフォーカスを戻す。
+            // (戻さないとフォーカスが迷子になり、以降の十字キー/決定キーが効かなくなる)
+            delay(100); mainFocusRequester.safeRequestFocus(TAG)
+        }
+    }
+
+    // ★ 追加: 単画面 ⇔ 二画面 の切り替えでプレイヤーのフォーカス受け皿ノードが作り直されるため、
+    // 切り替え後にフォーカスをプレイヤー本体へ引き戻す。
+    LaunchedEffect(ps.isDualDisplayMode) {
+        if (!isPiPMode && !isMiniListOpen && !isSubMenuOpen && ps.lCropMode == LCropMode.HIDDEN) {
+            delay(200)
+            mainFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 5, delayMillis = 60)
         }
     }
 
@@ -530,6 +622,13 @@ fun LivePlayerScreen(
     ) {
         if (ps.isDualDisplayMode) {
             DualDisplayPlayer(
+                // ★ 修正: 二画面表示中もプレイヤー本体をフォーカスの受け皿にする。
+                // これが無いとmainFocusRequesterがどのノードにも接続されず、
+                // サブメニュー/ミニリストを閉じた後にフォーカスが迷子になり、
+                // 背面のホーム画面へフォーカスが落ちてしまう。
+                modifier = Modifier.focusRequester(mainFocusRequester),
+                isFocusable = !isPiPMode && !isMiniListOpen && !isSubMenuOpen &&
+                    ps.lCropMode == LCropMode.HIDDEN,
                 state = ps,
                 leftChannel = currentChannelItem,
                 getLogoUrl = { channelId -> channelViewModel.getChannelLogoUrl(channelId) },
@@ -540,12 +639,12 @@ fun LivePlayerScreen(
                 mainVideoWidth = videoWidth,
                 mainVideoHeight = videoHeight,
                 mainPixelRatio = pixelWidthHeightRatio,
-                mainWebViewRef = webViewRef,
+                mainCaptionCue = mainCaptionCue.value,
                 dualPlayer = dualPlayer,
                 dualVideoWidth = dualVideoWidth,
                 dualVideoHeight = dualVideoHeight,
                 dualPixelRatio = dualPixelWidthHeightRatio,
-                dualWebViewRef = dualWebViewRef,
+                dualCaptionCue = dualCaptionCue.value,
                 isSubtitleEnabled = isSubtitleEnabled
             )
         } else {
@@ -602,26 +701,9 @@ fun LivePlayerScreen(
 
             if (!isPiPMode) {
                 if (isHeavyUiReady) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            view.visibility =
-                                if (isSubtitleEnabled && !isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                        },
-                        onRelease = { view ->
-                            view.destroy()
-                            webViewRef.value = null
-                        },
+                    NativeCaptionOverlay(
+                        cue = mainCaptionCue.value,
+                        visible = isSubtitleEnabled && !isUiVisible,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -751,9 +833,19 @@ fun LivePlayerScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
         ) {
+            // ★ 修正: 二画面表示で2画面目(右)を操作中は、右画面のチャンネルを基準にする。
+            // 初期タブ・スクロール位置・フォーカス位置がすべてこのIDで決まるため、
+            // メイン(左)のチャンネルを渡していると2画面目の選局時に意図しない位置が選ばれる。
+            val miniListCurrentChannelId =
+                if (ps.isDualDisplayMode && ps.activeDualPlayerIndex == 1) {
+                    ps.dualRightChannel?.id ?: currentChannelItem.id
+                } else {
+                    currentChannelItem.id
+                }
+
             ChannelListOverlay(
                 groupedChannels = displayGroupedChannels,
-                currentChannelId = currentChannelItem.id,
+                currentChannelId = miniListCurrentChannelId,
                 onChannelSelect = { selectedChannel ->
                     if (!ps.isDualDisplayMode) onChannelSelect(selectedChannel) else {
                         if (ps.activeDualPlayerIndex == 0) onChannelSelect(selectedChannel) else ps.dualRightChannel =
@@ -782,6 +874,8 @@ fun LivePlayerScreen(
                 availableSources = availableSources,
                 currentAudioMode = ps.currentAudioMode,
                 isSubtitleEnabled = isSubtitleEnabled,
+                subtitleLanguages = activeSubtitleLanguages,
+                currentSubtitleLanguageId = currentSubtitleLanguageId,
                 currentQuality = ps.currentQuality,
                 isCommentEnabled = isCommentEnabled,
                 isLCropEnabled = ps.lCropEnabled,
@@ -792,25 +886,36 @@ fun LivePlayerScreen(
                     ps.isDualDisplayMode = !ps.isDualDisplayMode
                     if (ps.isDualDisplayMode) {
                         ps.activeDualPlayerIndex = 1
-                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB) && allowMirakurunDual != "ON") {
+                        // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
+                        // HLS再生時を除きダウングレード対象に含める
+                        val isEpgStationHeavy = ps.currentStreamSource == StreamSource.EPGSTATION &&
+                            !ps.currentQuality.value.startsWith("hls:")
+                        if ((ps.currentStreamSource == StreamSource.MIRAKURUN || ps.currentStreamSource == StreamSource.EDCB || isEpgStationHeavy) && allowMirakurunDual != "ON") {
                             ps.previousStreamSource = ps.currentStreamSource
                             if (availableSources.contains(StreamSource.KONOMITV)) {
                                 ps.currentStreamSource = StreamSource.KONOMITV
                                 onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
                             }
+                        } else if (ps.currentStreamSource == StreamSource.KONOMITV &&
+                            ps.currentQuality.value == "original" && allowMirakurunDual != "ON"
+                        ) {
+                            // ★ 追加: KonomiTVのoriginal画質もMIRAKURUN/EDCB同様の重量な生TSパイプラインを
+                            // 使うため、ソース切替の代わりに画質を通常画質へダウングレードする
+                            // ★ 修正: 単に「originalではない最初の画質」を選ぶと、DEFAULT_QUALITIESの並び順
+                // (original, 1080p-60fps, 1080p, ...)により1080p(60fps)が選ばれてしまい、
+                // 二画面表示の負荷軽減という目的に反していた。LivePlayerSubMenu.ktの
+                // デュアル表示時フォールバックと同じ基準(720p)に揃える。
+                val fallback = availableQualities.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: availableQualities.firstOrNull { it.value != "original" }
+                            if (fallback != null) {
+                                ps.previousQuality = ps.currentQuality
+                                ps.currentQuality = fallback
+                                onShowToast("負荷軽減のため画質を ${fallback.label} に変更しました")
+                            }
                         }
                     } else {
-                        ps.activeDualPlayerIndex = 0
-                        ps.dualRightChannel = null
-                        ps.leftScreenWeight = 1f
-                        ps.rightScreenWeight = 1f
-                        if (ps.previousStreamSource != null) {
-                            if (availableSources.contains(ps.previousStreamSource!!)) {
-                                ps.currentStreamSource = ps.previousStreamSource!!
-                                onShowToast("元のストリーミングソースに復帰しました")
-                            }
-                            ps.previousStreamSource = null
-                        }
+                        exitDualDisplayMode()
                     }
                 },
                 onSwapScreens = {
@@ -822,13 +927,20 @@ fun LivePlayerScreen(
                 },
                 onRecordToggle = {
                     if (isRecording) {
-                        if (activeReserve != null) {
-                            reserveViewModel.deleteReservation(activeReserve.id) {}
-                            onShowToast("録画を停止しました")
-                        }
+                        reserveViewModel.deleteReservation(
+                            reservationId = requireNotNull(activeReserve).id,
+                            onFailure = { onShowToast(it) }
+                        ) { onShowToast("録画を停止しました") }
                     } else {
-                        reserveViewModel.addReserve(currentChannelItem.id) {}
-                        onShowToast("録画を開始しました")
+                        val programId = currentChannelItem.programPresent?.id
+                        if (programId == null) {
+                            onShowToast("放送中番組の情報がないため録画予約できません")
+                        } else {
+                            reserveViewModel.addReserve(
+                                programId = programId,
+                                onFailure = { onShowToast(it) }
+                            ) { onShowToast("録画を開始しました") }
+                        }
                     }
                     onSubMenuToggle(false)
                 },
@@ -839,6 +951,7 @@ fun LivePlayerScreen(
                     }
                 },
                 availableQualities = availableQualities,
+                allowHeavyDual = allowMirakurunDual == "ON",
                 focusRequester = subMenuFocusRequester,
                 onSourceSelect = { source, isDirect ->
                     ps.currentStreamSource = source
@@ -873,6 +986,19 @@ fun LivePlayerScreen(
                             AppStrings.TOAST_SUBTITLE_CHANGED,
                             if (subtitleEnabledState.value) AppStrings.STATE_SHOW else AppStrings.STATE_HIDE
                         )
+                    )
+                },
+                onSubtitleLanguageToggle = {
+                    val nextLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                    if (isDualSubtitleActive) {
+                        livePlayerViewModel.setDualSubtitleLanguage(nextLanguageId)
+                    } else {
+                        livePlayerViewModel.setMainSubtitleLanguage(nextLanguageId)
+                    }
+                    val selectedLanguage = activeSubtitleLanguages.firstOrNull { it.id == nextLanguageId }
+                    onShowToast(
+                        "字幕言語: 第${nextLanguageId}言語" +
+                            (selectedLanguage?.let { "・${it.displayName}" } ?: "")
                     )
                 },
                 onQualitySelect = {

@@ -72,13 +72,11 @@ fun BaseballDashboardScreen(
         targetDate.format(formatter)
     }
 
-    // ★ 修正: 画面全体をくるむ Column に contentFirstItemRequester と focusGroup() を付与。
-    // LazyRow の中身が破棄されても、親コンテナが安全にフォーカスを受け止め、内部の適切な子へフォーカスを流すためクラッシュしません。
+    // カード一覧の先頭カードへフォーカスを直接接続する。
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 48.dp)
-            .focusRequester(contentFirstItemRequester)
             .focusGroup()
     ) {
         Row(
@@ -171,7 +169,9 @@ fun BaseballDashboardScreen(
             LazyColumn(
                 contentPadding = PaddingValues(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(40.dp),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusGroup()
             ) {
                 itemsIndexed(groupedGames) { teamIndex, (teamName, teamGames) ->
                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -184,6 +184,7 @@ fun BaseballDashboardScreen(
 
                         // ★ 変更: LazyRow -> LazyRow に置換
                         LazyRow(
+                            modifier = Modifier.focusGroup(),
                             horizontalArrangement = Arrangement.spacedBy(24.dp)
                         ) {
                             itemsIndexed(teamGames) { gameIndex, game ->
@@ -219,9 +220,16 @@ fun BaseballDashboardScreen(
                                             onProgramClick(game.program)
                                         }
                                     },
-                                    // ★ 修正: 不安定なRequesterの割り当てを削除。端のガード処理のみ残す
+                                    // 先頭カードだけをタブからの下移動先にする。端のガード処理も明示する。
                                     modifier = Modifier
                                         .width(380.dp)
+                                        .then(
+                                            if (teamIndex == 0 && gameIndex == 0) {
+                                                Modifier.focusRequester(contentFirstItemRequester)
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
                                         .focusProperties {
                                             if (gameIndex == 0) left = FocusRequester.Cancel
                                             if (gameIndex == teamGames.lastIndex) right =

@@ -55,6 +55,9 @@ class VideoPlayerState {
     var wasPlayingBeforeSceneSearch = false
     var downKeyDownTime = 0L
     var isDownKeyLongPressed = false
+    var isMediaSeekLongPressHandled = false
+    // チャプタースキップの長押し連続発火用に、最後に発火した時刻を保持する
+    var lastMediaSeekRepeatTime = 0L
 
     // ★ 新規追加: クイックシーク状態の追跡
     var isQuickSeeking by mutableStateOf(false)
@@ -87,7 +90,9 @@ class VideoPlayerState {
         onSubMenuToggle: (Boolean) -> Unit,
         exoPlayerIsPlaying: Boolean,
         onPause: () -> Unit,
-        onPlay: () -> Unit
+        onPlay: () -> Unit,
+        onSkipPreviousChapter: () -> Unit = {},
+        onSkipNextChapter: () -> Unit = {}
     ): Boolean {
         if (isPiPMode) return false
         val keyCode = keyEvent.nativeKeyEvent.keyCode
@@ -135,6 +140,97 @@ class VideoPlayerState {
         }
 
         if (isSubOverlayOpen) return false
+
+        val isMediaRewind = keyCode == NativeKeyEvent.KEYCODE_MEDIA_REWIND
+        val isMediaFastForward = keyCode == NativeKeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+        val isPreviousChapterKey = keyCode == NativeKeyEvent.KEYCODE_MEDIA_PREVIOUS ||
+                keyCode == NativeKeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD ||
+                keyCode == NativeKeyEvent.KEYCODE_MEDIA_STEP_BACKWARD
+        val isNextChapterKey = keyCode == NativeKeyEvent.KEYCODE_MEDIA_NEXT ||
+                keyCode == NativeKeyEvent.KEYCODE_MEDIA_SKIP_FORWARD ||
+                keyCode == NativeKeyEvent.KEYCODE_MEDIA_STEP_FORWARD
+
+        if (isPreviousChapterKey || isNextChapterKey) {
+            if (isActionDown && !isMediaSeekLongPressHandled) {
+                onShowControlsChange(true)
+                if (isPreviousChapterKey) onSkipPreviousChapter() else onSkipNextChapter()
+                isMediaSeekLongPressHandled = true
+            } else if (isActionUp) {
+                isMediaSeekLongPressHandled = false
+            }
+            return true
+        }
+
+        if (isMediaRewind || isMediaFastForward) {
+            if (isActionDown) {
+                onShowControlsChange(true)
+                if (keyEvent.nativeKeyEvent.repeatCount > 0 && chapters.size > 1) {
+                    // 長押し中は400ms間隔でチャプタースキップを連続発火させる
+                    val now = System.currentTimeMillis()
+                    if (!isMediaSeekLongPressHandled || now - lastMediaSeekRepeatTime > 400) {
+                        if (isMediaRewind) onSkipPreviousChapter() else onSkipNextChapter()
+                        isMediaSeekLongPressHandled = true
+                        lastMediaSeekRepeatTime = now
+                    }
+                } else if (!isMediaSeekLongPressHandled) {
+                    val basePos = pendingSeekPositionMs ?: getCurrentPositionMs()
+                    val amount = if (isMediaRewind) -10_000L else 30_000L
+                    val newPos = (basePos + amount).coerceIn(
+                        0L,
+                        if (totalDurationMs > 0) totalDurationMs else Long.MAX_VALUE
+                    )
+                    performSeek(newPos)
+                    triggerSeekingPreview()
+                }
+            } else if (isActionUp) {
+                isMediaSeekLongPressHandled = false
+                lastMediaSeekRepeatTime = 0L
+            }
+            return true
+        }
+
+        // PLAY_PAUSE はトグル、PLAY / PAUSE は方向が決まっているキーなので個別に扱う。
+        // (Bluetooth キーボード等は PLAY と PAUSE を別々に送ってくるため、
+        //  トグル扱いにすると「再生中に Play を押すと一時停止する」逆転が起きる)
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+            if (isActionUp) {
+                onShowControlsChange(true)
+                togglePlayPause(exoPlayerIsPlaying)
+                if (exoPlayerIsPlaying) onPause() else onPlay()
+            }
+            return true
+        }
+
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PLAY) {
+            if (isActionUp) {
+                onShowControlsChange(true)
+                if (!exoPlayerIsPlaying) {
+                    togglePlayPause(false)
+                    onPlay()
+                }
+            }
+            return true
+        }
+
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_PAUSE) {
+            if (isActionUp) {
+                onShowControlsChange(true)
+                if (exoPlayerIsPlaying) {
+                    togglePlayPause(true)
+                    onPause()
+                }
+            }
+            return true
+        }
+
+        if (keyCode == NativeKeyEvent.KEYCODE_MEDIA_STOP) {
+            if (isActionDown) {
+                onShowControlsChange(true)
+                isPlayerPlaying = false
+                onPause()
+            }
+            return true
+        }
 
         if (keyCode == NativeKeyEvent.KEYCODE_BACK || keyCode == NativeKeyEvent.KEYCODE_ESCAPE) {
             if (isActionDown) {

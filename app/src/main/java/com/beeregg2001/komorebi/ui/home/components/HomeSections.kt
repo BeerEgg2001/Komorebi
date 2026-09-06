@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.focusGroup
 // ★ 変更: TvLazy系のインポートを削除し、標準のLazy系のインポートに変更
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -114,7 +115,7 @@ fun LastWatchedSection(
         // ★ 変更: TvLazyRow -> LazyRow
         LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -211,7 +212,7 @@ fun HotChannelSection(
         // ★ 変更: TvLazyRow -> LazyRow
         LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -303,7 +304,7 @@ fun WatchHistorySection(
         // ★ 変更: TvLazyRow -> LazyRow
         LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -405,7 +406,7 @@ fun UpcomingReserveSection(
         // ★ 変更: TvLazyRow -> LazyRow
         LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -506,7 +507,7 @@ fun GenrePickupSection(
         // ★ 変更: TvLazyRow -> LazyRow
         LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {

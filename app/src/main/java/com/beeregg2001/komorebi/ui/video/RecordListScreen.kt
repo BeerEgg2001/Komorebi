@@ -71,8 +71,17 @@ import com.beeregg2001.komorebi.viewmodel.RecordSortOrder
 import com.beeregg2001.komorebi.viewmodel.RecordSortType
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SeriesSortType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private fun seasonNameJa(name: String): String = when (name) {
+    "WINTER" -> "冬"
+    "SPRING" -> "春"
+    "SUMMER" -> "夏"
+    "AUTUMN" -> "秋"
+    else -> name
+}
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @RequiresApi(Build.VERSION_CODES.O)
@@ -98,70 +107,6 @@ fun RecordListScreen(
     val scope = rememberCoroutineScope()
     val syncProgress by viewModel.syncProgress.collectAsState()
 
-    if (syncProgress.isInitialSyncPhase) {
-        val blockFocusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); blockFocusRequester.safeRequestFocus("InitialSyncBlock") }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(colors.background)
-                .focusRequester(blockFocusRequester)
-                .focusable(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(24.dp)
-            ) {
-                CircularProgressIndicator(
-                    color = colors.accent,
-                    modifier = Modifier.size(64.dp),
-                    strokeWidth = 6.dp
-                )
-                Text(
-                    text = "データベースを構築しています...",
-                    color = colors.textPrimary,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Surface(
-                    colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
-                    ) {
-                        if (syncProgress.total > 0) {
-                            Text(
-                                text = "進捗: ${syncProgress.current} / ${syncProgress.total} 件",
-                                color = colors.textSecondary,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        } else {
-                            Text(
-                                text = "進捗: ${syncProgress.current} 件取得済み",
-                                color = colors.textSecondary,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "※この処理は初回のみ発生します。\n完了するまでビデオタブは操作できませんが、\n「ライブ視聴」など他の機能をご利用いただけます。",
-                            color = colors.textSecondary,
-                            style = MaterialTheme.typography.bodyLarge,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 24.sp
-                        )
-                    }
-                }
-            }
-        }
-        return
-    }
-
     val pagedRecordings = viewModel.pagedRecordings.collectAsLazyPagingItems()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val groupedChannels by viewModel.groupedChannels.collectAsState()
@@ -180,6 +125,26 @@ fun RecordListScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isListView by viewModel.isListView.collectAsState()
     val selectedSeriesGenre by viewModel.selectedSeriesGenre.collectAsState()
+    val availableSeasons by viewModel.availableSeasons.collectAsState()
+    val selectedSeason by viewModel.selectedSeason.collectAsState()
+    val isOnAirOnly by viewModel.isOnAirOnly.collectAsState()
+    val seriesSortType by viewModel.seriesSortType.collectAsState()
+    val seriesSortOrder by viewModel.seriesSortOrder.collectAsState()
+    val visibleSeries = remember(
+        groupedSeries,
+        selectedSeriesGenre,
+        seriesSortType,
+        seriesSortOrder
+    ) {
+        viewModel.sortSeriesForDisplay(
+            if (!selectedSeriesGenre.isNullOrEmpty()) {
+                groupedSeries[selectedSeriesGenre] ?: emptyList()
+            } else {
+                groupedSeries.values.flatten()
+            }
+        )
+    }
+    val seriesFocusProgramId by viewModel.seriesFocusProgramId.collectAsState()
     val programDetail by viewModel.programDetail.collectAsState()
     val isRecLoading by viewModel.isRecordingLoading.collectAsState()
 
@@ -233,12 +198,16 @@ fun RecordListScreen(
         selectedGenre,
         selectedDay,
         selectedSeriesGenre,
+        selectedSeason,
+        isOnAirOnly,
         activeSearchQuery,
         sortType,
         sortOrder,
+        seriesSortType,
+        seriesSortOrder,
         ticketManager.forceResetTick
     ) {
-        "${selectedCategory.name}_${selectedGenre}_${selectedDay}_${selectedSeriesGenre}_${activeSearchQuery}_${sortType}_${sortOrder}_${ticketManager.forceResetTick}"
+        "${selectedCategory.name}_${selectedGenre}_${selectedDay}_${selectedSeriesGenre}_${selectedSeason}_${isOnAirOnly}_${activeSearchQuery}_${sortType}_${sortOrder}_${seriesSortType}_${seriesSortOrder}_${ticketManager.forceResetTick}"
     }
 
     val listState = remember(stateKey) { LazyListState() }
@@ -271,8 +240,7 @@ fun RecordListScreen(
             if (!isCategoryImplemented) false
             else {
                 when (selectedCategory) {
-                    RecordCategory.SERIES -> (if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                        ?: emptyList() else groupedSeries.values.flatten()).isNotEmpty()
+                    RecordCategory.SERIES -> visibleSeries.isNotEmpty()
 
                     else -> pagedRecordings.itemCount > 0
                 }
@@ -343,16 +311,45 @@ fun RecordListScreen(
         }
     }
 
+    LaunchedEffect(seriesFocusProgramId) {
+        seriesFocusProgramId?.let { ticketManager.issue(FocusTicket.TARGET_ID, it) }
+    }
+
     LaunchedEffect(Unit) {
         if (menuState.isInitialFocusRequested) {
             delay(200)
-            if (isReturningFromPlayer && lastPlayedProgramId != null) {
-                ticketManager.issue(FocusTicket.TARGET_ID, lastPlayedProgramId)
-                onReturnFocusConsumed()
-            } else {
+            if (!isReturningFromPlayer) {
                 ticketManager.issue(FocusTicket.LIST_TOP)
             }
             menuState.isInitialFocusRequested = false
+        }
+    }
+
+    // ★ 追加: プレイヤーへ遷移する直前に、開いているサブメニュー・ペイン類をすべて閉じる。
+    // この画面はプレイヤー表示中も破棄されずコンポーズされ続けるため（MainRootBackground参照）、
+    // 閉じずに再生を始めると復帰時にサブメニューが開いたまま残り、
+    // リスト側（LazyColumn の canFocus）へフォーカスを戻せなくなる。
+    val handleProgramClick: (RecordedProgram, Double?) -> Unit = { program, forcedPosition ->
+        menuState.closeAllMenus()
+        viewModel.clearProgramDetail()
+        onProgramClick(program, forcedPosition)
+    }
+
+    // プレイヤー表示中もこの画面は背面で保持されるため、戻るたびに明示的に
+    // 復帰チケットを発行する。これにより録画一覧・シリーズ検索結果の双方で、
+    // 直前に再生していた番組へスクロールとフォーカスを戻せる。
+    LaunchedEffect(isReturningFromPlayer, lastPlayedProgramId) {
+        if (isReturningFromPlayer) {
+            // ★ 追加: onProgramClick を経由しない遷移（AIコンシェルジュ等）に備えた保険。
+            // メニューが開いたままだとフォーカス復帰チケットが効かない。
+            menuState.closeAllMenus()
+            delay(150)
+            if (lastPlayedProgramId != null) {
+                ticketManager.issue(FocusTicket.TARGET_ID, lastPlayedProgramId)
+            } else {
+                ticketManager.issue(FocusTicket.LIST_TOP)
+            }
+            onReturnFocusConsumed()
         }
     }
 
@@ -509,8 +506,7 @@ fun RecordListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 88.dp)
-                .onKeyEvent { if (!paneTransitionState.isIdle) true else false }) {
+                .padding(top = 88.dp)) {
 
             Box(
                 modifier = Modifier
@@ -528,14 +524,13 @@ fun RecordListScreen(
                     if (isListView) {
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
                                 RecordSeriesContent(
-                                    seriesList = list,
+                                    seriesList = visibleSeries,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { executeSearch(it) },
+                                    onSeriesClick = {
+                                        viewModel.searchSeries(it.seriesId, it.displayTitle)
+                                    },
                                     onOpenNavPane = handleOpenNavPane,
                                     isListView = true,
                                     firstItemFocusRequester = focuses.firstItem,
@@ -568,17 +563,19 @@ fun RecordListScreen(
                                     contentContainerFocusRequester = focuses.contentContainer,
                                     searchInputFocusRequester = focuses.searchInput,
                                     backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
-                                    onSeriesSearch = { keyword ->
-                                        executeSearch(keyword); focusedProgram?.id?.let {
-                                        ticketManager.issue(
-                                            FocusTicket.TARGET_ID,
-                                            it
+                                    onProgramClick = handleProgramClick,
+                                    onSeriesSearch = { program ->
+                                        viewModel.searchSeries(
+                                            seriesId = program.seriesId,
+                                            title = program.seriesName ?: program.title
                                         )
-                                    }
+                                        menuState.isDetailActive = false
+                                        ticketManager.issue(FocusTicket.LIST_TOP)
                                     },
                                     isDetailVisible = menuState.isDetailActive,
                                     onDetailStateChange = { menuState.isDetailActive = it },
+                                    isSideMenuOpen = menuState.isSideMenuOpen,
+                                    onSideMenuStateChange = { menuState.isSideMenuOpen = it },
                                     onBackPress = handleBackPress,
                                     ticketManager = ticketManager,
                                     listState = listState,
@@ -602,14 +599,13 @@ fun RecordListScreen(
                     } else {
                         when (selectedCategory) {
                             RecordCategory.SERIES -> {
-                                val list =
-                                    if (!selectedSeriesGenre.isNullOrEmpty()) groupedSeries[selectedSeriesGenre]
-                                        ?: emptyList() else groupedSeries.values.flatten()
                                 RecordSeriesGridContent(
-                                    seriesList = list,
+                                    seriesList = visibleSeries,
                                     konomiIp = konomiIp,
                                     konomiPort = konomiPort,
-                                    onSeriesClick = { executeSearch(it) },
+                                    onSeriesClick = {
+                                        viewModel.searchSeries(it.seriesId, it.displayTitle)
+                                    },
                                     onOpenNavPane = handleOpenNavPane,
                                     firstItemFocusRequester = focuses.firstItem,
                                     contentContainerFocusRequester = focuses.contentContainer,
@@ -639,7 +635,7 @@ fun RecordListScreen(
                                     contentContainerFocusRequester = focuses.contentContainer,
                                     searchInputFocusRequester = focuses.searchInput,
                                     backButtonFocusRequester = focuses.backButton,
-                                    onProgramClick = onProgramClick,
+                                    onProgramClick = handleProgramClick,
                                     onOpenNavPane = handleOpenNavPane,
                                     ticketManager = ticketManager,
                                     onFocusedItemChanged = {
@@ -662,7 +658,16 @@ fun RecordListScreen(
                             .background(colors.background),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isLoadingAny) CircularProgressIndicator(color = colors.textPrimary)
+                        if (syncProgress.isInitialSyncPhase && syncProgress.current == 0) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = colors.textPrimary)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "録画リストを取得しています… (${syncProgress.current} / ${syncProgress.total})",
+                                    color = colors.textSecondary
+                                )
+                            }
+                        } else if (isLoadingAny) CircularProgressIndicator(color = colors.textPrimary)
                         else Text(
                             "録画番組がありません",
                             style = MaterialTheme.typography.headlineSmall,
@@ -703,18 +708,36 @@ fun RecordListScreen(
             }
 
             // ★ 追加: 新しいソートメニューのオーバーレイ
-            RecordSortMenuOverlay(
-                isOpen = menuState.isSortMenuOpen,
-                currentType = sortType,
-                currentOrder = sortOrder,
-                onClose = { handleBackPress() },
-                onSelect = { newType, newOrder ->
-                    viewModel.setSort(newType, newOrder)
-                    pagedRecordings.refresh() // ソート条件が変わったらPagingをリフレッシュ
-                    menuState.isSortMenuOpen = false
-                    focuses.sortButton.safeRequestFocus("CloseSort")
-                }
-            )
+            if (selectedCategory == RecordCategory.SERIES) {
+                RecordSeriesFilterMenuOverlay(
+                    isOpen = menuState.isSortMenuOpen,
+                    genres = groupedSeries.keys.toList(),
+                    selectedGenre = selectedSeriesGenre,
+                    seasons = availableSeasons,
+                    selectedSeason = selectedSeason,
+                    isOnAirOnly = isOnAirOnly,
+                    currentSortType = seriesSortType,
+                    currentSortOrder = seriesSortOrder,
+                    onClose = { handleBackPress() },
+                    onGenreSelect = viewModel::updateSeriesGenre,
+                    onSeasonSelect = viewModel::setSeasonFilter,
+                    onOnAirOnlyChange = viewModel::setOnAirOnly,
+                    onSortSelect = viewModel::setSeriesSort
+                )
+            } else {
+                RecordSortMenuOverlay(
+                    isOpen = menuState.isSortMenuOpen,
+                    currentType = sortType,
+                    currentOrder = sortOrder,
+                    onClose = { handleBackPress() },
+                    onSelect = { newType, newOrder ->
+                        viewModel.setSort(newType, newOrder)
+                        pagedRecordings.refresh()
+                        menuState.isSortMenuOpen = false
+                        focuses.sortButton.safeRequestFocus("CloseSort")
+                    }
+                )
+            }
         }
 
         RecordScreenTopBar(
@@ -878,6 +901,132 @@ fun BoxScope.RecordSortMenuOverlay(
             }
         }
     }
+}
+
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalTvMaterial3Api::class)
+@Composable
+fun BoxScope.RecordSeriesFilterMenuOverlay(
+    isOpen: Boolean,
+    genres: List<String>,
+    selectedGenre: String?,
+    seasons: List<Pair<Int, String>>,
+    selectedSeason: Pair<Int, String>?,
+    isOnAirOnly: Boolean,
+    currentSortType: SeriesSortType,
+    currentSortOrder: RecordSortOrder,
+    onClose: () -> Unit,
+    onGenreSelect: (String?) -> Unit,
+    onSeasonSelect: (Pair<Int, String>?) -> Unit,
+    onOnAirOnlyChange: (Boolean) -> Unit,
+    onSortSelect: (SeriesSortType, RecordSortOrder) -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(isOpen) {
+        if (isOpen) {
+            delay(150)
+            focusRequester.safeRequestFocus("SeriesFilterMenu")
+        }
+    }
+
+    AnimatedVisibility(visible = isOpen, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.zIndex(10f)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)))
+    }
+    AnimatedVisibility(
+        visible = isOpen,
+        enter = slideInHorizontally { it } + fadeIn(),
+        exit = slideOutHorizontally { it } + fadeOut(),
+        modifier = Modifier.align(Alignment.CenterEnd).zIndex(11f)
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(360.dp)
+                .fillMaxHeight()
+                .focusProperties { left = FocusRequester.Cancel; right = FocusRequester.Cancel }
+                .onKeyEvent {
+                    if (it.type == KeyEventType.KeyDown &&
+                        (it.key == Key.DirectionLeft || it.key == Key.Back || it.key == Key.Escape)
+                    ) {
+                        onClose()
+                        true
+                    } else false
+                },
+            colors = SurfaceDefaults.colors(containerColor = colors.surface.copy(alpha = 0.98f)),
+            shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp),
+            border = Border(BorderStroke(1.dp, colors.textPrimary.copy(alpha = 0.1f)))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 28.dp, top = 24.dp, end = 12.dp, bottom = 24.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "シリーズの絞り込み・並び替え",
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 8.dp, start = 8.dp)
+                )
+                Text("ジャンル", color = colors.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp))
+                SeriesFilterMenuItem("すべて", selectedGenre == null, { onGenreSelect(null) }, focusRequester)
+                genres.forEach { genre ->
+                    SeriesFilterMenuItem(genre, selectedGenre == genre, { onGenreSelect(genre) })
+                }
+
+                Text("クール", color = colors.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 8.dp, top = 12.dp))
+                SeriesFilterMenuItem("すべて", selectedSeason == null, { onSeasonSelect(null) })
+                seasons.forEach { season ->
+                    SeriesFilterMenuItem(
+                        "${season.first}年${seasonNameJa(season.second)}",
+                        selectedSeason == season,
+                        { onSeasonSelect(season) }
+                    )
+                }
+                SeriesFilterMenuItem("放送中のみ", isOnAirOnly, { onOnAirOnlyChange(!isOnAirOnly) })
+
+                Text("並び替え", color = colors.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 8.dp, top = 12.dp))
+                listOf(
+                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.DESC, "最終放送日時 (新しい順)"),
+                    Triple(SeriesSortType.LAST_AIRED, RecordSortOrder.ASC, "最終放送日時 (古い順)"),
+                    Triple(SeriesSortType.TITLE, RecordSortOrder.ASC, "タイトル (A→Z)"),
+                    Triple(SeriesSortType.TITLE, RecordSortOrder.DESC, "タイトル (Z→A)"),
+                    Triple(SeriesSortType.PROGRAM_COUNT, RecordSortOrder.DESC, "録画本数 (多い順)"),
+                    Triple(SeriesSortType.PROGRAM_COUNT, RecordSortOrder.ASC, "録画本数 (少ない順)"),
+                    Triple(SeriesSortType.UNWATCHED_COUNT, RecordSortOrder.DESC, "未視聴数 (多い順)"),
+                    Triple(SeriesSortType.UNWATCHED_COUNT, RecordSortOrder.ASC, "未視聴数 (少ない順)")
+                ).forEach { (type, order, label) ->
+                    SeriesFilterMenuItem(
+                        label,
+                        currentSortType == type && currentSortOrder == order,
+                        { onSortSelect(type, order) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SeriesFilterMenuItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester? = null
+) {
+    SortMenuItem(
+        icon = if (selected) Icons.Default.Check else Icons.Default.Circle,
+        iconTint = if (selected) KomorebiTheme.colors.accent else Color.Transparent,
+        label = label,
+        onClick = onClick,
+        modifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+    )
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

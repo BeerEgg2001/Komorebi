@@ -1,8 +1,10 @@
 package com.beeregg2001.komorebi.di
 
+import com.beeregg2001.komorebi.BuildConfig
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.data.api.interceptor.CloudflareAccessInterceptor
 import com.google.gson.Gson
 import dagger.Module
 import dagger.Provides
@@ -28,9 +30,28 @@ import javax.net.ssl.X509TrustManager
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
+    private fun trustAllClient(builder: OkHttpClient.Builder): OkHttpClient.Builder {
+        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        })
+        val sslContext = SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+        return builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+    }
+
     @Provides
     @Singleton
-    fun provideOkHttpClient(settingsRepository: SettingsRepository): OkHttpClient {
+    fun provideOkHttpClient(
+        settingsRepository: SettingsRepository,
+        cloudflareAccessInterceptor: CloudflareAccessInterceptor
+    ): OkHttpClient {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(
                 chain: Array<out X509Certificate>?,
@@ -51,8 +72,24 @@ object NetworkModule {
             init(null, trustAllCerts, SecureRandom())
         }
 
+        // ★ 重要 (起動速度): 以前はここが Level.BODY だった。
+        // BODY はレスポンス本文を丸ごとメモリへ読み切ってから文字列化し logcat へ流すため、
+        // 数MB規模の JSON を返す EPG API では
+        //   ・本文全体の二重デコード (ログ用 + Gson 用)
+        //   ・巨大文字列の生成による GC 多発
+        //   ・logd への大量書き込み
+        // が発生する。起動直後は EPG / チャンネル一覧の取得が集中するため、
+        // これが「起動直後だけ操作が絶望的に重い」最大の要因になっていた。
+        // Cloudflare Access の診断はヘッダーが見えれば足りるので、
+        // デバッグビルドでも HEADERS までに留め、リリースでは完全に無効化する。
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.HEADERS
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+            // Cloudflare Access のシークレットは logcat に平文で残さない
+            redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
         }
 
         return OkHttpClient.Builder()
@@ -85,6 +122,10 @@ object NetworkModule {
                     .build()
                 chain.proceed(newRequest)
             })
+            .addInterceptor(cloudflareAccessInterceptor)
+            // 最後に追加し、実際に送信されるヘッダーとレスポンス本文をログ出力する
+            // (CF Access のブロック/認証ページがHTMLで返ってきていないか確認するため)
+            .addInterceptor(logging)
             .build()
     }
 
@@ -110,4 +151,44 @@ object NetworkModule {
     fun provideKonomiApi(retrofit: Retrofit): KonomiApi {
         return retrofit.create(KonomiApi::class.java)
     }
+
+    @Provides
+    @Singleton
+    @EpgStationClient
+    fun provideEpgStationClient(
+        settingsRepository: SettingsRepository,
+        cloudflareAccessInterceptor: CloudflareAccessInterceptor
+    ): OkHttpClient {
+        val logging = HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+            redactHeader(SettingsRepository.CF_ACCESS_CLIENT_SECRET_HEADER)
+        }
+        return trustAllClient(OkHttpClient.Builder())
+            .addInterceptor(Interceptor { chain ->
+                val original = chain.request()
+                val base = runBlocking { settingsRepository.getEpgStationFullUrl() }
+                    .toHttpUrlOrNull() ?: original.url
+                chain.proceed(original.newBuilder().url(original.url.newBuilder()
+                    .scheme(base.scheme).host(base.host).port(base.port).build()).build())
+            })
+            .addInterceptor(cloudflareAccessInterceptor)
+            .addInterceptor(logging)
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    @EpgStationRetrofit
+    fun provideEpgStationRetrofit(@EpgStationClient client: OkHttpClient, gson: Gson): Retrofit =
+        Retrofit.Builder().baseUrl("http://127.0.0.1:8888/").client(client)
+            .addConverterFactory(GsonConverterFactory.create(gson)).build()
+
+    @Provides
+    @Singleton
+    fun provideEpgStationApi(@EpgStationRetrofit retrofit: Retrofit): com.beeregg2001.komorebi.data.api.EpgStationApi =
+        retrofit.create(com.beeregg2001.komorebi.data.api.EpgStationApi::class.java)
 }

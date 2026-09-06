@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.*
 import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -30,10 +31,17 @@ import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationDataMapper
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionDecoder
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,9 +76,11 @@ class LivePlayerViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val liveProvider: LiveProvider,
     private val recordProvider: RecordProvider,
+    private val epgStationLiveRepository: EpgStationLiveRepository,
     private val settingsRepository: SettingsRepository,
     private val livePlayerFactory: LivePlayerFactory,
-    private val liveJikkyoManager: LiveJikkyoManager
+    private val liveJikkyoManager: LiveJikkyoManager,
+    private val recordSyncEngine: RecordSyncEngine
 ) : ViewModel() {
 
     companion object {
@@ -107,8 +117,29 @@ class LivePlayerViewModel @Inject constructor(
     private val _dualSseDetail = MutableStateFlow(AppStrings.SSE_CONNECTING)
     val dualSseDetail: StateFlow<String> = _dualSseDetail.asStateFlow()
 
-    private val _subtitleEvents = MutableSharedFlow<Pair<Long, String>>(extraBufferCapacity = 10)
-    val subtitleEvents: SharedFlow<Pair<Long, String>> = _subtitleEvents.asSharedFlow()
+    private val _mainSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val mainSubtitleEvents: SharedFlow<NativeCaptionCue> = _mainSubtitleEvents.asSharedFlow()
+
+    private val _dualSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val dualSubtitleEvents: SharedFlow<NativeCaptionCue> = _dualSubtitleEvents.asSharedFlow()
+
+    private val _mainSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val mainSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _mainSubtitleLanguages.asStateFlow()
+
+    private val _dualSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val dualSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _dualSubtitleLanguages.asStateFlow()
+
+    private val _mainSubtitleLanguageId = MutableStateFlow(1)
+    val mainSubtitleLanguageId: StateFlow<Int> = _mainSubtitleLanguageId.asStateFlow()
+
+    private val _dualSubtitleLanguageId = MutableStateFlow(1)
+    val dualSubtitleLanguageId: StateFlow<Int> = _dualSubtitleLanguageId.asStateFlow()
 
     private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
     val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
@@ -132,7 +163,10 @@ class LivePlayerViewModel @Inject constructor(
     private val _mainBackendType = MutableStateFlow("KONOMITV")
     val mainBackendType: StateFlow<String> = _mainBackendType.asStateFlow()
 
+    @Volatile
     private var isSubtitleEnabled = false
+    private val mainCaptionDecoder = NativeCaptionDecoder()
+    private val dualCaptionDecoder = NativeCaptionDecoder()
     private var signalPollJob: Job? = null
 
     private var mainPlaybackJob: Job? = null
@@ -197,20 +231,78 @@ class LivePlayerViewModel @Inject constructor(
                             )
                         )
                     } else {
-                        val json = settingsRepository.availableStreamQualities.first()
-                        if (json.isNotBlank()) {
-                            try {
-                                val type = object : TypeToken<List<StreamQuality>>() {}.type
-                                val list = gson.fromJson<List<StreamQuality>>(json, type)
-                                if (!list.isNullOrEmpty()) _availableQualities.value = list
-                                else fetchFromApiAndSave()
-                            } catch (e: Exception) {
-                                fetchFromApiAndSave()
+                        // ★ 修正(再修正): 以前はキャッシュ済みJSONを最優先し、キャッシュが空/不正な
+                        // 場合しかresolver.luaへ動的取得しに行かなかったため、EDCBサーバー側で
+                        // トランスコード(xcode)プロファイルの設定を変更しても、Komorebi側の設定
+                        // (IP/ポート/再生方式)を変更しない限りキャッシュが更新されず、
+                        // 「トランスコードを設定しても画質が動的に取得できない」不具合があった。
+                        //
+                        // そこで一度「常にresolver.luaへ動的取得し、失敗時のみキャッシュへ
+                        // フォールバック」に変更したが、これは再生開始のたびに毎回ネットワーク
+                        // 往復を待つ形になり、resolver.luaが遅い/不安定な環境では逆に
+                        // 「画質がオリジナルしか取得できない(取得失敗のフォールバックに
+                        // 落ちてしまう)」regressionを引き起こした。1.1.0-beta6まではキャッシュ
+                        // 優先で確実に動いていたため、キャッシュがあればまずそれを即座に反映して
+                        // 表示をブロックしないようにしつつ、裏で最新値を取得して更新する
+                        // (stale-while-revalidate)方式にする。
+                        val cached = readCachedQualities()
+                        if (!cached.isNullOrEmpty()) {
+                            // キャッシュがあれば即座に表示し、再生開始をブロックしない
+                            // (beta6までの挙動)。裏で最新値を取得し、取得できれば差し替える。
+                            _availableQualities.value = cached
+                            viewModelScope.launch(Dispatchers.IO) {
+                                try {
+                                    val fetched = recordProvider.getStreamQualities()
+                                    if (fetched.isNotEmpty()) {
+                                        settingsRepository.saveString(
+                                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                            gson.toJson(fetched)
+                                        )
+                                        _availableQualities.value = fetched
+                                    }
+                                    // 空の場合は取得失敗とみなし、表示済みのキャッシュを維持する。
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Background quality refresh failed. Keeping cache.", e)
+                                }
                             }
-                        } else fetchFromApiAndSave()
+                        } else {
+                            // キャッシュが無い(初回起動等)場合のみ、最低限選べる状態にするため
+                            // 動的取得の完了を待つ。
+                            try {
+                                val fetched = recordProvider.getStreamQualities()
+                                if (fetched.isNotEmpty()) {
+                                    settingsRepository.saveString(
+                                        SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                        gson.toJson(fetched)
+                                    )
+                                    _availableQualities.value = fetched
+                                } else {
+                                    useDefaultQuality()
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Initial quality fetch failed.", e)
+                                useDefaultQuality()
+                            }
+                        }
                     }
                 } else if (source == StreamSource.KONOMITV) {
                     _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                } else if (source == StreamSource.EPGSTATION) {
+                    _availableQualities.value =
+                        epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
+                            // EPGStationの一部バージョンでは /api/config の streamConfig が
+                            // 空でも、ライブm2ts/m2tsllのmode 1/2は利用できる。
+                            // mode 0は無変換配信で、サーバー設定によってはデータが流れないため、
+                            // トランスコード配信を先に試す。
+                            listOf(
+                                StreamQuality("m2ts mode 1", "m2ts:1"),
+                                StreamQuality("m2ts mode 2", "m2ts:2"),
+                                StreamQuality("m2tsll mode 1", "m2tsll:1"),
+                                StreamQuality("m2tsll mode 2", "m2tsll:2"),
+                                StreamQuality("HLS", "hls:0"),
+                                StreamQuality("そのまま視聴 (m2ts)", "m2ts:0", isRawTs = true)
+                            )
+                        }
                 } else {
                     _availableQualities.value = listOf(
                         StreamQuality(
@@ -236,36 +328,28 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun fetchFromApiAndSave() {
-        try {
-            Log.i(TAG, "Cache empty. Interrupting EPG to fetch qualities from API.")
-            val fetched = recordProvider.getStreamQualities()
-            if (fetched.isNotEmpty()) {
-                settingsRepository.saveString(
-                    SettingsRepository.AVAILABLE_STREAM_QUALITIES,
-                    gson.toJson(fetched)
-                )
-                _availableQualities.value = fetched
-            } else {
-                val currentLive = settingsRepository.liveQuality.first()
-                _availableQualities.value = listOf(
-                    StreamQuality(
-                        label = "設定値 ($currentLive)",
-                        value = currentLive,
-                        isRawTs = false
-                    )
-                )
-            }
+    // EDCB(トランスコード)の画質キャッシュを読み出す。無ければ/壊れていればnullを返す。
+    private suspend fun readCachedQualities(): List<StreamQuality>? {
+        val json = settingsRepository.availableStreamQualities.first()
+        if (json.isBlank()) return null
+        return try {
+            val type = object : TypeToken<List<StreamQuality>>() {}.type
+            gson.fromJson<List<StreamQuality>>(json, type)
         } catch (e: Exception) {
-            val currentLive = settingsRepository.liveQuality.first()
-            _availableQualities.value = listOf(
-                StreamQuality(
-                    label = "設定値 ($currentLive)",
-                    value = currentLive,
-                    isRawTs = false
-                )
-            )
+            null
         }
+    }
+
+    // キャッシュも動的取得も両方失敗した場合の最終フォールバック。
+    private suspend fun useDefaultQuality() {
+        val currentLive = settingsRepository.liveQuality.first()
+        _availableQualities.value = listOf(
+            StreamQuality(
+                label = "設定値 ($currentLive)",
+                value = currentLive,
+                isRawTs = false
+            )
+        )
     }
 
     fun saveLiveQuality(qualityValue: String) {
@@ -283,12 +367,14 @@ class LivePlayerViewModel @Inject constructor(
 
         val mainSource = when (backendStr) {
             "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
             "MIRAKURUN_ONLY", "MIRAKURUN" -> StreamSource.MIRAKURUN
             else -> StreamSource.KONOMITV
         }
 
         val preferredSource = when (prefStr) {
             "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
             "MIRAKURUN" -> StreamSource.MIRAKURUN
             "KONOMITV" -> mainSource
             else -> mainSource
@@ -309,6 +395,8 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
 
         // ★ 修正: KonomiTV等でセッションが残らないよう、確実にstop()とclearMediaItems()を呼ぶ
         _mainPlayer.value?.stop()
@@ -321,6 +409,8 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
+        _dualSubtitleLanguages.value = emptyList()
 
         // ★ 修正: サブプレイヤー側も同様に確実なクリーンアップを行う
         _dualPlayer.value?.stop()
@@ -331,6 +421,7 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun releasePlayers() {
+        recordSyncEngine.setThrottled(false)
         mainPlaybackJob?.cancel(); dualPlaybackJob?.cancel()
         mainEventSource?.cancel(); dualEventSource?.cancel()
 
@@ -342,6 +433,11 @@ class LivePlayerViewModel @Inject constructor(
         _dualPlayer.value?.stop()
         _dualPlayer.value?.clearMediaItems()
         _dualPlayer.value?.release(); _dualPlayer.value = null
+
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
+        _dualSubtitleLanguages.value = emptyList()
 
         _mainSseStatus.value = "Standby"; _dualSseStatus.value = "Standby"
         liveJikkyoManager.stopJikkyo()
@@ -363,6 +459,29 @@ class LivePlayerViewModel @Inject constructor(
             }
 
             val errorMsg = analyzePlayerError(error)
+            val epgFallback = if (
+                mainCurrentSource == StreamSource.EPGSTATION &&
+                (mainCurrentQuality?.value?.startsWith("m2ts:") == true ||
+                    mainCurrentQuality?.value?.startsWith("m2tsll:") == true)
+            ) {
+                _availableQualities.value.firstOrNull { it.value.startsWith("hls:") }
+            } else null
+            if (epgFallback != null && mainCurrentChannel != null) {
+                Log.w(TAG, "EPGStation TS playback failed. Falling back to HLS: ${epgFallback.value}")
+                mainCurrentQuality = epgFallback
+                mainAutoRetryCount = 0
+                _mainSseDetail.value = "HLSへ切り替え中..."
+                stopMainPlaybackSafely()
+                playMainChannel(
+                    uiContext,
+                    mainCurrentChannel!!,
+                    mainCurrentSource,
+                    mainIsEdcbDirect,
+                    epgFallback,
+                    true
+                )
+                return@launch
+            }
             if (mainAutoRetryCount < MAX_AUTO_RETRY) {
                 mainAutoRetryCount++; _mainSseDetail.value =
                     "通信復旧中... ($mainAutoRetryCount/$MAX_AUTO_RETRY)"
@@ -425,6 +544,8 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (mainCurrentChannel?.id != channel.id) setMainSubtitleLanguage(1)
+        recordSyncEngine.setThrottled(true)
         if (!isAutoRetry) {
             mainAutoRetryCount = 0; _mainPlayerError.value = null
         }
@@ -444,15 +565,14 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
                     val newPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
                             isKonomiTvSource = { mainCurrentSource == StreamSource.KONOMITV },
-                            isSubtitleEnabled = { isSubtitleEnabled },
-                            onSubtitleDataReceived = { pts, base64 ->
-                                viewModelScope.launch(
-                                    Dispatchers.Main
-                                ) { _subtitleEvents.emit(Pair(pts, base64)) }
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitMainSubtitle(pts, data)
                             },
                             onError = { error -> handleMainError(uiContext, error) }
                         )
@@ -460,20 +580,40 @@ class LivePlayerViewModel @Inject constructor(
                     _mainPlayer.value = newPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
                         withContext(Dispatchers.Main) {
                             _mainSseDetail.value = "トランスコード開始を待機中..."
                         }
                         val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 0)
                         if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
                         hlsUrl
-                    } else buildStreamUrl(channel, source, quality, config, mainTsDataSourceFactory)
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        mainTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
 
                     withContext(Dispatchers.Main) {
-                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
                             _mainSseStatus.value = "ONAir"; _mainSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
-                            startMainSse(uiContext, channel.displayChannelId, quality.value, config)
+                            startMainSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
                         }
                         startPlayback(
                             uiContext,
@@ -481,7 +621,10 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            mainTsDataSourceFactory
+                            quality,
+                            mainTsDataSourceFactory,
+                            ::decodeAndEmitMainSubtitle,
+                            cfAccessHeaders
                         )
                         liveJikkyoManager.startJikkyo(channel, source)
                     }
@@ -505,6 +648,8 @@ class LivePlayerViewModel @Inject constructor(
         isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (dualCurrentChannel?.id != channel.id) setDualSubtitleLanguage(1)
+        recordSyncEngine.setThrottled(true)
         if (!isAutoRetry) dualAutoRetryCount = 0
         dualCurrentChannel = channel; dualCurrentSource = source; dualIsEdcbDirect =
             isEdcbDirect; dualCurrentQuality = quality
@@ -520,15 +665,14 @@ class LivePlayerViewModel @Inject constructor(
                     delay(if (isAutoRetry) 0 else 600)
 
                     val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
                     val newDualPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
                             audioOutputMode = audioOutputMode,
                             isKonomiTvSource = { dualCurrentSource == StreamSource.KONOMITV },
-                            isSubtitleEnabled = { isSubtitleEnabled },
-                            onSubtitleDataReceived = { pts, base64 ->
-                                viewModelScope.launch(
-                                    Dispatchers.Main
-                                ) { _subtitleEvents.emit(Pair(pts, base64)) }
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitDualSubtitle(pts, data)
                             },
                             onError = { error -> handleDualError(uiContext, error) }
                         )
@@ -536,20 +680,40 @@ class LivePlayerViewModel @Inject constructor(
                     _dualPlayer.value = newDualPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
-                    val streamUrl = if (source == StreamSource.EDCB && !isEdcbDirect) {
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
                         withContext(Dispatchers.Main) {
                             _dualSseDetail.value = "トランスコード開始を待機中..."
                         }
                         val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 1)
                         if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
                         hlsUrl
-                    } else buildStreamUrl(channel, source, quality, config, dualTsDataSourceFactory)
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        dualTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
 
                     withContext(Dispatchers.Main) {
-                        if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect) || (source == StreamSource.EDCB && !isEdcbDirect)) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
                             _dualSseStatus.value = "ONAir"; _dualSseDetail.value = ""
                         } else if (config is BackendConfig.KonomiTv) {
-                            startDualSse(uiContext, channel.displayChannelId, quality.value, config)
+                            startDualSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
                         }
                         startPlayback(
                             uiContext,
@@ -557,7 +721,10 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            dualTsDataSourceFactory
+                            quality,
+                            dualTsDataSourceFactory,
+                            ::decodeAndEmitDualSubtitle,
+                            cfAccessHeaders
                         )
                     }
                 }
@@ -592,6 +759,52 @@ class LivePlayerViewModel @Inject constructor(
         this.isSubtitleEnabled = enabled
     }
 
+    fun setMainSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _mainSubtitleLanguageId.value = languageId
+        mainCaptionDecoder.switchLanguage(languageId)
+    }
+
+    fun setDualSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _dualSubtitleLanguageId.value = languageId
+        dualCaptionDecoder.switchLanguage(languageId)
+    }
+
+    private fun decodeAndEmitMainSubtitle(ptsMs: Long, data: ByteArray) {
+        decodeAndEmitSubtitle(
+            decoder = mainCaptionDecoder,
+            languagesState = _mainSubtitleLanguages,
+            events = _mainSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
+    }
+
+    private fun decodeAndEmitDualSubtitle(ptsMs: Long, data: ByteArray) {
+        decodeAndEmitSubtitle(
+            decoder = dualCaptionDecoder,
+            languagesState = _dualSubtitleLanguages,
+            events = _dualSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
+    }
+
+    private fun decodeAndEmitSubtitle(
+        decoder: NativeCaptionDecoder,
+        languagesState: MutableStateFlow<List<NativeCaptionLanguage>>,
+        events: MutableSharedFlow<NativeCaptionCue>,
+        ptsMs: Long,
+        data: ByteArray
+    ) {
+        val renderCaptions = isSubtitleEnabled
+        val cue = decoder.decode(data, ptsMs, renderCaptions = renderCaptions)
+        val languages = decoder.availableLanguages()
+        if (languages != languagesState.value) languagesState.value = languages
+        if (renderCaptions && cue != null) events.tryEmit(cue)
+    }
+
     fun setVolumes(mainVolume: Float, dualVolume: Float) {
         _mainPlayer.value?.volume = mainVolume; _dualPlayer.value?.volume = dualVolume
     }
@@ -605,7 +818,8 @@ class LivePlayerViewModel @Inject constructor(
         source: StreamSource,
         quality: StreamQuality,
         config: BackendConfig,
-        factory: TsReadExDataSourceFactory
+        factory: TsReadExDataSourceFactory,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ): String {
         return when (source) {
             StreamSource.EDCB -> {
@@ -654,6 +868,8 @@ class LivePlayerViewModel @Inject constructor(
                         "-d",
                         "13"
                     )
+                    // ★ 追加: Mirakurun ストリームにも Cloudflare Access ヘッダーを付与
+                    factory.requestHeaders = cfAccessHeaders
                     UrlBuilder.getMirakurunStreamUrl(
                         config.ip,
                         config.port,
@@ -663,12 +879,75 @@ class LivePlayerViewModel @Inject constructor(
                 } else ""
             }
 
-            StreamSource.KONOMITV -> UrlBuilder.getKonomiTvLiveStreamUrl(
-                config.ip,
-                config.port,
-                channel.displayChannelId,
-                quality.value
-            )
+            StreamSource.KONOMITV -> {
+                // ★ 追加: original画質はサーバー側で再エンコードせず、tsreadexを通しただけの
+                // 生MPEG-TSがそのまま流れてくる。サーバー側tsreadexは-a/-b/-c/-uでPID存在保証は
+                // 行うがID3変換(-d)や音声デュアルモノ分離は行わないため、EDCB/Mirakurunの生放送波
+                // 直接再生と同じ状態(生PESの字幕・未分離の音声)。再エンコードを挟まないぶん
+                // program_number/service_idは放送そのままのはずなので、EDCB/Mirakurunと同様に
+                // channel.serviceIdでCServiceFilterに正しく対象サービスを絞らせ、音声デュアルモノ
+                // 分離とID3変換(id3convは独立してPMTからPIDを検出するためservice絞り込みの影響を
+                // 受けない)の両方を有効にする
+                if (quality.value == "original") {
+                    factory.tsArgs = arrayOf(
+                        "-x",
+                        "18/38/39",
+                        "-n",
+                        channel.serviceId.toString(),
+                        "-a",
+                        "13",
+                        "-b",
+                        "4",
+                        "-c",
+                        "5",
+                        "-u",
+                        "1",
+                        "-d",
+                        "13"
+                    )
+                    factory.requestHeaders = cfAccessHeaders
+                }
+                UrlBuilder.getKonomiTvLiveStreamUrl(
+                    config.ip,
+                    config.port,
+                    channel.displayChannelId,
+                    quality.value
+                )
+            }
+
+            StreamSource.EPGSTATION -> {
+                // EPGStationのmode 1/2はトランスコード後にprogram numberが1へ
+                // 再構成されるため、元チャンネルのserviceIdで絞ると全PIDが除外される。
+                // 配信URL自体がチャンネル単位なので、EPGStationでは全サービスを通す。
+                factory.tsArgs = arrayOf(
+                    "-x",
+                    "18/38/39",
+                    "-n",
+                    "0",
+                    "-a",
+                    "13",
+                    "-b",
+                    "4",
+                    "-c",
+                    "5",
+                    "-u",
+                    "1",
+                    "-d",
+                    "13"
+                )
+                factory.requestHeaders = cfAccessHeaders
+                val channelId = EpgStationDataMapper.parseChannelId(channel.id)
+                val mode = quality.value.substringAfter(":", "").toIntOrNull() ?: 0
+                if (config is BackendConfig.EpgStation && channelId != null) {
+                    if (quality.value.startsWith("m2tsll:")) {
+                        UrlBuilder.getEpgStationLiveM2tsLlUrl(config.ip, config.port, channelId, mode)
+                    } else {
+                        UrlBuilder.getEpgStationLiveM2tsUrl(config.ip, config.port, channelId, mode)
+                    }
+                } else {
+                    ""
+                }
+            }
         }
     }
 
@@ -679,24 +958,35 @@ class LivePlayerViewModel @Inject constructor(
         streamUrl: String,
         source: StreamSource,
         isEdcbDirect: Boolean,
-        factory: TsReadExDataSourceFactory
+        quality: StreamQuality,
+        factory: TsReadExDataSourceFactory,
+        onSubtitleDataReceived: (Long, ByteArray) -> Unit,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         try {
             val mediaItem = MediaItem.fromUri(streamUrl)
             val mediaSource =
-                if (source == StreamSource.MIRAKURUN || (source == StreamSource.EDCB && isEdcbDirect)) {
+                if (streamUrl.contains(".m3u8", ignoreCase = true)) {
+                    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                        .setDefaultRequestProperties(cfAccessHeaders)
+                        .setAllowCrossProtocolRedirects(true)
+                    HlsMediaSource.Factory(httpDataSourceFactory)
+                        .setAllowChunklessPreparation(false)
+                        .createMediaSource(mediaItem)
+                } else if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION ||
+                    (source == StreamSource.EDCB && isEdcbDirect) ||
+                    // ★ 追加: KonomiTVのoriginal画質も生MPEG-TSなので同じ経路(TsReadExDataSource +
+                    // 直接PESパース)で再生する
+                    (source == StreamSource.KONOMITV && quality.value == "original")
+                ) {
                     val extractorsFactory = ExtractorsFactory {
                         arrayOf(
                             TsExtractor(
                                 TsExtractor.MODE_SINGLE_PMT,
-                                TimestampAdjuster(C.TIME_UNSET),
+                                TimestampAdjuster(0L),
                                 DirectSubtitlePayloadReaderFactory(
-                                    onSubtitleDataReceived = { pts, base64 ->
-                                        viewModelScope.launch(
-                                            Dispatchers.Main
-                                        ) { _subtitleEvents.emit(Pair(pts, base64)) }
-                                    },
-                                    isSubtitleEnabled = { isSubtitleEnabled }),
+                                    onSubtitleDataReceived = onSubtitleDataReceived
+                                ),
                                 TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
                             )
                         )
@@ -707,11 +997,21 @@ class LivePlayerViewModel @Inject constructor(
                     if (source == StreamSource.EDCB && !isEdcbDirect) {
                         val uri = Uri.parse(streamUrl)
                         val ctok = uri.getQueryParameter("ctok") ?: ""
+                        // ★ 追加: Cookie に加えて Cloudflare Access ヘッダーも付与
                         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-                            .setDefaultRequestProperties(mapOf("Cookie" to "ctok=$ctok"))
+                            .setDefaultRequestProperties(
+                                mapOf("Cookie" to "ctok=$ctok") + cfAccessHeaders
+                            )
                             .setAllowCrossProtocolRedirects(true)
                         HlsMediaSource.Factory(httpDataSourceFactory)
                             .setAllowChunklessPreparation(false).createMediaSource(mediaItem)
+                    } else if (cfAccessHeaders.isNotEmpty()) {
+                        // ★ 追加: KonomiTV ストリームに Cloudflare Access ヘッダーを付与
+                        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                            .setDefaultRequestProperties(cfAccessHeaders)
+                        DefaultMediaSourceFactory(
+                            DefaultDataSource.Factory(uiContext, httpDataSourceFactory)
+                        ).createMediaSource(mediaItem)
                     } else DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
                 }
             player?.setMediaSource(mediaSource); player?.prepare(); player?.play()
@@ -727,12 +1027,16 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
-            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)").build()
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
         mainEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onFailure(
@@ -798,12 +1102,16 @@ class LivePlayerViewModel @Inject constructor(
         uiContext: Context,
         channelId: String,
         quality: String,
-        config: BackendConfig.KonomiTv
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
     ) {
         val eventUrl =
             UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
         val request =
-            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)").build()
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
         dualEventSource = EventSources.createFactory(okHttpClient)
             .newEventSource(request, object : EventSourceListener() {
                 override fun onFailure(
@@ -933,6 +1241,8 @@ class LivePlayerViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         releasePlayers()
+        mainCaptionDecoder.close()
+        dualCaptionDecoder.close()
         // ★ 修正: 全通信機能を破壊する自爆スイッチ（shutdown）を撤去し、
         // プレイヤーの releasePlayers() でのクリーンアップに一任する
     }

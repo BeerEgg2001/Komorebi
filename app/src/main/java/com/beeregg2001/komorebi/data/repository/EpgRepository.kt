@@ -28,12 +28,24 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 import javax.inject.Inject
+import javax.inject.Singleton
 
 data class EpgSearchResultItem(
     val program: EpgProgram,
     val channel: EpgChannel
 )
 
+/**
+ * ★ 最適化: @Singleton を付与。
+ * このクラスは番組表データの巨大なメモリキャッシュ([memoryCache])を保持しているが、
+ * スコープ未指定だったため Hilt が注入先ごとに別インスタンスを生成していた。
+ * 実際 EpgViewModel と HomeViewModel の 2 箇所から注入されており、
+ *   - 全放送種別の番組表データがメモリ上に二重に載る（数 MB〜数十 MB 規模）
+ *   - 片方が温めたキャッシュをもう片方が使えず、Room 読み出し + GZIP 展開 + Gson パースを
+ *     それぞれ独立にやり直す
+ * という無駄が発生していた。シングルトン化でこの二重化を解消する。
+ */
+@Singleton
 class EpgRepository @Inject constructor(
     @ApplicationContext private val context: Context, // ★ 追加: キャッシュディレクトリを使用するためContextを注入
     private val epgProvider: EpgProvider,

@@ -72,6 +72,7 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
+    val isValidatingGeminiApiKey by viewModel.isValidatingGeminiApiKey.collectAsState()
     val playerUiMode by viewModel.playerUiMode.collectAsState()
     val autoCmSkip by viewModel.autoCmSkip.collectAsState()
     val availableQualities by viewModel.availableQualities.collectAsState()
@@ -130,8 +131,11 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
+                FocusRequester(),
+                // ★ 追加: Cloudflare Zero Trust (Client ID / Secret) 用に2個増強
+                FocusRequester(),
                 FocusRequester()
-            ),
+            ), // 1: Connection
             listOf(
                 FocusRequester(),
                 FocusRequester(),
@@ -177,6 +181,14 @@ fun SettingsScreen(
     LaunchedEffect(uiState.selectedCategoryIndex) {
         if (initialFocusItemIndex == null || uiState.selectedCategoryIndex != initialCategoryIndex) {
             mainScrollState.scrollTo(0)
+        }
+        // ★ 追加: 「再生設定」タブ(画質選択ダイアログがある)を開いたタイミングで、
+        // EDCBのトランスコード画質リストを確実に再取得する。アプリ起動1.5秒後の
+        // 自動同期が失敗すると、以後リトライされずダイアログの選択肢が
+        // 「設定値」ベースの縮退リストに固定されてしまっていたため、
+        // ユーザーが実際にこの画面を見るタイミングで取り直す。
+        if (uiState.selectedCategoryIndex == 2) {
+            viewModel.refreshStreamQualities()
         }
     }
 
@@ -408,43 +420,80 @@ fun SettingsScreen(
                                 }
                             },
                             edcbPlayMethodR,
+                            prefs.cfAccessClientId,
+                            prefs.cfAccessClientSecret,
                             { t, v ->
-                                uiState.activeDialog = SettingDialogState.Input(t, v) { input ->
+                                uiState.activeDialog = SettingDialogState.Input(
+                                    title = t,
+                                    initialValue = v,
+                                    isLongToken = t == AppStrings.SETTINGS_INPUT_CF_CLIENT_ID || t == AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET,
+                                    placeholder = when (t) {
+                                        AppStrings.SETTINGS_INPUT_CF_CLIENT_ID -> AppStrings.SETTINGS_PLACEHOLDER_CF_CLIENT_ID
+                                        AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET -> AppStrings.SETTINGS_PLACEHOLDER_CF_CLIENT_SECRET
+                                        else -> null
+                                    }
+                                ) { input ->
                                     scope.launch(Dispatchers.IO) {
+                                        // ★ 追加: CF Access のトークンには空白・改行は含まれ得ないため、
+                                        // TV の画面キーボードが誤って挿入した改行等も除去する
+                                        val sanitizedInput =
+                                            if (t == AppStrings.SETTINGS_INPUT_CF_CLIENT_ID || t == AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET)
+                                                input.replace(Regex("\\s+"), "")
+                                            else input
                                         when (t) {
                                             "KonomiTV (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "KonomiTV (ポート)" -> repository.saveString(
                                                 SettingsRepository.KONOMI_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.EDCB_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (TCPポート)" -> repository.saveString(
                                                 SettingsRepository.EDCB_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "EDCB (HTTP/HTTPSポート)" -> repository.saveString(
                                                 SettingsRepository.EDCB_HTTP_PORT,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "Mirakurun (IPアドレス)" -> repository.saveString(
                                                 SettingsRepository.MIRAKURUN_IP,
-                                                input
+                                                sanitizedInput
                                             )
 
                                             "Mirakurun (ポート)" -> repository.saveString(
                                                 SettingsRepository.MIRAKURUN_PORT,
-                                                input
+                                                sanitizedInput
+                                            )
+
+                                            "EPGStation (IPアドレス)" -> repository.saveString(
+                                                SettingsRepository.EPGSTATION_IP,
+                                                sanitizedInput
+                                            )
+
+                                            "EPGStation (ポート)" -> repository.saveString(
+                                                SettingsRepository.EPGSTATION_PORT,
+                                                sanitizedInput
+                                            )
+
+                                            AppStrings.SETTINGS_INPUT_CF_CLIENT_ID -> repository.saveString(
+                                                SettingsRepository.CF_ACCESS_CLIENT_ID,
+                                                sanitizedInput
+                                            )
+
+                                            AppStrings.SETTINGS_INPUT_CF_CLIENT_SECRET -> repository.saveString(
+                                                SettingsRepository.CF_ACCESS_CLIENT_SECRET,
+                                                sanitizedInput
                                             )
                                         }
                                     }
@@ -456,20 +505,28 @@ fun SettingsScreen(
                                         "Mirakurun (IPアドレス)" -> viewModel.updateMirakurunIp(
                                             input
                                         )
+
+                                        "EPGStation (IPアドレス)" -> viewModel.updateEpgStationIp(input)
+                                        "EPGStation (ポート)" -> viewModel.updateEpgStationPort(input)
                                     }
                                 }
                             },
                             {
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     "バックエンドシステムの選択",
+                                    // ★ 修正: "Mirakurun (録画なし)" はまだ未対応のため選択肢から非表示にする。
+                                    // 既にこれを選択している既存ユーザーがいる可能性を考慮し、
+                                    // SettingsRepository側の判定・分岐(MIRAKURUN_ONLY)自体は残したまま、
+                                    // 新規に選べないようにするだけに留める。
                                     listOf(
                                         "KonomiTV" to "KONOMITV",
                                         "EDCB (EpgTimerSrv)" to "EDCB",
-                                        "Mirakurun (録画なし)" to "MIRAKURUN_ONLY"
+                                        "EPGStation" to "EPGSTATION"
                                     ),
                                     if (listOf(
                                             "KONOMITV",
                                             "EDCB",
+                                            "EPGSTATION",
                                             "MIRAKURUN_ONLY"
                                         ).any { it == prefs.backendType }
                                     ) prefs.backendType else "KONOMITV"
@@ -516,6 +573,8 @@ fun SettingsScreen(
                             itemFocusRequesters[1][4],
                             itemFocusRequesters[1][5],
                             itemFocusRequesters[1][6],
+                            itemFocusRequesters[1][8],
+                            itemFocusRequesters[1][9],
                             categoryFocusRequesters[1]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 1 }
 
@@ -977,6 +1036,8 @@ fun SettingsScreen(
 
                         8 -> LabSettingsContent(
                             prefs.geminiApiKey,
+                            prefs.geminiApiKeyStatus,
+                            isValidatingGeminiApiKey,
                             prefs.favoriteBaseballTeams,
                             prefs.labAllowMirakurunDual,
                             itemFocusRequesters[8][0],
@@ -1042,11 +1103,13 @@ fun SettingsScreen(
 
         // --- ダイアログ表示制御 ---
         when (val state = uiState.activeDialog) {
-            is SettingDialogState.Input -> InputDialog(
-                state.title,
-                state.initialValue,
-                { closeDialog() },
-                { state.onConfirm(it); closeDialog() })
+            is SettingDialogState.Input -> com.beeregg2001.komorebi.ui.components.InputDialog(
+                title = state.title,
+                initialValue = state.initialValue,
+                isLongToken = state.isLongToken,
+                placeholder = state.placeholder,
+                onDismiss = { closeDialog() },
+                onConfirm = { state.onConfirm(it); closeDialog() })
 
             is SettingDialogState.BatchInput -> BatchInputDialog(
                 { closeDialog() },
@@ -1078,6 +1141,8 @@ fun SettingsScreen(
                 val localIp by viewModel.localIpAddress.collectAsState()
                 GeminiSetupDialog(
                     prefs.geminiApiKey,
+                    prefs.geminiApiKeyStatus,
+                    isValidatingGeminiApiKey,
                     localIp,
                     { viewModel.startGeminiLocalServer() },
                     { viewModel.stopGeminiLocalServer() },
@@ -1088,21 +1153,13 @@ fun SettingsScreen(
                             "Gemini API Key",
                             prefs.geminiApiKey
                         ) { key ->
-                            scope.launch {
-                                repository.saveString(
-                                    SettingsRepository.GEMINI_API_KEY,
-                                    key
-                                )
-                            }
+                            viewModel.saveAndValidateGeminiApiKey(key)
                         }
                     },
                     {
-                        viewModel.stopGeminiLocalServer(); scope.launch {
-                        repository.saveString(
-                            SettingsRepository.GEMINI_API_KEY,
-                            ""
-                        )
-                    }; closeDialog()
+                        viewModel.stopGeminiLocalServer()
+                        viewModel.clearGeminiApiKey()
+                        closeDialog()
                     })
             }
 

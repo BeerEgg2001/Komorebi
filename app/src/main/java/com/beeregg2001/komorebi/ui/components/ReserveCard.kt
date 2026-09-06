@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import java.time.OffsetDateTime
@@ -119,9 +120,13 @@ fun ReserveCard(
 
     // ★修正: EDCBとKonomiTVの両方に対応した非同期ロゴ取得
     val displayId = item.channel.displayChannelId ?: item.channel.id
-    var logoUrl by remember(item.channel.id) { mutableStateOf("") }
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得（チラつき・再解決の防止）
+    var logoUrl by remember(item.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(displayId) ?: "")
+    }
 
     LaunchedEffect(item.channel.id) {
+        if (logoUrl.isNotEmpty()) return@LaunchedEffect
         val fetchedUrl = getLogoUrl(displayId)
         logoUrl = fetchedUrl.ifEmpty {
             // 取得できなかった場合はKonomiTVのURLビルダーにフォールバック

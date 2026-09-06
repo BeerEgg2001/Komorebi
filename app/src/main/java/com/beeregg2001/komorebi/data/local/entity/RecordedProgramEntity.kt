@@ -39,5 +39,10 @@ data class RecordedProgramEntity(
     @ColumnInfo(name = "tile_height") val tileHeight: Int? = null,
     // ★ 追加: データベースのカラムとしてサムネイルURLを永続化
     @ColumnInfo(name = "direct_thumbnail_url") val directThumbnailUrl: String? = null,
-    @ColumnInfo(name = "api_thumbnail_url") val apiThumbnailUrl: String? = null
+    @ColumnInfo(name = "api_thumbnail_url") val apiThumbnailUrl: String? = null,
+    @ColumnInfo(name = "series_id") val seriesId: Int? = null,
+    @ColumnInfo(name = "episode_number") val episodeNumber: Double? = null,
+    @ColumnInfo(name = "episode_label") val episodeLabel: String? = null,
+    @ColumnInfo(name = "episode_title") val episodeTitle: String? = null,
+    @ColumnInfo(name = "air_type") val airType: String? = null
 )

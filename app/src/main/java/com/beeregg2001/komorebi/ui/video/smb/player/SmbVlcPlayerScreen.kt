@@ -40,6 +40,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.ui.video.player.*
 import com.beeregg2001.komorebi.ui.video.smb.SmbItem
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
@@ -546,6 +547,24 @@ fun SmbVlcPlayerScreen(
             seekingPreviewJob = scope.launch { delay(2000); isSeekingPreviewVisible = false }
         }
 
+        // ★ 修正: メディアキーのチャプタースキップ(handleKeyEvent)とOSDボタン(PlayerControls)の
+        // 両方から同じロジックを呼べるよう、変数として括り出す
+        val skipToPreviousChapter = {
+            vs.lastInteractionTime = System.currentTimeMillis()
+            val basePos = getEffectivePositionMs()
+            val reversedChapters = vlcChapters.sortedByDescending { it.startTimeMs }
+            val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
+            performSeek(prevChapter?.startTimeMs ?: 0L)
+        }
+        val skipToNextChapter = {
+            vs.lastInteractionTime = System.currentTimeMillis()
+            val basePos = getEffectivePositionMs()
+            val nextChapter = vlcChapters.find { it.startTimeMs > basePos + 3000 }
+            if (nextChapter != null) performSeek(nextChapter.startTimeMs) else onShowToast(
+                "次のチャプターはありません"
+            )
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -576,7 +595,9 @@ fun SmbVlcPlayerScreen(
                         onSubMenuToggle = onSubMenuToggle,
                         exoPlayerIsPlaying = vs.isPlayerPlaying,
                         onPause = { mediaPlayer.pause() },
-                        onPlay = { mediaPlayer.play() }
+                        onPlay = { mediaPlayer.play() },
+                        onSkipPreviousChapter = skipToPreviousChapter,
+                        onSkipNextChapter = skipToNextChapter
                     )
                 }
         ) {
@@ -645,21 +666,8 @@ fun SmbVlcPlayerScreen(
                         performSeek((basePos + 30_000).coerceAtMost(limit))
                     },
                     onSeekRequested = { performSeek(it) }, // ★ 追加: シークバー操作によるシーク実行
-                    onSkipPreviousChapter = {
-                        vs.lastInteractionTime = System.currentTimeMillis()
-                        val basePos = getEffectivePositionMs()
-                        val reversedChapters = vlcChapters.sortedByDescending { it.startTimeMs }
-                        val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
-                        performSeek(prevChapter?.startTimeMs ?: 0L)
-                    },
-                    onSkipNextChapter = {
-                        vs.lastInteractionTime = System.currentTimeMillis()
-                        val basePos = getEffectivePositionMs()
-                        val nextChapter = vlcChapters.find { it.startTimeMs > basePos + 3000 }
-                        if (nextChapter != null) performSeek(nextChapter.startTimeMs) else onShowToast(
-                            "次のチャプターはありません"
-                        )
-                    },
+                    onSkipPreviousChapter = skipToPreviousChapter,
+                    onSkipNextChapter = skipToNextChapter,
                     onChapterListToggle = { isChapterListOpen = true; onShowControlsChange(true) },
                     onInfoToggle = { isProgramInfoOpen = true; onShowControlsChange(true) },
                     onSettingsToggle = {
@@ -715,6 +723,7 @@ fun SmbVlcPlayerScreen(
                                     (tracks.indexOfFirst { it.id == mediaPlayer.audioTrack } + 1) % tracks.size
                                 mediaPlayer.audioTrack = tracks[nextIdx].id
                                 onShowToast("音声: ${tracks[nextIdx].name}")
+                                vs.currentAudioMode = if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
                             } else onShowToast("音声トラックが1つしかありません")
                         },
                         onSpeedToggle = {

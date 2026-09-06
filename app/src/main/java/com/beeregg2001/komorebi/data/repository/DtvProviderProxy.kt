@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.data.repository
 
 import android.util.Log
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.*
 // ★ 追加: 分割された新しいEDCBリポジトリ群をインポート
@@ -9,6 +10,10 @@ import com.beeregg2001.komorebi.data.repository.edcb.EdcbLiveRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbRecordRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbReserveRepository
 import com.beeregg2001.komorebi.data.repository.edcb.EdcbEpgRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationEpgRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationRecordRepository
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationReserveRepository
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,7 +26,10 @@ import javax.inject.Singleton
 class DtvProviderProxy @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val konomiRepository: KonomiRepository,
-    private val epgStationRepository: EpgStationRepository,
+    private val epgStationLiveRepository: EpgStationLiveRepository,
+    private val epgStationRecordRepository: EpgStationRecordRepository,
+    private val epgStationReserveRepository: EpgStationReserveRepository,
+    private val epgStationEpgRepository: EpgStationEpgRepository,
     // ★ 修正: 旧 EdcbRepository を削除し、分割した4つのRepositoryをInjectする
     private val edcbLiveRepository: EdcbLiveRepository,
     private val edcbRecordRepository: EdcbRecordRepository,
@@ -34,7 +42,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getLiveProvider(): LiveProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbLiveRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationLiveRepository
             else -> konomiRepository
         }
     }
@@ -42,7 +50,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getRecordProvider(): RecordProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbRecordRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationRecordRepository
             else -> konomiRepository
         }
     }
@@ -50,7 +58,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getReserveProvider(): ReserveProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbReserveRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationReserveRepository
             else -> konomiRepository
         }
     }
@@ -58,7 +66,7 @@ class DtvProviderProxy @Inject constructor(
     private suspend fun getEpgProvider(): EpgProvider {
         return when (settingsRepository.backendType.first()) {
             "EDCB" -> edcbEpgRepository
-            "EPGSTATION" -> epgStationRepository
+            "EPGSTATION" -> epgStationEpgRepository
             else -> konomiRepository
         }
     }
@@ -92,9 +100,31 @@ class DtvProviderProxy @Inject constructor(
         }
     }
 
+    /**
+     * ★ 最適化: 局ロゴ URL をプロセス全体で共有するメモリキャッシュ経由で返す。
+     *
+     * 従来は呼び出し元ごと(ChannelViewModel のみ)にキャッシュがあり、EpgViewModel /
+     * HomeViewModel / LivePlayerViewModel、および各 Composable の LaunchedEffect からの
+     * 呼び出しは毎回バックエンドまで到達していた。バックエンド実装は DataStore 読み出しや
+     * Dispatchers.IO 切り替え + ファイル存在確認を伴うため、リスト描画のたびに
+     * 数十回のコルーチン往復が発生していた。
+     *
+     * キャッシュはバックエンド種別が変わると自動で破棄され、接続先(IP/ポート)変更時は
+     * SettingsRepository.saveString から明示的にクリアされる。
+     */
     override suspend fun getChannelLogoUrl(channelId: String): String {
         return try {
-            getLiveProvider().getChannelLogoUrl(channelId)
+            val backend = settingsRepository.backendType.first()
+            ChannelLogoUrlCache.get(backend, channelId)?.let { return it }
+
+            val provider = when (backend) {
+                "EDCB" -> edcbLiveRepository
+                "EPGSTATION" -> epgStationLiveRepository
+                else -> konomiRepository
+            }
+            provider.getChannelLogoUrl(channelId).also {
+                ChannelLogoUrlCache.put(backend, channelId, it)
+            }
         } catch (e: Exception) {
             Log.w("DtvProviderProxy", "getChannelLogoUrl failed or not implemented. Skipping.")
             ""
@@ -107,6 +137,9 @@ class DtvProviderProxy @Inject constructor(
 
     override suspend fun getRecordedPrograms(page: Int) =
         getRecordProvider().getRecordedPrograms(page)
+
+    override suspend fun getRecordedPrograms(page: Int, limit: Int) =
+        getRecordProvider().getRecordedPrograms(page, limit)
 
     override suspend fun getRecordedProgram(videoId: Int) =
         getRecordProvider().getRecordedProgram(videoId)

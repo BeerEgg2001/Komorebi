@@ -32,6 +32,7 @@ import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 enum class LiveSubMenuCategory {
@@ -46,6 +47,8 @@ fun LiveTopSubMenuUI(
     availableSources: List<StreamSource>,
     currentAudioMode: AudioMode,
     isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage>,
+    currentSubtitleLanguageId: Int,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
@@ -60,11 +63,17 @@ fun LiveTopSubMenuUI(
     onSourceSelect: (StreamSource, Boolean) -> Unit,
     onAudioToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
     onCloseMenu: () -> Unit,
-    availableQualities: List<StreamQuality> = StreamQuality.DEFAULT_QUALITIES
+    availableQualities: List<StreamQuality> = StreamQuality.DEFAULT_QUALITIES,
+    // ★ 追加: 設定画面ラボの「Mirakurun/EDCB等の重量パイプラインでの2画面表示を許可」リミッターと
+    // 同じ設定値。originalもMIRAKURUN/EDCB同様の重量な生TSパイプラインを使うため、この設定でリミッター
+    // を解除しているユーザーには1080p系と違って除外せず選択可能にする(LivePlayerScreen.kt側の
+    // 自動ダウングレード判定と揃える)
+    allowHeavyDual: Boolean = false
 ) {
     val colors = KomorebiTheme.colors
     var selectedCategory by remember { mutableStateOf<LiveSubMenuCategory?>(null) }
@@ -73,19 +82,25 @@ fun LiveTopSubMenuUI(
     val mainSourceButtonRequester = remember { FocusRequester() }
 
     // ★ 修正: name を value に変更して Unresolved reference エラーを解消
-    val effectiveQualities = remember(isDualDisplayMode, availableQualities) {
+    // ★ 追加: original(MPEG-2)は1080相当以上の解像度かつHWデコーダーを専有するため、
+    // デュアル表示時は1080pと同様に選択肢から除外する。ただしallowHeavyDual(ラボのリミッター解除)が
+    // 有効な場合は、MIRAKURUN/EDCB同様に除外しない
+    val effectiveQualities = remember(isDualDisplayMode, availableQualities, allowHeavyDual) {
         if (isDualDisplayMode) {
-            availableQualities.filter { !it.value.contains("1080") && !it.label.contains("1080") }
+            availableQualities.filter {
+                !it.value.contains("1080") && !it.label.contains("1080") &&
+                    (allowHeavyDual || it.value != "original")
+            }
         } else {
             availableQualities
         }
     }
 
     // ★ 修正: name を value に変更して Unresolved reference エラーを解消
-    val effectiveQuality = remember(currentQuality, isDualDisplayMode, effectiveQualities) {
+    val effectiveQuality = remember(currentQuality, isDualDisplayMode, effectiveQualities, allowHeavyDual) {
         if (isDualDisplayMode && (currentQuality.value.contains("1080") || currentQuality.label.contains(
                 "1080"
-            ))
+            ) || (!allowHeavyDual && currentQuality.value == "original"))
         ) {
             effectiveQualities.find { it.value.contains("720") || it.label.contains("720") }
                 ?: effectiveQualities.firstOrNull()
@@ -156,6 +171,7 @@ fun LiveTopSubMenuUI(
                 currentStreamSource == StreamSource.EDCB && isEdcbDirect -> "EDCB (TCP)"
                 currentStreamSource == StreamSource.EDCB && !isEdcbDirect -> "EDCB (トランスコード)"
                 currentStreamSource == StreamSource.MIRAKURUN -> "Mirakurun"
+                currentStreamSource == StreamSource.EPGSTATION -> "EPGStation"
                 else -> "KonomiTV"
             }
 
@@ -163,8 +179,12 @@ fun LiveTopSubMenuUI(
                 currentStreamSource == StreamSource.EDCB && isEdcbDirect -> "EDCB (TCPダイレクト)"
                 currentStreamSource == StreamSource.EDCB && !isEdcbDirect -> "EDCB (トランスコード)"
                 currentStreamSource == StreamSource.MIRAKURUN -> "Mirakurun"
+                currentStreamSource == StreamSource.EPGSTATION -> "EPGStation"
                 else -> "KonomiTV"
             }
+            val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+                it.id == currentSubtitleLanguageId
+            } ?: subtitleLanguages.firstOrNull()
 
             // --- メインタイルメニュー行 ---
             Row(
@@ -198,6 +218,17 @@ fun LiveTopSubMenuUI(
                         onClick = onSubtitleToggle,
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
+                    )
+
+                    LiveMenuTileItem(
+                        title = "字幕言語", icon = Icons.Default.Translate,
+                        subtitle = currentSubtitleLanguage?.let {
+                            "第${it.id}言語・${it.displayName}"
+                        } ?: "利用不可",
+                        onClick = onSubtitleLanguageToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary,
+                        enabled = subtitleLanguages.size > 1
                     )
 
                     LiveMenuTileItem(
@@ -257,6 +288,17 @@ fun LiveTopSubMenuUI(
                         onClick = onSubtitleToggle,
                         modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
                         contentColor = colors.textPrimary
+                    )
+
+                    LiveMenuTileItem(
+                        title = "字幕言語", icon = Icons.Default.Translate,
+                        subtitle = currentSubtitleLanguage?.let {
+                            "第${it.id}言語・${it.displayName}"
+                        } ?: "利用不可",
+                        onClick = onSubtitleLanguageToggle,
+                        modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                        contentColor = colors.textPrimary,
+                        enabled = subtitleLanguages.size > 1
                     )
 
                     LiveMenuTileItem(
@@ -408,6 +450,11 @@ fun LiveTopSubMenuUI(
                         if (availableSources.contains(StreamSource.MIRAKURUN)) {
                             sourceOptions.add("Mirakurun" to {
                                 onSourceSelect(StreamSource.MIRAKURUN, false)
+                            })
+                        }
+                        if (availableSources.contains(StreamSource.EPGSTATION)) {
+                            sourceOptions.add("EPGStation" to {
+                                onSourceSelect(StreamSource.EPGSTATION, false)
                             })
                         }
 

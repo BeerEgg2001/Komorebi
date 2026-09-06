@@ -13,7 +13,10 @@ class TsReadExDataSourceFactory(
     // 外部から書き換え可能なように var にする
     var tsArgs: Array<String> = initialArgs
 
+    // ★ 追加: Cloudflare Access 等のリクエストヘッダー
+    var requestHeaders: Map<String, String> = emptyMap()
+
     override fun createDataSource(): androidx.media3.datasource.DataSource {
-        return TsReadExDataSource(nativeLib, tsArgs)
+        return TsReadExDataSource(nativeLib, tsArgs, requestHeaders = requestHeaders)
     }
 }

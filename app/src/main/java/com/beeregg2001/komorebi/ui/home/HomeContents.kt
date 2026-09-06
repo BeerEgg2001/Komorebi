@@ -9,6 +9,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -66,13 +67,14 @@ fun HomeContents(
     timeFormat: String,
 ) {
     val lazyListState = rememberLazyListState()
-    val recentRecordings by recordViewModel.recentRecordings.collectAsState()
     val isFirstItemRendered =
         remember { derivedStateOf { lazyListState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
 
+    // 最初の項目がレイアウトされた時点で、ホーム画面はもう見えている。
+    // ここで待っても得られるものがないため、ローディング画面は即座に閉じる。
     LaunchedEffect(isFirstItemRendered.value) {
         if (isFirstItemRendered.value) {
-            delay(100); onUiReady()
+            onUiReady()
         }
     }
 
@@ -88,6 +90,25 @@ fun HomeContents(
         }
     }
 
+    // ★ 起動直後の待ち時間短縮:
+    // 上の3つの効果は「リストに項目が1つ以上表示された」か「ホームのデータが1件以上届いた」
+    // ことが条件になっている。そのため、初回起動でホームのデータがまだ空の場合は
+    // どれも発火せず、下の3秒の保険まで丸ごと待たされていた。
+    // (実機ログの「スプラッシュ終了→ホーム初回タブ準備完了」の数秒の空白がこれに該当する)
+    //
+    // 項目が0件でもリスト自体の測定が終われば画面としては表示できているので、
+    // 「LazyColumnがビューポートを測定し終えた」時点を準備完了の判定に加える。
+    // 測定前はviewportEndOffsetが0のままなので、描画前に発火することはない。
+    val isListMeasured =
+        remember { derivedStateOf { lazyListState.layoutInfo.viewportEndOffset > 0 } }
+
+    LaunchedEffect(isListMeasured.value) {
+        if (isListMeasured.value) {
+            delay(300); onUiReady()
+        }
+    }
+
+    // 上記のいずれも成立しない異常系のための最終保険。
     LaunchedEffect(Unit) { delay(3000); onUiReady() }
 
     val welcomeHeroInfo = remember {
@@ -202,7 +223,7 @@ fun HomeContents(
                 state = lazyListState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .focusRequester(externalFocusRequester),
+                    .focusGroup(),
                 contentPadding = PaddingValues(bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
             ) {
@@ -214,6 +235,7 @@ fun HomeContents(
                             getLogoUrl = getLogoUrl,
                             shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "lastWatched") upToTabModifier else Modifier,
+                            contentFirstItemRequester = if (topSection == "lastWatched") externalFocusRequester else null,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
                             ticketManager = ticketManager,
@@ -229,6 +251,7 @@ fun HomeContents(
                             getLogoUrl = getLogoUrl,
                             shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "hot") upToTabModifier else Modifier,
+                            contentFirstItemRequester = if (topSection == "hot") externalFocusRequester else null,
                             onChannelClick = onChannelClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
                             ticketManager = ticketManager,
@@ -246,6 +269,7 @@ fun HomeContents(
                             getLogoUrl = getLogoUrl,
                             shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "pickup") upToTabModifier else Modifier,
+                            contentFirstItemRequester = if (topSection == "pickup") externalFocusRequester else null,
                             onProgramClick = onProgramClick,
                             onNavigateToTab = onNavigateToTab,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
@@ -258,12 +282,21 @@ fun HomeContents(
                 }
                 if (watchHistory.isNotEmpty()) {
                     item(key = "section_history") {
+                        // recentRecordings は Room の Flow で、初回起動時の録画同期中は
+                        // ページ書き込みのたびに何度も発火する。HomeContents の直下で
+                        // 購読していたため、同期が走っている間じゅうホーム画面全体
+                        // (LazyColumn のセクション定義ごと) がリコンポーズされ、
+                        // 「起動直後だけ操作が極端に重い」原因になっていた。
+                        // 実際に使うのはサムネイル用のこのセクションだけなので、
+                        // item のリコンポーズ範囲内で購読してリコンポーズを局所化する。
+                        val recentRecordings by recordViewModel.recentRecordings.collectAsState()
                         WatchHistorySection(
                             watchHistory = watchHistory,
                             recentRecordings = recentRecordings, // ★ 追加: サムネイル用データを渡す
                             konomiIp = konomiIp,
                             konomiPort = konomiPort,
                             modifier = if (topSection == "history") upToTabModifier else Modifier,
+                            contentFirstItemRequester = if (topSection == "history") externalFocusRequester else null,
                             onHistoryClick = onHistoryClick,
                             onUpdateHeroInfo = { pendingHeroInfo = it },
                             ticketManager = ticketManager,
@@ -279,6 +312,7 @@ fun HomeContents(
                             getLogoUrl = getLogoUrl,
                             shouldCropLogo = shouldCropLogo,
                             modifier = if (topSection == "upcoming") upToTabModifier else Modifier,
+                            contentFirstItemRequester = if (topSection == "upcoming") externalFocusRequester else null,
                             onReserveClick = onReserveClick,
                             onNavigateToTab = onNavigateToTab,
                             onUpdateHeroInfo = { pendingHeroInfo = it },

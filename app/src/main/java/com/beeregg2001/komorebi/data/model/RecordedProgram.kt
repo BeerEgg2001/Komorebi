@@ -25,7 +25,12 @@ data class RecordedProgram(
     val playbackPosition: Double = 0.0,
     // ★ ここから下の2行を追加するだけです ★
     val directThumbnailUrl: String? = null,
-    val apiThumbnailUrl: String? = null
+    val apiThumbnailUrl: String? = null,
+    val seriesId: Int? = null,
+    val episodeNumber: Double? = null,
+    val episodeLabel: String? = null,
+    val episodeTitle: String? = null,
+    val airType: String? = null
 )
 
 // CM区間（チャプター）のデータモデル

@@ -38,6 +38,9 @@ class EdcbRecordRepository @Inject constructor(
 
     companion object {
         private const val TAG = "EdcbRecordRepository"
+
+        // 呼び出し側から limit の指定がない場合のページサイズ
+        private const val DEFAULT_RECORDED_PAGE_SIZE = 50
         private const val MAX_ALLOWED_DROPS = 1000L
     }
 
@@ -137,15 +140,18 @@ class EdcbRecordRepository @Inject constructor(
             }
         }
 
+    // ★ 修正: 以前はここで edcbRecordPlayMethod(録画ファイルの再生方式)を見て、
+    // "DIRECT" なら即座に「オリジナル (Direct)」の1件だけを返していた。
+    // このメソッドは RecordProvider のメソッドだが、LivePlayerViewModel も
+    // (EDCBのライブ視聴用に専用の取得口が無いため)そのまま呼び出しており、
+    // 「録画ファイルの再生方式」という録画専用の設定が、本来無関係なはずの
+    // ライブ視聴側のトランスコード画質選択まで巻き込んで「オリジナル (Direct)」
+    // 一択に縮退させてしまっていた(録画をAPI経由に変更すると直る、という
+    // 症状と一致)。録画をDIRECT運用する場合の分岐は呼び出し元
+    // (VideoPlayerViewModel.fetchAvailableQualities)側で既に行っているため、
+    // ここでは常にresolver.luaの動的な画質リストを返す。
     override suspend fun getStreamQualities(): List<StreamQuality> = withContext(Dispatchers.IO) {
         try {
-            val playMethod = settingsRepository.edcbRecordPlayMethod.first()
-            if (playMethod == "DIRECT") {
-                return@withContext listOf(
-                    StreamQuality(label = "オリジナル (Direct)", value = "direct", isRawTs = true)
-                )
-            }
-
             val baseUrl = getHttpBaseUrl()
             val settings = fetchResolverSettings(baseUrl)
             return@withContext settings?.options ?: emptyList()
@@ -222,6 +228,11 @@ class EdcbRecordRepository @Inject constructor(
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        getRecordedPrograms(page = page, limit = DEFAULT_RECORDED_PAGE_SIZE)
+
+    // 端末プロファイルごとのフェッチ数に合わせてページサイズを可変にする
+    @RequiresApi(Build.VERSION_CODES.O)
+    override suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse =
         withContext(Dispatchers.IO) {
             recordMutex.withLock {
                 try {
@@ -243,10 +254,11 @@ class EdcbRecordRepository @Inject constructor(
 
                     val all = cachedRecInfos ?: emptyList()
                     val total = all.size
-                    val from = (page - 1) * 50
+                    val pageSize = limit.takeIf { it in 1..1000 } ?: DEFAULT_RECORDED_PAGE_SIZE
+                    val from = (page - 1) * pageSize
                     if (from >= total) return@withContext RecordedApiResponse(total, emptyList())
 
-                    val to = (from + 50).coerceAtMost(total)
+                    val to = (from + pageSize).coerceAtMost(total)
                     val baseUrl = getHttpBaseUrl()
 
                     val programs = all.subList(from, to).map { info ->

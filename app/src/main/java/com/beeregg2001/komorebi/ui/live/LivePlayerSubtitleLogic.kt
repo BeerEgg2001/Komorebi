@@ -2,7 +2,6 @@
 
 package com.beeregg2001.komorebi.ui.live
 
-import android.util.Base64
 import android.util.SparseArray
 import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.common.util.TimestampAdjuster
@@ -14,12 +13,11 @@ import com.beeregg2001.komorebi.data.model.LivePlayerConstants
 import java.io.ByteArrayOutputStream
 
 /**
- * 字幕データを抽出し、UI層（WebView等）へコールバックでデータを渡す PayloadReader
+ * 字幕データを抽出し、native デコーダーへ渡す PayloadReader
  */
 @UnstableApi
 class DirectSubtitlePayloadReader(
-    private val onSubtitleDataReceived: (Long, String) -> Unit, // ★ WebViewの代わりにコールバック関数を受取
-    private val isSubtitleEnabled: () -> Boolean                // ★ 状態確認も関数で受取
+    private val onSubtitleDataReceived: (Long, ByteArray) -> Unit
 ) : TsPayloadReader {
     private var timestampAdjuster: TimestampAdjuster? = null
     private val buffer = ByteArrayOutputStream()
@@ -37,7 +35,6 @@ class DirectSubtitlePayloadReader(
     }
 
     override fun consume(data: ParsableByteArray, flags: Int) {
-        if (!isSubtitleEnabled()) return
         val isStart = (flags and TsPayloadReader.FLAG_PAYLOAD_UNIT_START_INDICATOR) != 0
         if (isStart && buffer.size() > 0) {
             parseAndSendBuffer()
@@ -45,9 +42,8 @@ class DirectSubtitlePayloadReader(
         }
         val bytesAvailable = data.bytesLeft()
         if (bytesAvailable > 0) {
-            val chunk = ByteArray(bytesAvailable)
-            data.readBytes(chunk, 0, bytesAvailable)
-            buffer.write(chunk)
+            buffer.write(data.data, data.position, bytesAvailable)
+            data.skipBytes(bytesAvailable)
         }
     }
 
@@ -63,18 +59,14 @@ class DirectSubtitlePayloadReader(
         try {
             var offset = id3StartIndex + 10
             while (offset < rawData.size - 10) {
-                val frameId = String(rawData, offset, 4)
                 val frameSize =
                     (rawData[offset + 4].toInt() and 0x7F shl 21) or (rawData[offset + 5].toInt() and 0x7F shl 14) or (rawData[offset + 6].toInt() and 0x7F shl 7) or (rawData[offset + 7].toInt() and 0x7F)
                 offset += 10
-                if (frameId == "PRIV") {
+                if (isPrivFrame(rawData, offset - 10)) {
                     var ownerEnd = offset
                     while (ownerEnd < offset + frameSize && ownerEnd < rawData.size && rawData[ownerEnd].toInt() != 0) ownerEnd++
-                    val ownerString = String(rawData, offset, ownerEnd - offset)
-                    if (ownerString.contains("aribb24", true) || ownerString.contains(
-                            "B24",
-                            true
-                        )
+                    if (containsAsciiIgnoreCase(rawData, offset, ownerEnd, "aribb24") ||
+                        containsAsciiIgnoreCase(rawData, offset, ownerEnd, "B24")
                     ) {
                         val privateDataStart = ownerEnd + 1
                         val privateDataLength = frameSize - (privateDataStart - offset)
@@ -83,12 +75,10 @@ class DirectSubtitlePayloadReader(
                                 privateDataStart,
                                 privateDataStart + privateDataLength
                             )
-                            // ★ 抽出したデータをUI層へコールバックで通知
-                            val base64Data = Base64.encodeToString(privateData, Base64.NO_WRAP)
                             val currentPtsMs = ((timestampAdjuster?.lastAdjustedTimestampUs
                                 ?: 0L) / 1000) + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
 
-                            onSubtitleDataReceived(currentPtsMs, base64Data)
+                            onSubtitleDataReceived(currentPtsMs, privateData)
                         }
                     }
                 }
@@ -99,12 +89,45 @@ class DirectSubtitlePayloadReader(
             android.util.Log.e("DirectSubtitle", "Parse error", e)
         }
     }
+
+    private fun isPrivFrame(data: ByteArray, offset: Int): Boolean {
+        return data[offset] == 'P'.code.toByte() &&
+            data[offset + 1] == 'R'.code.toByte() &&
+            data[offset + 2] == 'I'.code.toByte() &&
+            data[offset + 3] == 'V'.code.toByte()
+    }
+
+    private fun containsAsciiIgnoreCase(
+        data: ByteArray,
+        start: Int,
+        endExclusive: Int,
+        needle: String
+    ): Boolean {
+        val needleLength = needle.length
+        if (needleLength == 0 || endExclusive - start < needleLength) return false
+        val lastStart = endExclusive - needleLength
+        for (i in start..lastStart) {
+            var matched = true
+            for (j in 0 until needleLength) {
+                if (toLowerAscii(data[i + j]) != needle[j].lowercaseChar().code) {
+                    matched = false
+                    break
+                }
+            }
+            if (matched) return true
+        }
+        return false
+    }
+
+    private fun toLowerAscii(value: Byte): Int {
+        val charCode = value.toInt() and 0xff
+        return if (charCode in 'A'.code..'Z'.code) charCode + 32 else charCode
+    }
 }
 
 @UnstableApi
 class DirectSubtitlePayloadReaderFactory(
-    private val onSubtitleDataReceived: (Long, String) -> Unit,
-    private val isSubtitleEnabled: () -> Boolean
+    private val onSubtitleDataReceived: (Long, ByteArray) -> Unit
 ) : TsPayloadReader.Factory {
     private val defaultFactory = DefaultTsPayloadReaderFactory(
         DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
@@ -117,10 +140,9 @@ class DirectSubtitlePayloadReaderFactory(
         streamType: Int,
         esInfo: TsPayloadReader.EsInfo
     ): TsPayloadReader? {
-        if (streamType == 0x06 || streamType == 0x15) return DirectSubtitlePayloadReader(
-            onSubtitleDataReceived,
-            isSubtitleEnabled
-        )
+        if (streamType == 0x06 || streamType == 0x15) {
+            return DirectSubtitlePayloadReader(onSubtitleDataReceived)
+        }
         return defaultFactory.createPayloadReader(streamType, esInfo)
     }
 }

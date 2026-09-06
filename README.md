@@ -13,7 +13,7 @@
 
 ## 💻 動作環境
 
-以下の環境で動作確認しております。Android 8.0、Fire OS 7以上のOSが必要です。（おおよそ2021年以降の機種であれば利用できると思います）
+以下の環境で動作確認しております。Android 7.1.2、Fire OS 6以上のOSが必要です。（おおよそ2021年以降の機種であれば利用できると思います）
 機種ごとの確認報告などは作者X([@tamago0602](https://x.com/tamago0602))へご連絡いただければ、とても嬉しいです。
 
 * REGZA 55X8900K (Android TV 10)
@@ -217,10 +217,11 @@ bash "${MODULE_PATH}/jni/build_ffmpeg.sh" \
 本アプリの開発にあたり、以下の素晴らしいプロジェクトと成果物を活用させていただいております。
 
 * **[tsreadex](https://github.com/xtne6f/tsreadex)**: TS ストリーム解析および読み込み処理の基盤。
-* **[aribb24.js](https://github.com/monyone/aribb24.js)**: 高精度な字幕描画ロジックの提供。
+* **[libaribcaption](https://github.com/xqq/libaribcaption)**: ARIB 字幕のデコード・描画ライブラリ。
 * **[KonomiTV](https://github.com/tsukumijima/KonomiTV)**: 強力な API バックエンドおよび配信プラットフォーム。
 * **[Mirakurun](https://github.com/Chinachu/Mirakurun)**: チューナー管理および配信 API。
 * **[DanmakuFlameMaster](https://github.com/bilibili/DanmakuFlameMaster)**: ニコニコ実況およびNX-Jikkyoのコメント表示。
+  |-> 作者の方は逝去されています。長年の貢献に感謝し、心よりご冥福をお祈りいたします。R.I.P.
 * **[SCRename](https://github.com/rigaya/SCRenamePy)**: シリーズから探すの正規表現の参考にさせていただきました。
 
 

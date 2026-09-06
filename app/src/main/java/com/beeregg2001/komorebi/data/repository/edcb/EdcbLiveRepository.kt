@@ -6,6 +6,7 @@ import androidx.annotation.RequiresApi
 import android.os.Build
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.edcb.EdcbEventInfo
+import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.ChannelApiResponse
 import com.beeregg2001.komorebi.data.repository.LiveProvider
@@ -16,7 +17,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -29,25 +29,12 @@ class EdcbLiveRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val okHttpClient: OkHttpClient,
-    private val cacheManager: EdcbEpgCacheManager
+    private val cacheManager: EdcbEpgCacheManager,
+    private val jikkyoChannelResolver: JikkyoChannelResolver
 ) : LiveProvider {
 
     companion object {
         private const val TAG = "EdcbLiveRepository"
-
-        // 実況対応チャンネルIDのマップ
-        val JIKKYO_CHANNEL_ID_MAP = mapOf(
-            "jk1" to "ch2646436", "jk2" to "ch2646437", "jk4" to "ch2646438",
-            "jk5" to "ch2646439", "jk6" to "ch2646440", "jk7" to "ch2646441",
-            "jk8" to "ch2646442", "jk9" to "ch2646485", "jk10" to null,
-            "jk11" to null, "jk12" to null, "jk13" to null, "jk14" to null,
-            "jk101" to "ch2647992", "jk103" to null, "jk141" to null,
-            "jk151" to null, "jk161" to null, "jk171" to null, "jk181" to null,
-            "jk191" to null, "jk192" to null, "jk193" to null, "jk200" to null,
-            "jk201" to null, "jk211" to "ch2646846", "jk222" to null,
-            "jk236" to null, "jk252" to null, "jk260" to null, "jk263" to null,
-            "jk265" to null, "jk333" to null
-        )
     }
 
     private val baseEdcbHttpClient: OkHttpClient by lazy {
@@ -57,7 +44,6 @@ class EdcbLiveRepository @Inject constructor(
     }
 
     private val failedLogoIds = mutableSetOf<String>()
-    private var jikkyoChannelsCache: JSONArray? = null
 
     private suspend fun getHttpBaseUrl(): String {
         return settingsRepository.getEdcbFullUrl()
@@ -101,94 +87,14 @@ class EdcbLiveRepository @Inject constructor(
             }
         }
 
-    private fun fetchNxJikkyoForce(): Map<String, Int> {
-        val forceMap = mutableMapOf<String, Int>()
-        try {
-            val request = Request.Builder()
-                .url("https://nx-jikkyo.tsukumijima.net/api/v1/channels")
-                .build()
-
-            val client = baseEdcbHttpClient.newBuilder()
-                .connectTimeout(2, TimeUnit.SECONDS)
-                .readTimeout(2, TimeUnit.SECONDS)
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val responseJson = response.body?.string() ?: return forceMap
-                    val jsonArray = JSONArray(responseJson)
-                    for (i in 0 until jsonArray.length()) {
-                        val channelObj = jsonArray.optJSONObject(i) ?: continue
-                        val jkId = channelObj.optString("id", "")
-                        if (jkId.isBlank()) continue
-
-                        val threads = channelObj.optJSONArray("threads") ?: continue
-                        var maxForce = 0
-                        for (j in 0 until threads.length()) {
-                            val thread = threads.optJSONObject(j) ?: continue
-                            val force = thread.optInt("jikkyo_force", 0)
-                            if (force > maxForce) maxForce = force
-                        }
-                        forceMap[jkId] = maxForce
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch NX-Jikkyo force (Timeout or Network error)")
-        }
-        return forceMap
-    }
-
-    private fun getJikkyoChannels(): JSONArray {
-        if (jikkyoChannelsCache != null) return jikkyoChannelsCache!!
-        return try {
-            val jsonString =
-                context.assets.open("jikkyo_channels.json").bufferedReader().use { it.readText() }
-            val array = JSONArray(jsonString)
-            jikkyoChannelsCache = array
-            array
-        } catch (e: Exception) {
-            JSONArray()
-        }
-    }
-
-    fun getJikkyoId(networkId: Int, serviceId: Int): String? {
-        val channels = getJikkyoChannels()
-        for (i in 0 until channels.length()) {
-            val jc = channels.optJSONObject(i) ?: continue
-            val jcNid = jc.optInt("network_id", -1)
-
-            val sidRaw = jc.opt("service_id")?.toString() ?: "-1"
-            val jcSid = if (sidRaw.startsWith("0x", ignoreCase = true)) {
-                sidRaw.substring(2).toIntOrNull(16) ?: -1
-            } else {
-                sidRaw.toIntOrNull() ?: -1
-            }
-            val jkJikkyoId = jc.optInt("jikkyo_id", -1)
-
-            var matched = false
-            if (networkId == jcNid && serviceId == jcSid) {
-                matched = true
-            } else if (networkId in 0x7880..0x7FEF && jcNid == 15) {
-                if (serviceId == jcSid || serviceId - 1 == jcSid || serviceId - 2 == jcSid) {
-                    matched = true
-                }
-            }
-
-            if (matched && jkJikkyoId != -1) {
-                val jkId = "jk$jkJikkyoId"
-                if (JIKKYO_CHANNEL_ID_MAP.containsKey(jkId)) {
-                    return jkId
-                }
-            }
-        }
-        return null
-    }
+    /** EDCB の既存挙動を変えないよう、視聴可能な既知チャンネルへの絞り込み込みで解決する。 */
+    fun getJikkyoId(networkId: Int, serviceId: Int): String? =
+        jikkyoChannelResolver.getJikkyoId(networkId, serviceId)
 
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun getChannels(): ChannelApiResponse = withContext(Dispatchers.Default) {
         try {
-            val forceJob = async(Dispatchers.IO) { fetchNxJikkyoForce() }
+            val forceJob = async(Dispatchers.IO) { jikkyoChannelResolver.fetchForceMap() }
 
             cacheManager.fetchEpgDataIfNeeded()
 

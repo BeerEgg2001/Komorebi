@@ -3,7 +3,6 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.content.Context
-import android.util.Base64
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -40,15 +39,13 @@ class LivePlayerFactory @Inject constructor(
      *
      * @param audioOutputMode "PASSTHROUGH" などの音声出力モード設定
      * @param isKonomiTvSource KonomiTVソースかどうかの判定（字幕メタデータ抽出に使用）
-     * @param isSubtitleEnabled 現在字幕が有効かどうかの判定
-     * @param onSubtitleDataReceived 字幕データ（Base64）を受信した際のコールバック (pts, base64Data)
+     * @param onSubtitleDataReceived 字幕データを受信した際のコールバック (pts, rawData)
      * @param onError プレイヤーエラー発生時のコールバック
      */
     fun createExoPlayer(
         audioOutputMode: String,
         isKonomiTvSource: () -> Boolean,
-        isSubtitleEnabled: () -> Boolean,
-        onSubtitleDataReceived: (Long, String) -> Unit,
+        onSubtitleDataReceived: (Long, ByteArray) -> Unit,
         onError: (PlaybackException) -> Unit
     ): ExoPlayer {
 
@@ -124,7 +121,7 @@ class LivePlayerFactory @Inject constructor(
 
                     // KonomiTVソースの場合、ID3メタデータからARIB字幕データを抽出
                     override fun onMetadata(metadata: Metadata) {
-                        if (!isKonomiTvSource() || !isSubtitleEnabled()) return
+                        if (!isKonomiTvSource()) return
                         for (i in 0 until metadata.length()) {
                             val entry = metadata.get(i)
                             if (entry is PrivFrame && (entry.owner.contains(
@@ -132,11 +129,9 @@ class LivePlayerFactory @Inject constructor(
                                     true
                                 ) || entry.owner.contains("B24", true))
                             ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
                                 val pts =
                                     currentPosition + LivePlayerConstants.SUBTITLE_SYNC_OFFSET_MS
-                                onSubtitleDataReceived(pts, base64Data)
+                                onSubtitleDataReceived(pts, entry.privateData)
                             }
                         }
                     }

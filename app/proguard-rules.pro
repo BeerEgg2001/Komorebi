@@ -7,6 +7,11 @@
 # その中にあるすべての変数・メソッドの名前を変換・削除しないようにする。
 -keep class com.beeregg2001.komorebi.data.model.** { *; }
 
+# JNI が完全修飾名とコンストラクタ署名で生成する字幕モデルを保持する。
+-keep class com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue { *; }
+-keep class com.beeregg2001.komorebi.ui.subtitle.NativeCaptionImage { *; }
+-keep class com.beeregg2001.komorebi.NativeLib { native <methods>; }
+
 # (もしAPIレスポンス用のクラスが別パッケージにある場合はそれも追加)
 # -keep class com.beeregg2001.komorebi.data.api.response.** { *; }
 

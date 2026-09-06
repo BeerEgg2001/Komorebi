@@ -11,6 +11,8 @@ import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.InvalidAPIKeyException
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -298,6 +300,61 @@ class SettingsViewModel @Inject constructor(
         ""
     )
 
+    // ★ 追加: Cloudflare Zero Trust サービストークン
+    val cfAccessClientId: StateFlow<String> = settingsRepository.cfAccessClientId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val cfAccessClientSecret: StateFlow<String> = settingsRepository.cfAccessClientSecret
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    // ★ 追加: APIキーの検証結果("VALID"/"INVALID"/"UNVERIFIED"/未検証時は空文字)
+    val geminiApiKeyStatus: StateFlow<String> = settingsRepository.geminiApiKeyStatus.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
+    )
+
+    private val _isValidatingGeminiApiKey = MutableStateFlow(false)
+    val isValidatingGeminiApiKey: StateFlow<Boolean> = _isValidatingGeminiApiKey
+
+    /**
+     * GeminiのAPIキーを保存する前に、Google側へ軽量な疎通確認(countTokens)を行い実際に有効かどうかを検証する。
+     * ネットワーク不通など有効性を断定できない場合は「無効」ではなく「未確認」として保存する。
+     */
+    fun saveAndValidateGeminiApiKey(rawKey: String) {
+        val key = rawKey.trim()
+        viewModelScope.launch {
+            if (key.isBlank()) {
+                settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, "")
+                settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, "")
+                return@launch
+            }
+
+            _isValidatingGeminiApiKey.value = true
+            val status = withContext(Dispatchers.IO) {
+                try {
+                    GenerativeModel(modelName = "gemini-3-flash-preview", apiKey = key)
+                        .countTokens("疎通確認")
+                    "VALID"
+                } catch (e: InvalidAPIKeyException) {
+                    "INVALID"
+                } catch (e: Exception) {
+                    Log.w("SettingsViewModel", "Geminiキーの検証に失敗(通信エラー等)", e)
+                    "UNVERIFIED"
+                }
+            }
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, key)
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, status)
+            _isValidatingGeminiApiKey.value = false
+        }
+    }
+
+    fun clearGeminiApiKey() {
+        viewModelScope.launch {
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY, "")
+            settingsRepository.saveString(SettingsRepository.GEMINI_API_KEY_STATUS, "")
+        }
+    }
+
     // ★ 追加: 番組表設定の StateFlow
     val epgColumnCount: StateFlow<String> = settingsRepository.epgColumnCount.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), "7"
@@ -350,6 +407,21 @@ class SettingsViewModel @Inject constructor(
         // ★ 修正: 初期化時の重い同期処理をバックグラウンドに回し、UI描画後に遅らせる
         viewModelScope.launch {
             delay(1500)
+            forceSyncStreamQualities()
+        }
+    }
+
+    // ★ 追加: init内の自動同期は「アプリ起動後1.5秒経過時点で1回だけ」しか行われないため、
+    // その瞬間にEDCBのresolver.lua取得がたまたま失敗すると(サーバー起動タイミング・
+    // 一時的な通信不調等)、以後リトライされず、_dynamicQualities が空のまま固定されてしまう。
+    // 結果、設定画面の「再生設定」の画質選択ダイアログが「設定値」ベースの
+    // ダミー1〜2件だけの縮退リストになり、実質選べない状態になっていた
+    // (Komorebi側の設定変更(IP/ポート/再生方式)を行わない限り再同期のきっかけが無かった)。
+    // ユーザーが実際に設定画面(再生設定タブ)を開いたタイミングは「今まさにこのデータを
+    // 見ようとしている」という強いシグナルなので、そのタイミングで確実に取り直せるよう
+    // 公開関数として用意する。
+    fun refreshStreamQualities() {
+        viewModelScope.launch {
             forceSyncStreamQualities()
         }
     }
@@ -465,6 +537,21 @@ class SettingsViewModel @Inject constructor(
             SettingsRepository.EDCB_RECORD_PLAY_METHOD,
             method
         ); forceSyncStreamQualities()
+    }
+
+    fun updateEpgStationIp(ip: String) = viewModelScope.launch(Dispatchers.IO) {
+        val oldIp = settingsRepository.epgStationIp.first()
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_IP, ip)
+        // 接続先が変わったら録画一覧を作り直す必要があるため、全同期をかけ直す
+        if (oldIp.isNotBlank() && oldIp != ip) {
+            syncEngine.launchSyncAllRecords(forceFullSync = true)
+        }
+        forceSyncStreamQualities()
+    }
+
+    fun updateEpgStationPort(port: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.EPGSTATION_PORT, port)
+        forceSyncStreamQualities()
     }
 
     fun updateMirakurunIp(ip: String) {
@@ -646,12 +733,7 @@ class SettingsViewModel @Inject constructor(
                     val formParams = call.receiveParameters()
                     val apiKey = formParams["api_key"] ?: ""
                     if (apiKey.isNotBlank()) {
-                        viewModelScope.launch {
-                            settingsRepository.saveString(
-                                SettingsRepository.GEMINI_API_KEY,
-                                apiKey
-                            )
-                        }
+                        saveAndValidateGeminiApiKey(apiKey)
                         call.respondText(
                             "<html><body style='font-family:sans-serif; text-align:center; padding:50px; background:#e8f0fe;'><h2 style='color:#1a73e8;'>連携が完了しました！🎉</h2><p>テレビ画面を確認してください。この画面は閉じて大丈夫です。</p></body></html>",
                             ContentType.Text.Html

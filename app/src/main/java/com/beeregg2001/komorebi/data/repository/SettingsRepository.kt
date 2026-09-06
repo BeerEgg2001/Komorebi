@@ -2,6 +2,7 @@ package com.beeregg2001.komorebi.data
 
 import android.content.Context
 import android.util.Log
+import com.beeregg2001.komorebi.common.UrlBuilder
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -34,6 +35,19 @@ class SettingsRepository @Inject constructor(
         val KONOMI_PORT = stringPreferencesKey("konomi_port")
         val MIRAKURUN_IP = stringPreferencesKey("mirakurun_ip")
         val MIRAKURUN_PORT = stringPreferencesKey("mirakurun_port")
+
+        /**
+         * ★ 追加: これらのキーが更新されたら局ロゴ URL の共有キャッシュを破棄する。
+         * バックエンド種別と各接続先(IP/ポート)が URL の決定要素になっているため。
+         */
+        val LOGO_URL_AFFECTING_KEYS = setOf(
+            BACKEND_TYPE,
+            EDCB_IP, EDCB_PORT, EDCB_HTTP_PORT,
+            EPGSTATION_IP, EPGSTATION_PORT,
+            KONOMI_IP, KONOMI_PORT,
+            MIRAKURUN_IP, MIRAKURUN_PORT
+        )
+
         val PREFERRED_STREAM_SOURCE = stringPreferencesKey("preferred_stream_source")
         val COMMENT_SPEED = stringPreferencesKey("comment_speed")
         val COMMENT_FONT_SIZE = stringPreferencesKey("comment_font_size")
@@ -57,6 +71,7 @@ class SettingsRepository @Inject constructor(
         val POST_RECORDING_BATCH_LIST = stringPreferencesKey("post_recording_batch_list")
         val FAVORITE_BASEBALL_TEAMS = stringPreferencesKey("favorite_baseball_teams")
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
+        val GEMINI_API_KEY_STATUS = stringPreferencesKey("gemini_api_key_status")
         val ENABLE_AI_NORMALIZATION = stringPreferencesKey("enable_ai_normalization")
 
         val HOME_PICKUP_GENRE = stringPreferencesKey("home_pickup_genre")
@@ -80,6 +95,26 @@ class SettingsRepository @Inject constructor(
         val EPG_COLUMN_COUNT = stringPreferencesKey("epg_column_count")
         val EPG_FONT_SIZE_SCALE = stringPreferencesKey("epg_font_size_scale")
         val EPG_VISIBLE_HOURS = stringPreferencesKey("epg_visible_hours")
+
+        // ★ 追加: Cloudflare Zero Trust (Cloudflare Access) サービストークン
+        val CF_ACCESS_CLIENT_ID = stringPreferencesKey("cf_access_client_id")
+        val CF_ACCESS_CLIENT_SECRET = stringPreferencesKey("cf_access_client_secret")
+
+        const val CF_ACCESS_CLIENT_ID_HEADER = "CF-Access-Client-Id"
+        const val CF_ACCESS_CLIENT_SECRET_HEADER = "CF-Access-Client-Secret"
+
+        // ★ 追加: トークン値からヘッダーMapを組み立てる (未設定なら空Map)
+        // 保存済みの値に改行・空白が混入していても(過去の不具合や手動編集等で)
+        // OkHttp の header() が不正な文字で例外を投げないよう、ここで必ず除去する
+        fun buildCfAccessHeaders(clientId: String, clientSecret: String): Map<String, String> {
+            val sanitizedId = clientId.replace(Regex("\\s+"), "")
+            val sanitizedSecret = clientSecret.replace(Regex("\\s+"), "")
+            if (sanitizedId.isBlank() || sanitizedSecret.isBlank()) return emptyMap()
+            return mapOf(
+                CF_ACCESS_CLIENT_ID_HEADER to sanitizedId,
+                CF_ACCESS_CLIENT_SECRET_HEADER to sanitizedSecret
+            )
+        }
     }
 
     val isInitialized: Flow<Boolean> = context.dataStore.data
@@ -146,6 +181,10 @@ class SettingsRepository @Inject constructor(
     val favoriteBaseballTeams: Flow<String> =
         context.dataStore.data.map { it[FAVORITE_BASEBALL_TEAMS] ?: "[]" }
     val geminiApiKey: Flow<String> = context.dataStore.data.map { it[GEMINI_API_KEY] ?: "" }
+
+    // ★ 追加: GeminiのAPIキーが実際に有効か検証した結果("VALID"/"INVALID"/"UNVERIFIED"/未検証時は空文字)
+    val geminiApiKeyStatus: Flow<String> =
+        context.dataStore.data.map { it[GEMINI_API_KEY_STATUS] ?: "" }
     val enableAiNormalization: Flow<String> =
         context.dataStore.data.map { it[ENABLE_AI_NORMALIZATION] ?: "OFF" }
     val homePickupGenre: Flow<String> =
@@ -174,11 +213,22 @@ class SettingsRepository @Inject constructor(
     val epgFontSizeScale: Flow<String> = context.dataStore.data.map { it[EPG_FONT_SIZE_SCALE] ?: "1.0" }
     val epgVisibleHours: Flow<String> = context.dataStore.data.map { it[EPG_VISIBLE_HOURS] ?: "6" }
 
+    // ★ 追加: Cloudflare Zero Trust サービストークンのFlow
+    val cfAccessClientId: Flow<String> =
+        context.dataStore.data.map { it[CF_ACCESS_CLIENT_ID] ?: "" }
+    val cfAccessClientSecret: Flow<String> =
+        context.dataStore.data.map { it[CF_ACCESS_CLIENT_SECRET] ?: "" }
+
     suspend fun saveString(
         key: androidx.datastore.preferences.core.Preferences.Key<String>,
         value: String
     ) {
         context.dataStore.edit { settings -> settings[key] = value }
+        // ★ 最適化に伴う整合性維持: 接続先が変わると局ロゴ URL も変わるため、
+        //   共有 URL キャッシュを破棄して古い URL を返さないようにする。
+        if (key in LOGO_URL_AFFECTING_KEYS) {
+            ChannelLogoUrlCache.clear()
+        }
     }
 
     suspend fun saveBoolean(
@@ -207,6 +257,11 @@ class SettingsRepository @Inject constructor(
                 ip = prefs[EDCB_IP] ?: ""
                 port = prefs[EDCB_PORT] ?: "4510"
             }
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> {
+                ip = prefs[EPGSTATION_IP] ?: ""
+                port = prefs[EPGSTATION_PORT] ?: "8888"
+            }
         }
         if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
             ip = "http://$ip"
@@ -228,6 +283,35 @@ class SettingsRepository @Inject constructor(
         return "$scheme$ip:$port"
     }
 
+    suspend fun getEpgStationFullUrl(): String {
+        val prefs = context.dataStore.data.first()
+        val ip = prefs[EPGSTATION_IP] ?: ""
+        val port = prefs[EPGSTATION_PORT] ?: "8888"
+        if (ip.isBlank()) return ""
+        return UrlBuilder.formatBaseUrl(ip, port, "http")
+    }
+
+    // ★ 追加: Cloudflare Access サービストークンをヘッダーMapとして取得 (未設定なら空Map)
+    suspend fun getCfAccessHeaders(): Map<String, String> {
+        val prefs = context.dataStore.data.first()
+        return buildCfAccessHeaders(
+            prefs[CF_ACCESS_CLIENT_ID] ?: "",
+            prefs[CF_ACCESS_CLIENT_SECRET] ?: ""
+        )
+    }
+
+    // ★ 追加: Mirakurun のベースURLを取得 (未設定なら null)
+    suspend fun getMirakurunBaseUrl(): String? {
+        val prefs = context.dataStore.data.first()
+        var ip = prefs[MIRAKURUN_IP] ?: ""
+        if (ip.isBlank()) return null
+        val port = prefs[MIRAKURUN_PORT] ?: "40772"
+        if (!ip.startsWith("http://") && !ip.startsWith("https://")) {
+            ip = "http://$ip"
+        }
+        return "$ip:$port"
+    }
+
     suspend fun getStartupTabOnce(): String {
         val prefs = context.dataStore.data.first()
         return prefs[STARTUP_TAB] ?: "ホーム"
@@ -246,6 +330,10 @@ class SettingsRepository @Inject constructor(
 
             com.beeregg2001.komorebi.data.model.StreamSource.EDCB -> com.beeregg2001.komorebi.data.model.BackendConfig.Edcb(
                 ip = prefs[EDCB_IP] ?: "", port = prefs[EDCB_PORT] ?: "4510"
+            )
+
+            com.beeregg2001.komorebi.data.model.StreamSource.EPGSTATION -> com.beeregg2001.komorebi.data.model.BackendConfig.EpgStation(
+                ip = prefs[EPGSTATION_IP] ?: "", port = prefs[EPGSTATION_PORT] ?: "8888"
             )
         }
     }

@@ -72,9 +72,13 @@ fun RecordListContent(
     searchInputFocusRequester: FocusRequester,
     backButtonFocusRequester: FocusRequester,
     onProgramClick: (RecordedProgram, Double?) -> Unit,
-    onSeriesSearch: (String) -> Unit,
+    onSeriesSearch: (RecordedProgram) -> Unit,
     isDetailVisible: Boolean,
     onDetailStateChange: (Boolean) -> Unit,
+    // ★ 追加: サブメニューの開閉状態は呼び出し元（RecordListScreen）へホイストした。
+    // プレイヤー表示中も本画面が破棄されないため、遷移時に外から閉じられる必要がある。
+    isSideMenuOpen: Boolean,
+    onSideMenuStateChange: (Boolean) -> Unit,
     onBackPress: () -> Unit,
     ticketManager: FocusTicketManager,
     listState: LazyListState = rememberLazyListState(),
@@ -95,8 +99,12 @@ fun RecordListContent(
 
     var focusedProgram by remember { mutableStateOf<RecordedProgram?>(null) }
     var detailProgram by remember { mutableStateOf<RecordedProgram?>(null) }
-    var isSideMenuOpen by remember { mutableStateOf(false) }
     val backendType by settingViewModel.backendType.collectAsState()
+
+    // サブメニューが閉じられたら、詳細パネル用に保持していた番組も破棄する
+    LaunchedEffect(isSideMenuOpen) {
+        if (!isSideMenuOpen) detailProgram = null
+    }
 
     val itemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val menuFirstItemRequester = remember { FocusRequester() }
@@ -207,7 +215,7 @@ fun RecordListContent(
                             .onKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown) {
                                     if (event.key == Key.DirectionRight) {
-                                        if (!isScrollInProgress) isSideMenuOpen = true
+                                        if (!isScrollInProgress) onSideMenuStateChange(true)
                                         return@onKeyEvent true
                                     } else if (event.key == Key.DirectionLeft) {
                                         if (!isScrollInProgress) onOpenNavPane()
@@ -277,7 +285,7 @@ fun RecordListContent(
                                     onClearDetail()
                                     scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
                                 } else {
-                                    isSideMenuOpen = false
+                                    onSideMenuStateChange(false)
                                     val id = focusedProgram?.id
                                     if (id != null) {
                                         ticketManager.issue(FocusTicket.TARGET_ID, id)
@@ -385,10 +393,8 @@ fun RecordListContent(
                                     },
                                     onClick = {
                                         focusedProgram?.let {
-                                            val keyword =
-                                                TitleNormalizer.toSqlSearchQuery(displayTitle)
-                                            onSeriesSearch(keyword)
-                                            isSideMenuOpen = false
+                                            onSeriesSearch(it)
+                                            onSideMenuStateChange(false)
                                         }
                                     })
                                 Spacer(Modifier.height(12.dp))
@@ -404,7 +410,7 @@ fun RecordListContent(
                                     onClick = {
                                         focusedProgram?.let {
                                             if (!isAlreadyAutoReserved && displayTitle.isNotBlank()) {
-                                                isSideMenuOpen = false
+                                                onSideMenuStateChange(false)
                                                 onAutoReserveClick(it)
                                             }
                                         }

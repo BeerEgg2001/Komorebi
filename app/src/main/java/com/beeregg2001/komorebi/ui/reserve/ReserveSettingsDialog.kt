@@ -46,6 +46,7 @@ fun ReserveSettingsDialog(
     programTitle: String,
     initialSettings: ReserveRecordSettings,
     isNewReservation: Boolean,
+    isEpgStation: Boolean = false,
     onConfirm: (ReserveRecordSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -55,6 +56,7 @@ fun ReserveSettingsDialog(
     val gson = remember { Gson() }
 
     var isEnabled by remember { mutableStateOf(initialSettings.isEnabled) }
+    var allowEndLack by remember { mutableStateOf(initialSettings.allowEndLack) }
     var priority by remember { mutableIntStateOf(initialSettings.priority) }
     var isEventRelay by remember { mutableStateOf(initialSettings.isEventRelayFollowEnabled) }
 
@@ -149,73 +151,95 @@ fun ReserveSettingsDialog(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                SettingRow(label = "予約を有効にする") {
-                    Switch(
-                        checked = isEnabled,
-                        onCheckedChange = { isEnabled = it },
-                        modifier = Modifier.focusRequester(firstItemFocusRequester),
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
-                            checkedTrackColor = colors.accent,
-                            uncheckedThumbColor = colors.textPrimary,
-                            uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
-                        )
+                if (isEpgStation) {
+                    Text(
+                        text = "EPGStationで変更できる予約設定のみ表示しています",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
-                }
-
-                // ★修正: IconButton をTV向けの PriorityCircleButton に変更
-                SettingRow(label = "優先度 (1-5)") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        PriorityCircleButton(
-                            icon = Icons.Default.Remove,
-                            enabled = priority > 1,
-                            onClick = { priority-- }
-                        )
-                        Text(
-                            text = priority.toString(),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = colors.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.width(30.dp),
-                            textAlign = TextAlign.Center
-                        )
-                        PriorityCircleButton(
-                            icon = Icons.Default.Add,
-                            enabled = priority < 5,
-                            onClick = { priority++ }
+                    SettingRow(label = "末尾切れを許可") {
+                        Switch(
+                            checked = allowEndLack,
+                            onCheckedChange = { allowEndLack = it },
+                            modifier = Modifier.focusRequester(firstItemFocusRequester),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
+                                checkedTrackColor = colors.accent,
+                                uncheckedThumbColor = colors.textPrimary,
+                                uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                            )
                         )
                     }
-                }
-
-                SettingRow(label = "録画後実行バッチ") {
-                    val currentBatName =
-                        batchList.find { it.path == selectedBatPath }?.name ?: "なし"
-                    Button(
-                        onClick = { isBatSelectionOpen = true },
-                        modifier = Modifier.focusRequester(batSelectionFocusRequester),
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
-                            contentColor = colors.textPrimary
+                } else {
+                    SettingRow(label = "予約を有効にする") {
+                        Switch(
+                            checked = isEnabled,
+                            onCheckedChange = { isEnabled = it },
+                            modifier = Modifier.focusRequester(firstItemFocusRequester),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
+                                checkedTrackColor = colors.accent,
+                                uncheckedThumbColor = colors.textPrimary,
+                                uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                            )
                         )
-                    ) {
-                        Text(text = currentBatName)
                     }
-                }
 
-                SettingRow(label = "イベントリレー追従") {
-                    Switch(
-                        checked = isEventRelay,
-                        onCheckedChange = { isEventRelay = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
-                            checkedTrackColor = colors.accent,
-                            uncheckedThumbColor = colors.textPrimary,
-                            uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                    // ★修正: IconButton をTV向けの PriorityCircleButton に変更
+                    SettingRow(label = "優先度 (1-5)") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            PriorityCircleButton(
+                                icon = Icons.Default.Remove,
+                                enabled = priority > 1,
+                                onClick = { priority-- }
+                            )
+                            Text(
+                                text = priority.toString(),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(30.dp),
+                                textAlign = TextAlign.Center
+                            )
+                            PriorityCircleButton(
+                                icon = Icons.Default.Add,
+                                enabled = priority < 5,
+                                onClick = { priority++ }
+                            )
+                        }
+                    }
+
+                    SettingRow(label = "録画後実行バッチ") {
+                        val currentBatName =
+                            batchList.find { it.path == selectedBatPath }?.name ?: "なし"
+                        Button(
+                            onClick = { isBatSelectionOpen = true },
+                            modifier = Modifier.focusRequester(batSelectionFocusRequester),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                contentColor = colors.textPrimary
+                            )
+                        ) {
+                            Text(text = currentBatName)
+                        }
+                    }
+
+                    SettingRow(label = "イベントリレー追従") {
+                        Switch(
+                            checked = isEventRelay,
+                            onCheckedChange = { isEventRelay = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = if (colors.isDark) Color.Black else Color.White,
+                                checkedTrackColor = colors.accent,
+                                uncheckedThumbColor = colors.textPrimary,
+                                uncheckedTrackColor = colors.textPrimary.copy(alpha = 0.2f)
+                            )
                         )
-                    )
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -242,6 +266,7 @@ fun ReserveSettingsDialog(
                         onClick = {
                             val newSettings = initialSettings.copy(
                                 isEnabled = isEnabled,
+                                allowEndLack = allowEndLack,
                                 priority = priority,
                                 recordingMode = "SpecifiedService",
                                 postRecordingBatFilePath = selectedBatPath,

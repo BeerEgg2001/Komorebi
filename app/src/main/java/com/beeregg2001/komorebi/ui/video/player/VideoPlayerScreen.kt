@@ -6,11 +6,12 @@ import android.os.Build
 import android.util.Log
 import android.view.SurfaceView
 import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -32,20 +34,48 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.AudioMode
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
+import com.beeregg2001.komorebi.ui.subtitle.rememberNativeCaptionCue
 import com.beeregg2001.komorebi.ui.video.smb.SmbItem
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
+private val PLAYER_CONTROLS_SUBTITLE_OFFSET = 96.dp
+
+/**
+ * EPGStation の無変換再生 URL (`/api/videos/{videoFileId}`) かどうかを判定する。
+ * このURLは HLS ではなく MPEG-TS がそのまま流れてくるため、HLS として解釈させてはいけない。
+ * KonomiTV の `/api/videos/{id}/thumbnail` 等とは違い、数値で終わる点で見分ける。
+ */
+private val EPG_STATION_DIRECT_VIDEO_REGEX = Regex("/api/videos/\\d+$")
+
+private fun isEpgStationDirectVideoUrl(url: String): Boolean =
+    EPG_STATION_DIRECT_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
+/**
+ * KonomiTV の original画質(MPEG-2直接再生)用URL (`/api/videos/{id}/download`) かどうかを判定する。
+ * EPGStationの無変換再生URLと同様、HLSではなく生MPEG-TSがそのまま流れてくるため、
+ * (下のURLパターンマッチで)HLSとして誤解釈させてはいけない。
+ */
+private val KONOMI_TV_ORIGINAL_VIDEO_REGEX = Regex("/api/videos/\\d+/download$")
+
+private fun isKonomiTvOriginalVideoUrl(url: String): Boolean =
+    KONOMI_TV_ORIGINAL_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
 
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
@@ -70,12 +100,20 @@ fun VideoPlayerScreen(
 ) {
     val scope = rememberCoroutineScope()
 
+    DisposableEffect(Unit) {
+        videoPlayerViewModel.setPlaybackSyncThrottle(true)
+        onDispose { videoPlayerViewModel.setPlaybackSyncThrottle(false) }
+    }
+
     var currentProgram by remember { mutableStateOf(program) }
     val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
 
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
-    val isLiveStream by videoPlayerViewModel.isLiveStream.collectAsState()
+    // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
+    // トランスコード再生) かどうか。ViewModel 側の isLiveStream は EDCB xcode 判定という
+    // 別用途の名残りなので、この画面での位置補正・シーク判定にはこちらの専用フラグを使う。
+    val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
@@ -88,7 +126,7 @@ fun VideoPlayerScreen(
     LaunchedEffect(program.id) {
         if (smbItem == null) {
             videoPlayerViewModel.fetchProgramDetail(program.id)
-            videoPlayerViewModel.fetchAvailableQualities()
+            videoPlayerViewModel.fetchAvailableQualities(program.id)
         }
     }
 
@@ -126,6 +164,13 @@ fun VideoPlayerScreen(
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
     val videoSubtitleDefaultStr by settingsViewModel.videoSubtitleDefault.collectAsState()
 
+    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+    val cfAccessClientId by settingsViewModel.cfAccessClientId.collectAsState()
+    val cfAccessClientSecret by settingsViewModel.cfAccessClientSecret.collectAsState()
+    val cfAccessHeaders = remember(cfAccessClientId, cfAccessClientSecret) {
+        SettingsRepository.buildCfAccessHeaders(cfAccessClientId, cfAccessClientSecret)
+    }
+
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
     val commentOpacity = commentOpacityStr.toFloatOrNull() ?: 1.0f
@@ -145,7 +190,16 @@ fun VideoPlayerScreen(
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(vs.currentQuality) { UUID.randomUUID().toString() }
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val subtitleEvents = remember {
+        MutableSharedFlow<NativeCaptionCue>(
+            extraBufferCapacity = 10,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
+    var subtitleLanguages by remember(currentProgram.id) {
+        mutableStateOf(emptyList<NativeCaptionLanguage>())
+    }
+    var currentSubtitleLanguageId by remember(currentProgram.id) { mutableIntStateOf(1) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
@@ -164,6 +218,21 @@ fun VideoPlayerScreen(
 
     val isSubOverlayOpen =
         isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+    val isSubtitleBlockingOverlayOpen =
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+    val subtitleOffset by animateDpAsState(
+        targetValue = if (
+            showControls &&
+            !isSubOverlayOpen &&
+            vs.lCropMode == LCropMode.HIDDEN
+        ) {
+            PLAYER_CONTROLS_SUBTITLE_OFFSET
+        } else {
+            0.dp
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "playerControlsSubtitleOffset"
+    )
 
     val triggerSeekingPreview: () -> Unit = {
         isSeekingPreviewVisible = true
@@ -182,12 +251,24 @@ fun VideoPlayerScreen(
     val isBackground = remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val exoPlayer = rememberManagedExoPlayer(
+    val backendType by settingsViewModel.backendType.collectAsState()
+    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
+    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+    // ★ 追加: KonomiTVのoriginal画質(MPEG-2直接再生)も、EDCB直接再生と同じくExoPlayerの
+    // SeekMapに頼らないバイト位置計算シーク方式で扱う必要がある
+    val isKonomiOriginal = (backendType == "KONOMITV" && vs.currentQuality.value == "original")
+
+    // ★ 修正: 録画直接TS再生(isEdcbDirect)は、ExoPlayerのSeekMap機構(seekTo())に頼らず、
+    // シーク要求のたびにアプリ側で目標バイト位置を計算してMediaItemを作り直す方式にした
+    // (VideoPlayerManager.ktのコメント参照)。fileSizeBytesRef はその計算に必要なファイル全体
+    // サイズを、pendingSeekByteRef は次回open()時に読み始めるバイト位置の予約値を保持する。
+    val (exoPlayer, fileSizeBytesRef, pendingSeekByteRef) = rememberManagedExoPlayer(
         program = program,
         vs = vs,
-        isLiveStream = isLiveStream,
         scope = scope,
-        webViewRef = webViewRef,
+        onSubtitleCue = { subtitleEvents.tryEmit(it) },
+        subtitleLanguageId = currentSubtitleLanguageId,
+        onSubtitleLanguagesChanged = { subtitleLanguages = it },
         onVideoSizeChanged = { w, h, ratio ->
             videoWidth = w
             videoHeight = h
@@ -198,19 +279,43 @@ fun VideoPlayerScreen(
         onStopOrDispose = { player ->
             if (smbItem == null) {
                 val posMs =
-                    if (isLiveStream) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                    if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
                 videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
+        },
+        cfAccessHeaders = cfAccessHeaders,
+        onFatalError = { message ->
+            onShowToast(message)
+            onBackPressed()
         }
     )
 
-    val getCurrentPositionMs: () -> Long = remember(vs, exoPlayer) {
-        { if (isLiveStream) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
-    }
+    // ★ 修正: 以前は remember(vs, exoPlayer) でメモ化していたが、isEdcbDirect/isOffsetBasedStream
+    // (どちらも非同期に確定する値)がキーに含まれておらず、アプリ起動直後の読み込み中の一瞬に
+    // この関数が初回メモ化されると、その後正しい値になっても古いクロージャのままシークバー/
+    // 実況コメントの追従位置がズレ続ける不具合があった。performSeek等と同様、毎回の
+    // リコンポジションで最新の値を捕捉する普通のラムダにする(memo化するほど重い処理ではない)。
+    val getCurrentPositionMs: () -> Long =
+        { if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+    val subtitleCue = rememberNativeCaptionCue(
+        events = subtitleEvents,
+        enabled = vs.isSubtitleEnabled,
+        resetKey = currentProgram.id to currentSubtitleLanguageId,
+        positionMs = { exoPlayer.currentPosition }
+    )
 
-    val backendType by settingsViewModel.backendType.collectAsState()
-    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
-    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+    // ★ 追加: 直接TS再生でシーク先バイト位置を計算するためのヘルパー。番組全体時間(秒)に対する
+    // 目標時刻の比率と、直近に取得済みのファイル全体サイズから、HTTP Rangeの開始位置を概算する
+    // (線形補間のため、可変ビットレートのファイルでは数秒〜十数秒程度の誤差が生じ得る)。
+    val computeSeekByteOffset: (Long) -> Long? = { targetMs: Long ->
+        val durationSec = currentProgram.recordedVideo.duration
+        val size = fileSizeBytesRef.get()
+        if (durationSec > 0.0 && size > 0L) {
+            ((targetMs / 1000.0 / durationSec) * size).toLong().coerceIn(0L, size)
+        } else {
+            null
+        }
+    }
 
     val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
 
@@ -231,7 +336,7 @@ fun VideoPlayerScreen(
             }
         }
 
-        if (isLiveStream && smbItem == null) {
+        if (isOffsetBasedStream && smbItem == null) {
             scope.launch {
                 isBuffering = true; exoPlayer.pause()
                 vs.playbackOffsetMs = safeTarget
@@ -244,7 +349,10 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
+                    if (isEpgStationDirectVideoUrl(newUrl) || isKonomiTvOriginalVideoUrl(newUrl)) {
+                        // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
+                        mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+                    } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
                             "konomi.tv"
                         ) || newUrl.contains("m3u8")
                     ) {
@@ -256,6 +364,24 @@ fun VideoPlayerScreen(
                 } else {
                     if (fetchedDetail != null) onShowToast("シーク先ストリームの取得に失敗しました")
                 }
+            }
+        } else if ((isEdcbDirect || isKonomiOriginal) && smbItem == null) {
+            // ★ 追加: 録画直接TS再生のシークはExoPlayerネイティブのseekTo()に頼らず、
+            // 目標バイト位置を計算してMediaItemを作り直す(VideoPlayerManager.kt参照)
+            val byteOffset = computeSeekByteOffset(safeTarget)
+            if (byteOffset != null) {
+                val currentItem = exoPlayer.currentMediaItem
+                if (currentItem != null) {
+                    vs.playbackOffsetMs = safeTarget
+                    pendingSeekByteRef.set(byteOffset)
+                    isBuffering = true
+                    exoPlayer.stop()
+                    exoPlayer.setMediaItem(currentItem)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }
+            } else {
+                onShowToast("ファイルサイズを取得できていないためシークできません")
             }
         } else {
             exoPlayer.seekTo(safeTarget)
@@ -311,7 +437,16 @@ fun VideoPlayerScreen(
 
     var isFirstLoad by remember { mutableStateOf(true) }
 
-    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities) {
+    // ★ 修正: 以前は isQualitiesLoaded がキーに含まれておらず、本文中でガード条件にだけ
+    // 使われていた。availableQualities の更新(再取得完了)と isQualitiesLoaded が true に
+    // 戻るタイミングがわずかにズレるレースがあり、
+    //  1. availableQualities の参照更新でこのeffectが再起動される
+    //  2. その瞬間はまだ isQualitiesLoaded=false(再取得の過渡状態)のため早期return
+    //  3. 直後に isQualitiesLoaded が true に戻るが、キーに含まれていないため
+    //     effectは再発火せず、再生開始処理(setMediaItem/prepare/play)が永久に走らない
+    // という不具合があった(実機ログで確認済み)。isQualitiesLoaded をキーに追加し、
+    // trueに戻った時点で確実にeffectが再評価されるようにする。
+    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities, isQualitiesLoaded) {
         if (smbItem != null) {
             isBuffering = true
             vs.playbackOffsetMs = 0L
@@ -346,7 +481,10 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
+            if (isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url)) {
+                // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
+                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
+            } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
                     "m3u8"
                 )
             ) {
@@ -354,12 +492,29 @@ fun VideoPlayerScreen(
             }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isLiveStream) {
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
                 exoPlayer.seekTo(initialPositionMs)
             }
+            // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、初回再生位置の
+            // 復元はここではできない。ファイルサイズが判明してからバイト位置ベースで
+            // シークし直す(下のscope.launch参照)。
+            val shouldResumeViaByteSeek =
+                (isEdcbDirect || isKonomiOriginal) && isFirstLoad && initialPositionMs > 0
             isFirstLoad = false
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
+            if (shouldResumeViaByteSeek) {
+                scope.launch {
+                    var waitedMs = 0L
+                    while (fileSizeBytesRef.get() <= 0L && waitedMs < 8000L) {
+                        delay(200L)
+                        waitedMs += 200L
+                    }
+                    if (fileSizeBytesRef.get() > 0L) {
+                        performSeek(initialPositionMs)
+                    }
+                }
+            }
         } else {
             if (fetchedDetail != null) onShowToast("ストリームURLの取得に失敗しました")
         }
@@ -468,7 +623,9 @@ fun VideoPlayerScreen(
                     onSubMenuToggle = onSubMenuToggle,
                     exoPlayerIsPlaying = exoPlayer.playWhenReady,
                     onPause = { exoPlayer.pause() },
-                    onPlay = { exoPlayer.play() }
+                    onPlay = { exoPlayer.play() },
+                    onSkipPreviousChapter = skipToPreviousChapter,
+                    onSkipNextChapter = skipToNextChapter
                 )
             }
     ) {
@@ -527,27 +684,12 @@ fun VideoPlayerScreen(
             }
             val subtitleLayer = @Composable {
                 if (isHeavyUiReady) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
-                            }
-                        },
-                        update = { view ->
-                            val targetAlpha =
-                                if (vs.isSubtitleEnabled && !isSubOverlayOpen) 1f else 0f
-                            if (view.alpha != targetAlpha) {
-                                view.alpha = targetAlpha
-                            }
-                        },
-                        onRelease = { view -> view.destroy(); webViewRef.value = null },
-                        modifier = Modifier.fillMaxSize()
+                    NativeCaptionOverlay(
+                        cue = subtitleCue.value,
+                        visible = vs.isSubtitleEnabled && !isSubtitleBlockingOverlayOpen,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset(y = -subtitleOffset)
                     )
                 }
             }
@@ -626,7 +768,8 @@ fun VideoPlayerScreen(
                     tiledThumbnailUrl = tiledThumbnailUrl,
                     currentPositionMs = getEffectivePositionMs(),
                     onSeekRequested = { performSeek(it); isChapterListOpen = false },
-                    onClose = { isChapterListOpen = false })
+                    onClose = { isChapterListOpen = false },
+                    requestHeaders = cfAccessHeaders)
             }
 
             AnimatedVisibility(visible = isModernSettingsOpen, enter = fadeIn(), exit = fadeOut()) {
@@ -634,6 +777,8 @@ fun VideoPlayerScreen(
                     currentAudioMode = vs.currentAudioMode,
                     currentSpeed = vs.currentSpeed,
                     isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
@@ -655,6 +800,16 @@ fun VideoPlayerScreen(
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull {
+                            it.id == currentSubtitleLanguageId
+                        }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
+                    },
                     onQualitySelect = {
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
@@ -667,17 +822,26 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            if (isEdcbDirect) {
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
-                                    isBuffering = true;
+                                    isBuffering = true
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
                                         it.value,
                                         currentSessionId,
                                         0.0
-                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
-                                    currentPos
-                                ); player.play()
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
                                 }
                             } else {
                                 vs.playbackOffsetMs =
@@ -730,6 +894,8 @@ fun VideoPlayerScreen(
                     currentAudioMode = vs.currentAudioMode,
                     currentSpeed = vs.currentSpeed,
                     isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
@@ -752,6 +918,14 @@ fun VideoPlayerScreen(
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull { it.id == currentSubtitleLanguageId }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
+                    },
                     onQualitySelect = {
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
@@ -764,17 +938,26 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            if (isEdcbDirect) {
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
-                                    isBuffering = true;
+                                    isBuffering = true
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
                                         it.value,
                                         currentSessionId,
                                         0.0
-                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.seekTo(
-                                    currentPos
-                                ); player.play()
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
                                 }
                             } else {
                                 vs.playbackOffsetMs =

@@ -16,6 +16,9 @@ import javax.inject.Singleton
 
 private const val TAG = "Komorebi_Repo"
 
+// KonomiTV API の既定ページサイズ
+private const val DEFAULT_RECORDED_LIMIT = 24
+
 /**
  * KonomiTVバックエンド（API）との通信を抽象化するリポジトリ。
  * ローカルDBに関する処理はそれぞれ WatchHistoryRepository, LastChannelRepository に分離しました。
@@ -56,9 +59,17 @@ class KonomiRepository @Inject constructor(
         }
     }
 
-    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse {
+    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        getRecordedPrograms(page = page, limit = DEFAULT_RECORDED_LIMIT)
+
+    // 端末プロファイルごとのフェッチ数 (50/100/200) を KonomiTV API の limit に反映する
+    override suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse {
         return try {
-            val response = apiService.getRecordedPrograms(page = page, order = "desc")
+            val response = apiService.getRecordedPrograms(
+                limit = limit,
+                page = page,
+                order = "desc"
+            )
 
             val ip = settingsRepository.konomiIp.first()
             val port = settingsRepository.konomiPort.first()
@@ -321,6 +332,12 @@ class KonomiRepository @Inject constructor(
     ): String {
         val ip = settingsRepository.konomiIp.first()
         val port = settingsRepository.konomiPort.first()
+        // ★ 追加: original画質はHLS(VideoEncodingTask)を経由せず、録画ファイルダウンロードAPIを
+        // 生MPEG-TS直接再生ソースとしてそのまま使う(KonomiTVサーバー側もoriginal指定時はHLS系
+        // APIを422で拒否する実装になっている)。session_id/offsetSecはHLS専用のため使用しない。
+        if (quality == "original") {
+            return UrlBuilder.getKonomiTvVideoDownloadUrl(ip, port, videoId)
+        }
         return UrlBuilder.getVideoPlaylistUrl(ip, port, videoId, sessionId, quality)
     }
 

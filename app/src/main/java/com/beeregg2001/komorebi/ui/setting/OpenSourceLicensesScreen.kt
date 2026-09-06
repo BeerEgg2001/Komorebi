@@ -66,14 +66,13 @@ val ossLibraries = listOf(
         """.trimIndent()
     ),
     OssLibrary(
-        name = "aribb24.js",
-        author = "xqq, monyone",
+        name = "libaribcaption",
+        author = "magicxqq",
         licenseName = "MIT License",
         licenseText = """
             MIT License
 
-            Copyright (c) 2017-2021 xqq
-            Copyright (c) 2021 monyone
+            Copyright (c) 2022 magicxqq
 
             Permission is hereby granted, free of charge, to any person obtaining a copy
             of this software and associated documentation files (the "Software"), to deal
