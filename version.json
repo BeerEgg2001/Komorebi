@@ -8,6 +8,6 @@
     "versionCode": 17,
     "versionName": "1.1.0-beta7",
     "releaseNotes": "・stuayu版EPGStationに対応\n・KonomiTVのOriginal画質に対応\n・EDCB録画TS直接再生の音ズレ・シーク不具合へ対応\n詳細はGithubのリリースノートをご覧ください\n",
-    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta7/Komorebi-1.1.0-beta7.apk"
+    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta7/Komorebi-1.1.0-beta7-universal-release.apk"
   }
 }
