@@ -111,8 +111,7 @@ fun VideoPlayerScreen(
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
     // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
-    // トランスコード再生) かどうか。ViewModel 側の isLiveStream は EDCB xcode 判定という
-    // 別用途の名残りなので、この画面での位置補正・シーク判定にはこちらの専用フラグを使う。
+    // トランスコード再生) かどうか。位置補正・シーク判定にはこのフラグを使う。
     val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
@@ -216,10 +215,14 @@ fun VideoPlayerScreen(
     var isSeekingPreviewVisible by remember { mutableStateOf(false) }
     var seekingPreviewJob by remember { mutableStateOf<Job?>(null) }
 
+    // ★ 修正: L字クロップのメニュー表示中(lCropMode==MENU)も他のオーバーレイと同様に扱う。
+    // これが漏れていると、キー入力が VideoPlayerState.handleKeyEvent 側の一般処理に流れてしまい、
+    // メニュー内のフォーカス移動が効かず、戻るキーでメニューを閉じずにプレイヤーごと終了してしまう。
     val isSubOverlayOpen =
-        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
-    val isSubtitleBlockingOverlayOpen =
-        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen || vs.lCropMode == LCropMode.MENU
+    // ★ 修正: 以前から isSubOverlayOpen と完全に同一の式が重複定義されていたため、
+    // 一方を修正してももう一方に反映し忘れる乖離リスクがあった。同じ意味なので一本化する。
+    val isSubtitleBlockingOverlayOpen = isSubOverlayOpen
     val subtitleOffset by animateDpAsState(
         targetValue = if (
             showControls &&
@@ -587,10 +590,6 @@ fun VideoPlayerScreen(
         wasControlsVisible = showControls
     }
 
-    val safeHouseFocusRequester = remember { FocusRequester() }
-    val sceneSearchFocusRequester = remember { FocusRequester() }
-    var isLongPressHandled by remember { mutableStateOf(false) }
-
     BackHandler(enabled = isPiPMode) {}
 
     Box(
@@ -759,6 +758,19 @@ fun VideoPlayerScreen(
             }
 
             AnimatedVisibility(
+                isSceneSearchOpen,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()) {
+                SceneSearchOverlay(
+                    program = currentProgram,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = getEffectivePositionMs(),
+                    onSeekRequested = { performSeek(it); onSceneSearchToggle(false) },
+                    onClose = { onSceneSearchToggle(false) },
+                    requestHeaders = cfAccessHeaders)
+            }
+
+            AnimatedVisibility(
                 isChapterListOpen,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut()) {
@@ -869,8 +881,12 @@ fun VideoPlayerScreen(
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
+                            // ★ 修正: このコールバックはモダン設定パネル(isModernSettingsOpen)側のものなので、
+                            // 別UIのフラグ(isSubMenuOpen)を閉じるonSubMenuToggle(false)では自分自身が
+                            // 閉じない。isModernSettingsOpenを直接falseにしてL字クロップメニューに
+                            // 差し替える(閉じないとVideoLCropOverlayと二重表示・フォーカス競合する)。
                             vs.lCropMode =
-                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
+                                LCropMode.MENU; isModernSettingsOpen = false; onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
@@ -884,6 +900,22 @@ fun VideoPlayerScreen(
                     },
                     onClose = { isModernSettingsOpen = false }
                 )
+            }
+
+            AnimatedVisibility(
+                visible = vs.lCropMode != LCropMode.HIDDEN,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                VideoLCropOverlay(
+                    state = vs,
+                    onClose = {
+                        vs.lCropMode = LCropMode.HIDDEN
+                        scope.launch {
+                            delay(200)
+                            mainFocusRequester.safeRequestFocus(TAG)
+                        }
+                    })
             }
 
             AnimatedVisibility(

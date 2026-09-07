@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.util.UnstableApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -35,7 +34,6 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -177,7 +175,6 @@ class RecordViewModel @Inject constructor(
         _groupedChannels.asStateFlow()
 
     private var currentSearchQuery: String = ""
-    private var streamMaintenanceJob: Job? = null
     private var epgStationIp: String = ""
     private var epgStationPort: String = "8888"
 
@@ -477,44 +474,6 @@ class RecordViewModel @Inject constructor(
             } catch (e: Exception) {
             }
         }
-    }
-
-    @UnstableApi
-    fun startStreamMaintenance(
-        program: RecordedProgram,
-        quality: String,
-        sessionId: String,
-        currentPositionProvider: () -> Double
-    ) {
-        streamMaintenanceJob?.cancel()
-
-        streamMaintenanceJob = viewModelScope.launch {
-            while (isActive) {
-                try {
-                    val position = currentPositionProvider()
-                    recordProvider.keepAlive(
-                        videoId = program.recordedVideo.id,
-                        sessionId = sessionId,
-                        quality = quality
-                    )
-
-                    Log.d("StreamMaintenance", "Keep-Alive sent. Session: $sessionId")
-                } catch (e: Exception) {
-                    Log.e("StreamMaintenance", "Failed to send Keep-Alive", e)
-                }
-                delay(4000L)
-            }
-        }
-    }
-
-    fun stopStreamMaintenance() {
-        streamMaintenanceJob?.cancel()
-        streamMaintenanceJob = null
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        stopStreamMaintenance()
     }
 
     suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {

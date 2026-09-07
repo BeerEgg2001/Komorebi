@@ -56,15 +56,10 @@ class VideoPlayerViewModel @Inject constructor(
     private val _externalChapters = MutableStateFlow<List<ChapterInfo>>(emptyList())
     val externalChapters: StateFlow<List<ChapterInfo>> = _externalChapters.asStateFlow()
 
-    private val _isLiveStream = MutableStateFlow(false)
-    val isLiveStream: StateFlow<Boolean> = _isLiveStream.asStateFlow()
-
     // 再生 URL が「再生開始位置からのオフセット付き」かどうか。
     // EDCB の xcode 疑似ライブ配信だけでなく、EPGStation のトランスコード再生
     // (hls:N / mp4:N / webm:N) も、サーバー側で offsetSeconds 分シークした位置から
     // 配信されるため、プレイヤーの currentPosition は「オフセット後の 0 起点」になる。
-    // isLiveStream は EDCB 由来の別用途 (擬似ライブ判定) でも参照されているため、
-    // 意味を変えずに済むよう別の StateFlow として持つ。
     private val _isOffsetBasedStream = MutableStateFlow(false)
     val isOffsetBasedStream: StateFlow<Boolean> = _isOffsetBasedStream.asStateFlow()
 
@@ -249,7 +244,6 @@ class VideoPlayerViewModel @Inject constructor(
                 val url =
                     recordProvider.getRecordStreamUrl(videoId, quality, sessionId, offsetSeconds)
                 val isEdcbXcode = url.contains("/api/xcode") && quality != "10"
-                _isLiveStream.value = isEdcbXcode
                 // EPGStation の direct 以外 (hls:N / mp4:N / webm:N) はサーバー側で
                 // offsetSeconds 分シークした位置から配信されるオフセット付きストリームになる。
                 val backend = settingsRepository.backendType.first()
@@ -294,7 +288,6 @@ class VideoPlayerViewModel @Inject constructor(
         _tiledThumbnailUrl.value = null
         _chapters.value = emptyList()
         _externalChapters.value = emptyList() // ★ 追加: 外部チャプター情報もクリア
-        _isLiveStream.value = false
         _isOffsetBasedStream.value = false
     }
 
