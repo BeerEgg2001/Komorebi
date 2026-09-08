@@ -25,6 +25,7 @@ import androidx.media3.extractor.ts.TsExtractor
 import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.BackendConfig
 import com.beeregg2001.komorebi.data.model.Channel
@@ -286,7 +287,15 @@ class LivePlayerViewModel @Inject constructor(
                         }
                     }
                 } else if (source == StreamSource.KONOMITV) {
-                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                    // ★ 追加: Original画質(ライブ)はKonomiTVのmasterブランチでのみ対応しており、
+                    // 正式リリース版では422で拒否される。しかもサーバーのバージョン文字列だけでは
+                    // masterと直近の正式リリースを区別できないため、実際に再生を試みて拒否された
+                    // ことが確認済み(KonomiOriginalQualityGate)であれば選択肢自体から除外する。
+                    _availableQualities.value = if (KonomiOriginalQualityGate.isUnsupported()) {
+                        StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
+                    } else {
+                        StreamQuality.DEFAULT_QUALITIES
+                    }
                 } else if (source == StreamSource.EPGSTATION) {
                     _availableQualities.value =
                         epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
@@ -458,6 +467,39 @@ class LivePlayerViewModel @Inject constructor(
                 return@launch
             }
 
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = mainCurrentSource == StreamSource.KONOMITV &&
+                mainCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && mainCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    mainCurrentQuality = fallback
+                    mainAutoRetryCount = 0
+                    _mainSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopMainPlaybackSafely()
+                    playMainChannel(
+                        uiContext,
+                        mainCurrentChannel!!,
+                        mainCurrentSource,
+                        mainIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
+            }
+
             val errorMsg = analyzePlayerError(error)
             val epgFallback = if (
                 mainCurrentSource == StreamSource.EPGSTATION &&
@@ -515,6 +557,39 @@ class LivePlayerViewModel @Inject constructor(
                     "セグメント生成待機中... ($dualAutoRetryCount/5)"
                 delay(2500); _dualPlayer.value?.prepare(); _dualPlayer.value?.play()
                 return@launch
+            }
+
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = dualCurrentSource == StreamSource.KONOMITV &&
+                dualCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && dualCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    dualCurrentQuality = fallback
+                    dualAutoRetryCount = 0
+                    _dualSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopDualPlaybackSafely()
+                    playDualChannel(
+                        uiContext,
+                        dualCurrentChannel!!,
+                        dualCurrentSource,
+                        dualIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
             }
 
             val errorMsg = analyzePlayerError(error)

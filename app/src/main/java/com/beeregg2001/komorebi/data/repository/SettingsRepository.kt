@@ -228,6 +228,9 @@ class SettingsRepository @Inject constructor(
         //   共有 URL キャッシュを破棄して古い URL を返さないようにする。
         if (key in LOGO_URL_AFFECTING_KEYS) {
             ChannelLogoUrlCache.clear()
+            // ★ 追加: 接続先が変われば KonomiTV の Original画質(ライブ)対応状況も
+            //   変わりうるため、旧接続先で確認した「非対応」判定を持ち越さない
+            KonomiOriginalQualityGate.reset()
         }
     }
 
