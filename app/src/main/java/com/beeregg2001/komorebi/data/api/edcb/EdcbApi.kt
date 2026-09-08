@@ -336,9 +336,15 @@ class EdcbApi(private val ip: String, private val port: Int) {
             val payload =
                 ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
                     .array()
+            // ★ 修正: sendCommand()がnullを返すのはTCP接続失敗またはEDCB側のエラー応答時のみで、
+            // 「録画0件」という正常なケースはCMD_SUCCESS付きの空配列として読み取れるため
+            // ここには到達しない(KonomiTV本家のCtrlCmdUtil.pyでも同様の呼び出し元で
+            // 通信失敗を成功扱いの空リストにせず、明確に失敗として扱っている)。
+            // 以前はResult.success(emptyList())にフォールバックしていたため、EDCB停止時や
+            // 接続設定ミス時に「録画0件」の一覧が表示され、30秒キャッシュされてしまっていた。
             val res =
-                tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload) ?: return Result.success(
-                    emptyList()
+                tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload) ?: return Result.failure(
+                    Exception("EDCBとの通信に失敗しました。EDCBが起動しているか、接続設定(IP/ポート)を確認してください。")
                 )
             EdcbByteUtils.readUshort(res)
 

@@ -14,7 +14,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -42,6 +44,14 @@ class EdcbRecordRepository @Inject constructor(
         // 呼び出し側から limit の指定がない場合のページサイズ
         private const val DEFAULT_RECORDED_PAGE_SIZE = 50
         private const val MAX_ALLOWED_DROPS = 1000L
+
+        // ★ 追加: 1ページ分の録画を並列でmapToRecordedProgram()する際の同時実行数上限。
+        // 1件あたりresolver.lua・チャプター(最大2回)・tile.jsonと最大4回のHTTPリクエストを
+        // 投げるため、ページサイズ(既定50件)をそのまま無制限に並列化すると、EMWUI
+        // (civetweb)へ瞬間的に大量のリクエストが集中しread timeoutが多発していた
+        // (低スペック端末だけでなく、EMWUI側の同時接続処理能力の問題でもある)。
+        // 6並列に絞ることで、体感速度を大きく損なわずにタイムアウト頻度を抑える。
+        private const val ITEM_MAP_CONCURRENCY = 6
     }
 
     private val baseEdcbHttpClient: OkHttpClient by lazy {
@@ -51,6 +61,7 @@ class EdcbRecordRepository @Inject constructor(
     private val recordMutex = Mutex()
     private var cachedRecInfos: List<EdcbRecFileInfo>? = null
     private var lastRecFetchTime = 0L
+    private val itemMapSemaphore = Semaphore(ITEM_MAP_CONCURRENCY)
 
     private data class KomorebiResolverUrls(
         val videoUrl: String, val thumbnailUrl: String, val chapterUrl: String,
@@ -248,7 +259,15 @@ class EdcbRecordRepository @Inject constructor(
                             cachedRecInfos = validInfos.sortedByDescending { it.startTime }
                             lastRecFetchTime = System.currentTimeMillis()
                         } else {
-                            return@withContext RecordedApiResponse(0, emptyList())
+                            // ★ 修正: 以前はここで空リストを返して成功扱いにしていたため、
+                            // EDCB停止時やIP/ポート設定ミス時に「録画0件」と表示された上、
+                            // 30秒間その空リストがキャッシュされ、EDCB復旧後もすぐには
+                            // 反映されなかった。TCP通信失敗を握りつぶさず例外として投げ、
+                            // 下のcatchでUIにエラーを伝搬させる(smartSync等の背景同期側は
+                            // 従来通り例外を静かにログするだけなので、ここで例外化しても
+                            // バックグラウンド更新でダイアログが乱発することはない)。
+                            throw result.exceptionOrNull()
+                                ?: Exception("EDCBとの通信に失敗しました。")
                         }
                     }
 
@@ -261,8 +280,10 @@ class EdcbRecordRepository @Inject constructor(
                     val to = (from + pageSize).coerceAtMost(total)
                     val baseUrl = getHttpBaseUrl()
 
+                    // ★ 修正: 同時実行数をitemMapSemaphoreで絞ることでEMWUIへの
+                    // リクエスト集中を防ぐ(ITEM_MAP_CONCURRENCY定義部のコメント参照)
                     val programs = all.subList(from, to).map { info ->
-                        async { mapToRecordedProgram(info, ip, baseUrl) }
+                        async { itemMapSemaphore.withPermit { mapToRecordedProgram(info, ip, baseUrl) } }
                     }.awaitAll()
 
                     Log.i(TAG, "[getRecordedPrograms] Page $page 返却完了 (件数: ${programs.size})")
@@ -419,7 +440,17 @@ class EdcbRecordRepository @Inject constructor(
         }
 
         val fallbackUrl = "$baseUrl/api/Thumbnail?id=${info.id}"
-        val resolverUrls = fetchResolverUrls(baseUrl, info.id)
+        // ★ 修正: 以前はfetchResolverUrls()の例外(タイムアウト等)がここで捕捉されず、
+        // async{}.awaitAll()経由でページ全体を巻き添えにして失敗させていた
+        // (録画数が多い/EMWUIが混雑している環境で1件のタイムアウトが一覧全体の
+        // 「取得失敗」に直結していた)。1件の解決失敗は「サムネイル/チャプターなしで
+        // この録画だけ表示する」フォールバックにとどめ、ページ全体は失敗させない。
+        val resolverUrls = try {
+            fetchResolverUrls(baseUrl, info.id)
+        } catch (e: Exception) {
+            Log.w(TAG, "resolver.lua fetch failed for id=${info.id}. Falling back.", e)
+            null
+        }
         val primaryUrl =
             if (resolverUrls != null) "$baseUrl${resolverUrls.thumbnailUrl}" else fallbackUrl
 
