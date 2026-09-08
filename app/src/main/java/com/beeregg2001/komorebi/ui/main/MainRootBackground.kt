@@ -72,7 +72,12 @@ fun MainRootBackground(
     // 設定画面を開いても背面のホーム画面がフォーカス可能なまま残り、
     // 設定画面のボタンにフォーカスできない・戻るキーがホーム画面側に吸われて
     // アプリ終了確認ダイアログが出る、という操作不能状態になっていた。
-    val isBackgroundFocusBlocked = isFullScreenPlayerVisible || state.isSettingsOpen
+    // ★ 追加: AIコンシェルジュパネル(MainRootDialogs側で描画)も前面の全画面オーバーレイ。
+    // これが漏れていると、パネル表示中も背面のホーム画面がフォーカス可能なままになり、
+    // ホーム側の「フォーカス迷子検知」がパネルからフォーカスを奪い返してしまう
+    // (パネルは表示されたままキー操作だけ背面画面に効く操作不能状態になる)。
+    val isBackgroundFocusBlocked =
+        isFullScreenPlayerVisible || state.isSettingsOpen || state.isAiConciergeOpen
 
     Box(
         modifier = Modifier
@@ -318,6 +323,8 @@ fun MainRootBackground(
                         onReturnToPlayerClick = { state.isMiniPlayerMode = false },
                         aiFocusReturnTick = state.aiFocusReturnTick,
                         onAiReturnConsumed = { state.aiFocusReturnTick = 0 },
+                        // ★ 追加: AIコンシェルジュパネル表示中はフォーカス自動復帰・戻るキー処理を止める
+                        isAiConciergeOpen = state.isAiConciergeOpen,
                         // プレイヤー表示中はホーム画面が見えないため、定期取得を止めさせる
                         isPlayerActiveFullScreen = isFullScreenPlayerVisible
                     )
