@@ -272,18 +272,21 @@ class SettingsRepository @Inject constructor(
         return "$ip:$port"
     }
 
+    // ★ 修正: 以前は素朴な文字列連結("$ip:$port"等)で組み立てており、
+    // スキーム付きURL・末尾スラッシュ付き・ポート込みURLを入力すると不正なURL
+    // (例: "https://example.com/:5510"、ポート重複、パスへのポート混入)になっていた。
+    // EPGStation側は既にUrlBuilder.formatBaseUrl()でこれらを正しく処理しているため、
+    // EDCBも同じ関数に統一する(SSL自動判定のヒューリスティックはそのまま維持)。
     suspend fun getEdcbFullUrl(): String {
         val prefs = context.dataStore.data.first()
-        var ip = prefs[EDCB_IP] ?: ""
+        val ip = prefs[EDCB_IP] ?: ""
         val port = prefs[EDCB_HTTP_PORT] ?: "5510"
-        if (ip.isEmpty()) return ""
-
-        if (ip.startsWith("http://") || ip.startsWith("https://")) return "$ip:$port"
+        if (ip.isBlank()) return ""
 
         val isSsl = port == "5511" || port.endsWith("s")
-        val scheme = if (isSsl) "https://" else "http://"
+        val defaultProtocol = if (isSsl) "https" else "http"
 
-        return "$scheme$ip:$port"
+        return UrlBuilder.formatBaseUrl(ip, port, defaultProtocol)
     }
 
     suspend fun getEpgStationFullUrl(): String {

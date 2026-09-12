@@ -92,12 +92,13 @@ class DtvProviderProxy @Inject constructor(
         quality: String,
         streamNumber: Int
     ): String {
-        return try {
-            getLiveProvider().getLiveStreamUrl(channelId, quality, streamNumber)
-        } catch (e: Exception) {
-            Log.w("DtvProviderProxy", "getLiveStreamUrl failed or not implemented. Skipping.")
-            ""
-        }
+        // ★ 修正: 以前は全ての例外を空文字に握り潰していたため、EDCB側が組み立てた
+        // 「EDCBの接続設定を確認してください」等の原因を特定できるメッセージが失われ、
+        // 呼び出し元(LivePlayerViewModel)では常に汎用的な
+        // 「HLSトランスコードの開始に失敗しました」としか表示されなかった。
+        // 呼び出し元は既にこのメソッドの例外を受け止めて再生エラーとして表示する処理を
+        // 持っているため、ここでは握り潰さずそのまま伝搬させる。
+        return getLiveProvider().getLiveStreamUrl(channelId, quality, streamNumber)
     }
 
     /**

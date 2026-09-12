@@ -1309,6 +1309,11 @@ class LivePlayerViewModel @Inject constructor(
             }
 
             cause is IOException -> String.format(AppStrings.ERR_DATA_READ, cause.message)
+            // ★ 修正: DtvProviderProxy.getLiveStreamUrl()がEDCB側の具体的な失敗理由
+            // (「EDCBの接続設定を確認してください」等)を例外として伝搬するようになったが、
+            // 従来はここでerror.messageを見ずに一律「不明なエラー」に潰していたため、
+            // 原因が特定できるメッセージがユーザーに届いていなかった。
+            !error.message.isNullOrBlank() -> error.message!!
             else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
         }
     }

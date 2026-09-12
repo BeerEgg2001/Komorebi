@@ -199,14 +199,21 @@ class EdcbApi(private val ip: String, private val port: Int) {
                 requestBuffer.putLong(serviceIdLong)
             }
 
-            // ★ 高速化用: 取得期間を指定された場合、FILETIMEに変換してリクエストに付与
+            // ★ 修正: EDCBの日付はOSのタイムゾーンに関わらず常にJSTの壁時計表記のまま扱われ、
+            // FILETIME化する際もタイムゾーン変換なしにその数値をそのままUTCとみなう設計になっている
+            // (KonomiTV本家のCtrlCmdUtil.pyがSYSTEMTIMEをタイムゾーン変換せずJSTのままエンコードし、
+            // UNIX_EPOCHを「1970/1/1 09:00 JST」と定義してJSTの壁時計表記をUTCエポックとみなしている
+            // ことからも裏付けられる)。以前は atZone(JST).toInstant() で真のUTC時刻(9時間前)に
+            // 変換していたため、EDCB側の座標系で常に9時間手前の時刻を送ってしまい、起動直後の
+            // クイックロード(過去1時間〜未来24時間のつもり)が実質「過去10時間〜未来15時間」に
+            // ずれていた。壁時計の数値をそのままUTCとみなしてFILETIME化するよう修正する。
             val startFileTime = if (startTime != null) {
-                val startMs = startTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                val startMs = startTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
                 EdcbByteUtils.dateTimeToFileTime(startMs)
             } else 0L
 
             val endFileTime = if (endTime != null) {
-                val endMs = endTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                val endMs = endTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
                 EdcbByteUtils.dateTimeToFileTime(endMs)
             } else Long.MAX_VALUE
 

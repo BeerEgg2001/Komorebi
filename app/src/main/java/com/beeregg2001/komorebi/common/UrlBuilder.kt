@@ -39,6 +39,29 @@ object UrlBuilder {
     }
 
     /**
+     * EDCBのTCP直接通信(生ソケット)用に、設定欄の入力からホスト名/IPだけを取り出す。
+     *
+     * 以前は"^https?://"を剥がすだけで、スキーム付きかつポート込みのURL
+     * (例: "http://192.168.1.5:5510")を入力すると"192.168.1.5:5510"がそのまま
+     * ホスト名としてSocketに渡され、必ず接続に失敗していた。formatBaseUrl()と同様に
+     * HttpUrlでパースし、スキーム・ポート・パスを取り除いたホスト部分のみを返す。
+     */
+    fun extractBareHost(ip: String): String {
+        val cleanIp = ip.trim().removeSuffix("/")
+        val normalized = if (
+            cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        ) {
+            cleanIp
+        } else {
+            "http://$cleanIp"
+        }
+        return normalized.toHttpUrlOrNull()?.host
+            ?: cleanIp.replace(Regex("^https?://", RegexOption.IGNORE_CASE), "")
+                .substringBefore("/").substringBefore(":")
+    }
+
+    /**
      * Mirakurun形式のStreamID
      */
     @OptIn(UnstableApi::class)

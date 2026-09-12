@@ -21,7 +21,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -74,9 +73,12 @@ class EdcbRecordRepository @Inject constructor(
         val options: List<StreamQuality>
     )
 
+    // ★ 修正: 以前は"^https?://"を剥がすだけでポート・パスは剥がしていなかったため、
+    // EDCBのIP欄にスキーム付きかつポート込みのURL(例: "http://192.168.1.5:5510")を
+    // 入力すると、ホスト名が"192.168.1.5:5510"のままSocketに渡され必ず接続に失敗していた。
     private suspend fun getTcpIpAndPort(): Pair<String, Int> {
         val rawIp = settingsRepository.edcbIp.first()
-        val cleanIp = rawIp.replace(Regex("^https?://"), "")
+        val cleanIp = com.beeregg2001.komorebi.common.UrlBuilder.extractBareHost(rawIp)
         val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
         return Pair(cleanIp, port)
     }
@@ -327,42 +329,19 @@ class EdcbRecordRepository @Inject constructor(
         val resolverUrls = fetchResolverUrls(baseUrl, videoId)
         val videoPath = resolverUrls?.videoUrl
 
-        if (playMethod == "DIRECT") {
-            if (!videoPath.isNullOrEmpty()) {
-                val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
-                val videoUri = "$baseUrl/$safePath"
-                Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
-                return videoUri
-            } else {
-                try {
-                    val (ip, port) = getTcpIpAndPort()
-                    val info =
-                        cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
-                            videoId
-                        ).getOrNull()
-
-                    if (info != null && info.recFilePath.isNotBlank()) {
-                        val fileName =
-                            info.recFilePath.substringAfterLast("\\").substringAfterLast("/")
-                        val encodedFileName =
-                            URLEncoder.encode("video/rec/$fileName", "UTF-8").replace("+", "%20")
-                        val ctokView = fetchResolverSettings(baseUrl)?.ctokView ?: ""
-
-                        val builder = android.net.Uri.parse(baseUrl).buildUpon()
-                            .appendPath("api").appendPath("xcode")
-                            .appendQueryParameter("fname", encodedFileName)
-                            .appendQueryParameter("option", "10")
-                            .appendQueryParameter("ctok", ctokView)
-                        if (offsetSeconds > 0) builder.appendQueryParameter(
-                            "ofssec",
-                            offsetSeconds.toInt().toString()
-                        )
-                        return builder.build().toString()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to generate DIRECT fallback URI", e)
-                }
-            }
+        // ★ 修正: 以前はresolver.luaがvideoPathを返せなかった場合のフォールバックとして、
+        // EDCB TCPから直接recFilePathを取得しURLを組み立て直す経路があったが、
+        // Uri.Builder.appendQueryParameter()が値を再度パーセントエンコードするため
+        // URLEncoder.encode()の結果と合わさって二重エンコードになっており、日本語ファイル名では
+        // 正しいURLにならなかった。fetchResolverUrls()は失敗時に例外を投げる仕様のため、この経路は
+        // videoPathがnull/空になる(=HTTPレスポンスのボディが空だった)というごく限定的なケースでしか
+        // 到達せず、実質ほぼ機能していなかった。到達時は下の汎用フォールバック(id指定のapi/xcode)に
+        // 任せるようにし、壊れた再構築ロジックを削除する。
+        if (playMethod == "DIRECT" && !videoPath.isNullOrEmpty()) {
+            val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
+            val videoUri = "$baseUrl/$safePath"
+            Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
+            return videoUri
         }
 
         if (!videoPath.isNullOrEmpty()) {
@@ -457,9 +436,13 @@ class EdcbRecordRepository @Inject constructor(
         var cmSections: List<CmSection>? = null
         if (resolverUrls != null) {
             try {
-                val urlsToTry = listOf(
-                    "$baseUrl${resolverUrls.chapterUrl}",
-                    "$baseUrl${resolverUrls.chapterAltUrl}"
+                // ★ 修正: resolverが代替チャプターを見つけられなかった場合chapter_alt_urlは
+                // 空文字になるため、以前は2本目の試行URLが"$baseUrl"そのもの(EMWUIの
+                // トップページ)になり、無駄なリクエスト+HTML誤混入のリスクがあった。
+                // 空のURLは候補から除外する。
+                val urlsToTry = listOfNotNull(
+                    "$baseUrl${resolverUrls.chapterUrl}".takeIf { resolverUrls.chapterUrl.isNotBlank() },
+                    "$baseUrl${resolverUrls.chapterAltUrl}".takeIf { resolverUrls.chapterAltUrl.isNotBlank() }
                 )
                 val client =
                     baseEdcbHttpClient.newBuilder().connectTimeout(1500, TimeUnit.MILLISECONDS)
@@ -474,8 +457,15 @@ class EdcbRecordRepository @Inject constructor(
                                 val bytes = response.body?.bytes()
                                 if (bytes != null && bytes.isNotEmpty()) {
                                     val rawText = decodeEdcbString(bytes)
-                                    // 取得したテキストがHTMLやエラーメッセージでないか簡易チェック
-                                    if (!rawText.contains("Error 404") && !rawText.contains("<!DOCTYPE html>")) {
+                                    // ★ 修正: 大文字小文字を区別する完全一致だけだと、
+                                    // "<!doctype html>"のような表記ゆれのあるHTMLページや
+                                    // DOCTYPE宣言の無いHTMLがすり抜けていた。大文字小文字を
+                                    // 無視した判定にし、<html タグの有無も追加でチェックする。
+                                    val looksLikeHtmlOrError =
+                                        rawText.contains("Error 404", ignoreCase = true) ||
+                                            rawText.trimStart().startsWith("<!doctype", ignoreCase = true) ||
+                                            rawText.contains("<html", ignoreCase = true)
+                                    if (!looksLikeHtmlOrError) {
                                         chapterText = rawText
                                     }
                                 }
