@@ -55,9 +55,12 @@ class EdcbEpgCacheManager @Inject constructor(
     // データ取得ロジック
     // ========================================================================
 
+    // ★ 修正: 以前は"^https?://"を剥がすだけでポート・パスは剥がしていなかったため、
+    // EDCBのIP欄にスキーム付きかつポート込みのURL(例: "http://192.168.1.5:5510")を
+    // 入力すると、ホスト名が"192.168.1.5:5510"のままSocketに渡され必ず接続に失敗していた。
     private suspend fun getTcpIpAndPort(): Pair<String, Int> {
         val rawIp = settingsRepository.edcbIp.first()
-        val cleanIp = rawIp.replace(Regex("^https?://"), "")
+        val cleanIp = com.beeregg2001.komorebi.common.UrlBuilder.extractBareHost(rawIp)
         val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
         return Pair(cleanIp, port)
     }
