@@ -117,7 +117,17 @@ class EdcbRecordRepository @Inject constructor(
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
-                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        // ★ 修正: resolverが"Path not mapped"時に返すdetected_path(EDCB上の
+                        // 実際の物理パス)を捨てずに含める。マッピング設定ミスの切り分けに必要。
+                        val detectedPath = json.optString("detected_path", "")
+                        val fullMsg = buildString {
+                            append(errMsg)
+                            if (errDetail.isNotBlank()) append("\n").append(errDetail)
+                            if (detectedPath.isNotBlank()) {
+                                append("\nEDCB上の実際のパス: ").append(detectedPath)
+                                append("\n(設定画面の録画フォルダのマッピング設定を確認してください)")
+                            }
+                        }
                         Log.e(TAG, "Resolver Lua Error: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
@@ -207,7 +217,17 @@ class EdcbRecordRepository @Inject constructor(
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
-                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        // ★ 修正: resolverが"Path not mapped"時に返すdetected_path(EDCB上の
+                        // 実際の物理パス)を捨てずに含める。マッピング設定ミスの切り分けに必要。
+                        val detectedPath = json.optString("detected_path", "")
+                        val fullMsg = buildString {
+                            append(errMsg)
+                            if (errDetail.isNotBlank()) append("\n").append(errDetail)
+                            if (detectedPath.isNotBlank()) {
+                                append("\nEDCB上の実際のパス: ").append(detectedPath)
+                                append("\n(設定画面の録画フォルダのマッピング設定を確認してください)")
+                            }
+                        }
                         Log.e(TAG, "Resolver Lua Error for ID $videoId: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
@@ -575,20 +595,22 @@ class EdcbRecordRepository @Inject constructor(
 
     private fun decodeEdcbString(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
-        try {
-            if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
-                return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
-            }
-            if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
-                return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
-            }
-            return String(bytes, Charsets.UTF_8)
+        if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
+            return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        }
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        }
+        // ★ 修正: String(bytes, UTF_8) は不正バイト列を例外にせずU+FFFD(置換文字)へ
+        // 静かに置き換えるため、以前のtry/catchによるShift_JISフォールバックには
+        // 実質到達できなかった(Windows EDCB環境のShift-JISチャプター名等が文字化けしていた)。
+        // 例外の有無ではなく、置換文字が出たかどうかでUTF-8として妥当だったか判定する。
+        val utf8 = String(bytes, Charsets.UTF_8)
+        if (!utf8.contains('�')) return utf8
+        return try {
+            String(bytes, charset("Shift_JIS"))
         } catch (e: Exception) {
-            return try {
-                String(bytes, charset("Shift_JIS"))
-            } catch (ex: Exception) {
-                String(bytes)
-            }
+            utf8
         }
     }
 
