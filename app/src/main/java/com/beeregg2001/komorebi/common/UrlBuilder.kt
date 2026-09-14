@@ -164,19 +164,11 @@ object UrlBuilder {
         return "$baseUrl/api/videos/$videoId/jikkyo"
     }
 
-    /**
-     * EDCBの録画フォルダにある静的サムネイル (録画ファイル名.ts.jpg) を直接取得するURL
-     */
-    fun getEdcbDirectThumbnailUrl(ip: String, port: String, recFilePath: String): String {
-        val baseUrl = formatBaseUrl(ip, port, "http")
-        val relativePath = recFilePath
-            .replace(Regex("^[a-zA-Z]:\\\\"), "")
-            .replace("\\", "/")
-
-        // 録画ファイルの末尾に .jpg を足すことで "hoge.ts.jpg" を指定
-        val encodedPath = android.net.Uri.encode(relativePath, "/")
-        return "$baseUrl/rec/$encodedPath.jpg"
-    }
+    // ★ 削除: getEdcbDirectThumbnailUrl() は呼び出し元が存在しないデッドコードだった。
+    // ドライブレター("C:\")しか剥がさずLinuxパス("/mnt/rec/...")やUNCパスでは
+    // 壊れたURLになるうえ、"/rec/"という固定ルート自体もEDCB本体に裏付けが無く
+    // (EMWUI側の設定依存)、将来誤って使われると確実に壊れるため削除した。
+    // サムネイル取得は実績のあるresolver.lua経由(thumbnail_url)を使うこと。
 
     fun getEpgStationLogoUrl(ip: String, port: String, channelId: Long): String =
         "${formatBaseUrl(ip, port, "http")}/api/channels/$channelId/logo"

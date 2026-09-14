@@ -224,7 +224,17 @@ class EdcbReserveRepository @Inject constructor(
                         durationRangeMin = cond.searchInfo.chkDurationMin.takeIf { it > 0 },
                         durationRangeMax = cond.searchInfo.chkDurationMax.takeIf { it > 0 },
                         broadcastType = "All",
-                        duplicateTitleCheckScope = if (cond.searchInfo.chkRecEnd != 0) "AllChannels" else "None",
+                        // ★ 修正: chkRecNoServiceを見ずに常に"AllChannels"扱いにしていたため、
+                        // EDCB側で「同一チャンネルのみ重複チェック」(chkRecNoService=0)に
+                        // 設定されているルールが「全チャンネル」と誤表示されていた。
+                        // EdcbDataMapper.kt側の書き込みロジック(chkRecNoService=1のときのみ
+                        // AllChannels)と対称になるよう修正(EDCB本家のReserveManager.cppの
+                        // 重複判定ロジックで裏付け済み)。
+                        duplicateTitleCheckScope = when {
+                            cond.searchInfo.chkRecEnd == 0 -> "None"
+                            cond.searchInfo.chkRecNoService != 0 -> "AllChannels"
+                            else -> "SameChannelOnly"
+                        },
                         duplicateTitleCheckPeriodDays = cond.searchInfo.chkRecDay
                     )
 

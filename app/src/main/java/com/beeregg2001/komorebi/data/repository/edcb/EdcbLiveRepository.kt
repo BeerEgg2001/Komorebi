@@ -74,7 +74,17 @@ class EdcbLiveRepository @Inject constructor(
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
-                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        // ★ 修正: resolverが"Path not mapped"時に返すdetected_path(EDCB上の
+                        // 実際の物理パス)を捨てずに含める。マッピング設定ミスの切り分けに必要。
+                        val detectedPath = json.optString("detected_path", "")
+                        val fullMsg = buildString {
+                            append(errMsg)
+                            if (errDetail.isNotBlank()) append("\n").append(errDetail)
+                            if (detectedPath.isNotBlank()) {
+                                append("\nEDCB上の実際のパス: ").append(detectedPath)
+                                append("\n(設定画面の録画フォルダのマッピング設定を確認してください)")
+                            }
+                        }
                         Log.e(TAG, "Resolver Lua Error: $fullMsg")
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
                     }
@@ -186,6 +196,14 @@ class EdcbLiveRepository @Inject constructor(
                     "CS" -> cs.add(channel)
                     "SKY" -> sky.add(channel)
                     "BS4K" -> bs4k.add(channel)
+                    // ★ 修正: 以前はelseが無く、CATVや未知のONIDのチャンネルが
+                    // ログも警告も出さずに一覧から消えていた。ChannelApiResponseに
+                    // CATV用のバケットが無いため一覧に出すことはできないが、
+                    // 「消えたことが分かる」よう警告ログだけは残す。
+                    else -> Log.w(
+                        TAG,
+                        "未対応のチャンネル種別のため一覧から除外: type=$type onid=${svc.onid} sid=${svc.sid} name=${svc.serviceName}"
+                    )
                 }
             }
 
