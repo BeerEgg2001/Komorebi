@@ -77,6 +77,43 @@ private val KONOMI_TV_ORIGINAL_VIDEO_REGEX = Regex("/api/videos/\\d+/download$")
 private fun isKonomiTvOriginalVideoUrl(url: String): Boolean =
     KONOMI_TV_ORIGINAL_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
 
+/**
+ * EPGStationの録画mp4/webm配信 (`/api/streams/recorded/{videoFileId}/mp4|webm`) かどうかを判定する。
+ * サーバーは実際にContent-Type: video/mp4 または video/webmで応答するTSではないコンテナで
+ * あり、HLSではない(stuayu/EPGStation src/model/service/api/streams/recorded/{id}/mp4.ts等で
+ * Content-Type明示を確認済み)。UrlBuilder.getEpgStationRecordedStreamUrl()が生成するURL形式。
+ */
+private val EPG_STATION_RECORDED_CONTAINER_REGEX = Regex("/api/streams/recorded/\\d+/(mp4|webm)$")
+
+private fun epgStationRecordedContainerMimeType(url: String): String? {
+    val path = url.substringBefore("?")
+    if (!EPG_STATION_RECORDED_CONTAINER_REGEX.containsMatchIn(path)) return null
+    return if (path.endsWith("/webm")) MimeTypes.VIDEO_WEBM else MimeTypes.VIDEO_MP4
+}
+
+/**
+ * 再生URLからMIMEタイプを解決する。
+ * ★ 修正: 以前はEPGStationの録画mp4/webm URL(`/api/streams/recorded/{id}/mp4|webm`)が
+ * isEpgStationDirectVideoUrl(`/api/videos/\d+$`)にマッチせず、次の
+ * `url.contains("/api/streams/")`分岐でHLSと誤判定されてAPPLICATION_M3U8が明示指定されて
+ * いたため、fragmented MP4/WebMバイトストリームにHlsMediaSourceが誤って割り当てられ
+ * 再生に失敗していた。コンテナ判定を先に行うよう判定順序を修正する。
+ */
+private fun resolveMimeType(url: String): String? {
+    return when {
+        isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url) -> MimeTypes.VIDEO_MP2T
+        else -> epgStationRecordedContainerMimeType(url) ?: run {
+            if (url.contains("/api/streams/") || url.contains("/api/videos/") ||
+                url.contains("konomi.tv") || url.contains("m3u8")
+            ) {
+                MimeTypes.APPLICATION_M3U8
+            } else {
+                null
+            }
+        }
+    }
+}
+
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -352,15 +389,7 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (isEpgStationDirectVideoUrl(newUrl) || isKonomiTvOriginalVideoUrl(newUrl)) {
-                        // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
-                        mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
-                    } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
-                            "konomi.tv"
-                        ) || newUrl.contains("m3u8")
-                    ) {
-                        mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                    }
+                    resolveMimeType(newUrl)?.let { mediaItemBuilder.setMimeType(it) }
                     exoPlayer.setMediaItem(mediaItemBuilder.build())
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
@@ -484,15 +513,7 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url)) {
-                // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
-                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
-            } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
-                    "m3u8"
-                )
-            ) {
-                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-            }
+            resolveMimeType(url)?.let { mediaItemBuilder.setMimeType(it) }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
             if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {

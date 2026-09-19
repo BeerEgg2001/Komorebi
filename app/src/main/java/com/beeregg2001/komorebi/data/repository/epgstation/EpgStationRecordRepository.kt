@@ -278,10 +278,18 @@ class EpgStationRecordRepository @Inject constructor(
             "hls" -> api.startRecordedHls(videoFileId, mode, offsetSeconds.toInt()).also {
                 streamId = it.streamId
             }.let { UrlBuilder.getEpgStationHlsPlaylistUrl(ip, port, it.streamId) }
-            "mp4", "webm" -> UrlBuilder.getEpgStationRecordedStreamUrl(
-                ip, port, videoFileId, format, mode, offsetSeconds
-            )
-            else -> UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            // ★ 修正: 以前はHLS以外へ切り替えてもstreamIdがクリアされず、direct/mp4/webm
+            // 再生中もkeepAlive()が4秒おきに古いHLSストリームへPUT /keepを送り続けていた。
+            // サーバーは404を返すだけで実害はないが、古いHLSエンコードプロセスがサーバー上で
+            // 不要に延命され続けるため、切り替え時に明示的にクリアする。
+            "mp4", "webm" -> {
+                streamId = null
+                UrlBuilder.getEpgStationRecordedStreamUrl(ip, port, videoFileId, format, mode, offsetSeconds)
+            }
+            else -> {
+                streamId = null
+                UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            }
         }
     }
 
@@ -467,21 +475,34 @@ class EpgStationRecordRepository @Inject constructor(
 
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? = null
 
-    /** EPGStation の録画設定から利用可能な画質を生成する。 */
+    /**
+     * EPGStation の録画設定から利用可能な画質を生成する。
+     *
+     * ★ 修正: 以前はts側/encoded側の両方を回して"$format:$index"を画質値にしていたため、
+     * 例えば"ts: xxx"と"encoded: xxx"が両方とも値"mp4:0"になり衝突していた。しかも
+     * サーバー側(stuayu/EPGStation StreamApiModel.ts)は再生対象のvideoFileId自体から
+     * kind(ts/encoded)を自動判定する設計で、クライアントが明示的に選べる余地が無い。
+     * このメソッドは`RecordProvider`インターフェース上video非依存(video単位の呼び出しでは
+     * ない)のため、実際に再生されるファイルのtypeをここで知ることはできないが、
+     * resolveVideoFileId()が常にts側のファイルを優先する実装になっているため、
+     * ts側の設定のみを画質候補として出す(サーバーの実際の挙動と一致する)。
+     * encoded側だけの録画(ts側ファイルが既に削除済み)では選択肢が実態と合わない
+     * 可能性が残るが、これは元々index衝突で正しく動いていなかった経路であり、
+     * 「ラベルが実態と食い違う縮退」から「選択肢自体が少なくなる」に変わるだけで
+     * 悪化はしない。根本対応にはvideo単位でkindを判定できるAPI設計変更が必要。
+     */
     override suspend fun getStreamQualities(): List<StreamQuality> {
         qualities?.let { return it }
         val result = mutableListOf(StreamQuality("そのまま再生 (無変換)", "direct", true))
         try {
-            val config = api.getConfig().streamConfig?.recorded
-            listOf("ts" to config?.ts, "encoded" to config?.encoded).forEach { (type, formatConfig) ->
-                listOf(
-                    "mp4" to formatConfig?.mp4,
-                    "hls" to formatConfig?.hls,
-                    "webm" to formatConfig?.webm
-                ).forEach { (format, labels) ->
-                    labels.orEmpty().forEachIndexed { index, label ->
-                        result += StreamQuality("$type: $label", "$format:$index")
-                    }
+            val config = api.getConfig().streamConfig?.recorded?.ts
+            listOf(
+                "mp4" to config?.mp4,
+                "hls" to config?.hls,
+                "webm" to config?.webm
+            ).forEach { (format, labels) ->
+                labels.orEmpty().forEachIndexed { index, label ->
+                    result += StreamQuality(label, "$format:$index")
                 }
             }
         } catch (_: Exception) {

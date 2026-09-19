@@ -17,7 +17,12 @@ class EpgStationChannelCache @Inject constructor(
     }
 
     private val mutex = Mutex()
+    // ★ 修正: getChannels()の冒頭がミューテックス外で読む高速パスのため、
+    // 他スレッドの書き込みが可視化される保証がなかった(ダブルチェックロッキングの
+    // 典型的な穴)。@Volatileを付与して可視性を保証する。
+    @Volatile
     private var channels: List<EsChannelItem> = emptyList()
+    @Volatile
     private var fetchedAt = 0L
     private var index: EpgStationDataMapper.ChannelIndex? = null
     // ★ 修正: 索引を作った時点のチャンネル一覧を覚えておき、参照が変わった(=再取得された)ときだけ作り直す。
