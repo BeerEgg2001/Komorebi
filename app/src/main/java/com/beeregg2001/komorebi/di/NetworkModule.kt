@@ -112,10 +112,18 @@ object NetworkModule {
                     }
                 }
                 val newUrl = baseUrlString.toHttpUrlOrNull() ?: originalRequest.url
+                // ★ 修正: 以前はscheme/host/portのみ差し替えており、リバースプロキシの
+                // サブディレクトリ運用(例: https://example.com/konomi)で設定値に含まれる
+                // パス接頭辞が失われ、Retrofit経由の全APIが404になっていた
+                // (UrlBuilder.formatBaseUrl()生成のURL(ロゴ等)はパスを保持するため
+                // 挙動が非対称だった)。ダミーbaseUrlのパス("/api/...")の前に、
+                // 設定値側のパス接頭辞を連結する。
+                val basePath = newUrl.encodedPath.removeSuffix("/")
                 val modifiedUrl = originalRequest.url.newBuilder()
                     .scheme(newUrl.scheme)
                     .host(newUrl.host)
                     .port(newUrl.port)
+                    .encodedPath(basePath + originalRequest.url.encodedPath)
                     .build()
                 val newRequest = originalRequest.newBuilder()
                     .url(modifiedUrl)
@@ -172,8 +180,16 @@ object NetworkModule {
                 val original = chain.request()
                 val base = runBlocking { settingsRepository.getEpgStationFullUrl() }
                     .toHttpUrlOrNull() ?: original.url
-                chain.proceed(original.newBuilder().url(original.url.newBuilder()
-                    .scheme(base.scheme).host(base.host).port(base.port).build()).build())
+                // ★ 修正: KonomiTV側と同じ理由(サブディレクトリ運用でのパス欠落)。
+                // stuayu/EPGStation自体もsubDirectory設定を正式サポートしており
+                // (doc/conf-manual.md・ServiceServer.createUrl()で確認済み)、想定外の
+                // 使い方ではない。
+                val basePath = base.encodedPath.removeSuffix("/")
+                val modifiedUrl = original.url.newBuilder()
+                    .scheme(base.scheme).host(base.host).port(base.port)
+                    .encodedPath(basePath + original.url.encodedPath)
+                    .build()
+                chain.proceed(original.newBuilder().url(modifiedUrl).build())
             })
             .addInterceptor(cloudflareAccessInterceptor)
             .addInterceptor(logging)

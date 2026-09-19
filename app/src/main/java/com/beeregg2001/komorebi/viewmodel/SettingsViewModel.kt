@@ -78,7 +78,14 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.liveQuality,
         settingsRepository.videoQuality
     ) { dynamicList, json, backend, currentLive, currentVideo ->
-        if (backend == "EDCB") {
+        // ★ 修正: 以前はEDCBかそれ以外の2択で、EPGStationをKonomiTVと同一視していたため、
+        // 設定画面の「デフォルト画質」ダイアログにEPGStationの実画質(m2ts:n等)が出せず、
+        // KonomiTV用のDEFAULT_QUALITIES(original/1080p-60fps等)しか選べなかった。
+        // その状態で決定すると、現在値の照合が必ず不一致になりダイアログは常に先頭
+        // "original"を選択済みとして開くため、決定するとLIVE_QUALITY="original"のような
+        // 無効な値が保存され、再生中の画質設定が黙って上書きされてしまっていた。
+        // EDCBと同じ「動的取得→キャッシュJSON→設定値フォールバック」のロジックを適用する。
+        if (backend == "EDCB" || backend == "EPGSTATION") {
             if (dynamicList != null && dynamicList.isNotEmpty()) {
                 return@combine dynamicList
             }
@@ -433,7 +440,9 @@ class SettingsViewModel @Inject constructor(
                 val preLive = settingsRepository.liveQuality.first()
                 val preVideo = settingsRepository.videoQuality.first()
 
-                if (backend == "EDCB") {
+                // ★ 修正: EPGSTATIONもEDCBと同様に動的取得を行うようにする(availableQualities
+                // 側の修正に合わせた対応。詳細は同フィールド冒頭のコメント参照)。
+                if (backend == "EDCB" || backend == "EPGSTATION") {
                     val fetched = recordProvider.getStreamQualities()
                     if (fetched.isNotEmpty()) {
                         _dynamicQualities.value = fetched

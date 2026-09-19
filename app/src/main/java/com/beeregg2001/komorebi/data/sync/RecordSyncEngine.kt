@@ -8,7 +8,6 @@ import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
-import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationSeriesDictionary
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
 import com.beeregg2001.komorebi.data.local.entity.RecordedProgramEntity
 import com.beeregg2001.komorebi.data.local.entity.SyncMetaEntity
@@ -68,7 +67,6 @@ class RecordSyncEngine @Inject constructor(
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
     private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
-    private val epgStationSeriesDictionary: EpgStationSeriesDictionary,
     @ApplicationContext private val context: Context
 ) {
     private val _syncProgress = MutableStateFlow(SyncProgress())
@@ -594,7 +592,14 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun startDictionaryResolutionLoop() {
-        // EPGStation はサーバー側のシリーズ情報を使うため、辞書生成をスキップする。
+        // EPGStationは同期時点でサーバー側のシリーズ情報(recorded[].series等)を直接
+        // seriesNameへ採用済み(EpgStationDataMapper参照)であり、このループが処理対象とする
+        // 「未解決タイトル」自体が発生しない設計のため、辞書生成をスキップする。
+        // ★ 修正: 以前はこの早期returnのせいで、ループ内のepgStationSeriesDictionary.resolve()
+        // 呼び出しがEPGStation利用時に一度も実行されず、EpgStationSeriesDictionaryクラス
+        // 全体が到達不能なデッドコードになっていた。機能上の実害はほぼ無いと判断し
+        // (サーバー側のfeatureFlags.seriesLibraryが既定ONで代替済み)、デッドコード自体を
+        // 削除した(EpgStationSeriesDictionary.ktおよびこのクラスへの注入・呼び出しを削除)。
         if (settingsRepository.backendType.first() == "EPGSTATION") {
             Log.i(TAG, "EPGStation はサーバー側のシリーズ情報を使うため、辞書生成をスキップします。")
             _syncProgress.value = SyncProgress(
@@ -646,12 +651,8 @@ class RecordSyncEngine @Inject constructor(
 
                     for (baseTitle in baseTitleMap.keys) {
                         currentCoroutineContext().ensureActive()
-                        val epgStationTitle = epgStationSeriesDictionary.resolve(baseTitle)
-                        if (epgStationTitle != null) {
-                            resolvedBaseTitles[baseTitle] = epgStationTitle
-                            continue
-                        }
-
+                        // このループはEPGStation利用時には到達しない(冒頭の早期return参照)ため、
+                        // EDCB/KonomiTV向けのWikipediaフォールバックのみを行う。
                         try {
                             val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
                             resolvedBaseTitles[baseTitle] = canonicalTitle ?: baseTitle
