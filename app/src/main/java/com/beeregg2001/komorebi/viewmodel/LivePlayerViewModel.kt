@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -172,6 +173,14 @@ class LivePlayerViewModel @Inject constructor(
 
     private var mainPlaybackJob: Job? = null
     private var dualPlaybackJob: Job? = null
+
+    // ★ 追加: EPGStationのライブHLSはサーバー側が15秒の停止タイマーを持ち、
+    // PUT /api/streams/{streamId}/keepでしかリセットされない(stuayu/EPGStation
+    // StreamBaseModel.ts)。以前はkeepを一切送っていなかったため、ライブHLSは
+    // 再生開始から約15秒で必ず停止していた。録画側(VideoPlayerViewModel.
+    // startStreamMaintenance())と同じ4秒間隔のジョブをライブ側にも用意する。
+    private var mainLiveKeepAliveJob: Job? = null
+    private var dualLiveKeepAliveJob: Job? = null
 
     private val mainPlaybackMutex = Mutex()
     private val dualPlaybackMutex = Mutex()
@@ -404,6 +413,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
+        mainLiveKeepAliveJob?.cancel(); mainLiveKeepAliveJob = null
         mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
         _mainSubtitleLanguages.value = emptyList()
 
@@ -418,6 +428,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
+        dualLiveKeepAliveJob?.cancel(); dualLiveKeepAliveJob = null
         dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
         _dualSubtitleLanguages.value = emptyList()
 
@@ -702,6 +713,23 @@ class LivePlayerViewModel @Inject constructor(
                             cfAccessHeaders
                         )
                         liveJikkyoManager.startJikkyo(channel, source)
+
+                        // ★ 追加: EPGStationのライブHLS再生中のみkeep-aliveジョブを回す。
+                        // stopMainPlaybackSafely()で必ずcancelされるため、チャンネル切替・
+                        // 画質切替・再生終了時に取り残される心配はない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            mainLiveKeepAliveJob?.cancel()
+                            mainLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 0)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep main live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -801,6 +829,23 @@ class LivePlayerViewModel @Inject constructor(
                             ::decodeAndEmitDualSubtitle,
                             cfAccessHeaders
                         )
+
+                        // ★ 追加: メイン側と同じ理由でサブ側にもkeep-aliveジョブを回す。
+                        // streamNumber=1を使うため、メイン(0)と同時にEPGStation HLSを
+                        // 選んでもstreamIdが競合しない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            dualLiveKeepAliveJob?.cancel()
+                            dualLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 1)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep dual live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e: CancellationException) {

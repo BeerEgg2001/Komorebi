@@ -278,10 +278,18 @@ class EpgStationRecordRepository @Inject constructor(
             "hls" -> api.startRecordedHls(videoFileId, mode, offsetSeconds.toInt()).also {
                 streamId = it.streamId
             }.let { UrlBuilder.getEpgStationHlsPlaylistUrl(ip, port, it.streamId) }
-            "mp4", "webm" -> UrlBuilder.getEpgStationRecordedStreamUrl(
-                ip, port, videoFileId, format, mode, offsetSeconds
-            )
-            else -> UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            // ★ 修正: 以前はHLS以外へ切り替えてもstreamIdがクリアされず、direct/mp4/webm
+            // 再生中もkeepAlive()が4秒おきに古いHLSストリームへPUT /keepを送り続けていた。
+            // サーバーは404を返すだけで実害はないが、古いHLSエンコードプロセスがサーバー上で
+            // 不要に延命され続けるため、切り替え時に明示的にクリアする。
+            "mp4", "webm" -> {
+                streamId = null
+                UrlBuilder.getEpgStationRecordedStreamUrl(ip, port, videoFileId, format, mode, offsetSeconds)
+            }
+            else -> {
+                streamId = null
+                UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            }
         }
     }
 

@@ -360,13 +360,11 @@ data class EsStreamConfig(
     val live: EsLiveStreamConfig? = null,
     val recorded: EsRecordedStreamConfig? = null
 )
-data class EsLiveStreamConfig(
-    val m2ts: List<EsM2tsStreamParam>? = null,
-    val m2tsll: List<String>? = null,
-    val webm: List<String>? = null,
-    val mp4: List<String>? = null,
-    val hls: List<String>? = null
-)
+// ★ 修正: サーバーの/api/configレスポンスは streamConfig.live.ts.m2ts のように1段深い
+// 構造で返る(stuayu/EPGStation ConfigApiModel.ts・api.d.tsで確認済み。本家l3tnun版も同一構造)。
+// 以前はm2ts/m2tsll/hls等をliveの直下に置いていたため、Gsonが未知フィールド"ts"を
+// 読み捨てて全フィールドがnullになり、getLiveStreamQualities()が常に空を返していた。
+data class EsLiveStreamConfig(val ts: EsLiveFormatConfig? = null)
 data class EsRecordedStreamConfig(
     val ts: EsFormatConfig? = null,
     val encoded: EsFormatConfig? = null
@@ -379,10 +377,13 @@ data class EsLiveFormatConfig(
     val hls: List<String>? = null
 )
 data class EsM2tsStreamParam(val name: String = "", val isUnconverted: Boolean = false)
+// ★ 修正: 録画配信もm2tsllをサポートしている(stuayu/EPGStation api.d.ts・
+// StreamProfileManageModel.tsで確認済み)が、以前はフィールドが無く読み捨てられていた。
 data class EsFormatConfig(
     val mp4: List<String>? = null,
     val hls: List<String>? = null,
-    val webm: List<String>? = null
+    val webm: List<String>? = null,
+    val m2tsll: List<String>? = null
 )
 data class EsPlaybackPosition(val position: Double = 0.0, val duration: Double = 0.0)
 
