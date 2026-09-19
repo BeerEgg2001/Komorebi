@@ -166,10 +166,19 @@ class EpgStationReserveRepository @Inject constructor(
         }
     }
 
-    /** 共通の検索条件を EPGStation のルール検索条件へ変換する。 */
+    /**
+     * 共通の検索条件を EPGStation のルール検索条件へ変換する。
+     *
+     * [base] を渡した場合(更新時)、Komorebi側でモデル化・編集していないフィールド
+     * (saveOption/encodeOption/tags/allowEndLack/isTimeSpecification)を既存ルールから
+     * 引き継ぐ。PUT /api/rules/{id} は全置換のため、これらを渡さないとサーバー側で
+     * null/falseにリセットされてしまう(stuayu/EPGStation RuleDB.convertRuleToDBRule()で
+     * 確認済み)。新規追加時(base=null)は従来通りの既定値になる。
+     */
     private suspend fun mapRuleBody(
         search: ProgramSearchCondition,
-        settings: RecordSettings
+        settings: RecordSettings,
+        base: EsRule? = null
     ): EsAddRuleOption {
         if (search.broadcastType == "PaidOnly") {
             throw IllegalArgumentException("EPGStationの自動予約APIは有料番組のみの指定に対応していません。")
@@ -190,6 +199,7 @@ class EpgStationReserveRepository @Inject constructor(
         val hasKeyword = search.keyword.isNotBlank()
         val hasIgnoreKeyword = search.excludeKeyword.isNotBlank()
         return EsAddRuleOption(
+            isTimeSpecification = base?.isTimeSpecification ?: false,
             searchOption = EsRuleSearchOption(
                 keyword = search.keyword.takeIf { it.isNotBlank() },
                 ignoreKeyword = search.excludeKeyword.takeIf { it.isNotBlank() },
@@ -212,9 +222,13 @@ class EpgStationReserveRepository @Inject constructor(
             ),
             reserveOption = EsRuleReserveOption(
                 enable = settings.isEnabled,
+                allowEndLack = base?.reserveOption?.allowEndLack ?: true,
                 avoidDuplicate = search.duplicateTitleCheckScope != "None",
-                periodToAvoidDuplicate = search.duplicateTitleCheckPeriodDays
-            )
+                periodToAvoidDuplicate = search.duplicateTitleCheckPeriodDays,
+                tags = base?.reserveOption?.tags
+            ),
+            saveOption = base?.saveOption,
+            encodeOption = base?.encodeOption
         )
     }
 
@@ -227,15 +241,25 @@ class EpgStationReserveRepository @Inject constructor(
         }
     }
 
-    /** 自動予約条件を更新し、更新後の条件を再取得する。 */
+    /**
+     * 自動予約条件を更新し、更新後の条件を再取得する。
+     *
+     * ★ 修正: PUT /api/rules/{id} は全置換のため、以前は既存ルールを読まずに
+     * Komorebiが編集する項目だけでリクエストボディを組み立てていた。結果、
+     * EPGStation Web UI側で設定した保存先・エンコード設定・自動タグ・時刻指定予約の
+     * フラグ等が、Komorebi側で1文字編集して保存するだけで消えていた。
+     * 更新前に既存ルールを取得し、mapRuleBody()へ渡してモデル化していないフィールドを
+     * 保持したまま再送する(read-modify-write)。
+     */
     override suspend fun updateReservationCondition(
         conditionId: Int,
         request: ReservationConditionUpdateRequest
     ): Result<ReservationCondition> {
         return runCatching {
+            val base = api.getRule(conditionId)
             api.updateRule(
                 conditionId,
-                mapRuleBody(request.programSearchCondition, request.recordSettings)
+                mapRuleBody(request.programSearchCondition, request.recordSettings, base)
             ).requireSuccessful("自動予約条件の更新")
             val channels = channelCache.getChannels()
             mapCondition(api.getRule(conditionId), channels)
