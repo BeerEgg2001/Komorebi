@@ -1,13 +1,13 @@
 {
-  "versionCode": 10,
-  "versionName": "1.0.0",
-  "releaseNotes": "・アプリ内PiPモード対応\n・アプリアップデータのbetaチャンネルへの対応\n・細かいバグを修正\n",
-  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.0.0/Komorebi-1.0.0.apk",
+  "versionCode": 18,
+  "versionName": "1.1.0-Stable",
+  "releaseNotes": "・EDCB、EPGStation(Fork版)バックエンドへ対応\n・KonomiTVのOriginal画質へ対応\n・SMB経由での動画視聴に対応\n詳細はGithubのリリースノートをご覧ください\n",
+  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0/Komorebi-1.1.0-universal-release.apk",
 
   "beta": {
     "versionCode": 17,
     "versionName": "1.1.0-beta7",
-    "releaseNotes": "・TvtPlayのチャプターファイル読み込み処理を改善\n・KonomiTV v0.14.0環境にて録画番組が再生できない問題に対応\n・Issue #90 録画一覧が正しく同期されない問題を修正\n詳細はGithubのリリースノートをご覧ください\n",
-    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta7/Komorebi-1.1.0-beta7.apk"
+    "releaseNotes": "・stuayu版EPGStationに対応\n・KonomiTVのOriginal画質に対応\n・EDCB録画TS直接再生の音ズレ・シーク不具合へ対応\n詳細はGithubのリリースノートをご覧ください\n",
+    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0-beta7/Komorebi-1.1.0-beta7-universal-release.apk"
   }
 }
