@@ -589,6 +589,10 @@ fun PlaybackSettingsContent(
     uiMode: String,
     autoCmSkip: String,
     availableQualities: List<StreamQuality>,
+    // ★ 追加: EPGStationはライブ・録画で画質の値空間が別なため、ライブ画質の表示ラベルは
+    // 専用のリストから引く(録画用availableQualitiesを流用すると常に不一致になり、
+    // 常に先頭項目のラベルが表示されてしまっていた)。
+    liveAvailableQualities: List<StreamQuality>,
     liveR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
@@ -618,8 +622,8 @@ fun PlaybackSettingsContent(
         SettingsSection(AppStrings.SETTINGS_SECTION_QUALITY) {
             SettingItem(
                 AppStrings.SETTINGS_ITEM_LIVE_QUALITY,
-                availableQualities.find { it.value == liveQ }?.label
-                    ?: availableQualities.firstOrNull()?.label ?: "Unknown",
+                liveAvailableQualities.find { it.value == liveQ }?.label
+                    ?: liveAvailableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.LiveTv,
                 modifier = Modifier
                     .focusRequester(liveR)

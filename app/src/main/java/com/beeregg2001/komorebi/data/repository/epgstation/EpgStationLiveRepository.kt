@@ -214,7 +214,13 @@ class EpgStationLiveRepository @Inject constructor(
         return try {
             if (format == "hls") {
                 val stream = api.startLiveHls(id, mode)
-                if (stream.streamId <= 0) {
+                // ★ 修正: streamIdは0始まりの空きスロット採番(stuayu/EPGStation
+                // StreamManageModel.getEmptyStreamId()で確認済み)のため、streamId=0は
+                // 正当な値。以前は<= 0を失敗とみなしていたため、他にストリームが
+                // 走っていない状態(サーバー再起動直後や通常の初回再生)でライブHLSを
+                // 開始すると必ず失敗扱いになっていた(サーバー側は実際に起動済みで、
+                // 孤児ストリームとして15秒間残ってしまう)。
+                if (stream.streamId < 0) {
                     throw Exception("HLSストリームの開始に失敗しました (streamId=${stream.streamId})")
                 }
                 liveStreamIdByNumber[streamNumber] = stream.streamId

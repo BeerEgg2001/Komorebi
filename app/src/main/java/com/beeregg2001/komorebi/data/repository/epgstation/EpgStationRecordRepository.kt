@@ -501,8 +501,13 @@ class EpgStationRecordRepository @Inject constructor(
                 "hls" to config?.hls,
                 "webm" to config?.webm
             ).forEach { (format, labels) ->
+                // ★ 修正: ラベルをプリセット名のみにしていたため、mp4/hls/webmで
+                // 同名プリセット(例: "720p")を定義している構成(config.ymlでは一般的)だと
+                // UIに同じラベルが複数並び、どのコンテナか区別できなくなっていた。
+                // コンテナ名を接頭辞として復元する(値自体は元々コンテナ別なので
+                // 衝突しない。ts/encoded間の値衝突を解消した際の副作用のみ修正)。
                 labels.orEmpty().forEachIndexed { index, label ->
-                    result += StreamQuality(label, "$format:$index")
+                    result += StreamQuality("$format: $label", "$format:$index")
                 }
             }
         } catch (_: Exception) {

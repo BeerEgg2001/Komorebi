@@ -1358,7 +1358,14 @@ class LivePlayerViewModel @Inject constructor(
             // (「EDCBの接続設定を確認してください」等)を例外として伝搬するようになったが、
             // 従来はここでerror.messageを見ずに一律「不明なエラー」に潰していたため、
             // 原因が特定できるメッセージがユーザーに届いていなかった。
-            !error.message.isNullOrBlank() -> error.message!!
+            // ★ 再修正: 当初はerror.messageの有無だけで判定していたが、これだとExoPlayerが
+            // 投げる本物のPlaybackException(デコーダ初期化失敗等、messageが英語の内部
+            // 文字列で非nullなことが多い)まで拾ってしまい、「不明なエラー」という日本語の
+            // 汎用メッセージが英語の内部文字列に置き換わる退行があった。playMainChannel/
+            // playDualChannelのcatchで自前組み立てた例外はPlaybackException(...,
+            // ERROR_CODE_UNSPECIFIED)で包んでいるため、このコードに限定して判定する。
+            error.errorCode == PlaybackException.ERROR_CODE_UNSPECIFIED && !error.message.isNullOrBlank() ->
+                error.message!!
             else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
         }
     }

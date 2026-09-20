@@ -281,12 +281,21 @@ data class EsRuleSaveOption(
     val directory: String? = null,
     val recordedFormat: String? = null
 )
+// ★ 修正: mode1/2/3はInt型で定義していたが、stuayu/EPGStation本家api.d.tsの
+// ReserveEncodedOptionでは実際はString型(エンコードプロファイル名。DB実体
+// src/db/entities/Rule.tsも"string | null")だった。EsRuleにこのフィールドを
+// 追加したことで、既にエンコード設定を持つルールが1件でもあるとapi.getRules()/
+// api.getRule()のGsonパースが例外を投げ、自動予約条件一覧が丸ごと取得失敗していた。
+// あわせて欠けていたencodeParentDirectoryName1/2/3も追加した。
 data class EsRuleEncodeOption(
-    val mode1: Int? = null,
+    val mode1: String? = null,
+    val encodeParentDirectoryName1: String? = null,
     val directory1: String? = null,
-    val mode2: Int? = null,
+    val mode2: String? = null,
+    val encodeParentDirectoryName2: String? = null,
     val directory2: String? = null,
-    val mode3: Int? = null,
+    val mode3: String? = null,
+    val encodeParentDirectoryName3: String? = null,
     val directory3: String? = null,
     val isDeleteOriginalAfterEncode: Boolean = false
 )
