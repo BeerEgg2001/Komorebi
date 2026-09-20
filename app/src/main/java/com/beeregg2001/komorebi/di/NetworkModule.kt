@@ -121,10 +121,14 @@ object NetworkModule {
                 // 全APIが404になっていた。ダミーbaseUrlのパス("/api/...")の前に、
                 // 設定値側のパス接頭辞を連結する。
                 // ★ 追加: EPGStation側と同じ理由で、既にbasePathで始まっているパスへの
-                // 二重前置を避け冪等にする。
+                // 二重前置を避け冪等にする。境界チェック無しの startsWith(basePath) だと、
+                // 例えばbasePath="/a"のときRetrofitの"/api/..."が誤って前置スキップ対象に
+                // なってしまう(パス区切り文字を跨がない部分一致)ため、区切り位置まで含めて判定する。
                 val basePath = newUrl.encodedPath.removeSuffix("/")
                 val originalPath = originalRequest.url.encodedPath
-                val newPath = if (basePath.isNotEmpty() && !originalPath.startsWith(basePath)) {
+                val alreadyPrefixed = basePath.isNotEmpty() &&
+                    (originalPath == basePath || originalPath.startsWith("$basePath/"))
+                val newPath = if (basePath.isNotEmpty() && !alreadyPrefixed) {
                     basePath + originalPath
                 } else {
                     originalPath
@@ -199,10 +203,15 @@ object NetworkModule {
                 // getEpgStationLogoUrl()で組み立てた「既にパス接頭辞を含むフルURL」の
                 // リクエストにも使われる。後者に無条件でbasePathを前置すると、
                 // サブディレクトリ運用時にパスが二重になり局ロゴが404になっていた。
-                // 既にbasePathで始まっている場合は前置しないことで冪等にする。
+                // 既にbasePathで始まっている場合は前置しないことで冪等にする。境界チェック
+                // 無しのstartsWith(basePath)だと、パス区切りを跨がない部分一致
+                // (例: basePath="/a"に対しRetrofitの"/api/..."が誤って一致)で前置が
+                // スキップされてしまうため、区切り位置まで含めて判定する。
                 val basePath = base.encodedPath.removeSuffix("/")
                 val originalPath = original.url.encodedPath
-                val newPath = if (basePath.isNotEmpty() && !originalPath.startsWith(basePath)) {
+                val alreadyPrefixed = basePath.isNotEmpty() &&
+                    (originalPath == basePath || originalPath.startsWith("$basePath/"))
+                val newPath = if (basePath.isNotEmpty() && !alreadyPrefixed) {
                     basePath + originalPath
                 } else {
                     originalPath
