@@ -1167,9 +1167,19 @@ class LivePlayerViewModel @Inject constructor(
                     if (t is java.io.IOException && t.message == "Canceled") return
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: 以前はresponse.codeをそのままerrorCodeに入れていたため、
+                        // analyzePlayerError()がERROR_CODE_UNSPECIFIED限定でerror.messageを
+                        // 見るよう絞り込んだ後、404/422/503等の正当なHTTPステータスコードが
+                        // errorCodeName()の「invalid error code」表記に埋もれてしまっていた。
+                        // 日本語メッセージをここで組み立て、errorCodeはERROR_CODE_UNSPECIFIEDに
+                        // 揃える。
                         if (response != null && response.code !in 200..299) handleMainError(
                             uiContext,
-                            PlaybackException("KonomiTV HTTP Error", null, response.code)
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
                         )
                     }
                 }
@@ -1242,9 +1252,14 @@ class LivePlayerViewModel @Inject constructor(
                     if (t is java.io.IOException && t.message == "Canceled") return
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: メイン側と同じ理由(httpStatusErrorMessage定義部のコメント参照)。
                         if (response != null && response.code !in 200..299) handleDualError(
                             uiContext,
-                            PlaybackException("HTTP Error", null, response.code)
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
                         )
                     }
                 }
@@ -1337,15 +1352,20 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
+    // ★ 追加: SSE(startMainSse/startDualSse)のonFailureでもHTTPステータスコードから
+    // 同じ文言を組み立てたいため、analyzePlayerErrorのHTTP分岐から切り出した。
+    private fun httpStatusErrorMessage(code: Int): String = when (code) {
+        404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
+        503 -> AppStrings.ERR_TUNER_FULL
+        422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
+        else -> String.format(AppStrings.ERR_SERVER_HTTP, code)
+    }
+
     private fun analyzePlayerError(error: PlaybackException): String {
         val cause = error.cause
         return when {
-            cause is HttpDataSource.InvalidResponseCodeException -> when (cause.responseCode) {
-                404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
-                503 -> AppStrings.ERR_TUNER_FULL
-                422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
-                else -> String.format(AppStrings.ERR_SERVER_HTTP, cause.responseCode)
-            }
+            cause is HttpDataSource.InvalidResponseCodeException ->
+                httpStatusErrorMessage(cause.responseCode)
 
             cause is HttpDataSource.HttpDataSourceException -> when (cause.cause) {
                 is java.net.ConnectException -> AppStrings.ERR_CONNECTION_REFUSED
@@ -1358,7 +1378,14 @@ class LivePlayerViewModel @Inject constructor(
             // (「EDCBの接続設定を確認してください」等)を例外として伝搬するようになったが、
             // 従来はここでerror.messageを見ずに一律「不明なエラー」に潰していたため、
             // 原因が特定できるメッセージがユーザーに届いていなかった。
-            !error.message.isNullOrBlank() -> error.message!!
+            // ★ 再修正: 当初はerror.messageの有無だけで判定していたが、これだとExoPlayerが
+            // 投げる本物のPlaybackException(デコーダ初期化失敗等、messageが英語の内部
+            // 文字列で非nullなことが多い)まで拾ってしまい、「不明なエラー」という日本語の
+            // 汎用メッセージが英語の内部文字列に置き換わる退行があった。playMainChannel/
+            // playDualChannelのcatchで自前組み立てた例外はPlaybackException(...,
+            // ERROR_CODE_UNSPECIFIED)で包んでいるため、このコードに限定して判定する。
+            error.errorCode == PlaybackException.ERROR_CODE_UNSPECIFIED && !error.message.isNullOrBlank() ->
+                error.message!!
             else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
         }
     }

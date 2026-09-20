@@ -215,7 +215,19 @@ class EpgStationReserveRepository @Inject constructor(
                 ignoreExtended = hasIgnoreKeyword,
                 channelIds = channelIds,
                 genres = mapGenres(search.genreRanges),
-                times = mapDateRanges(search.dateRanges),
+                // ★ 修正: EsRuleSearchOption.timesの単位は通常ルール(時単位: start 0〜23時・
+                // range 1〜23時間)と時刻指定予約(秒単位)で異なる(stuayu/EPGStation
+                // api.d.tsのSearchTime)。mapDateRanges()は常に時単位で組み立てるため、
+                // 時刻指定ルール(base.isTimeSpecification==true)をKomorebiから編集すると、
+                // フラグだけ引き継がれ値は秒扱いのまま送られ、意図しないごく短時間の
+                // ルールに化けていた(エラーにならず静かに壊れる)。Komorebi側には
+                // 時刻指定予約を編集するUIが無いため、時刻指定ルールの場合はtimesを
+                // 一切再構築せず既存ルールの値をそのまま引き継ぐ。
+                times = if (base?.isTimeSpecification == true) {
+                    base.searchOption.times
+                } else {
+                    mapDateRanges(search.dateRanges)
+                },
                 isFree = true.takeIf { search.broadcastType == "FreeOnly" },
                 durationMin = search.durationRangeMin,
                 durationMax = search.durationRangeMax

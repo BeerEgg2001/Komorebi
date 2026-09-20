@@ -76,6 +76,9 @@ fun SettingsScreen(
     val playerUiMode by viewModel.playerUiMode.collectAsState()
     val autoCmSkip by viewModel.autoCmSkip.collectAsState()
     val availableQualities by viewModel.availableQualities.collectAsState()
+    // ★ 追加: EPGStationはライブ・録画で画質の値空間が別なため、ライブ用の画質一覧を
+    // 別途取得する(詳細はSettingsViewModel.liveAvailableQualitiesのコメント参照)。
+    val liveAvailableQualities by viewModel.liveAvailableQualities.collectAsState()
     val groupedChannels by channelViewModel.groupedChannels.collectAsState()
     val flatChannels = remember(groupedChannels) { groupedChannels.values.flatten() }
 
@@ -588,6 +591,7 @@ fun SettingsScreen(
                             playerUiMode,
                             autoCmSkip,
                             availableQualities,
+                            liveAvailableQualities,
                             itemFocusRequesters[2][0],
                             itemFocusRequesters[2][1],
                             itemFocusRequesters[2][2],
@@ -600,8 +604,8 @@ fun SettingsScreen(
                             {
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.DIALOG_QUALITY_TITLE,
-                                    availableQualities.map { it.label to it.value },
-                                    if (availableQualities.any { it.value == prefs.liveQuality }) prefs.liveQuality else availableQualities.firstOrNull()?.value
+                                    liveAvailableQualities.map { it.label to it.value },
+                                    if (liveAvailableQualities.any { it.value == prefs.liveQuality }) prefs.liveQuality else liveAvailableQualities.firstOrNull()?.value
                                         ?: ""
                                 ) {
                                     scope.launch {

@@ -1,5 +1,6 @@
 package com.beeregg2001.komorebi.ui.live
 
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoClient
@@ -73,8 +74,15 @@ class LiveJikkyoManager @Inject constructor(
             val config = settingsRepository.getBackendConfig(source) as? BackendConfig.KonomiTv
             if (config == null) return null
             try {
-                val apiUrl =
-                    "${config.ip}:${config.port}/api/channels/${channel.displayChannelId}/jikkyo"
+                // ★ 修正: 以前は素朴な"${ip}:${port}/..."連結でURLを組み立てていたため、
+                // スキーム無しIPを設定しているとRequest.Builder.url()がIllegalArgumentException
+                // を投げ(下のcatchで握り潰され実況コメントが無言で無効化される)、
+                // サブディレクトリ付きURL設定では壊れたパスになっていた。
+                val apiUrl = UrlBuilder.getKonomiTvJikkyoWatchSessionUrl(
+                    config.ip,
+                    config.port,
+                    channel.displayChannelId
+                )
                 val request = Request.Builder().url(apiUrl).build()
                 val response = okHttpClient.newCall(request).execute()
 

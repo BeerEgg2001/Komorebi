@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.di
 
 import com.beeregg2001.komorebi.BuildConfig
+import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
 import com.beeregg2001.komorebi.data.model.StreamSource
@@ -101,29 +102,42 @@ object NetworkModule {
             // ★ 修正: Interceptorを明示的に指定し、SettingsRepositoryから正しくURLを取得する
             .addInterceptor(Interceptor { chain ->
                 val originalRequest = chain.request()
+                // ★ 修正: 以前は"$ip:$port"という素朴な文字列連結でベースURLを組み立てて
+                // いたため、ip欄にサブディレクトリ付きURL(例: https://example.com/konomi)を
+                // 設定すると"https://example.com/konomi:7000"のようにポートがパスの
+                // 末尾に付いてしまい、HttpUrlパース時にホスト名付きポートと誤認識されず
+                // encodedPath="/konomi:7000"という壊れた状態になっていた(ロゴ等
+                // UrlBuilder.formatBaseUrl()生成のURLは正しく"https://example.com:7000/konomi"を
+                // 向くため、APIとストリームで別々の壊れ方をする非対称な状態だった)。
+                // EPGStation側で実績のあるUrlBuilder.formatBaseUrl()に統一する。
                 val baseUrlString = runBlocking {
-                    // KonomiTVのベースURLを動的に取得して組み立てる
                     val ip = settingsRepository.konomiIp.first()
                     val port = settingsRepository.konomiPort.first()
-                    if (ip.startsWith("http://") || ip.startsWith("https://")) {
-                        "$ip:$port"
-                    } else {
-                        "http://$ip:$port"
-                    }
+                    UrlBuilder.formatBaseUrl(ip, port, "http")
                 }
                 val newUrl = baseUrlString.toHttpUrlOrNull() ?: originalRequest.url
-                // ★ 修正: 以前はscheme/host/portのみ差し替えており、リバースプロキシの
-                // サブディレクトリ運用(例: https://example.com/konomi)で設定値に含まれる
-                // パス接頭辞が失われ、Retrofit経由の全APIが404になっていた
-                // (UrlBuilder.formatBaseUrl()生成のURL(ロゴ等)はパスを保持するため
-                // 挙動が非対称だった)。ダミーbaseUrlのパス("/api/...")の前に、
+                // 以前はscheme/host/portのみ差し替えており、リバースプロキシの
+                // サブディレクトリ運用で設定値に含まれるパス接頭辞が失われ、Retrofit経由の
+                // 全APIが404になっていた。ダミーbaseUrlのパス("/api/...")の前に、
                 // 設定値側のパス接頭辞を連結する。
+                // ★ 追加: EPGStation側と同じ理由で、既にbasePathで始まっているパスへの
+                // 二重前置を避け冪等にする。境界チェック無しの startsWith(basePath) だと、
+                // 例えばbasePath="/a"のときRetrofitの"/api/..."が誤って前置スキップ対象に
+                // なってしまう(パス区切り文字を跨がない部分一致)ため、区切り位置まで含めて判定する。
                 val basePath = newUrl.encodedPath.removeSuffix("/")
+                val originalPath = originalRequest.url.encodedPath
+                val alreadyPrefixed = basePath.isNotEmpty() &&
+                    (originalPath == basePath || originalPath.startsWith("$basePath/"))
+                val newPath = if (basePath.isNotEmpty() && !alreadyPrefixed) {
+                    basePath + originalPath
+                } else {
+                    originalPath
+                }
                 val modifiedUrl = originalRequest.url.newBuilder()
                     .scheme(newUrl.scheme)
                     .host(newUrl.host)
                     .port(newUrl.port)
-                    .encodedPath(basePath + originalRequest.url.encodedPath)
+                    .encodedPath(newPath)
                     .build()
                 val newRequest = originalRequest.newBuilder()
                     .url(modifiedUrl)
@@ -184,10 +198,27 @@ object NetworkModule {
                 // stuayu/EPGStation自体もsubDirectory設定を正式サポートしており
                 // (doc/conf-manual.md・ServiceServer.createUrl()で確認済み)、想定外の
                 // 使い方ではない。
+                // ★ 追加: このクライアントはRetrofit(ダミーURL宛)だけでなく、
+                // EpgStationLiveRepository.getChannelLogoUrl()がUrlBuilder.
+                // getEpgStationLogoUrl()で組み立てた「既にパス接頭辞を含むフルURL」の
+                // リクエストにも使われる。後者に無条件でbasePathを前置すると、
+                // サブディレクトリ運用時にパスが二重になり局ロゴが404になっていた。
+                // 既にbasePathで始まっている場合は前置しないことで冪等にする。境界チェック
+                // 無しのstartsWith(basePath)だと、パス区切りを跨がない部分一致
+                // (例: basePath="/a"に対しRetrofitの"/api/..."が誤って一致)で前置が
+                // スキップされてしまうため、区切り位置まで含めて判定する。
                 val basePath = base.encodedPath.removeSuffix("/")
+                val originalPath = original.url.encodedPath
+                val alreadyPrefixed = basePath.isNotEmpty() &&
+                    (originalPath == basePath || originalPath.startsWith("$basePath/"))
+                val newPath = if (basePath.isNotEmpty() && !alreadyPrefixed) {
+                    basePath + originalPath
+                } else {
+                    originalPath
+                }
                 val modifiedUrl = original.url.newBuilder()
                     .scheme(base.scheme).host(base.host).port(base.port)
-                    .encodedPath(basePath + original.url.encodedPath)
+                    .encodedPath(newPath)
                     .build()
                 chain.proceed(original.newBuilder().url(modifiedUrl).build())
             })

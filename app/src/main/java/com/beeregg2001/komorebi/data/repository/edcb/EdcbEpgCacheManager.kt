@@ -83,6 +83,35 @@ class EdcbEpgCacheManager @Inject constructor(
                         if (fullEpgFetchJob?.isActive != true) {
                             val (ip, port) = getTcpIpAndPort()
                             if (ip.isNotBlank()) {
+                                // ★ 修正: 以前はここでcachedServicesを一切更新しなかったため、
+                                // 一度全期間取得が成功すると(clearCache()は呼び出し元が無く
+                                // isFullEpgFetchedが二度とfalseに戻らないため)、プロセスが
+                                // 生きている限りサービス(チャンネル)一覧が永久に凍結していた。
+                                // EDCB側でチャンネルスキャンをやり直した場合等に新チャンネルが
+                                // 一覧・番組表に反映されなくなる。E-11修正で失ったサービス
+                                // 一覧の定期更新(旧: 15分毎のクイックロード時)を、全期間
+                                // キャッシュを上書きしない形で復元する。
+                                val edcbApi = EdcbApi(ip, port)
+                                val refreshedServices = edcbApi.getServices().getOrNull()
+                                if (!refreshedServices.isNullOrEmpty()) {
+                                    val targetServices = refreshedServices.filter {
+                                        it.serviceType == 0x01 || it.serviceType == 0xA5 || it.serviceType == 0xAD
+                                    }
+                                    if (targetServices.isNotEmpty()) {
+                                        cachedServices = targetServices
+                                        tsidToSidsMap = targetServices
+                                            .filter { getChannelType(it.onid) == "GR" }
+                                            .groupBy { it.tsid }
+                                            .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+                                        bsPrefixToSidsMap = targetServices
+                                            .filter { getChannelType(it.onid) == "BS" }
+                                            .groupBy { it.sid / 10 }
+                                            .mapValues { (_, svcs) -> svcs.map { it.sid }.sorted() }
+                                    }
+                                }
+                                // サービス一覧取得に失敗しても、既存のcachedServicesで
+                                // バックグラウンド全期間取得は継続する(取得失敗時は
+                                // getOrNull()がnullを返すため何もせずスルーする)。
                                 fetchFullEpgDataInBackground(cachedServices, ip, port)
                             }
                         }

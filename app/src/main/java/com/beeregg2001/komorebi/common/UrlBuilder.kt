@@ -83,6 +83,16 @@ object UrlBuilder {
         return "$baseUrl/api/channels/$displayChannelId/logo"
     }
 
+    // ★ 追加: LiveJikkyoManagerが実況セッションURL取得のために素朴な"${ip}:${port}/..."
+    // 文字列連結を直書きしていたため、スキーム無しIPを入力するとRequest.Builder.url()が
+    // IllegalArgumentExceptionを投げ(catchで握り潰され実況コメントが無言で無効化される)、
+    // サブディレクトリ付きURLでは壊れたパスになっていた。他のKonomiTV用URL生成と同じく
+    // formatBaseUrl()に統一する。
+    fun getKonomiTvJikkyoWatchSessionUrl(ip: String, port: String, displayChannelId: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/channels/$displayChannelId/jikkyo"
+    }
+
     // --- サムネイル関連 ---
     // ★修正: backendTypeを受け取り、システムごとに正しいパスを生成する
     fun getThumbnailUrl(backendType: String, ip: String, port: String, videoId: String): String {
