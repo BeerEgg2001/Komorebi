@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -40,6 +41,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.Extractor
 import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
@@ -360,6 +362,21 @@ fun rememberManagedExoPlayer(
                     true
                 )
                 addListener(object : Player.Listener {
+                    override fun onMetadata(metadata: Metadata) {
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                                val cue = captionDecoder.decode(
+                                    entry.privateData,
+                                    currentPosition,
+                                    renderCaptions = vs.isSubtitleEnabled
+                                )
+                                onSubtitleLanguagesChanged(captionDecoder.availableLanguages())
+                                if (vs.isSubtitleEnabled && cue != null) onSubtitleCue(cue)
+                            }
+                        }
+                    }
+
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
                         onVideoSizeChanged(
                             videoSize.width,
