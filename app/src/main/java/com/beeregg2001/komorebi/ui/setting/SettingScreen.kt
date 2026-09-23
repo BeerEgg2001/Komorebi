@@ -72,6 +72,8 @@ fun SettingsScreen(
     val totalRecordCount by viewModel.totalRecordCount.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
     val receiveBetaUpdates by viewModel.receiveBetaUpdates.collectAsState()
+    val updateCheckState by viewModel.updateCheckState.collectAsState()
+    val hasManuallyCheckedForUpdate by viewModel.hasManuallyCheckedForUpdate.collectAsState()
     val isValidatingGeminiApiKey by viewModel.isValidatingGeminiApiKey.collectAsState()
     val playerUiMode by viewModel.playerUiMode.collectAsState()
     val autoCmSkip by viewModel.autoCmSkip.collectAsState()
@@ -124,6 +126,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
+                FocusRequester(),
+                // ★ 追加: 「アップデートを確認する」用に1個増強
                 FocusRequester()
             ),
             listOf(
@@ -357,6 +361,10 @@ fun SettingsScreen(
                                 }
                             },
                             itemFocusRequesters[0][0],
+                            updateCheckState,
+                            hasManuallyCheckedForUpdate,
+                            { viewModel.checkForUpdatesManually() },
+                            itemFocusRequesters[0][5],
                             {
                                 uiState.activeDialog = SettingDialogState.ConfirmClear(
                                     "データベースの再構築",

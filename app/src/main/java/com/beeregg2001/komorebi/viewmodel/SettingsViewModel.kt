@@ -13,12 +13,15 @@ import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
+import com.beeregg2001.komorebi.util.AppUpdater
+import com.beeregg2001.komorebi.util.UpdateState
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.InvalidAPIKeyException
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -70,6 +73,7 @@ class SettingsViewModel @Inject constructor(
     // 画質の値空間が別なため、録画用のrecordProvider.getStreamQualities()とは別に
     // ライブ用の画質一覧を取得する必要がある(詳細はforceSyncStreamQualities()参照)。
     private val epgStationLiveRepository: EpgStationLiveRepository,
+    private val appUpdater: AppUpdater,
     private val db: AppDatabase
 ) : ViewModel() {
 
@@ -341,6 +345,21 @@ class SettingsViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5000),
         false
     )
+
+    // ★ 追加: 設定画面からの手動アップデート確認用。AppUpdaterはSingletonのため、
+    // ここで発火した確認結果はホーム画面のアップデートダイアログにもそのまま反映される。
+    val updateCheckState: StateFlow<UpdateState> = appUpdater.updateState
+
+    private val _hasManuallyCheckedForUpdate = MutableStateFlow(false)
+    val hasManuallyCheckedForUpdate: StateFlow<Boolean> = _hasManuallyCheckedForUpdate.asStateFlow()
+
+    fun checkForUpdatesManually() {
+        viewModelScope.launch {
+            val receiveBeta = settingsRepository.receiveBetaUpdates.first()
+            appUpdater.checkForUpdates(receiveBetaUpdates = receiveBeta)
+            _hasManuallyCheckedForUpdate.value = true
+        }
+    }
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),

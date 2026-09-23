@@ -21,6 +21,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.util.UpdateState
 import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 import com.beeregg2001.komorebi.viewmodel.SmbServer
 import java.time.LocalTime
@@ -57,6 +58,10 @@ fun GeneralSettingsContent(
     receiveBetaUpdates: Boolean,
     onToggleBetaUpdates: (Boolean) -> Unit,
     betaUpdateR: FocusRequester,
+    updateCheckState: UpdateState,
+    hasManuallyCheckedForUpdate: Boolean,
+    onCheckForUpdates: () -> Unit,
+    checkUpdateR: FocusRequester,
     onForceSync: () -> Unit,
     onClearChannel: () -> Unit,
     onClearHistory: () -> Unit,
@@ -90,9 +95,29 @@ fun GeneralSettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = FocusRequester.Cancel
-                        down = dbInfoR
+                        down = checkUpdateR
                     },
                 onClick = { onClick(betaUpdateR); onToggleBetaUpdates(!receiveBetaUpdates) }
+            )
+            SettingItem(
+                title = "アップデートを確認する",
+                value = when (updateCheckState) {
+                    is UpdateState.Checking -> "確認中..."
+                    is UpdateState.UpdateAvailable -> "新しいバージョンがあります: ${updateCheckState.versionName}"
+                    is UpdateState.Downloading -> "ダウンロード中... ${updateCheckState.progressPercentage}%"
+                    is UpdateState.ReadyToInstall -> "インストールの準備ができました"
+                    is UpdateState.Error -> updateCheckState.message
+                    UpdateState.Idle -> if (hasManuallyCheckedForUpdate) "最新バージョンです" else "手動で確認する"
+                },
+                icon = Icons.Default.Sync,
+                modifier = Modifier
+                    .focusRequester(checkUpdateR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = betaUpdateR
+                        down = dbInfoR
+                    },
+                onClick = { onClick(checkUpdateR); onCheckForUpdates() }
             )
         }
 
@@ -105,7 +130,7 @@ fun GeneralSettingsContent(
                     .focusRequester(dbInfoR)
                     .focusProperties {
                         left = sidebarR
-                        up = betaUpdateR
+                        up = checkUpdateR
                         down = forceSyncR
                     },
                 onClick = { onClick(dbInfoR) }
