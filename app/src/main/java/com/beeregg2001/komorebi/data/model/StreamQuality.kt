@@ -11,9 +11,12 @@ data class StreamQuality(
     companion object {
         // KonomiTVなどのバックエンド用のデフォルト（固定）リスト
         val DEFAULT_QUALITIES = listOf(
-            // ★ 追加: サーバー側で再エンコードせず、放送波のMPEG-2映像+MPEG-TSをtsreadex経由でそのまま
-            // 配信する画質。クライアント側でtsreadex相当の処理(NativeLib)を通す必要があるためisRawTs=true
-            StreamQuality("オリジナル (MPEG-2)", "original", isRawTs = true),
+            // ★ 修正: サーバー側で再エンコードせず、MPEG-TSをtsreadex経由でそのまま配信する画質。
+            // クライアント側でtsreadex相当の処理(NativeLib)を通す必要があるためisRawTs=true。
+            // ラベルは以前"オリジナル (MPEG-2)"だったが、BS4K(HEVC)の録画・ライブでもこの画質を
+            // 選べるようになったため、コーデック非依存の表記へ変更した
+            // (映像はMPEG-2 / H.264 / H.265のいずれもあり得る)。
+            StreamQuality("オリジナル (無変換)", "original", isRawTs = true),
             StreamQuality("1080p (60fps)", "1080p-60fps"),
             StreamQuality("1080p", "1080p"),
             StreamQuality("810p", "810p"),

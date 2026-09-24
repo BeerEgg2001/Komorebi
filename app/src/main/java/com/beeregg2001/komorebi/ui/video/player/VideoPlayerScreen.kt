@@ -153,6 +153,9 @@ fun VideoPlayerScreen(
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
+    // ★ 追加: 「この録画番組に限って使えない」画質の値(理由の区別は ViewModel 側のコメント参照)
+    val perProgramExcludedQualities by
+        videoPlayerViewModel.perProgramExcludedQualities.collectAsState()
     val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
@@ -179,7 +182,12 @@ fun VideoPlayerScreen(
         vs.isAutoCmSkipEnabled = (autoCmSkipStr == "ON")
     }
 
-    LaunchedEffect(availableQualities, isQualitiesLoaded, currentVideoQualityStr) {
+    LaunchedEffect(
+        availableQualities,
+        isQualitiesLoaded,
+        currentVideoQualityStr,
+        perProgramExcludedQualities
+    ) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
             val matched = availableQualities.find { it.value == currentVideoQualityStr }
             if (matched != null) {
@@ -187,7 +195,24 @@ fun VideoPlayerScreen(
             } else {
                 val fallback = availableQualities.first()
                 vs.currentQuality = fallback
-                videoPlayerViewModel.saveVideoQuality(fallback.value)
+                // ★ 修正: 以前はここで無条件に saveVideoQuality() を呼び、フォールバック先を
+                // VIDEO_QUALITYへ書き戻していた。この書き戻しは 2c3d8c0「バックエンド変更時に
+                // 画質設定が正常に反映されない問題に暫定対応」で、バックエンドを切り替えて
+                // 値空間が変わったときに古い設定値を正規化する目的で入ったもので、その用途では
+                // 今も必要なため残す。
+                //
+                // 一方、値空間には存在するのにこの録画番組でだけ使えない画質(KonomiTVの
+                // original画質)まで同じ扱いにしていたのが不具合だった。original非対応の録画を
+                // 一度再生しただけで既定画質が"1080p-60fps"へ黙って変わり、以降は対応録画を
+                // 開いてもoriginalに戻らなくなっていた。KonomiTV本家(PlayerController.ts)も
+                // この場合は再生時のdefault_qualityを差し替えるだけで設定値は書き換えていない。
+                //
+                // そのため、番組固有の理由で除外された値(perProgramExcludedQualities)のときだけ
+                // 書き戻しを見送る。設定画面は保存値が一覧に無い場合を既に考慮しているため
+                // (SettingContents.kt / SettingScreen.kt)、書き戻さなくても表示は壊れない。
+                if (currentVideoQualityStr !in perProgramExcludedQualities) {
+                    videoPlayerViewModel.saveVideoQuality(fallback.value)
+                }
             }
         }
     }

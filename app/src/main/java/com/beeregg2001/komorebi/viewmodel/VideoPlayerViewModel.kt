@@ -70,12 +70,43 @@ class VideoPlayerViewModel @Inject constructor(
     private val _isQualitiesLoaded = MutableStateFlow(false)
     val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
 
+    /**
+     * 「このバックエンドの画質としては有効だが、いま開いている録画番組に限って使えない」画質の値。
+     *
+     * ★ 追加: [availableQualities] から画質が除外される理由は2種類あり、区別が必要になった。
+     *  (A) バックエンドが変わって値空間そのものが変わった (例: KonomiTVの"1080p-60fps"のまま
+     *      EDCBへ切り替えた)。この場合は設定値が今後どの番組でも無効なので、再生時に
+     *      フォールバック先をVIDEO_QUALITYへ書き戻して正規化する必要がある(2c3d8c0の対応)。
+     *  (B) 値空間には存在するが、この録画番組の条件では使えない (KonomiTVのoriginal画質を
+     *      MPEG-4コンテナの録画で開いた場合など)。この場合に書き戻すと、対応番組へ戻っても
+     *      二度と既定画質に復帰しなくなるため、書き戻してはいけない。
+     * ここには(B)に該当する値だけを入れる。
+     */
+    private val _perProgramExcludedQualities = MutableStateFlow<Set<String>>(emptySet())
+    val perProgramExcludedQualities: StateFlow<Set<String>> =
+        _perProgramExcludedQualities.asStateFlow()
+
     private var detailFetchJob: Job? = null
     private var streamMaintenanceJob: Job? = null
 
+    /**
+     * ★ 追加: 画質一覧取得の実行中ジョブ。
+     *
+     * この取得は [_perProgramExcludedQualities] という「いま開いている録画番組固有」の状態を
+     * 書くようになったため、前回分を打ち切らないと番組をまたいだ取り違えが起きる。
+     * 例: 番組A(MPEG-4コンテナ・API応答が遅い)を開いてすぐ戻り、番組B(MPEG-TS)を開くと、
+     * Bの結果が出た後にAの遅延応答が上書きし、Bなのにoriginalが選べなくなる。逆順に完了すると
+     * 非TS録画にoriginalが残り、ダウンロードAPIのレスポンスをVIDEO_MP2Tとして
+     * TsExtractorに渡して再生失敗する。[detailFetchJob] と同じくキャンセル方式で直列化する。
+     */
+    private var qualitiesFetchJob: Job? = null
+
     fun fetchAvailableQualities(videoId: Int) {
-        viewModelScope.launch(Dispatchers.IO) {
+        qualitiesFetchJob?.cancel()
+        qualitiesFetchJob = viewModelScope.launch(Dispatchers.IO) {
             _isQualitiesLoaded.value = false
+            // 番組ごとの除外理由は番組を開くたびに再判定する(前の番組の判定を持ち越さない)
+            _perProgramExcludedQualities.value = emptySet()
             try {
                 val backend = settingsRepository.backendType.first()
                 if (backend == "EDCB") {
@@ -144,23 +175,39 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                     }
                 } else if (backend == "KONOMITV") {
-                    // ★ 追加: original画質(MPEG-2 直接再生)は、録画完了済み・かつ
-                    // コンテナがMPEG-TS・映像コーデックがMPEG-2の録画番組でのみ選択可能にする
-                    // (tsreplace等で既にH.264/HEVCへ変換済みの録画では利用不可。KonomiTVサーバー
-                    // 側もこの条件を満たさない場合は録画ダウンロードAPIをoriginal用途に使えない)。
-                    // 一覧画面のRoom DBキャッシュはcontainerFormat/videoCodecを保持していないため、
+                    // ★ 修正: original画質(生MPEG-TS直接再生)の可否判定から映像コーデックの条件を外し、
+                    // 「録画完了済み・かつコンテナがMPEG-TS」のみで判定する。
+                    //
+                    // 以前は KonomiTV 本家(client/src/services/player/PlayerController.ts の
+                    // is_original_quality_available)をそのまま移植し、videoCodec == "MPEG-2" を
+                    // 要求していた。しかし本家がMPEG-2限定なのは、ブラウザがMPEG-2を再生できず
+                    // MPEG-2専用のWASMトランスコーダ(mpeg2toh264)を挟んでいるためで、
+                    // Komorebiには当てはまらない制約だった。Komorebiはtsreadex(NativeLib)経由で
+                    // Media3のTsExtractorへ渡す方式であり、servicefilter.cpp は H_262/AVC/H_265 を
+                    // 等しく映像として扱い、Media3も TS_STREAM_TYPE_H265(0x24) に対応している。
+                    //
+                    // この制限により、BS4K(dantto4K等でMMT/TLVからTSへ変換したHEVC録画)は
+                    // videoCodec == "H.265" となって常にoriginalが選べず、1080p(60fps)へ
+                    // フォールバックしていた。
+                    //
+                    // サーバー側の録画ダウンロードAPI(/api/videos/{id}/download)はコーデックを
+                    // 一切見ずファイルをそのまま返すため、緩和にあたってサーバー側の制約はない。
+                    //
+                    // 一覧画面のRoom DBキャッシュはcontainerFormatを保持していないため、
                     // 必ずここでAPIから最新の詳細を取得して判定する。
                     val isOriginalAvailable = recordProvider.getRecordedProgram(videoId)
                         .getOrNull()
                         ?.recordedVideo
                         ?.let { video ->
                             video.status != "Recording" &&
-                                video.containerFormat.equals("MPEG-TS", ignoreCase = true) &&
-                                video.videoCodec.equals("MPEG-2", ignoreCase = true)
+                                video.containerFormat.equals("MPEG-TS", ignoreCase = true)
                         } ?: false
                     _availableQualities.value = if (isOriginalAvailable) {
                         StreamQuality.DEFAULT_QUALITIES
                     } else {
+                        // originalはKonomiTVの値空間には常に存在し、この録画番組でだけ使えない。
+                        // バックエンド切替由来の無効値と区別するため理由を記録する。
+                        _perProgramExcludedQualities.value = setOf("original")
                         StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
                     }
                 } else if (backend == "EPGSTATION") {
@@ -396,5 +443,6 @@ class VideoPlayerViewModel @Inject constructor(
         stopStreamMaintenance()
         recordSyncEngine.setThrottled(false)
         detailFetchJob?.cancel()
+        qualitiesFetchJob?.cancel()
     }
 }
