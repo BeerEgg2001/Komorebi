@@ -118,6 +118,12 @@ interface EpgStationApi {
         @Query("isHalfWidth") isHalfWidth: Boolean = false
     ): EsReserves
 
+    @GET("api/reserves/{id}")
+    suspend fun getReserve(
+        @Path("id") id: Int,
+        @Query("isHalfWidth") isHalfWidth: Boolean = false
+    ): EsReserveItem
+
     @POST("api/reserves")
     suspend fun addReserve(@Body body: EsManualReserveOption): Response<Unit>
 

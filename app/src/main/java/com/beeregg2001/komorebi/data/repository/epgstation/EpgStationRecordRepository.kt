@@ -8,6 +8,7 @@ import com.beeregg2001.komorebi.data.api.EpgStationApi
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -470,7 +471,12 @@ class EpgStationRecordRepository @Inject constructor(
     /** 開始済み HLS ストリームを維持する。 */
     @UnstableApi
     override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
-        streamId?.let { api.keepStream(it) }
+        val id = streamId ?: return
+        // Response<Unit>は4xxでも例外にならないため、認証による拒否だけは明示的にログへ残す
+        // (401のままだとサーバーの15秒停止タイマーがリセットされず配信が止まる)。
+        if (api.keepStream(id).code() == 401) {
+            Log.w(TAG, EpgStationDataMapper.AUTH_REQUIRED_MESSAGE.format("録画HLSストリームの維持"))
+        }
     }
 
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? = null
@@ -495,21 +501,38 @@ class EpgStationRecordRepository @Inject constructor(
         qualities?.let { return it }
         val result = mutableListOf(StreamQuality("そのまま再生 (無変換)", "direct", true))
         try {
-            val config = api.getConfig().streamConfig?.recorded?.ts
-            listOf(
-                "mp4" to config?.mp4,
-                "hls" to config?.hls,
-                "webm" to config?.webm
-            ).forEach { (format, labels) ->
-                // ★ 修正: ラベルをプリセット名のみにしていたため、mp4/hls/webmで
-                // 同名プリセット(例: "720p")を定義している構成(config.ymlでは一般的)だと
-                // UIに同じラベルが複数並び、どのコンテナか区別できなくなっていた。
-                // コンテナ名を接頭辞として復元する(値自体は元々コンテナ別なので
-                // 衝突しない。ts/encoded間の値衝突を解消した際の副作用のみ修正)。
-                labels.orEmpty().forEachIndexed { index, label ->
-                    result += StreamQuality("$format: $label", "$format:$index")
+            val esConfig = api.getConfig()
+            // ★ 修正: サーバーは ?mode=N を配信プリセット(streamProfiles)から解決し、新形式の設定が
+            // あれば旧形式(streamConfig)より優先する(stuayu/EPGStation StreamProfileManageModel.
+            // getRecordedProfiles())。streamProfiles があれば常に優先し、返さない古いサーバーでだけ
+            // streamConfig を使う。以前は streamConfig しか見ておらず、新形式だけで設定したサーバーでは
+            // 「そのまま再生」しか選べなかった。
+            val fromProfiles = EpgStationDataMapper.toProfileQualities(
+                esConfig.streamProfiles?.recorded?.ts,
+                listOf("mp4", "hls", "webm")
+            )
+            if (fromProfiles.isNotEmpty()) {
+                result += fromProfiles
+            } else {
+                val config = esConfig.streamConfig?.recorded?.ts
+                listOf(
+                    "mp4" to config?.mp4,
+                    "hls" to config?.hls,
+                    "webm" to config?.webm
+                ).forEach { (format, labels) ->
+                    // ★ 修正: ラベルをプリセット名のみにしていたため、mp4/hls/webmで
+                    // 同名プリセット(例: "720p")を定義している構成(config.ymlでは一般的)だと
+                    // UIに同じラベルが複数並び、どのコンテナか区別できなくなっていた。
+                    // コンテナ名を接頭辞として復元する(値自体は元々コンテナ別なので
+                    // 衝突しない。ts/encoded間の値衝突を解消した際の副作用のみ修正)。
+                    labels.orEmpty().forEachIndexed { index, label ->
+                        result += StreamQuality("$format: $label", "$format:$index")
+                    }
                 }
             }
+        } catch (e: CancellationException) {
+            // 取り消し時は「直接再生のみ」の一覧をキャッシュに固定しないよう、そのまま伝える
+            throw e
         } catch (_: Exception) {
             // 設定取得に失敗しても直接再生は利用できる。
         }

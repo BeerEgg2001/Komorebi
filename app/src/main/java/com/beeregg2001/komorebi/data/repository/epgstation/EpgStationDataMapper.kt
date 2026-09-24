@@ -11,6 +11,35 @@ import java.time.format.DateTimeFormatter
 /** EPGStation の DTO を Komorebi 共通モデルへ変換するマッパー。 */
 object EpgStationDataMapper {
     /**
+     * 書き込み系API(予約・ルール操作、ストリームのkeep)が401になったときの案内文。
+     * EPGStation側で auth.enabled: true にしていると、未ログインで通るのは GET 系だけになる
+     * (stuayu/EPGStation AuthGuard.ts)。Komorebiはログイン認証に未対応のため原因を明示する。
+     * %s には操作名が入る。
+     */
+    const val AUTH_REQUIRED_MESSAGE =
+        "%s に失敗しました (HTTP 401)。\n" +
+            "EPGStation側でログイン認証(auth.enabled: true)が有効になっている可能性があります。\n" +
+            "Komorebiはログイン認証に未対応のため、config.ymlで auth.enabled を false にしてください。"
+
+    /**
+     * 新形式の配信プリセット(streamProfiles)から、指定コンテナの画質選択肢を組み立てる。
+     * 値は旧形式と同じ "$container:$mode" とする。サーバーは ?mode=N を「コンテナで絞り込んだ
+     * プリセット配列のN番目」として解決する(stuayu/EPGStation StreamProfileManageModel.
+     * resolveLegacyMode())ため、ここでもコンテナごとの出現順をmodeとして採番する。
+     */
+    fun toProfileQualities(
+        profiles: List<EsClientStreamProfile>?,
+        containers: List<String>
+    ): List<StreamQuality> {
+        val list = profiles.orEmpty()
+        return containers.flatMap { container ->
+            list.filter { it.container == container }.mapIndexed { mode, profile ->
+                StreamQuality("$container: ${profile.name}", "$container:$mode", profile.isUnconverted)
+            }
+        }
+    }
+
+    /**
      * 番組表取得に必要な放送波フラグを、指定された種別に応じて組み立てる。
      * /api/schedules は GR/BS/CS/SKY/BS4K/CS4K/NW1〜NW40 が全て必須クエリのため、
      * 絞り込まない場合も含めて必ず全キーを埋める。

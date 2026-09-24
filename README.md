@@ -50,6 +50,7 @@ PC操作に抵抗がない方向けの方法です。
 * **初回セットアップ**: インストール後の初回起動時は、**KonomiTV**・**EDCB**・**EPGStation** のいずれか、および **Mirakurun（オプション）** のサーバー設定が必要です。画面の指示に従ってIPアドレスやポート番号を入力してください。バックエンドにMirakurunを使用していない場合は、MirakurunのIPアドレスとポート番号の入力は不要です。
 * **EDCBをご利用の方へ**: ライブ視聴・録画視聴のいずれについても、連携スクリプトの配置が必要です。各リリースに添付されている `Komorebi Configurator`（Windows用）または `setup.sh`（Linux用）を実行し、最新の `resolver.lua` を設定してください。さらに、録画番組への「直接アクセス」再生でシーンサーチのサムネイル画像を表示する場合は、同梱の `Komorebi Thumbnailer` によるサムネイル生成も必要です。
 * **EPGStationをご利用の方へ**: [stuayu氏によるFork版EPGStation](https://github.com/stuayu/EPGStation) での動作を確認しています。本家EPGStationでの動作は未確認です。
+  * Komorebiは EPGStation のログイン認証に対応していません。EPGStation の `config.yml` で `auth.enabled: true` にしていると、HLS再生が約15秒で停止し、予約・自動予約条件の追加/変更/削除も失敗します。Komorebiから利用する場合は `auth.enabled` を設定しない（既定で無効）か、`false` にしてください。
 * **Cloudflare Zero Trust（Cloudflare Access）配下の環境をご利用の方へ**: 接続設定画面からサービストークン（Client ID / Client Secret）を入力することで、各バックエンドへ接続できます。
 
 ---

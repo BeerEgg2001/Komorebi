@@ -10,6 +10,7 @@ import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.LiveProvider
 import com.beeregg2001.komorebi.di.EpgStationClient
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -166,13 +167,25 @@ class EpgStationLiveRepository @Inject constructor(
 
     /** 設定されたライブ配信形式を画質選択肢へ変換する。 */
     suspend fun getLiveStreamQualities(): List<StreamQuality> {
-        val result = mutableListOf<StreamQuality>()
         return try {
+            val esConfig = api.getConfig()
+            // ★ 修正: サーバーは ?mode=N を配信プリセット(streamProfiles)から解決し、新形式の設定が
+            // あれば旧形式(streamConfig)より優先する(stuayu/EPGStation StreamProfileManageModel.
+            // getLiveProfiles())。streamProfiles は旧形式だけの設定からも同じ手順で作られて返るため、
+            // これがあれば常に優先し、streamProfiles を返さない古いサーバーでだけ streamConfig を使う。
+            // 以前は streamConfig しか見ておらず、新形式だけで設定したサーバーでは一覧が空になり、
+            // 呼び出し元の固定リスト(実際のプリセット構成と無関係なラベル・mode)へ落ちていた。
+            val fromProfiles = EpgStationDataMapper.toProfileQualities(
+                esConfig.streamProfiles?.live,
+                listOf("m2ts", "m2tsll", "hls")
+            )
+            if (fromProfiles.isNotEmpty()) return fromProfiles
             // ★ 修正: サーバーの/api/configレスポンスはstreamConfig.live.ts.m2tsのように
             // 1段深い構造で返るため、以前の"streamConfig?.live"直下参照では常にnullになり
             // このメソッドは常に空リストを返していた(呼び出し元のLivePlayerViewModelで
             // ハードコードされたフォールバックに常に落ちていた)。
-            val config = api.getConfig().streamConfig?.live?.ts
+            val config = esConfig.streamConfig?.live?.ts
+            val result = mutableListOf<StreamQuality>()
             config?.m2ts.orEmpty().forEachIndexed { index, item ->
                 result += StreamQuality("m2ts: ${item.name}", "m2ts:$index", item.isUnconverted)
             }
@@ -183,6 +196,9 @@ class EpgStationLiveRepository @Inject constructor(
                 result += StreamQuality("hls: $label", "hls:$index")
             }
             result
+        } catch (e: CancellationException) {
+            // 取り消し(ソース切替等)はフォールバック扱いにせず呼び出し元へ伝える
+            throw e
         } catch (_: Exception) {
             emptyList()
         }
@@ -196,7 +212,11 @@ class EpgStationLiveRepository @Inject constructor(
     suspend fun keepLiveStream(streamNumber: Int) {
         val id = liveStreamIdByNumber[streamNumber] ?: return
         try {
-            api.keepStream(id)
+            // Response<Unit>は4xxでも例外にならないため、認証による拒否だけは明示的にログへ残す
+            // (401のままだとサーバーの15秒停止タイマーがリセットされず配信が止まる)。
+            if (api.keepStream(id).code() == 401) {
+                Log.w(TAG, EpgStationDataMapper.AUTH_REQUIRED_MESSAGE.format("ライブHLSストリームの維持"))
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to keep live HLS stream alive (streamId=$id)", e)
         }
