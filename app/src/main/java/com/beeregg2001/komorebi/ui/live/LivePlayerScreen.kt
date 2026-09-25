@@ -232,6 +232,7 @@ fun LivePlayerScreen(
 
     val availableQualities by livePlayerViewModel.availableQualities.collectAsState(initial = StreamQuality.DEFAULT_QUALITIES)
     val isQualitiesLoaded by livePlayerViewModel.isQualitiesLoaded.collectAsState()
+    val loadedQualitiesKey by livePlayerViewModel.loadedQualitiesKey.collectAsState()
 
     val currentLiveQualityStr by settingsViewModel.liveQuality.collectAsState()
 
@@ -261,8 +262,12 @@ fun LivePlayerScreen(
         livePlayerViewModel.fetchAvailableQualities(ps.currentStreamSource, ps.isEdcbDirect)
     }
 
-    LaunchedEffect(availableQualities, isQualitiesLoaded, currentLiveQualityStr) {
-        if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
+    LaunchedEffect(availableQualities, isQualitiesLoaded, currentLiveQualityStr, loadedQualitiesKey, isSourceInitialized) {
+        // ★ 修正: ソース確定前(初期値KONOMITV)に取得した一覧や、別ソース向けの一覧で照合すると
+        // 保存済み画質が「一覧に無い」と誤判定され、先頭の画質で上書き保存されてしまう。
+        // 現在のソース向けに読み込んだ一覧であることを確認してから照合する。
+        val isCurrentSourceList = loadedQualitiesKey == (ps.currentStreamSource to ps.isEdcbDirect)
+        if (isSourceInitialized && isCurrentSourceList && isQualitiesLoaded && availableQualities.isNotEmpty()) {
             val matched = availableQualities.find { it.value == currentLiveQualityStr }
             if (matched != null) {
                 ps.currentQuality = matched

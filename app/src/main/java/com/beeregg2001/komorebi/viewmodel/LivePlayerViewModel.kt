@@ -153,6 +153,14 @@ class LivePlayerViewModel @Inject constructor(
     private val _isQualitiesLoaded = MutableStateFlow(false)
     val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
 
+    // ★ 追加: 現在の画質一覧を読み込んだ対象(ストリームソース, EDCB直接再生か)。
+    // 画面側はプレイヤー起動直後に初期値のKONOMITVで一度取得を始め、ソース確定後に取り直す。
+    // どのソース向けの一覧かを区別できないと、KonomiTV用の一覧で保存済み画質を照合して
+    // 「一覧に無い」と誤判定し、EPGStation等の画質設定を先頭の画質で上書きしてしまっていた。
+    private val _loadedQualitiesKey = MutableStateFlow<Pair<StreamSource, Boolean>?>(null)
+    val loadedQualitiesKey: StateFlow<Pair<StreamSource, Boolean>?> = _loadedQualitiesKey.asStateFlow()
+    private var qualityFetchJob: Job? = null
+
     private val _currentLogoUrl = MutableStateFlow<String>("")
     val currentLogoUrl: StateFlow<String> = _currentLogoUrl.asStateFlow()
 
@@ -228,8 +236,11 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun fetchAvailableQualities(source: StreamSource, isEdcbDirect: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _isQualitiesLoaded.value = false
+        // 前回の取得(別ソース向け)が後から完了して一覧を上書きしないよう、先に取り消す
+        qualityFetchJob?.cancel()
+        _isQualitiesLoaded.value = false
+        _loadedQualitiesKey.value = null
+        qualityFetchJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (source == StreamSource.EDCB) {
                     if (isEdcbDirect) {
@@ -260,7 +271,10 @@ class LivePlayerViewModel @Inject constructor(
                             // キャッシュがあれば即座に表示し、再生開始をブロックしない
                             // (beta6までの挙動)。裏で最新値を取得し、取得できれば差し替える。
                             _availableQualities.value = cached
-                            viewModelScope.launch(Dispatchers.IO) {
+                            // ★ 修正: viewModelScope直下で起動すると、ソース切替で取得ジョブを
+                            // 取り消しても裏更新だけが生き残り、切替後のソースの画質一覧を
+                            // EDCBの一覧で上書きしてしまう。取得ジョブの子として起動し、一緒に取り消す。
+                            launch(Dispatchers.IO) {
                                 try {
                                     val fetched = recordProvider.getStreamQualities()
                                     if (fetched.isNotEmpty()) {
@@ -271,6 +285,8 @@ class LivePlayerViewModel @Inject constructor(
                                         _availableQualities.value = fetched
                                     }
                                     // 空の場合は取得失敗とみなし、表示済みのキャッシュを維持する。
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Background quality refresh failed. Keeping cache.", e)
                                 }
@@ -289,6 +305,8 @@ class LivePlayerViewModel @Inject constructor(
                                 } else {
                                     useDefaultQuality()
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 Log.e(TAG, "Initial quality fetch failed.", e)
                                 useDefaultQuality()
@@ -330,6 +348,8 @@ class LivePlayerViewModel @Inject constructor(
                         )
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load stream qualities", e)
                 val currentLive = settingsRepository.liveQuality.first()
@@ -341,7 +361,11 @@ class LivePlayerViewModel @Inject constructor(
                     )
                 )
             } finally {
-                _isQualitiesLoaded.value = true
+                // 取り消された(別ソース向けの取得に置き換えられた)場合は完了扱いにしない
+                if (isActive) {
+                    _loadedQualitiesKey.value = source to isEdcbDirect
+                    _isQualitiesLoaded.value = true
+                }
             }
         }
     }

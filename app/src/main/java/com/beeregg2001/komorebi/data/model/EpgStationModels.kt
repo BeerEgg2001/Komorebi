@@ -255,14 +255,36 @@ data class EsReserveItem(
     val name: String = "",
     val description: String? = null,
     val genre1: Int? = null,
-    val subGenre1: Int? = null
+    val subGenre1: Int? = null,
+    // PUT /api/reserves/{id} は saveOption/encodeOption を省略するとサーバー側で
+    // null に上書きされる(stuayu/EPGStation ReservationManageModel.setSaveOptionToReserve()
+    // で確認済み)。更新時に既存値を送り返すため、予約の保存先・エンコード設定も受け取る。
+    val tags: List<Int>? = null,
+    val parentDirectoryName: String? = null,
+    val directory: String? = null,
+    val recordedFormat: String? = null,
+    val encodeMode1: String? = null,
+    val encodeParentDirectoryName1: String? = null,
+    val encodeDirectory1: String? = null,
+    val encodeMode2: String? = null,
+    val encodeParentDirectoryName2: String? = null,
+    val encodeDirectory2: String? = null,
+    val encodeMode3: String? = null,
+    val encodeParentDirectoryName3: String? = null,
+    val encodeDirectory3: String? = null,
+    val isDeleteOriginalAfterEncode: Boolean = false
 )
 
 data class EsManualReserveOption(
     val programId: Long? = null,
     val allowEndLack: Boolean = true
 )
-data class EsEditManualReserveOption(val allowEndLack: Boolean = true)
+data class EsEditManualReserveOption(
+    val allowEndLack: Boolean = true,
+    val tags: List<Int>? = null,
+    val saveOption: EsRuleSaveOption? = null,
+    val encodeOption: EsRuleEncodeOption? = null
+)
 // ★ 修正: PUT /api/rules/{id} は全置換(full replace)であり、送らなかったフィールドは
 // サーバー側でnull/falseに正規化される(stuayu/EPGStation RuleDB.convertRuleToDBRule()で
 // 確認済み)。以前はsaveOption/encodeOptionをモデルにすら持っておらず、Komorebiから
@@ -363,8 +385,12 @@ data class EsRuleSearchOption(
     val times: List<EsRuleTime>? = null,
     val isFree: Boolean? = null,
     val durationMin: Int? = null,
-    val durationMax: Int? = null
+    val durationMax: Int? = null,
+    // ★ 追加: 検索対象期間。Komorebi側では編集しないが、PUT /api/rules/{id} は全置換のため
+    // モデルに持っていないと更新のたびに消えていた(stuayu/EPGStation RuleDB.ts)。
+    val searchPeriods: List<EsSearchPeriod>? = null
 )
+data class EsSearchPeriod(val startAt: Long = 0, val endAt: Long = 0)
 data class EsRuleGenre(val genre: Int = 0, val subGenre: Int? = null)
 data class EsRuleTime(
     val start: Int? = null,
@@ -392,7 +418,29 @@ data class EsRule(
 )
 data class EsRules(val rules: List<EsRule> = emptyList(), val total: Int = 0)
 
-data class EsConfig(val streamConfig: EsStreamConfig? = null)
+data class EsConfig(
+    val streamConfig: EsStreamConfig? = null,
+    // サーバーに定義されているエンコードモード名の一覧(予約更新時の整合確認に使う)
+    val encode: List<String>? = null,
+    // ★ 追加: idベースの配信プリセット(新形式)。config.ymlを新形式(streamProfiles)だけで
+    // 書いているサーバーでは streamConfig が空オブジェクトで返り、画質一覧はこちらにしか無い
+    // (stuayu/EPGStation ConfigApiModel.ts)。
+    val streamProfiles: EsStreamProfiles? = null
+)
+data class EsStreamProfiles(
+    val live: List<EsClientStreamProfile>? = null,
+    val recorded: EsRecordedStreamProfiles? = null
+)
+data class EsRecordedStreamProfiles(
+    val ts: List<EsClientStreamProfile>? = null,
+    val encoded: List<EsClientStreamProfile>? = null
+)
+data class EsClientStreamProfile(
+    val id: String = "",
+    val name: String = "",
+    val container: String = "",
+    val isUnconverted: Boolean = false
+)
 data class EsStreamConfig(
     val live: EsLiveStreamConfig? = null,
     val recorded: EsRecordedStreamConfig? = null
