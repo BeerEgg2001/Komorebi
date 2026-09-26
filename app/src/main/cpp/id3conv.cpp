@@ -295,7 +295,15 @@ void CID3Converter::CheckPrivateDataPes(const std::vector<uint8_t> &pes)
     m_buf.push_back(1);
     m_buf.push_back(PRIVATE_STREAM_1);
     m_buf.resize(m_buf.size() + 2); // PES length
-    m_buf.push_back(0x80);
+    // ★ 修正: data_alignment_indicator ビット(0x04)を追加して 0x84 にする。
+    // 元の 0x80 のままだと、このビットが立たず(=0)、Media3標準の Id3Reader が
+    // packetStarted() の冒頭 `if ((flags & FLAG_DATA_ALIGNMENT_INDICATOR) == 0) return;`
+    // で毎回即リターンしてサンプル書き込み自体を開始しない。native側ではPES組み立て・
+    // ID3変換まで正常に完了している(CheckPrivateDataPes ACCEPTEDが出続ける)のに、
+    // Kotlin側のonMetadataが一度も呼ばれない不具合の直接の原因だった。
+    // 上流tsreadexはブラウザ側の独自パーサ(mpegts.js)向けでこのビットを気にしない
+    // 設計だったため、この値のまま見過ごされていた。
+    m_buf.push_back(0x84);
     m_buf.push_back(0x80);
     m_buf.push_back(5);
     m_buf.push_back(static_cast<uint8_t>(pts >> 29) | 0x21); // 3 bits

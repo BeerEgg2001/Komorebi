@@ -7,31 +7,33 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface LastChannelDao {
-    // 1. まず同じ channelId のデータがあれば削除（重複防止）
-    @Query("DELETE FROM last_watched_channel WHERE channelId = :channelId")
-    suspend fun deleteByChannelId(channelId: String)
+    // ★ 修正: channelId(文字列)ではなく、全国共通の networkId と serviceId の組み合わせで重複判定を行う
+    @Query("DELETE FROM last_watched_channel WHERE networkId = :networkId AND serviceId = :serviceId")
+    suspend fun deleteByNetworkAndServiceId(networkId: Long, serviceId: Long)
 
-    // 2. 新しいデータを挿入
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: LastChannelEntity)
 
     // リポジトリから呼ぶためのトランザクション
     @Transaction
     suspend fun insertOrUpdate(entity: LastChannelEntity) {
-        deleteByChannelId(entity.channelId)
+        deleteByNetworkAndServiceId(entity.networkId, entity.serviceId)
         insert(entity)
     }
 
     @Query("SELECT * FROM last_watched_channel ORDER BY updatedAt DESC LIMIT 10")
     fun getLastChannels(): Flow<List<LastChannelEntity>>
 
-    // ★追加: 履歴の全削除
     @Query("DELETE FROM last_watched_channel")
     suspend fun clearAll()
 }
 
 // AppDatabase.kt に DAO を追加
-@Database(entities = [WatchHistoryEntity::class, LastChannelEntity::class], version = 3, exportSchema = false)
+@Database(
+    entities = [WatchHistoryEntity::class, LastChannelEntity::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
     abstract fun lastChannelDao(): LastChannelDao

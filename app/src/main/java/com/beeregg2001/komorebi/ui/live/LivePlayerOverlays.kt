@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
@@ -13,6 +13,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -22,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
@@ -43,7 +46,7 @@ fun SignalInfoOverlay(info: SignalMetadata) {
     ) {
         Column(
             modifier = Modifier
-                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                .background(colors.background.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
                 .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
                 .padding(24.dp)
                 .width(320.dp)
@@ -99,15 +102,12 @@ private fun SignalRow(label: String, value: String) {
 @Composable
 fun StatusOverlay(
     channel: Channel,
-    mirakurunIp: String?,
-    mirakurunPort: String?,
-    konomiIp: String,
-    konomiPort: String,
-    timeFormatSetting: String = "24H" // ★ 追加
+    logoUrl: String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
+    timeFormatSetting: String = "24H"
 ) {
     var currentTime by remember { mutableStateOf("") }
 
-    // ★ 修正：設定に応じたフォーマッターを生成
     val displaySdf = remember(timeFormatSetting) {
         if (timeFormatSetting == "12H") SimpleDateFormat("a h:mm", Locale.getDefault())
         else SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -115,21 +115,9 @@ fun StatusOverlay(
 
     LaunchedEffect(Unit) {
         while (true) {
-            currentTime = displaySdf.format(Date()) // ★ 修正
+            currentTime = displaySdf.format(Date())
             delay(1000)
         }
-    }
-
-    val isMirakurunAvailable = !mirakurunIp.isNullOrBlank() && !mirakurunPort.isNullOrBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp ?: "",
-            mirakurunPort ?: "",
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
     }
 
     Box(
@@ -152,7 +140,8 @@ fun StatusOverlay(
                     .size(56.dp, 32.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(Color.White),
-                contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
+                // ★ 修正: フラグに基づいてスケールを変更
+                contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
             )
             Spacer(Modifier.width(16.dp))
             Text(
@@ -175,34 +164,20 @@ fun StatusOverlay(
 fun LiveOverlayUI(
     channel: Channel,
     programTitle: String,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    logoUrl: String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     showDesc: Boolean,
     isRecording: Boolean,
     scrollState: ScrollState,
-    timeFormatSetting: String = "24H" // ★ 追加
+    timeFormatSetting: String = "24H"
 ) {
     val program = channel.programPresent
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.getDefault()) }
-    // ★ 修正：変数名を displaySdf に変更し、設定に応じて切り替え
     val displaySdf = remember(timeFormatSetting) {
         if (timeFormatSetting == "12H") SimpleDateFormat("a h:mm", Locale.getDefault())
         else SimpleDateFormat("HH:mm", Locale.getDefault())
     }
     var progress by remember { mutableFloatStateOf(-1f) }
-    val isMirakurunAvailable = mirakurunIp.isNotBlank() && mirakurunPort.isNotBlank()
-    val logoUrl = if (isMirakurunAvailable) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp,
-            mirakurunPort,
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
-    }
 
     LaunchedEffect(program) {
         if (program != null && !program.startTime.isNullOrEmpty() && !program.endTime.isNullOrEmpty()) {
@@ -247,7 +222,8 @@ fun LiveOverlayUI(
                         .size(80.dp, 45.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.White),
-                    contentScale = if (isMirakurunAvailable) ContentScale.Fit else ContentScale.Crop
+                    // ★ 修正: フラグに基づいてスケールを変更
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
                 )
                 Spacer(Modifier.width(24.dp))
                 Text(
@@ -309,9 +285,10 @@ fun LiveOverlayUI(
             }
 
             if (progress >= 0f) {
-                // ★ 修正：displaySdf を使用する
-                val start = program?.startTime?.let { sdf.parse(it) }?.let { displaySdf.format(it) } ?: ""
-                val end = program?.endTime?.let { sdf.parse(it) }?.let { displaySdf.format(it) } ?: ""
+                val start =
+                    program?.startTime?.let { sdf.parse(it) }?.let { displaySdf.format(it) } ?: ""
+                val end =
+                    program?.endTime?.let { sdf.parse(it) }?.let { displaySdf.format(it) } ?: ""
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -448,82 +425,263 @@ fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Uni
     }
 }
 
-// ★追加: Mirakurunソース時に二画面を開始しようとした際の警告ダイアログ
+/**
+ * L字クロップ機能の設定・調整用オーバーレイ
+ */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun MirakurunDualWarningDialog(
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+fun LCropOverlay(
+    state: LivePlayerState,
+    onClose: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
-    val focusRequester = remember { FocusRequester() }
+    val menuFocusRequester = remember { FocusRequester() }
+    val directAdjustFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(Unit) {
-        delay(300)
-        focusRequester.requestFocus()
+    val focusedContentColor = if (colors.isDark) Color.Black else Color.White
+
+    LaunchedEffect(state.lCropMode) {
+        if (state.lCropMode == LCropMode.MENU) {
+            delay(150)
+            try {
+                menuFocusRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        } else if (state.lCropMode == LCropMode.DIRECT_ADJUST) {
+            delay(150)
+            try {
+                directAdjustFocusRequester.requestFocus()
+            } catch (e: Exception) {
+            }
+        }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.85f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            colors = SurfaceDefaults.colors(containerColor = colors.surface),
-            modifier = Modifier.width(450.dp)
+    if (state.lCropMode == LCropMode.DIRECT_ADJUST) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 48.dp)
+                .focusRequester(directAdjustFocusRequester)
+                .focusable(),
+            contentAlignment = Alignment.BottomCenter
         ) {
             Column(
-                modifier = Modifier.padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .background(colors.background.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
+                    .border(1.dp, colors.accent.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                    .padding(24.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = colors.accent,
-                    modifier = Modifier.size(48.dp)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Crop, contentDescription = null, tint = colors.accent)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "L字クロップ: ダイレクト調整中",
+                        color = colors.accent,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("十字キー: 映像を移動", color = colors.textPrimary)
                 Text(
-                    text = "ソース切り替えの確認",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = colors.textPrimary,
-                    fontWeight = FontWeight.Bold
+                    "決定ボタン: 倍率切り替え (${state.lCropZoom.toInt()}%)",
+                    color = colors.textPrimary
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "メイン画面をMirakurunソースで再生しているときはKonomiTVソースに切り替えます。\nよろしいですか？",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.textSecondary,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(32.dp))
+                Text("戻るボタン: メニューへ戻る", color = colors.textSecondary.copy(alpha = 0.7f))
+            }
+        }
+    } else if (state.lCropMode == LCropMode.MENU) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.4f))
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown &&
+                        (keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
+                                keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                    ) {
+                        onClose()
+                        true
+                    } else false
+                },
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.2f to colors.background.copy(alpha = 0.85f),
+                            1f to colors.background.copy(alpha = 0.95f)
+                        )
+                    )
+                    .padding(start = 64.dp, end = 64.dp, top = 64.dp, bottom = 48.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        Icons.Default.Crop,
+                        contentDescription = null,
+                        tint = colors.accent,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "L字クロップ設定",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = colors.textPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = onDismiss,
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.textPrimary.copy(alpha = 0.1f),
-                            contentColor = colors.textPrimary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("キャンセル") }
+                    Column(modifier = Modifier.weight(1.2f)) {
+                        Button(
+                            onClick = { state.lCropMode = LCropMode.DIRECT_ADJUST },
+                            modifier = Modifier
+                                .fillMaxWidth(0.9f)
+                                .focusRequester(menuFocusRequester),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.accent,
+                                contentColor = focusedContentColor,
+                                focusedContainerColor = colors.textPrimary,
+                                focusedContentColor = focusedContentColor
+                            )
+                        ) {
+                            Text("十字キーでダイレクト調整を開始", fontWeight = FontWeight.Bold)
+                        }
 
-                    Button(
-                        onClick = onConfirm,
-                        colors = ButtonDefaults.colors(
-                            containerColor = colors.accent,
-                            contentColor = if (colors.isDark) Color.Black else Color.White
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(focusRequester)
-                    ) { Text("OK") }
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Button(
+                            onClick = onClose,
+                            modifier = Modifier.fillMaxWidth(0.9f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                contentColor = colors.textPrimary,
+                                focusedContainerColor = colors.textPrimary,
+                                focusedContentColor = focusedContentColor
+                            )
+                        ) {
+                            Text("確定して閉じる", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("微調整", color = colors.accent, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "拡大率:",
+                                color = colors.textSecondary,
+                                modifier = Modifier.width(80.dp)
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                AdjustmentButton(icon = Icons.Default.Remove) {
+                                    state.lCropZoom = (state.lCropZoom - 1f).coerceAtLeast(100f)
+                                }
+                                Text(
+                                    text = "${state.lCropZoom.toInt()}%",
+                                    color = colors.textPrimary,
+                                    modifier = Modifier.width(60.dp),
+                                    textAlign = TextAlign.Center,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                AdjustmentButton(icon = Icons.Default.Add) {
+                                    state.lCropZoom = (state.lCropZoom + 1f).coerceAtMost(200f)
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "座標: X ${state.lCropX.toInt()}% / Y ${state.lCropY.toInt()}%",
+                            color = colors.textSecondary.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 80.dp, top = 4.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "拡大起点:",
+                                color = colors.textSecondary,
+                                modifier = Modifier.width(80.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    state.lCropOrigin = when (state.lCropOrigin) {
+                                        ZoomOrigin.TopLeft -> ZoomOrigin.TopRight
+                                        ZoomOrigin.TopRight -> ZoomOrigin.BottomRight
+                                        ZoomOrigin.BottomRight -> ZoomOrigin.BottomLeft
+                                        ZoomOrigin.BottomLeft -> ZoomOrigin.TopLeft
+                                    }
+                                },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                    contentColor = colors.textPrimary,
+                                    focusedContainerColor = colors.textPrimary,
+                                    focusedContentColor = focusedContentColor
+                                )
+                            ) {
+                                val originLabel = when (state.lCropOrigin) {
+                                    ZoomOrigin.TopLeft -> "左上"
+                                    ZoomOrigin.TopRight -> "右上"
+                                    ZoomOrigin.BottomLeft -> "左下"
+                                    ZoomOrigin.BottomRight -> "右下"
+                                }
+                                Text(originLabel, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 拡大率等の数値を1単位で調整するための小型ボタン
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun AdjustmentButton(
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val focusedContentColor = if (colors.isDark) Color.Black else Color.White
+
+    Surface(
+        onClick = onClick,
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.2f),
+        shape = ClickableSurfaceDefaults.shape(CircleShape),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+            contentColor = colors.textPrimary,
+            focusedContainerColor = colors.textPrimary,
+            focusedContentColor = focusedContentColor
+        ),
+        modifier = Modifier.size(36.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(icon, null, modifier = Modifier.size(24.dp))
         }
     }
 }

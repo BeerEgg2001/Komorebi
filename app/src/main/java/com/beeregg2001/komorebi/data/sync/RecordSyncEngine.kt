@@ -5,7 +5,7 @@ import android.content.Context
 import android.util.Log
 import androidx.room.withTransaction
 import com.beeregg2001.komorebi.data.SettingsRepository
-import com.beeregg2001.komorebi.data.api.KonomiApi
+import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.local.dao.AiSeriesDictionaryDao
 import com.beeregg2001.komorebi.data.local.entity.AiSeriesDictionaryEntity
@@ -16,11 +16,15 @@ import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.util.WikipediaNormalizer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -29,12 +33,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "RecordSyncEngine"
+private const val KNOWN_RECORD_STOP_THRESHOLD = 1
 
 data class SyncProgress(
     val isSyncing: Boolean = false,
@@ -55,7 +63,7 @@ data class SyncProgress(
 
 @Singleton
 class RecordSyncEngine @Inject constructor(
-    private val apiService: KonomiApi,
+    private val recordProvider: RecordProvider,
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository,
     private val aiSeriesDictionaryDao: AiSeriesDictionaryDao,
@@ -72,13 +80,96 @@ class RecordSyncEngine @Inject constructor(
     private val smartSyncMutex = Mutex()
     private var activeSyncJob: Job? = null
 
-    private val isLowRamDevice: Boolean by lazy {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        am.isLowRamDevice
+    private data class SyncProfile(
+        val name: String,
+        val parallelism: Int,
+        val fetchLimit: Int,
+        val batchSize: Int,
+        val initialDelayMs: Long,
+        val normalDelayMs: Long
+    )
+
+    private val isThrottled = AtomicBoolean(false)
+
+    private val syncProfile: SyncProfile by lazy {
+        val activityManager =
+            context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        val totalMemoryMb = memoryInfo.totalMem / (1024L * 1024L)
+        val memoryClassMb = activityManager.memoryClass
+        val cpuCores = Runtime.getRuntime().availableProcessors()
+        val isLowRamDevice = activityManager.isLowRamDevice
+
+        val profile = if (
+            isLowRamDevice ||
+            totalMemoryMb < 1200L ||
+            cpuCores <= 2
+        ) {
+            // 1GB級はレスポンスとDBバッファを小さくしてメモリ使用量を抑える。
+            SyncProfile(
+                name = "low",
+                parallelism = 2,
+                fetchLimit = 50,
+                batchSize = 50,
+                initialDelayMs = 25L,
+                normalDelayMs = 25L
+            )
+        } else if (
+            totalMemoryMb >= 3072L &&
+            cpuCores >= 6
+        ) {
+            // 高性能機は最大6本まで並列化し、通信回数を最小化する。
+            SyncProfile(
+                name = "high",
+                parallelism = 6,
+                fetchLimit = 200,
+                batchSize = 400,
+                initialDelayMs = 0L,
+                normalDelayMs = 0L
+            )
+        } else {
+            // 2GB級を含む大半のTV端末は標準プロファイルで動かす。
+            SyncProfile(
+                name = "standard",
+                parallelism = 4,
+                fetchLimit = 100,
+                batchSize = 200,
+                initialDelayMs = 0L,
+                normalDelayMs = 0L
+            )
+        }
+
+        Log.i(
+            TAG,
+            "Sync profile=" + profile.name +
+                ", totalMemoryMb=" + totalMemoryMb +
+                ", memoryClassMb=" + memoryClassMb +
+                ", cpuCores=" + cpuCores +
+                ", isLowRamDevice=" + isLowRamDevice +
+                ", parallelism=" + profile.parallelism +
+                ", fetchLimit=" + profile.fetchLimit +
+                ", batchSize=" + profile.batchSize +
+                ", initialDelayMs=" + profile.initialDelayMs +
+                ", normalDelayMs=" + profile.normalDelayMs
+        )
+        profile
     }
 
-    private val BATCH_SIZE get() = if (isLowRamDevice) 30 else 100
-    private val GC_DELAY_MS get() = if (isLowRamDevice) 2000L else 1200L
+    // 再生中は通信を1本に絞り、端末とプレイヤーの取り合いを避ける。
+    fun setThrottled(enabled: Boolean) {
+        isThrottled.set(enabled)
+        Log.i(TAG, "Playback sync throttle=" + if (enabled) "on" else "off")
+    }
+
+    private fun hasRecordChanged(
+        local: RecordedProgramEntity?,
+        remote: RecordedProgramEntity
+    ): Boolean {
+        return local == null ||
+                local.title != remote.title ||
+                local.isRecording != remote.isRecording
+    }
 
     fun clearError() {
         _syncProgress.value = _syncProgress.value.copy(error = null)
@@ -121,6 +212,7 @@ class RecordSyncEngine @Inject constructor(
             }
             withContext(Dispatchers.IO) {
                 try {
+                    val syncStartedAtNanos = System.nanoTime()
                     Log.i(TAG, "Sync started. FullSync: $forceFullSync")
 
                     val metaDao = db.syncMetaDao()
@@ -151,16 +243,29 @@ class RecordSyncEngine @Inject constructor(
                         message = "$baseMessage (接続中)"
                     )
 
+                    // 完了済みの通常更新は降順ページングの先頭から確認する。
+                    // lastSyncedPage は未完了の初期構築を再開する場合だけ使う。
+                    val canResumeInitialBuild =
+                        currentMeta.lastSyncedPage > 0 &&
+                                !currentMeta.isInitialBuildCompleted &&
+                                !forceFullSync
                     var currentPage =
-                        if (currentMeta.lastSyncedPage > 0 && !forceFullSync) currentMeta.lastSyncedPage + 1 else 1
-                    val isResumed = currentPage > 1
+                        if (canResumeInitialBuild) currentMeta.lastSyncedPage + 1 else 1
+                    val isResumed = canResumeInitialBuild
                     var isCompleted = false
                     var processedCount = if (isResumed) programDao.getAllIds().size else 0
 
-                    val needsOrphanDeletion = !isResumed && (isInitial || forceFullSync)
+                    // 省メモリ機では通常の初期構築で17081件規模のID集合を作らない。
+                    // ただし孤児削除を恒久的に諦めるとサーバー側で消した録画がローカルに残り続けるため、
+                    // 明示的な完全同期 (forceFullSync) のときだけは省メモリ機でも実行する。
+                    val needsOrphanDeletion =
+                        !isResumed &&
+                            (isInitial || forceFullSync) &&
+                            (syncProfile.name != "low" || forceFullSync)
                     val allFetchedIds = if (needsOrphanDeletion) mutableSetOf<Int>() else null
 
-                    val dictionary: Map<String, String> = if (isLowRamDevice && isInitial) {
+                    val dictionary: Map<String, String> =
+                        if (syncProfile.name == "low" && isInitial) {
                         Log.i(TAG, "Low RAM device: skipping dictionary preload to save memory.")
                         emptyMap()
                     } else {
@@ -169,44 +274,73 @@ class RecordSyncEngine @Inject constructor(
                     }
 
                     val entityBuffer = mutableListOf<RecordedProgramEntity>()
+                    val pageSemaphore = Semaphore(syncProfile.parallelism)
+                    var knownUnchangedStreak = 0
+                    var lastCompletedPage = currentPage - 1
 
                     while (!isCompleted) {
                         currentCoroutineContext().ensureActive()
+                        val parallelism = if (isThrottled.get()) 1 else syncProfile.parallelism
+                        val windowSize = if (isInitial) parallelism else 1
+                        val windowPages = (currentPage until currentPage + windowSize).toList()
 
-                        Log.i(TAG, "Fetching page: $currentPage")
-                        val response = apiService.getRecordedPrograms(page = currentPage)
-                        val programs = response.recordedPrograms
+                        // DeferredはこのcoroutineScope内で必ずawaitし、
+                        // 同期のキャンセル時も子コルーチンを確実に閉じる。
+                        val fetchedPages = coroutineScope {
+                            windowPages.map { page ->
+                                async {
+                                    pageSemaphore.withPermit {
+                                        page to recordProvider.getRecordedPrograms(
+                                            page = page,
+                                            limit = syncProfile.fetchLimit
+                                        )
+                                    }
+                                }
+                            }.awaitAll().sortedBy { it.first }
+                        }
 
-                        if (programs.isEmpty()) {
+                        if (fetchedPages.all { it.second.recordedPrograms.isEmpty() }) {
                             isCompleted = true
                             break
                         }
 
-                        run {
+                        for ((page, response) in fetchedPages) {
+                            currentCoroutineContext().ensureActive()
+                            val programs = response.recordedPrograms
+                            if (programs.isEmpty()) {
+                                isCompleted = true
+                                break
+                            }
+
                             val entities = programs.map { RecordDataMapper.toEntity(it) }
                             allFetchedIds?.addAll(entities.map { it.id })
 
-                            // ★ 修正: フル同期・レジューム時も録画ステータスの変化を検知して更新を継続させる
                             if (currentMeta.isInitialBuildCompleted && !forceFullSync) {
                                 val pageIds = entities.map { it.id }
                                 val localEntitiesMap =
                                     programDao.getByIds(pageIds).associateBy { it.id }
-
-                                val allPageItemsMatch =
-                                    entities.size == localEntitiesMap.size && entities.all { entity ->
-                                        val local = localEntitiesMap[entity.id]
+                                val hasPageChanges = entities.any { entity ->
+                                    hasRecordChanged(localEntitiesMap[entity.id], entity)
+                                }
+                                val shouldStopAfterPage = entities.any { entity ->
+                                    val local = localEntitiesMap[entity.id]
+                                    val knownUnchanged =
                                         local != null &&
-                                                local.title == entity.title &&
-                                                local.isRecording == entity.isRecording
+                                            !local.isRecording &&
+                                            !hasRecordChanged(local, entity)
+                                    knownUnchangedStreak = if (knownUnchanged) {
+                                        knownUnchangedStreak + 1
+                                    } else {
+                                        0
                                     }
-
-                                // ローカルに「録画中」の番組が残っていないかも確認するフェイルセーフ
-                                val hasLocalRecording =
-                                    localEntitiesMap.values.any { it.isRecording }
-
-                                if (allPageItemsMatch && !hasLocalRecording) {
+                                    knownUnchangedStreak >= KNOWN_RECORD_STOP_THRESHOLD
+                                }
+                                if (!hasPageChanges && shouldStopAfterPage) {
                                     isCompleted = true
-                                    return@run
+                                    break
+                                }
+                                if (shouldStopAfterPage) {
+                                    isCompleted = true
                                 }
                             }
 
@@ -215,50 +349,54 @@ class RecordSyncEngine @Inject constructor(
                                 val finalSeriesName = dictionary[entity.title] ?: baseTitle
                                 entity.copy(seriesName = finalSeriesName)
                             }
-
                             entityBuffer.addAll(enrichedEntities)
-                        }
 
-                        val processedThisTime = programs.size
-                        val totalCount = response.total.takeIf { it > 0 } ?: 0
-
-                        if (entityBuffer.size >= BATCH_SIZE) {
-                            db.withTransaction {
-                                programDao.upsertAll(entityBuffer)
-                                val newMeta = currentMeta.copy(
-                                    lastSyncedPage = currentPage,
-                                    lastSyncedAt = System.currentTimeMillis()
-                                )
-                                metaDao.upsert(newMeta)
-                                currentMeta = newMeta
-                            }
-                            entityBuffer.clear()
-
-                            if (_syncProgress.value.isInitialBuild) {
-                                _syncProgress.value =
-                                    _syncProgress.value.copy(isInitialBuild = false)
-                            }
-                        }
-
-                        processedCount += processedThisTime
-
-                        _syncProgress.value = _syncProgress.value.copy(
-                            isSyncing = true,
-                            message = baseMessage,
-                            current = processedCount,
-                            total = totalCount
-                        )
-
-                        if (totalCount > 0 && processedCount >= totalCount) {
-                            isCompleted = true
-                        } else {
-                            currentPage++
-                            if (isInitial) {
-                                System.gc()
-                                delay(GC_DELAY_MS)
+                            // 最初の3ページはページごとに反映し、最新録画をすぐ表示する。
+                            val shouldFlushImmediately = isInitial && page <= 3
+                            if (shouldFlushImmediately || entityBuffer.size >= syncProfile.batchSize) {
+                                db.withTransaction {
+                                    programDao.upsertAll(entityBuffer)
+                                    val newMeta = currentMeta.copy(
+                                        lastSyncedPage = page,
+                                        lastSyncedAt = System.currentTimeMillis()
+                                    )
+                                    metaDao.upsert(newMeta)
+                                    currentMeta = newMeta
+                                }
+                                entityBuffer.clear()
+                                lastCompletedPage = page
+                                if (_syncProgress.value.isInitialBuild && shouldFlushImmediately) {
+                                    _syncProgress.value =
+                                        _syncProgress.value.copy(isInitialBuild = false)
+                                }
                             } else {
-                                delay(if (isLowRamDevice) 500L else 300L)
+                                lastCompletedPage = page
                             }
+
+                            processedCount += programs.size
+                            val totalCount = response.total.takeIf { it > 0 } ?: 0
+                            _syncProgress.value = _syncProgress.value.copy(
+                                isSyncing = true,
+                                message = baseMessage,
+                                current = processedCount,
+                                total = totalCount
+                            )
+                            if (totalCount > 0 && processedCount >= totalCount) {
+                                isCompleted = true
+                                break
+                            }
+                        }
+
+                        if (!isCompleted) {
+                            currentPage = lastCompletedPage + 1
+                            val waitMs = if (isThrottled.get()) {
+                                maxOf(syncProfile.initialDelayMs, 250L)
+                            } else if (isInitial) {
+                                syncProfile.initialDelayMs
+                            } else {
+                                syncProfile.normalDelayMs
+                            }
+                            if (waitMs > 0L) delay(waitMs)
                         }
                     }
 
@@ -266,7 +404,7 @@ class RecordSyncEngine @Inject constructor(
                         db.withTransaction {
                             programDao.upsertAll(entityBuffer)
                             val newMeta = currentMeta.copy(
-                                lastSyncedPage = currentPage,
+                                lastSyncedPage = lastCompletedPage,
                                 lastSyncedAt = System.currentTimeMillis()
                             )
                             metaDao.upsert(newMeta)
@@ -289,11 +427,23 @@ class RecordSyncEngine @Inject constructor(
 
                         metaDao.upsert(
                             currentMeta.copy(
+                                lastSyncedPage = 0,
                                 lastSyncedAt = System.currentTimeMillis(),
                                 isInitialBuildCompleted = true
                             )
                         )
                     }
+
+                    val elapsedSeconds =
+                        (System.nanoTime() - syncStartedAtNanos) / 1_000_000_000.0
+                    val throughput =
+                        if (elapsedSeconds > 0.0) processedCount / elapsedSeconds else 0.0
+                    Log.i(
+                        TAG,
+                        "Sync completed. elapsedSeconds=" + elapsedSeconds +
+                            ", totalCount=" + processedCount +
+                            ", throughputPerSecond=" + throughput
+                    )
 
                     _syncProgress.value = _syncProgress.value.copy(
                         message = "シリーズ辞書を準備中...",
@@ -303,6 +453,8 @@ class RecordSyncEngine @Inject constructor(
                     isSyncSuccessful = true
 
                 } catch (e: CancellationException) {
+                    Log.i(TAG, "Sync gracefully cancelled: ${e.message}")
+                    _syncProgress.value = SyncProgress(isSyncing = false)
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Sync interrupted. Error: ${e.message}", e)
@@ -374,7 +526,7 @@ class RecordSyncEngine @Inject constructor(
                         val programDao = db.recordedProgramDao()
                         currentCoroutineContext().ensureActive()
 
-                        val response = apiService.getRecordedPrograms(page = 1)
+                        val response = recordProvider.getRecordedPrograms(page = 1)
                         val apiPrograms = response.recordedPrograms
                         if (apiPrograms.isEmpty()) return@withContext
 
@@ -382,7 +534,6 @@ class RecordSyncEngine @Inject constructor(
                         val pageIds = entities.map { it.id }
                         val localEntitiesMap = programDao.getByIds(pageIds).associateBy { it.id }
 
-                        // ★ 修正: タイトルだけでなく、録画ステータス（isRecording）と録画時間（duration）も比較する
                         val allPageItemsMatch =
                             entities.size == localEntitiesMap.size && entities.all { entity ->
                                 val local = localEntitiesMap[entity.id]
@@ -391,10 +542,8 @@ class RecordSyncEngine @Inject constructor(
                                         local.isRecording == entity.isRecording
                             }
 
-                        // ★ 追加: ローカルDBに「録画中」のまま残っている古い番組がないかをフェイルセーフでチェック
                         val hasLocalRecording = localEntitiesMap.values.any { it.isRecording }
 
-                        // 完全に一致しており、かつローカルに録画中の番組も残っていなければ、更新不要とみなす
                         if (!allPageItemsMatch || hasLocalRecording) {
                             val dictionary = aiSeriesDictionaryDao.getAllDictionary()
                                 .associate { it.originalTitle to it.normalizedSeriesName }
@@ -417,6 +566,7 @@ class RecordSyncEngine @Inject constructor(
                         isSyncSuccessful = true
 
                     } catch (e: CancellationException) {
+                        Log.i(TAG, "Smart sync gracefully cancelled: ${e.message}")
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Smart sync error: ${e.message}", e)
@@ -442,22 +592,34 @@ class RecordSyncEngine @Inject constructor(
     }
 
     private suspend fun startDictionaryResolutionLoop() {
+        // EPGStationは同期時点でサーバー側のシリーズ情報(recorded[].series等)を直接
+        // seriesNameへ採用済み(EpgStationDataMapper参照)であり、このループが処理対象とする
+        // 「未解決タイトル」自体が発生しない設計のため、辞書生成をスキップする。
+        // ★ 修正: 以前はこの早期returnのせいで、ループ内のepgStationSeriesDictionary.resolve()
+        // 呼び出しがEPGStation利用時に一度も実行されず、EpgStationSeriesDictionaryクラス
+        // 全体が到達不能なデッドコードになっていた。機能上の実害はほぼ無いと判断し
+        // (サーバー側のfeatureFlags.seriesLibraryが既定ONで代替済み)、デッドコード自体を
+        // 削除した(EpgStationSeriesDictionary.ktおよびこのクラスへの注入・呼び出しを削除)。
+        if (settingsRepository.backendType.first() == "EPGSTATION") {
+            Log.i(TAG, "EPGStation はサーバー側のシリーズ情報を使うため、辞書生成をスキップします。")
+            _syncProgress.value = SyncProgress(
+                isSyncing = false,
+                isInitialBuild = false,
+                isInitialSyncPhase = false
+            )
+            return
+        }
+
         if (!dictionaryMutex.tryLock()) {
             Log.i(TAG, "Dictionary resolution is already running. Skipping.")
             return
         }
 
-        Log.i(TAG, "startDictionaryResolutionLoop: started")
-
         try {
             withContext(Dispatchers.IO) {
                 val programDao = db.recordedProgramDao()
-
                 val totalUnknown = programDao.getUnknownTitlesCount()
-                Log.i(TAG, "startDictionaryResolutionLoop: totalUnknown=$totalUnknown")
-
                 if (totalUnknown == 0) {
-                    Log.i(TAG, "No unknown titles found. Dictionary is up to date.")
                     _syncProgress.value = SyncProgress(
                         isSyncing = false,
                         isInitialBuild = false,
@@ -474,45 +636,46 @@ class RecordSyncEngine @Inject constructor(
                     current = 0,
                     total = totalUnknown
                 )
-                Log.i(TAG, "startDictionaryResolutionLoop: progress updated to 自動生成中")
 
                 var processedCount = 0
-
+                val chunkSize = 100
                 while (true) {
                     currentCoroutineContext().ensureActive()
-                    val unknownTitles = programDao.getUnknownTitles(limit = 50)
+                    val unknownTitles = programDao.getUnknownTitles(limit = chunkSize)
                     if (unknownTitles.isEmpty()) break
 
-                    val newDictEntries = mutableListOf<AiSeriesDictionaryEntity>()
+                    val baseTitleMap = unknownTitles.groupBy {
+                        TitleNormalizer.extractDisplayTitle(it)
+                    }
+                    val resolvedBaseTitles = HashMap<String, String>()
 
-                    for (title in unknownTitles) {
+                    for (baseTitle in baseTitleMap.keys) {
                         currentCoroutineContext().ensureActive()
-                        val baseTitle = TitleNormalizer.extractDisplayTitle(title)
-
-                        val canonicalTitle = try {
-                            WikipediaNormalizer.getCanonicalTitle(baseTitle)
-                        } catch (e: CancellationException) {
-                            throw e
+                        // このループはEPGStation利用時には到達しない(冒頭の早期return参照)ため、
+                        // EDCB/KonomiTV向けのWikipediaフォールバックのみを行う。
+                        try {
+                            val canonicalTitle = WikipediaNormalizer.getCanonicalTitle(baseTitle)
+                            resolvedBaseTitles[baseTitle] = canonicalTitle ?: baseTitle
                         } catch (e: Exception) {
-                            Log.w(
-                                TAG,
-                                "Wikipedia lookup failed for '$baseTitle', skipping: ${e.message}"
-                            )
-                            null
+                            if (e !is CancellationException) {
+                                Log.w(TAG, "Wikipedia lookup failed for '" + baseTitle + "': " + e.message)
+                            }
+                            resolvedBaseTitles[baseTitle] = baseTitle
                         }
-
                         delay(300)
+                    }
 
-                        val finalSeriesName = canonicalTitle ?: baseTitle
+                    val newDictEntries = unknownTitles.map { title ->
+                        val baseTitle = TitleNormalizer.extractDisplayTitle(title)
+                        val finalSeriesName = resolvedBaseTitles[baseTitle] ?: baseTitle
                         processedCount++
-                        _syncProgress.value = _syncProgress.value.copy(current = processedCount)
-
-                        newDictEntries.add(
-                            AiSeriesDictionaryEntity(
-                                originalTitle = title,
-                                normalizedSeriesName = finalSeriesName,
-                                updatedAt = System.currentTimeMillis()
-                            )
+                        if (processedCount % 100 == 0 || processedCount == totalUnknown) {
+                            _syncProgress.value = _syncProgress.value.copy(current = processedCount)
+                        }
+                        AiSeriesDictionaryEntity(
+                            originalTitle = title,
+                            normalizedSeriesName = finalSeriesName,
+                            updatedAt = System.currentTimeMillis()
                         )
                     }
 
@@ -528,10 +691,8 @@ class RecordSyncEngine @Inject constructor(
                         }
                     }
 
-                    val hasMore = programDao.getUnknownTitlesCount() > 0
-                    if (hasMore) delay(2000)
+                    if (programDao.getUnknownTitlesCount() > 0) delay(500)
                 }
-
                 Log.i(TAG, "Dictionary resolution loop completed successfully.")
             }
         } catch (e: CancellationException) {

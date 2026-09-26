@@ -26,13 +26,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
-import com.beeregg2001.komorebi.ui.components.ChannelLogo
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
@@ -42,22 +46,18 @@ fun ChannelListOverlay(
     groupedChannels: Map<String, List<Channel>>,
     currentChannelId: String,
     onChannelSelect: (Channel) -> Unit,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     focusRequester: FocusRequester
 ) {
     val focusManager = LocalFocusManager.current
     val colors = KomorebiTheme.colors
 
-    // 表示可能なタブをフィルタリング
     val allTabs = listOf("GR", "BS", "CS", "BS4K", "SKY")
     val availableTabKeys = remember(groupedChannels) {
         allTabs.filter { groupedChannels.containsKey(it) }
     }
 
-    // 現在のチャンネルが含まれるタブを初期選択にする
     val initialTab = groupedChannels.entries.find { entry ->
         entry.value.any { it.id == currentChannelId }
     }?.key ?: availableTabKeys.firstOrNull() ?: ""
@@ -66,16 +66,33 @@ fun ChannelListOverlay(
     val currentChannels = groupedChannels[selectedTab] ?: emptyList()
     val listState = rememberLazyListState()
 
-    // ★ 修正: availableTabKeys が確定したタイミングで、すべてのタブの FocusRequester を一括生成して安定させる
     val tabFocusRequesters = remember(availableTabKeys) {
         availableTabKeys.associateWith { FocusRequester() }
     }
 
     val selectedTabIndex = availableTabKeys.indexOf(selectedTab).coerceAtLeast(0)
 
-    // タブ切り替え時にリストを先頭（または選択中チャンネル）に戻す
-    LaunchedEffect(selectedTab) {
-        val index = currentChannels.indexOfFirst { it.id == currentChannelId }
+    // ★ 修正: フォーカス要求先(呼び出し側のfocusRequester)を必ずレイアウト上に存在させる。
+    // 以前は「currentChannelIdと一致する項目」だけに結び付けていたため、
+    // 一致する項目が現在のタブに無い(2画面目が未選局・別タブ・一覧が未取得など)場合は
+    // どのノードにも接続されず、requestFocus()が失敗してフォーカスが迷子になっていた。
+    val focusTargetChannelId = remember(currentChannels, currentChannelId) {
+        if (currentChannels.any { it.id == currentChannelId }) currentChannelId
+        else currentChannels.firstOrNull()?.id
+    }
+
+    // チャンネル一覧の取得が遅れてタブが決まらなかった場合に、有効なタブへ復帰させる
+    LaunchedEffect(availableTabKeys) {
+        if (availableTabKeys.isNotEmpty() && selectedTab !in availableTabKeys) {
+            selectedTab = initialTab
+        }
+    }
+
+    // 一覧の取得完了でフォーカス先が確定した場合にも、その項目まで確実にスクロールする
+    // (LazyRowは可視範囲外の項目を生成しないため、スクロールしないとFocusRequesterが接続されない)。
+    // キーはIDのみとし、定期更新でリストが作り直されてもスクロール位置を奪わないようにする。
+    LaunchedEffect(selectedTab, focusTargetChannelId) {
+        val index = currentChannels.indexOfFirst { it.id == focusTargetChannelId }
         if (index >= 0) {
             listState.scrollToItem(index)
         } else {
@@ -100,7 +117,6 @@ fun ChannelListOverlay(
             )
             .padding(bottom = 8.dp, top = 16.dp)
     ) {
-        // --- 1. 放送波種別タブ ---
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center
@@ -130,7 +146,6 @@ fun ChannelListOverlay(
                     val interactionSource = remember { MutableInteractionSource() }
                     val isFocused by interactionSource.collectIsFocusedAsState()
 
-                    // 紐づけた FocusRequester を取得
                     val requester = tabFocusRequesters[tabKey] ?: FocusRequester()
 
                     Tab(
@@ -139,7 +154,6 @@ fun ChannelListOverlay(
                         modifier = Modifier
                             .focusRequester(requester)
                             .focusProperties {
-                                // 下キーを押したときは自然にリストへ移動させる
                                 down = FocusRequester.Default
                             },
                         interactionSource = interactionSource
@@ -158,7 +172,6 @@ fun ChannelListOverlay(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // --- 2. チャンネルリスト ---
         LazyRow(
             state = listState,
             contentPadding = PaddingValues(horizontal = 48.dp),
@@ -166,7 +179,6 @@ fun ChannelListOverlay(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(130.dp)
-                // 戻るキーで選択中のタブにフォーカスを戻す処理
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
                         tabFocusRequesters[selectedTab]?.requestFocus()
@@ -178,19 +190,17 @@ fun ChannelListOverlay(
             items(currentChannels, key = { it.id }) { channel ->
                 val isSelected = channel.id == currentChannelId
                 val itemRequester =
-                    if (isSelected) focusRequester else remember { FocusRequester() }
+                    if (channel.id == focusTargetChannelId) focusRequester
+                    else remember { FocusRequester() }
 
                 ChannelCardItem(
                     channel = channel,
                     isSelected = isSelected,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo, // ★ 修正: クロップフラグを渡す
                     onClick = { onChannelSelect(channel) },
                     modifier = Modifier
                         .focusRequester(itemRequester)
-                        // ★ 修正: 個別のカードに対して、上キーを押したときの強制移動先（現在選択中のタブ）を指定する
                         .focusProperties {
                             val currentTabRequester = tabFocusRequesters[selectedTab]
                             if (currentTabRequester != null) {
@@ -207,10 +217,8 @@ fun ChannelListOverlay(
 fun ChannelCardItem(
     channel: Channel,
     isSelected: Boolean,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean, // ★ 追加: クロップフラグ
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -239,6 +247,15 @@ fun ChannelCardItem(
     val borderWidth = if (isFocused) 3.dp else 0.dp
     val borderColor = if (isFocused) colors.accent else Color.Transparent
 
+    // ★ 最適化: 解決済み URL を同期的に初期値へ。LazyRow のスクロールで
+    //   アイテムが再生成されるたびに走っていたコルーチン往復とチラつきを解消する。
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
+    LaunchedEffect(channel.id) {
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
+    }
+
     Box(
         modifier = modifier
             .graphicsLayer {
@@ -265,19 +282,24 @@ fun ChannelCardItem(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxSize()
         ) {
-            ChannelLogo(
-                channel = channel,
-                mirakurunIp = mirakurunIp,
-                mirakurunPort = mirakurunPort,
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
+            Surface(
                 modifier = Modifier
-                    .width(80.dp)
-                    .height(45.dp)
+                    .size(48.dp, 27.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(if (isFocused) Color.LightGray else Color.White),
-                backgroundColor = Color.Transparent
-            )
+                colors = SurfaceDefaults.colors(containerColor = Color.Transparent)
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(logoUrl)
+                        .crossfade(false)
+                        .build(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    // ★ 修正: フラグに基づいてスケールを変更
+                    contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
+                )
+            }
 
             Spacer(modifier = Modifier.width(12.dp))
 

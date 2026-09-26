@@ -7,6 +7,11 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.focusGroup
+// ★ 変更: TvLazy系のインポートを削除し、標準のLazy系のインポートに変更
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.Composable
@@ -23,9 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.TvLazyRow
-import androidx.tv.foundation.lazy.list.itemsIndexed
-import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
@@ -84,8 +86,8 @@ fun NavigationLinkButton(label: String, icon: ImageVector, onClick: () -> Unit) 
 fun LastWatchedSection(
     channels: List<Channel>,
     groupedChannels: Map<String, List<Channel>>,
-    konomiIp: String, konomiPort: String,
-    mirakurunIp: String, mirakurunPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -94,10 +96,8 @@ fun LastWatchedSection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val isKonomiTvMode =
-        mirakurunIp.isEmpty() || mirakurunIp == "localhost" || mirakurunIp == "127.0.0.1"
-
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -112,25 +112,14 @@ fun LastWatchedSection(
             Icons.Default.History,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             itemsIndexed(channels, key = { _, it -> "ch_${it.id}" }) { index, channel ->
-                val logoUrl = if (isKonomiTvMode) UrlBuilder.getKonomiTvLogoUrl(
-                    konomiIp,
-                    konomiPort,
-                    channel.displayChannelId
-                )
-                else UrlBuilder.getMirakurunLogoUrl(
-                    mirakurunIp,
-                    mirakurunPort,
-                    channel.networkId,
-                    channel.serviceId
-                )
-
                 val liveChannel = remember(groupedChannels, channel.id) {
                     groupedChannels.values.flatten().find { it.id == channel.id }
                 }
@@ -151,7 +140,8 @@ fun LastWatchedSection(
                 LastWatchedChannelCard(
                     channel = channel,
                     liveChannel = liveChannel,
-                    logoUrl = logoUrl,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo,
                     onClick = { onChannelClick(channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -160,7 +150,7 @@ fun LastWatchedSection(
                                 subtitle = channel.name,
                                 description = liveChannel?.programPresent?.description
                                     ?: "前回視聴していたチャンネルです。",
-                                imageUrl = logoUrl,
+                                channelId = channel.id,
                                 isThumbnail = false,
                                 tag = "前回視聴"
                             )
@@ -193,7 +183,8 @@ fun LastWatchedSection(
 @Composable
 fun HotChannelSection(
     hotChannels: List<UiChannelState>,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onChannelClick: (Channel) -> Unit,
@@ -202,7 +193,8 @@ fun HotChannelSection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -217,19 +209,14 @@ fun HotChannelSection(
             Icons.Default.TrendingUp,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             itemsIndexed(hotChannels, key = { _, it -> "hot_${it.channel.id}" }) { index, uiState ->
-                val logoUrl = UrlBuilder.getKonomiTvLogoUrl(
-                    konomiIp,
-                    konomiPort,
-                    uiState.channel.displayChannelId
-                )
-
                 val specificRequester = remember { FocusRequester() }
                 LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                     if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE &&
@@ -245,7 +232,8 @@ fun HotChannelSection(
 
                 HotChannelCard(
                     uiState = uiState,
-                    logoUrl = logoUrl,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo,
                     onClick = { onChannelClick(uiState.channel) },
                     onFocus = {
                         onUpdateHeroInfo(
@@ -253,7 +241,7 @@ fun HotChannelSection(
                                 title = uiState.programTitle,
                                 subtitle = uiState.name,
                                 description = uiState.channel.programPresent?.description ?: "",
-                                imageUrl = logoUrl,
+                                channelId = uiState.channel.id,
                                 isThumbnail = false,
                                 tag = "盛り上がり"
                             )
@@ -286,6 +274,7 @@ fun HotChannelSection(
 @Composable
 fun WatchHistorySection(
     watchHistory: List<KonomiHistoryProgram>,
+    recentRecordings: List<RecordedProgram>, // ★ 追加: DBのメタデータを持つ録画リスト
     konomiIp: String, konomiPort: String,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
@@ -295,7 +284,8 @@ fun WatchHistorySection(
     homeViewModel: HomeViewModel,
     sectionId: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -311,9 +301,10 @@ fun WatchHistorySection(
             Icons.Default.PlayCircle,
             Modifier.padding(start = 48.dp, bottom = 12.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -333,8 +324,13 @@ fun WatchHistorySection(
                     }
                 }
 
+                // ★ 追加: KonomiHistoryProgram と DBの RecordedProgram を突き合わせる
+                val matchedProgram =
+                    recentRecordings.find { it.id.toString() == history.program.id.toString() }
+
                 WatchHistoryCard(
                     history = history,
+                    matchedProgram = matchedProgram, // ★ 追加: カードに渡す
                     konomiIp = konomiIp,
                     konomiPort = konomiPort,
                     onClick = { onHistoryClick(history) },
@@ -344,7 +340,7 @@ fun WatchHistorySection(
                                 title = history.program.title,
                                 subtitle = "視聴履歴から再開",
                                 description = history.program.description,
-                                imageUrl = thumbnailUrl,
+                                imageUrl = thumbnailUrl, // サムネイル画像をそのままHeroへ
                                 isThumbnail = true,
                                 tag = "視聴履歴",
                                 progress = progressVal
@@ -378,7 +374,8 @@ fun WatchHistorySection(
 @Composable
 fun UpcomingReserveSection(
     upcomingReserves: List<ReserveItem>,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onReserveClick: (ReserveItem) -> Unit,
@@ -387,9 +384,10 @@ fun UpcomingReserveSection(
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
     sectionId: String,
-    timeFormat: String // ★ 追加
+    timeFormat: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -405,9 +403,10 @@ fun UpcomingReserveSection(
             Icons.Default.RadioButtonChecked,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -434,11 +433,7 @@ fun UpcomingReserveSection(
                                 title = reserve.program.title,
                                 subtitle = "$startFormat - ${reserve.channel.name}",
                                 description = reserve.program.description ?: "",
-                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                    konomiIp,
-                                    konomiPort,
-                                    reserve.channel.displayChannelId ?: ""
-                                ),
+                                channelId = reserve.channel.id,
                                 isThumbnail = false,
                                 tag = "録画予約"
                             )
@@ -461,7 +456,7 @@ fun UpcomingReserveSection(
                                 homeViewModel.lastClickedItemId = reserve.id.toString()
                             }
                         },
-                    timeFormat = timeFormat // ★ 追加
+                    timeFormat = timeFormat
                 )
             }
         }
@@ -478,7 +473,8 @@ fun GenrePickupSection(
     genrePickup: List<Pair<EpgProgram, String>>,
     pickupGenreName: String,
     pickupTimeSlot: String,
-    konomiIp: String, konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier,
     contentFirstItemRequester: FocusRequester? = null,
     onProgramClick: (EpgProgram) -> Unit,
@@ -487,9 +483,10 @@ fun GenrePickupSection(
     ticketManager: HomeFocusTicketManager,
     homeViewModel: HomeViewModel,
     sectionId: String,
-    timeFormat: String // ★ 追加
+    timeFormat: String
 ) {
-    val rowState = rememberTvLazyListState()
+    // ★ 変更: rememberTvLazyListState -> rememberLazyListState
+    val rowState = rememberLazyListState()
 
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         if (ticketManager.currentTicket == HomeFocusTicket.HOME_RESTORE && ticketManager.targetSection == sectionId) {
@@ -507,9 +504,10 @@ fun GenrePickupSection(
             Icons.Default.Star,
             Modifier.padding(horizontal = 48.dp)
         )
-        TvLazyRow(
+        // ★ 変更: TvLazyRow -> LazyRow
+        LazyRow(
             state = rowState,
-            modifier = modifier,
+            modifier = modifier.focusGroup(),
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -540,11 +538,7 @@ fun GenrePickupSection(
                                 title = program.title,
                                 subtitle = "$startFormat - $channelName",
                                 description = program.description,
-                                imageUrl = UrlBuilder.getKonomiTvLogoUrl(
-                                    konomiIp,
-                                    konomiPort,
-                                    program.channel_id
-                                ),
+                                channelId = program.channel_id,
                                 isThumbnail = false,
                                 tag = "ピックアップ"
                             )
@@ -567,7 +561,7 @@ fun GenrePickupSection(
                                 homeViewModel.lastClickedItemId = program.id
                             }
                         },
-                    timeFormat = timeFormat // ★ 追加
+                    timeFormat = timeFormat
                 )
             }
         }

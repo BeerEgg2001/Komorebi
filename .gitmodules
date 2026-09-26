@@ -1,0 +1,3 @@
+[submodule "app/src/main/cpp/third_party/libaribcaption"]
+	path = app/src/main/cpp/third_party/libaribcaption
+	url = https://github.com/xqq/libaribcaption

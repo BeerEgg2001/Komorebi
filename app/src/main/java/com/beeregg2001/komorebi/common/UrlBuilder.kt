@@ -3,19 +3,62 @@ package com.beeregg2001.komorebi.common
 import androidx.annotation.OptIn
 import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 object UrlBuilder {
 
     /**
-     * ベースURLを組み立てる
+     * ホストとポートからベースURLを組み立てる。
+     *
+     * スキーム付きの入力 (例: https://example.com) はそのまま維持する。
+     * URL側にポートが明示されている場合はそちらを優先し、
+     * ポートが書かれていない場合はスキームの有無に関わらず設定欄のポートを付与する。
+     * (リバースプロキシ運用などでドメイン名 + 非標準ポートを指定するケースに対応するため)
      */
-    private fun formatBaseUrl(ip: String, port: String, defaultProtocol: String): String {
-        val cleanIp = ip.removeSuffix("/")
-        return if (cleanIp.startsWith("http://") || cleanIp.startsWith("https://")) {
-            "$cleanIp:$port"
+    fun formatBaseUrl(ip: String, port: String, defaultProtocol: String): String {
+        val cleanIp = ip.trim().removeSuffix("/")
+        val normalized = if (
+            cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        ) {
+            cleanIp
         } else {
-            "$defaultProtocol://$cleanIp:$port"
+            "$defaultProtocol://$cleanIp"
         }
+
+        val parsed = normalized.toHttpUrlOrNull() ?: return "$normalized:$port"
+        val hasExplicitPort = Regex("^https?://(?:\\[[^]]+\\]|[^/:]+):\\d+(?:/|$)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(normalized)
+        // ホスト欄自体にポートが埋め込まれている場合はそれを最優先する
+        if (hasExplicitPort) return parsed.toString().removeSuffix("/")
+
+        // ポート未指定なら設定欄のポートを付与する。設定欄が空・不正なら標準ポートのままにする
+        val configuredPort = port.trim().toIntOrNull()?.takeIf { it in 1..65535 }
+            ?: return parsed.toString().removeSuffix("/")
+        return parsed.newBuilder().port(configuredPort).build().toString().removeSuffix("/")
+    }
+
+    /**
+     * EDCBのTCP直接通信(生ソケット)用に、設定欄の入力からホスト名/IPだけを取り出す。
+     *
+     * 以前は"^https?://"を剥がすだけで、スキーム付きかつポート込みのURL
+     * (例: "http://192.168.1.5:5510")を入力すると"192.168.1.5:5510"がそのまま
+     * ホスト名としてSocketに渡され、必ず接続に失敗していた。formatBaseUrl()と同様に
+     * HttpUrlでパースし、スキーム・ポート・パスを取り除いたホスト部分のみを返す。
+     */
+    fun extractBareHost(ip: String): String {
+        val cleanIp = ip.trim().removeSuffix("/")
+        val normalized = if (
+            cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        ) {
+            cleanIp
+        } else {
+            "http://$cleanIp"
+        }
+        return normalized.toHttpUrlOrNull()?.host
+            ?: cleanIp.replace(Regex("^https?://", RegexOption.IGNORE_CASE), "")
+                .substringBefore("/").substringBefore(":")
     }
 
     /**
@@ -40,10 +83,29 @@ object UrlBuilder {
         return "$baseUrl/api/channels/$displayChannelId/logo"
     }
 
-    // --- サムネイル関連 ---
-    fun getThumbnailUrl(ip: String, port: String, videoId: String): String {
+    // ★ 追加: LiveJikkyoManagerが実況セッションURL取得のために素朴な"${ip}:${port}/..."
+    // 文字列連結を直書きしていたため、スキーム無しIPを入力するとRequest.Builder.url()が
+    // IllegalArgumentExceptionを投げ(catchで握り潰され実況コメントが無言で無効化される)、
+    // サブディレクトリ付きURLでは壊れたパスになっていた。他のKonomiTV用URL生成と同じく
+    // formatBaseUrl()に統一する。
+    fun getKonomiTvJikkyoWatchSessionUrl(ip: String, port: String, displayChannelId: String): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
-        return "$baseUrl/api/videos/$videoId/thumbnail"
+        return "$baseUrl/api/channels/$displayChannelId/jikkyo"
+    }
+
+    // --- サムネイル関連 ---
+    // ★修正: backendTypeを受け取り、システムごとに正しいパスを生成する
+    fun getThumbnailUrl(backendType: String, ip: String, port: String, videoId: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "http") // サムネイルは基本的にhttpフォールバックで安全に組む
+        return when (backendType) {
+            // ★修正: TODOを削除し、EMWUIの標準サムネイルAPIパスを設定
+            "EDCB" -> "$baseUrl/api/Thumbnail?id=$videoId"
+            "EPGSTATION" -> "$baseUrl/api/thumbnails/$videoId" // EPGStationの標準サムネイルAPI
+            else -> { // KonomiTV (デフォルト)
+                val secureBaseUrl = formatBaseUrl(ip, port, "https")
+                "$secureBaseUrl/api/videos/$videoId/thumbnail"
+            }
+        }
     }
 
     // --- ストリーミング関連 ---
@@ -53,21 +115,47 @@ object UrlBuilder {
         return "$baseUrl/api/services/$streamId/stream"
     }
 
-    fun getKonomiTvLiveStreamUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
+    fun getKonomiTvLiveStreamUrl(
+        ip: String,
+        port: String,
+        displayChannelId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/mpegts"
     }
 
-    fun getKonomiTvLiveEventsUrl(ip: String, port: String, displayChannelId: String, quality: String = "1080p-60fps"): String {
+    fun getKonomiTvLiveEventsUrl(
+        ip: String,
+        port: String,
+        displayChannelId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/streams/live/$displayChannelId/$quality/events"
     }
 
     @OptIn(UnstableApi::class)
-    fun getVideoPlaylistUrl(ip: String, port: String, videoId: Int, sessionId: String, quality: String = "1080p-60fps"): String {
+    fun getVideoPlaylistUrl(
+        ip: String,
+        port: String,
+        videoId: Int,
+        sessionId: String,
+        quality: String = "1080p-60fps"
+    ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
-//        Log.d("Komorebi_Debug", "Playing URL: $baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId")
         return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
+    }
+
+    /**
+     * 録画番組のoriginal画質 (MPEG-2 直接再生) 用URL。
+     * サーバー側での再エンコードを一切行わず、録画ファイルダウンロードAPIをそのまま
+     * HTTP Rangeリクエスト対応のTS直接再生ソースとして流用する(KonomiTV本家のmpeg2toh264と同じ発想)。
+     * URL: /api/videos/{id}/download
+     */
+    fun getKonomiTvVideoDownloadUrl(ip: String, port: String, videoId: Int): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/videos/$videoId/download"
     }
 
     /**
@@ -80,9 +168,45 @@ object UrlBuilder {
         return "$baseUrl/api/videos/$videoId/thumbnail/tiled"
     }
 
-    // ★追加: アーカイブ実況コメントAPIのURL
-    fun getArchivedJikkyoUrl(ip: String, port: String, videoId: Int): String {
+    // アーカイブ実況コメントAPIのURL
+    fun getArchivedJikkyoUrl(ip: String, port:  String, videoId: Int): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/videos/$videoId/jikkyo"
     }
+
+    // ★ 削除: getEdcbDirectThumbnailUrl() は呼び出し元が存在しないデッドコードだった。
+    // ドライブレター("C:\")しか剥がさずLinuxパス("/mnt/rec/...")やUNCパスでは
+    // 壊れたURLになるうえ、"/rec/"という固定ルート自体もEDCB本体に裏付けが無く
+    // (EMWUI側の設定依存)、将来誤って使われると確実に壊れるため削除した。
+    // サムネイル取得は実績のあるresolver.lua経由(thumbnail_url)を使うこと。
+
+    fun getEpgStationLogoUrl(ip: String, port: String, channelId: Long): String =
+        "${formatBaseUrl(ip, port, "http")}/api/channels/$channelId/logo"
+
+    fun getEpgStationThumbnailUrl(ip: String, port: String, thumbnailId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/thumbnails/$thumbnailId"
+
+    fun getEpgStationSeriesImageUrl(ip: String, port: String, seriesId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/series/$seriesId/image"
+
+    fun getEpgStationVideoDirectUrl(ip: String, port: String, videoFileId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/videos/$videoFileId"
+
+    fun getEpgStationLiveM2tsUrl(ip: String, port: String, channelId: Long, mode: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/streams/live/$channelId/m2ts?mode=$mode"
+
+    fun getEpgStationLiveM2tsLlUrl(ip: String, port: String, channelId: Long, mode: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/api/streams/live/$channelId/m2tsll?mode=$mode"
+
+    fun getEpgStationHlsPlaylistUrl(ip: String, port: String, streamId: Int): String =
+        "${formatBaseUrl(ip, port, "http")}/streamfiles/stream$streamId.m3u8"
+
+    fun getEpgStationRecordedStreamUrl(
+        ip: String,
+        port: String,
+        videoFileId: Int,
+        format: String,
+        mode: Int,
+        ss: Double
+    ): String = "${formatBaseUrl(ip, port, "http")}/api/streams/recorded/$videoFileId/$format?mode=$mode&ss=${ss.toInt()}"
 }

@@ -32,7 +32,7 @@ object RecordDataMapper {
             endTime = program.endTime,
             videoDuration = if (program.recordedVideo.duration > 0) program.recordedVideo.duration else program.duration,
             // ★descriptionの保存を削除
-            hasKeyFrames = program.recordedVideo.hasKeyFrames,
+            hasKeyFrames = program.recordedVideo.hasKeyFrames?: true,
             isRecording = isCurrentlyRecording, // ★修正: マージした確実なフラグをDBに保存
             playbackPosition = program.playbackPosition,
             channelId = program.channel?.id,
@@ -43,22 +43,37 @@ object RecordDataMapper {
             tileRows = tile?.rowCount,
             tileInterval = tile?.intervalSec,
             tileWidth = tile?.tileWidth,
-            tileHeight = tile?.tileHeight
+            tileHeight = tile?.tileHeight,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = program.directThumbnailUrl,
+            apiThumbnailUrl = program.apiThumbnailUrl,
+            seriesId = program.seriesId,
+            episodeNumber = program.episodeNumber,
+            episodeLabel = program.episodeLabel,
+            episodeTitle = program.episodeTitle,
+            airType = program.airType
         )
     }
 
     fun toDomainModel(entity: RecordedProgramEntity): RecordedProgram {
         val thumbnailInfo = if (entity.tileColumns != null) {
+            // ★修正: 保持している列数・行数から画像の全体サイズと総タイル数を計算して完全なTileInfoを復元する
+            val cCount = entity.tileColumns
+            val rCount = entity.tileRows ?: 1
+            val tWidth = entity.tileWidth ?: 320
+            val tHeight = entity.tileHeight ?: 180
+
             ThumbnailInfo(
                 version = 1,
                 tile = TileInfo(
-                    imageWidth = 0, imageHeight = 0,
-                    tileWidth = entity.tileWidth ?: 320,
-                    tileHeight = entity.tileHeight ?: 180,
-                    columnCount = entity.tileColumns,
-                    rowCount = entity.tileRows ?: 1,
+                    imageWidth = tWidth * cCount,
+                    imageHeight = tHeight * rCount,
+                    tileWidth = tWidth,
+                    tileHeight = tHeight,
+                    columnCount = cCount,
+                    rowCount = rCount,
                     intervalSec = entity.tileInterval ?: 10.0,
-                    totalTiles = 0
+                    totalTiles = cCount * rCount
                 )
             )
         } else null
@@ -96,7 +111,15 @@ object RecordDataMapper {
             ),
             genres = entity.genres,
             isRecording = entity.isRecording,
-            playbackPosition = entity.playbackPosition
+            playbackPosition = entity.playbackPosition,
+            // ★ 追加: マッピングにURLを含める
+            directThumbnailUrl = entity.directThumbnailUrl,
+            apiThumbnailUrl = entity.apiThumbnailUrl,
+            seriesId = entity.seriesId,
+            episodeNumber = entity.episodeNumber,
+            episodeLabel = entity.episodeLabel,
+            episodeTitle = entity.episodeTitle,
+            airType = entity.airType
         )
     }
 }

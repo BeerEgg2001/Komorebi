@@ -11,7 +11,6 @@ import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.viewmodel.*
 
-// 🌟 修正: HOME_RESTORE チケットを追加（ホーム画面の2次元復帰用）
 enum class HomeFocusTicket { NONE, TAB_BAR, CONTENT_TOP, HOME_RESTORE }
 
 @Stable
@@ -21,19 +20,21 @@ class HomeFocusTicketManager {
     var issueTime by mutableLongStateOf(0L)
         private set
 
-    // 🌟 追加: ホーム画面復帰用のターゲット指定
     var targetSection by mutableStateOf<String?>(null)
         private set
     var targetItemId by mutableStateOf<String?>(null)
         private set
 
     fun issue(ticket: HomeFocusTicket) {
+        if (currentTicket == ticket) {
+            Log.w("KomorebiFocus", "HomeTicket 重複発行を抑止: $ticket")
+            return
+        }
         currentTicket = ticket
         issueTime = System.currentTimeMillis()
         Log.i("KomorebiFocus", "🎟️ HomeTicket ISSUED: $ticket")
     }
 
-    // 🌟 追加: 2段階追尾用のチケット発行メソッド
     fun issueForHomeRestore(section: String, itemId: String) {
         targetSection = section
         targetItemId = itemId
@@ -48,6 +49,18 @@ class HomeFocusTicketManager {
     fun consume(ticket: HomeFocusTicket) {
         if (currentTicket == ticket) {
             Log.i("KomorebiFocus", "🗑️ HomeTicket CONSUMED: $ticket")
+            currentTicket = HomeFocusTicket.NONE
+            targetSection = null
+            targetItemId = null
+        }
+    }
+
+    fun cancelForUserNavigation() {
+        if (currentTicket != HomeFocusTicket.NONE) {
+            Log.i(
+                "KomorebiFocus",
+                "ユーザー操作により保留中のHomeTicketをキャンセル: $currentTicket"
+            )
             currentTicket = HomeFocusTicket.NONE
             targetSection = null
             targetItemId = null
@@ -75,9 +88,6 @@ class HomeLauncherState(
     // --- データ保持 ---
     var watchHistory by mutableStateOf<List<KonomiHistoryProgram>>(emptyList())
     var lastChannels by mutableStateOf<List<Channel>>(emptyList())
-    var recentRecordings by mutableStateOf<List<RecordedProgram>>(emptyList())
-    var isLoadingInitial by mutableStateOf(false)
-    var isLoadingMore by mutableStateOf(false)
     var reserves by mutableStateOf<List<ReserveItem>>(emptyList())
 
     var hotChannels by mutableStateOf<List<UiChannelState>>(emptyList())
@@ -92,11 +102,7 @@ class HomeLauncherState(
     var openedSeriesTitle by mutableStateOf<String?>(null)
     var isSeriesListOpen by mutableStateOf(false)
 
-    var favoriteBaseballTeams by mutableStateOf<Set<String>>(emptySet())
-    var favoriteBaseballGames by mutableStateOf<List<Pair<String, List<BaseballGameInfo>>>>(
-        emptyList()
-    )
-
+    // ★ 修正: タブがいくつ増えても対応できるようにRequesterをあらかじめ余裕を持って生成しておく
     val tabFocusRequesters = List(10) { FocusRequester() }
     val contentFirstItemRequesters = List(10) { FocusRequester() }
     val settingsFocusRequester = FocusRequester()
@@ -108,9 +114,18 @@ class HomeLauncherState(
             KonomiDataMapper.toDomainModel(it)
         }
 
+    // 直近に onTabSelected を処理したタブ番号。
+    // 十字キーでのタブ移動は Row の onPreviewKeyEvent → moveTabByDpad で1回、
+    // その後の遅延フォーカス要求で発火する Tab の onFocus でもう1回、と
+    // 同じタブに対して onTabSelected が二重に呼ばれる。ここで起動される
+    // refreshHomeData() / fetchReserves() / 録画同期はいずれも重い処理のため、
+    // 二重起動するとタブ移動のたびに無駄な通信と CPU 負荷が倍増していた。
+    private var lastDispatchedTabIndex: Int = -1
+
     @RequiresApi(Build.VERSION_CODES.O)
     fun onTabSelected(
         index: Int,
+        tabs: List<String>, // ★ 追加: 実際のタブ名リストを受け取り、ハードコードを排除
         onTabChange: (Int) -> Unit,
         homeViewModel: HomeViewModel,
         channelViewModel: ChannelViewModel,
@@ -118,35 +133,41 @@ class HomeLauncherState(
         reserveViewModel: ReserveViewModel
     ) {
         onTabChange(index)
+
+        // 同じタブへの重複した選択通知では、重いデータ取得を再実行しない。
+        if (lastDispatchedTabIndex == index) return
+        lastDispatchedTabIndex = index
+
         isCurrentTabContentReady = false
-        // 🌟 追加: タブを切り替えたら、復帰用の記憶をリセットする
         homeViewModel.clearFocusMemory()
 
-        when (index) {
-            0 -> {
+        val tabName = tabs.getOrNull(index)
+
+        when (tabName) {
+            "ホーム" -> {
                 homeViewModel.refreshHomeData()
                 channelViewModel.startPolling()
             }
 
-            1 -> {
+            "ライブ" -> {
                 channelViewModel.startPolling()
             }
 
-            2 -> {
+            "ビデオ" -> {
                 channelViewModel.stopPolling()
                 recordViewModel.fetchRecentRecordings(forceRefresh = false)
             }
 
-            3 -> {
+            "番組表" -> {
                 channelViewModel.stopPolling()
             }
 
-            4 -> {
+            "録画予約" -> {
                 channelViewModel.stopPolling()
                 reserveViewModel.fetchReserves()
             }
 
-            5 -> {
+            "プロ野球" -> {
                 channelViewModel.stopPolling()
             }
 
@@ -154,16 +175,34 @@ class HomeLauncherState(
         }
     }
 
+    /**
+     * ホーム画面が前面の別UIに覆われていて、操作対象ではない状態かどうか。
+     *
+     * ★ 重要: ミニプレイヤー(PiP)表示中はプレイヤーが画面の一部しか占有しないため、
+     * 「プレイヤー起因のフルスクリーン判定」だけを無効化する。
+     * 設定画面・録画リスト・番組詳細などのオーバーレイは、ミニプレイヤー表示中であっても
+     * 画面全体を覆うので、必ずフルスクリーン扱いにしなければならない。
+     *
+     * 以前は呼び出し側で `isFullScreen(...) && !hasActivePlayer` としていたため、
+     * ミニプレイヤー表示中に設定画面を開くとisFullScreenModeがfalseのままになり、
+     * 背面のホーム画面がフォーカス復帰処理を走らせて設定画面からフォーカスを奪ってしまっていた。
+     */
     fun isFullScreen(
         selectedChannel: Channel?,
         selectedProgram: RecordedProgram?,
         epgSelectedProgram: EpgProgram?,
         isSettingsOpen: Boolean,
         isRecordListOpen: Boolean,
-        isReserveOverlayOpen: Boolean
+        isReserveOverlayOpen: Boolean,
+        hasActivePlayer: Boolean = false
     ): Boolean {
-        return selectedChannel != null || selectedProgram != null || epgSelectedProgram != null ||
-                isSettingsOpen || isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
+        // プレイヤー起因のフルスクリーン。ミニプレイヤー表示中は該当しない。
+        val isPlayerFullScreen =
+            !hasActivePlayer && (selectedChannel != null || selectedProgram != null)
+        // 画面全体を覆うオーバーレイ。ミニプレイヤーの有無に関わらずホーム画面は裏に隠れる。
+        val isOverlayVisible = epgSelectedProgram != null || isSettingsOpen ||
+                isRecordListOpen || isReserveOverlayOpen || isSeriesListOpen
+        return isPlayerFullScreen || isOverlayVisible
     }
 
     fun handleBackNavigation(
@@ -228,11 +267,19 @@ fun rememberHomeLauncherState(
         state.selectedTabIndex = initialTabIndex
     }
 
+    // ここでの collectAsState は HomeLauncherScreen 自身のリコンポーズ範囲に紐づくため、
+    // 購読した Flow が1つ更新されるだけで巨大な HomeLauncherScreen 全体が作り直される。
+    // 実際に画面へ描画されている値だけを購読し、無駄な購読は行わない。
+    //
+    // 特に recentRecordings は Room の Flow で、初回起動時の録画同期中は
+    // ページ書き込みのたびに何度も発火する。これを購読していたため、
+    // 「初回起動時にバックグラウンド処理が走っている間だけ操作が極端に重い」
+    // 状態になっていた。クリック時にしか使わない値なので購読をやめ、
+    // 必要になった時点で ViewModel から直接読み出す。
+    // isLoadingInitial / isLoadingMore / favoriteBaseballTeams / favoriteBaseballGames は
+    // ここで代入していたものの参照箇所が一切なく、リコンポーズを誘発するだけだった。
     state.watchHistory = homeViewModel.watchHistory.collectAsState().value
     state.lastChannels = homeViewModel.lastWatchedChannelFlow.collectAsState().value
-    state.recentRecordings = recordViewModel.recentRecordings.collectAsState().value
-    state.isLoadingInitial = recordViewModel.isRecordingLoading.collectAsState().value
-    state.isLoadingMore = recordViewModel.isLoadingMore.collectAsState().value
     state.reserves = reserveViewModel.reserves.collectAsState().value
 
     val liveRows by channelViewModel.liveRows.collectAsState()
@@ -242,14 +289,12 @@ fun rememberHomeLauncherState(
     state.genrePickup = homeViewModel.genrePickupPrograms.collectAsState().value
     state.pickupGenreLabel = homeViewModel.pickupGenreLabel.collectAsState().value
     state.genrePickupTimeSlot = homeViewModel.genrePickupTimeSlot.collectAsState().value
+
     state.epgUiState = epgViewModel.uiState
     state.logoUrls = remember(state.epgUiState) {
         val eData = state.epgUiState
-        if (eData is EpgUiState.Success) eData.data.map { epgViewModel.getLogoUrl(it.channel) } else emptyList()
+        if (eData is EpgUiState.Success) eData.logoUrls else emptyList()
     }
-
-    state.favoriteBaseballTeams = homeViewModel.favoriteBaseballTeams.collectAsState().value
-    state.favoriteBaseballGames = homeViewModel.favoriteBaseballGames.collectAsState().value
 
     return state
 }

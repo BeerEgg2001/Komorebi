@@ -6,7 +6,7 @@ import androidx.annotation.RequiresApi
 import androidx.room.withTransaction
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.mapper.EpgDataMapper
-import com.beeregg2001.komorebi.data.repository.KonomiTvApiService
+import com.beeregg2001.komorebi.data.repository.EpgProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +24,7 @@ private const val TAG = "EpgSyncEngine"
 
 @Singleton
 class EpgSyncEngine @Inject constructor(
-    private val apiService: KonomiTvApiService,
+    private val epgProvider: EpgProvider, // ★ KonomiTvApiService から EpgProvider に差し替え
     private val db: AppDatabase
 ) {
     private val _syncProgress = MutableStateFlow(SyncProgress())
@@ -61,7 +61,7 @@ class EpgSyncEngine @Inject constructor(
                             val end = start.plusDays(3)
 
                             try {
-                                val response = apiService.getEpgPrograms(
+                                val response = epgProvider.getEpgPrograms(
                                     startTime = start.format(formatter),
                                     endTime = end.format(formatter),
                                     channelType = type
@@ -70,7 +70,7 @@ class EpgSyncEngine @Inject constructor(
                                 // ★メモリ最適化: flatMapで全番組を一度にメモリ展開せず、
                                 // チャンネルごとに変換・挿入してピーク使用量を抑える
                                 var totalPrograms = 0
-                                for (wrapper in response.channels) {
+                                for (wrapper in response) {
                                     val channel = EpgDataMapper.toChannelEntity(wrapper.channel)
                                     val programs = wrapper.programs.map { EpgDataMapper.toProgramEntity(it) }
                                     db.withTransaction {

@@ -11,24 +11,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.EpgChannel
 import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.data.repository.EpgRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext // ★追加
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import org.json.JSONArray // ★追加
+import org.json.JSONArray
 import java.time.OffsetDateTime
 import javax.inject.Inject
 
-/**
- * 検索結果リストのUIに渡すための統合データクラス。
- * 番組情報単体だけでなく、どのチャンネルで放送されるかと、そのチャンネルのロゴURLをセットにして保持します。
- */
 data class UiSearchResultItem(
     val program: EpgProgram,
     val channel: EpgChannel,
@@ -38,67 +34,48 @@ data class UiSearchResultItem(
 private const val PREF_NAME_EPG_SEARCH = "epg_search_history_pref"
 private const val KEY_EPG_HISTORY = "history_list"
 
-/**
- * 番組表（EPGタブ）のUI状態とビジネスロジックを管理するViewModel。
- * KonomiTV APIからの数日分・数十チャンネルに及ぶ巨大な番組データ（fullEpgData）をメモリ上に保持し、
- * UIの要求（表示したい日付や時間帯）に応じて1日分だけをスライスしてUI層（CanvasEngine）に渡す役割を担います。
- */
 @RequiresApi(Build.VERSION_CODES.O)
 @HiltViewModel
-class EpgViewModel @Inject constructor(
+class EpgViewModel @OptIn(UnstableApi::class)
+@Inject constructor(
     private val repository: EpgRepository,
+    private val liveProvider: LiveProvider,
     private val settingsRepository: SettingsRepository,
-    @ApplicationContext private val context: Context // ★追加: SharedPreferencesにアクセスするため
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-    // ==========================================
-    // 番組表のUI状態管理 (State)
-    // ==========================================
-
-    // EPGのメイン画面（グリッド）に渡すデータ状態。ComposeのMutableStateを利用して高速に再描画をトリガーします。
     var uiState by mutableStateOf<EpgUiState>(EpgUiState.Loading)
         private set
 
-    // アプリ起動直後のバックグラウンドデータ先読み中フラグ
     private val _isPreloading = MutableStateFlow(true)
     val isPreloading: StateFlow<Boolean> = _isPreloading
 
-    // 最初のデータロードが完了したかどうかのフラグ（スプラッシュ画面の解除判定などに使用）
     private val _isInitialLoadComplete = MutableStateFlow(false)
     val isInitialLoadComplete: StateFlow<Boolean> = _isInitialLoadComplete.asStateFlow()
 
-    // 現在表示している放送波のタブ（"GR"=地デジ, "BS", "CS" など）
     private val _selectedBroadcastingType = MutableStateFlow("GR")
     val selectedBroadcastingType: StateFlow<String> = _selectedBroadcastingType.asStateFlow()
 
-    // サーバーの接続情報（ロゴ画像のURL生成などに使用）
     private var mirakurunIp = ""
     private var mirakurunPort = ""
-    private var konomiIp = ""
-    private var konomiPort = ""
 
     private var hasInitialFetched = false
     private var epgJob: Job? = null
 
-    // APIから取得した数日分の「全番組データ」。これを丸ごとUIに渡すと重すぎるため、裏側で保持しておきます。
+    // ★ 追加: DB検索待ちをゼロにするためのメモリキャッシュ群
+    private val epgMemoryCache = mutableMapOf<String, List<EpgChannelWrapper>>()
+    private val logoMemoryCache = mutableMapOf<String, List<String>>()
+
     private var fullEpgData: List<EpgChannelWrapper> = emptyList()
-
-    // 上記チャンネル群のロゴURLリスト（UI描画時の計算コストを省くためのキャッシュ）
     private var fullLogoUrls: List<String> = emptyList()
-
-    // ユーザーが番組表上でフォーカスしている、またはジャンプ指定した「目標の日時」
     private var currentTargetTime: OffsetDateTime = OffsetDateTime.now()
 
-    // ==========================================
-    // 未来番組検索用のState
-    // ==========================================
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    // 実際に検索ボタンが押され、現在検索結果に反映されている確定済みのクエリ
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
 
@@ -108,7 +85,6 @@ class EpgViewModel @Inject constructor(
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
 
-    // 🌟 追加: EPGフォーカス記憶と復元トリガー
     var lastFocusedChannelId: String? = null
     var lastFocusedTime: OffsetDateTime? = null
     var epgRestoreTrigger by androidx.compose.runtime.mutableStateOf(0L)
@@ -129,31 +105,40 @@ class EpgViewModel @Inject constructor(
     }
 
     init {
-        loadSearchHistory() // ★追加: アプリ起動時に履歴を読み込む
+        loadSearchHistory()
         loadInitialData()
+
+        viewModelScope.launch {
+            com.beeregg2001.komorebi.data.repository.edcb.EdcbEpgCacheManager.epgBackgroundUpdateEvent.collect {
+                Log.i(
+                    "EpgViewModel",
+                    "Background EPG fetch completed! Refreshing ViewModel cache..."
+                )
+                refreshEpgData()
+            }
+        }
     }
 
-    // ==========================================
-    // 検索履歴のローカル保存機能 (SharedPreferences)
-    // ==========================================
     private fun loadSearchHistory() {
-        try {
-            val prefs = context.getSharedPreferences(PREF_NAME_EPG_SEARCH, Context.MODE_PRIVATE)
-            val jsonString = prefs.getString(KEY_EPG_HISTORY, "[]")
-            val jsonArray = JSONArray(jsonString)
-            val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) list.add(jsonArray.getString(i))
-            _searchHistory.value = list
-        } catch (e: Exception) {
-            _searchHistory.value = emptyList()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val prefs = context.getSharedPreferences(PREF_NAME_EPG_SEARCH, Context.MODE_PRIVATE)
+                val jsonString = prefs.getString(KEY_EPG_HISTORY, "[]")
+                val jsonArray = JSONArray(jsonString)
+                val list = ArrayList<String>()
+                for (i in 0 until jsonArray.length()) list.add(jsonArray.getString(i))
+                _searchHistory.value = list
+            } catch (e: Exception) {
+                _searchHistory.value = emptyList()
+            }
         }
     }
 
     private fun addSearchHistory(query: String) {
         val currentList = _searchHistory.value.toMutableList()
-        currentList.remove(query) // 重複排除
-        currentList.add(0, query) // 先頭に追加
-        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex) // 最大5件まで保持
+        currentList.remove(query)
+        currentList.add(0, query)
+        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex)
         _searchHistory.value = currentList
         saveSearchHistory(currentList)
     }
@@ -167,29 +152,20 @@ class EpgViewModel @Inject constructor(
     }
 
     private fun saveSearchHistory(list: List<String>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val prefs = context.getSharedPreferences(PREF_NAME_EPG_SEARCH, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
                 prefs.edit().putString(KEY_EPG_HISTORY, jsonArray.toString()).apply()
             } catch (e: Exception) {
-                // Ignore
             }
         }
     }
-    // ==========================================
 
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
 
-    /**
-     * KonomiTVのAPIを叩いて、未来の番組（番組表データ）からキーワード検索を実行します。
-     * 結果は番組単体ではなく、チャンネル情報とロゴURLを結合したUiSearchResultItemのリストとしてUIに提供します。
-     */
-    // ==========================================
-    // ★ 修正: 超スッキリした検索呼び出しメソッド
-    // ==========================================
     @OptIn(UnstableApi::class)
     fun executeSearch(
         keyword: String,
@@ -200,8 +176,6 @@ class EpgViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             _isSearching.value = true
-
-            // UIに表示するためのテキストを生成
             val displayQuery = listOfNotNull(
                 keyword.takeIf { it.isNotBlank() },
                 channelName?.takeIf { it.isNotBlank() },
@@ -213,22 +187,37 @@ class EpgViewModel @Inject constructor(
             if (displayQuery.isNotBlank()) addSearchHistory(displayQuery)
 
             try {
-                // 最強になったRepositoryの検索エンジンを呼ぶだけ！
-                val rawResults = repository.searchFuturePrograms(
-                    keyword,
-                    genre,
-                    dateStr,
-                    isLiveOnly,
-                    channelName
-                )
-
-                _searchResults.value = rawResults.map { item ->
-                    UiSearchResultItem(
-                        program = item.program,
-                        channel = item.channel,
-                        logoUrl = getLogoUrl(item.channel)
+                val rawResults = withContext(Dispatchers.Default) {
+                    repository.searchFuturePrograms(
+                        keyword,
+                        genre,
+                        dateStr,
+                        isLiveOnly,
+                        channelName
                     )
                 }
+
+                val topMatches = rawResults.sortedBy {
+                    try {
+                        OffsetDateTime.parse(it.program.start_time)
+                    } catch (e: Exception) {
+                        OffsetDateTime.MAX
+                    }
+                }.take(100)
+
+                val results = withContext(Dispatchers.IO) {
+                    topMatches.map { item ->
+                        async {
+                            UiSearchResultItem(
+                                program = item.program,
+                                channel = item.channel,
+                                logoUrl = getLogoUrl(item.channel)
+                            )
+                        }
+                    }.awaitAll()
+                }
+
+                _searchResults.value = results
             } catch (e: Exception) {
                 Log.e("EpgViewModel", "Search Error", e)
                 _searchResults.value = emptyList()
@@ -246,14 +235,28 @@ class EpgViewModel @Inject constructor(
         channelName: String? = null
     ): List<UiSearchResultItem> {
         return try {
-            val rawResults =
+            val rawResults = withContext(Dispatchers.Default) {
                 repository.searchFuturePrograms(keyword, genre, dateStr, isLiveOnly, channelName)
-            rawResults.map { item ->
-                UiSearchResultItem(
-                    program = item.program,
-                    channel = item.channel,
-                    logoUrl = getLogoUrl(item.channel)
-                )
+            }
+
+            val topMatches = rawResults.sortedBy {
+                try {
+                    OffsetDateTime.parse(it.program.start_time)
+                } catch (e: Exception) {
+                    OffsetDateTime.MAX
+                }
+            }.take(100)
+
+            withContext(Dispatchers.IO) {
+                topMatches.map { item ->
+                    async {
+                        UiSearchResultItem(
+                            program = item.program,
+                            channel = item.channel,
+                            logoUrl = getLogoUrl(item.channel)
+                        )
+                    }
+                }.awaitAll()
             }
         } catch (e: Exception) {
             emptyList()
@@ -266,13 +269,10 @@ class EpgViewModel @Inject constructor(
         _searchResults.value = emptyList()
     }
 
-    /**
-     * EPGデータ（地デジ、BSなど全波）をバックグラウンドで先読みしてキャッシュに格納します。
-     */
     fun preloadEpgDataForSearch(availableTypes: List<String>) {
         val now = OffsetDateTime.now()
         val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
-        val end = now.plusDays(7) // 1週間分を取得
+        val end = now.plusDays(7)
 
         viewModelScope.launch(Dispatchers.IO) {
             availableTypes.map { type ->
@@ -288,28 +288,24 @@ class EpgViewModel @Inject constructor(
     private fun loadInitialData() {
         viewModelScope.launch {
             combine(
+                settingsRepository.isInitialized,
                 settingsRepository.mirakurunIp,
                 settingsRepository.mirakurunPort,
-                settingsRepository.konomiIp,
-                settingsRepository.konomiPort,
                 _selectedBroadcastingType
-            ) { mIp, mPort, kIp, kPort, type ->
+            ) { isInit, mIp, mPort, type ->
                 mirakurunIp = mIp
                 mirakurunPort = mPort
-                konomiIp = kIp
-                konomiPort = kPort
 
-                val isMirakurunReady = mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()
-                val isKonomiReady = konomiIp.isNotEmpty() && konomiPort.isNotEmpty()
-
-                if ((isMirakurunReady || isKonomiReady) && !hasInitialFetched) {
+                if (isInit && !hasInitialFetched) {
                     hasInitialFetched = true
                     viewModelScope.launch { refreshEpgData(type) }
 
-                    // ★追加: 検索・AI予約のために、他の放送波（BS・CS・SKY等）も裏側でメモリにキャッシュしておく！
-                    preloadEpgDataForSearch(listOf("GR", "BS", "CS", "SKY", "BS4K"))
+                    viewModelScope.launch {
+                        delay(10000)
+                        preloadEpgDataForSearch(listOf("GR", "BS", "CS", "SKY", "BS4K"))
+                    }
 
-                } else if ((isMirakurunReady || isKonomiReady) && hasInitialFetched) {
+                } else if (isInit && hasInitialFetched) {
                     refreshEpgData(type)
                 }
             }.collectLatest { }
@@ -323,21 +319,33 @@ class EpgViewModel @Inject constructor(
     fun refreshEpgData(channelType: String? = null) {
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
-            if (uiState !is EpgUiState.Success) {
-                uiState = EpgUiState.Loading
-            }
-
+            val typeToFetch = channelType ?: _selectedBroadcastingType.value
             val now = OffsetDateTime.now()
             val start = now.withHour(0).withMinute(0).withSecond(0).withNano(0)
             val end = now.plusDays(7)
 
-            val typeToFetch = channelType ?: _selectedBroadcastingType.value
+            // ★ 修正: メモリキャッシュがあれば即座にUIへ反映（Loadingスピナーすら出さない）
+            if (epgMemoryCache.containsKey(typeToFetch)) {
+                fullEpgData = epgMemoryCache[typeToFetch]!!
+                fullLogoUrls = logoMemoryCache[typeToFetch] ?: emptyList()
+                sliceAndEmitEpgData()
+            } else {
+                if (uiState !is EpgUiState.Success) {
+                    uiState = EpgUiState.Loading
+                }
+            }
 
+            // キャッシュ表示後も、裏側でRoomから最新情報を取得してキャッシュを更新する
             repository.getEpgDataStream(start, end, typeToFetch).collect { result ->
                 result.onSuccess { data ->
                     fullEpgData = data
+                    epgMemoryCache[typeToFetch] = data
+                    // ★ 時刻解析メモが無制限に膨らまないよう、元データ更新時に破棄する
+                    if (timeParseCache.size > 100_000) timeParseCache.clear()
+
                     fullLogoUrls =
                         withContext(Dispatchers.Default) { data.map { getLogoUrl(it.channel) } }
+                    logoMemoryCache[typeToFetch] = fullLogoUrls
 
                     sliceAndEmitEpgData()
 
@@ -363,22 +371,54 @@ class EpgViewModel @Inject constructor(
         return if (time.hour < 4) base.minusDays(1) else base
     }
 
+    /**
+     * ★ 最適化: ISO8601 文字列 -> エポックミリ秒 の解析結果メモ。
+     *
+     * [sliceAndEmitEpgData] は日付移動のたびに fullEpgData 全件を走査し、
+     * 1 番組につき start_time / end_time を 2 回 OffsetDateTime.parse していた。
+     * 100 チャンネル × 200 番組なら 1 回の日付移動で 4 万回の parse になり、
+     * 番組表の日付切り替えが目に見えて待たされる原因になっていた。
+     *
+     * 日付移動では fullEpgData 自体は変わらないため、同じ文字列を何度も解析している。
+     * メモ化により 2 回目以降の日付移動は数値比較だけで済む。
+     */
+    private val timeParseCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun parseEpochMillis(text: String?): Long {
+        if (text.isNullOrEmpty()) return Long.MIN_VALUE
+        return timeParseCache.getOrPut(text) {
+            try {
+                OffsetDateTime.parse(text).toInstant().toEpochMilli()
+            } catch (e: Exception) {
+                Long.MIN_VALUE
+            }
+        }
+    }
+
+    /** ★ 追加: 連続した日付移動で古いスライス処理が走り続けないようキャンセルするためのジョブ */
+    private var sliceJob: Job? = null
+
     private fun sliceAndEmitEpgData() {
         if (fullEpgData.isEmpty()) return
-        viewModelScope.launch(Dispatchers.Default) {
+        // ★ 最適化 + 競合の修正:
+        //   従来は呼ばれるたびに新しいコルーチンを起動しっぱなしだったため、
+        //   日付を素早く連打すると同じデータに対する重いスライス処理が多重に走り、
+        //   さらに完了順が前後すると古い結果が新しい結果を上書きする可能性があった。
+        sliceJob?.cancel()
+        sliceJob = viewModelScope.launch(Dispatchers.Default) {
 
             val tvDayStart = getTvDayStart(currentTargetTime)
             val tvDayEnd = tvDayStart.plusHours(24)
+            val tvDayStartMs = tvDayStart.toInstant().toEpochMilli()
+            val tvDayEndMs = tvDayEnd.toInstant().toEpochMilli()
 
             val slicedData = fullEpgData.map { wrapper ->
                 val filteredPrograms = wrapper.programs.filter { prog ->
-                    try {
-                        val pStart = OffsetDateTime.parse(prog.start_time)
-                        val pEnd = OffsetDateTime.parse(prog.end_time)
-                        pEnd.isAfter(tvDayStart) && pStart.isBefore(tvDayEnd)
-                    } catch (e: Exception) {
-                        false
-                    }
+                    val startMs = parseEpochMillis(prog.start_time)
+                    val endMs = parseEpochMillis(prog.end_time)
+                    // 解析に失敗した番組は従来どおり除外する
+                    startMs != Long.MIN_VALUE && endMs != Long.MIN_VALUE &&
+                        endMs > tvDayStartMs && startMs < tvDayEndMs
                 }
                 wrapper.copy(programs = filteredPrograms)
             }
@@ -394,14 +434,8 @@ class EpgViewModel @Inject constructor(
     }
 
     @OptIn(UnstableApi::class)
-    fun getLogoUrl(channel: EpgChannel): String {
-        return if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-            UrlBuilder.getMirakurunLogoUrl(
-                mirakurunIp, mirakurunPort, channel.network_id.toLong(), channel.service_id.toLong()
-            )
-        } else {
-            UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.display_channel_id)
-        }
+    suspend fun getLogoUrl(channel: EpgChannel): String {
+        return liveProvider.getChannelLogoUrl(channel.display_channel_id)
     }
 
     fun updateBroadcastingType(type: String) {

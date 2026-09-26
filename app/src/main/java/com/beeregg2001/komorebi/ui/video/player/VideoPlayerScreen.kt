@@ -2,18 +2,16 @@
 
 package com.beeregg2001.komorebi.ui.video.player
 
-import android.content.Context
 import android.os.Build
-import android.util.Base64
 import android.util.Log
-import android.view.TextureView
-import android.view.View
-import android.view.KeyEvent as NativeKeyEvent
+import android.view.SurfaceView
 import android.view.ViewGroup
-import android.webkit.WebView
+import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -23,48 +21,107 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.*
-import androidx.media3.common.audio.*
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.ui.AspectRatioFrameLayout
-import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.viewmodel.RecordViewModel
+import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.AudioMode
-import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
+import com.beeregg2001.komorebi.ui.subtitle.rememberNativeCaptionCue
+import com.beeregg2001.komorebi.ui.video.smb.SmbItem
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val TAG = "VideoPlayerScreen"
-private const val DEBUG_TAG = "ChapterDebug"
+private val PLAYER_CONTROLS_SUBTITLE_OFFSET = 96.dp
+
+/**
+ * EPGStation の無変換再生 URL (`/api/videos/{videoFileId}`) かどうかを判定する。
+ * このURLは HLS ではなく MPEG-TS がそのまま流れてくるため、HLS として解釈させてはいけない。
+ * KonomiTV の `/api/videos/{id}/thumbnail` 等とは違い、数値で終わる点で見分ける。
+ */
+private val EPG_STATION_DIRECT_VIDEO_REGEX = Regex("/api/videos/\\d+$")
+
+private fun isEpgStationDirectVideoUrl(url: String): Boolean =
+    EPG_STATION_DIRECT_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
+/**
+ * KonomiTV の original画質(MPEG-2直接再生)用URL (`/api/videos/{id}/download`) かどうかを判定する。
+ * EPGStationの無変換再生URLと同様、HLSではなく生MPEG-TSがそのまま流れてくるため、
+ * (下のURLパターンマッチで)HLSとして誤解釈させてはいけない。
+ */
+private val KONOMI_TV_ORIGINAL_VIDEO_REGEX = Regex("/api/videos/\\d+/download$")
+
+private fun isKonomiTvOriginalVideoUrl(url: String): Boolean =
+    KONOMI_TV_ORIGINAL_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
+
+/**
+ * EPGStationの録画mp4/webm配信 (`/api/streams/recorded/{videoFileId}/mp4|webm`) かどうかを判定する。
+ * サーバーは実際にContent-Type: video/mp4 または video/webmで応答するTSではないコンテナで
+ * あり、HLSではない(stuayu/EPGStation src/model/service/api/streams/recorded/{id}/mp4.ts等で
+ * Content-Type明示を確認済み)。UrlBuilder.getEpgStationRecordedStreamUrl()が生成するURL形式。
+ */
+private val EPG_STATION_RECORDED_CONTAINER_REGEX = Regex("/api/streams/recorded/\\d+/(mp4|webm)$")
+
+private fun epgStationRecordedContainerMimeType(url: String): String? {
+    val path = url.substringBefore("?")
+    if (!EPG_STATION_RECORDED_CONTAINER_REGEX.containsMatchIn(path)) return null
+    return if (path.endsWith("/webm")) MimeTypes.VIDEO_WEBM else MimeTypes.VIDEO_MP4
+}
+
+/**
+ * 再生URLからMIMEタイプを解決する。
+ * ★ 修正: 以前はEPGStationの録画mp4/webm URL(`/api/streams/recorded/{id}/mp4|webm`)が
+ * isEpgStationDirectVideoUrl(`/api/videos/\d+$`)にマッチせず、次の
+ * `url.contains("/api/streams/")`分岐でHLSと誤判定されてAPPLICATION_M3U8が明示指定されて
+ * いたため、fragmented MP4/WebMバイトストリームにHlsMediaSourceが誤って割り当てられ
+ * 再生に失敗していた。コンテナ判定を先に行うよう判定順序を修正する。
+ */
+private fun resolveMimeType(url: String): String? {
+    return when {
+        isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url) -> MimeTypes.VIDEO_MP2T
+        else -> epgStationRecordedContainerMimeType(url) ?: run {
+            if (url.contains("/api/streams/") || url.contains("/api/videos/") ||
+                url.contains("konomi.tv") || url.contains("m3u8")
+            ) {
+                MimeTypes.APPLICATION_M3U8
+            } else {
+                null
+            }
+        }
+    }
+}
 
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun VideoPlayerScreen(
     program: RecordedProgram,
+    smbItem: SmbItem? = null,
     initialPositionMs: Long = 0,
     initialQuality: String = "1080p-60fps",
-    konomiIp: String,
-    konomiPort: String,
     showControls: Boolean,
     onShowControlsChange: (Boolean) -> Unit,
     isSubMenuOpen: Boolean,
@@ -73,43 +130,92 @@ fun VideoPlayerScreen(
     onSceneSearchToggle: (Boolean) -> Unit,
     onBackPressed: () -> Unit,
     onShowToast: (String) -> Unit,
-    // ★ 追加: PiP状態の受け取りと、要求コールバック
     isPiPMode: Boolean = false,
     onPiPRequested: () -> Unit = {},
-    recordViewModel: RecordViewModel = hiltViewModel(),
+    videoPlayerViewModel: VideoPlayerViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var currentProgram by remember { mutableStateOf(program) }
-    val fetchedDetail by recordViewModel.programDetail.collectAsState()
+    DisposableEffect(Unit) {
+        videoPlayerViewModel.setPlaybackSyncThrottle(true)
+        onDispose { videoPlayerViewModel.setPlaybackSyncThrottle(false) }
+    }
 
-    var isBuffering by remember { mutableStateOf(false) }
+    var currentProgram by remember { mutableStateOf(program) }
+    val fetchedDetail by videoPlayerViewModel.programDetail.collectAsState()
+
+    val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
+    val chapters by videoPlayerViewModel.chapters.collectAsState()
+    // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
+    // トランスコード再生) かどうか。位置補正・シーク判定にはこのフラグを使う。
+    val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
+
+    val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
+    val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
+    // ★ 追加: 「この録画番組に限って使えない」画質の値(理由の区別は ViewModel 側のコメント参照)
+    val perProgramExcludedQualities by
+        videoPlayerViewModel.perProgramExcludedQualities.collectAsState()
+    val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
+
+    val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
+    val isModern = playerUiMode == "MODERN"
+    var isBuffering by remember { mutableStateOf(true) }
 
     LaunchedEffect(program.id) {
-        recordViewModel.fetchProgramDetail(program.id)
+        if (smbItem == null) {
+            videoPlayerViewModel.fetchProgramDetail(program.id)
+            videoPlayerViewModel.fetchAvailableQualities(program.id)
+        }
     }
 
     LaunchedEffect(fetchedDetail) {
         if (fetchedDetail != null && fetchedDetail?.id == program.id) {
             currentProgram = fetchedDetail!!
-            Log.i(
-                DEBUG_TAG,
-                "Fetched Detail received. Raw cmSections count: ${currentProgram.recordedVideo.cmSections?.size ?: 0}"
-            )
-            val merged = mergeCmSections(currentProgram.recordedVideo.cmSections)
-            Log.i(DEBUG_TAG, "Merged cmSections count: ${merged.size}")
-            merged.forEachIndexed { index, cmSection ->
-                Log.i(
-                    DEBUG_TAG,
-                    "  Merged Section $index: start=${cmSection.startTime}, end=${cmSection.endTime}"
-                )
-            }
         }
     }
 
-    val vs = rememberVideoPlayerState(initialQuality)
+    val vs = rememberVideoPlayerState()
+
+    val autoCmSkipStr by settingsViewModel.autoCmSkip.collectAsState()
+    LaunchedEffect(autoCmSkipStr) {
+        vs.isAutoCmSkipEnabled = (autoCmSkipStr == "ON")
+    }
+
+    LaunchedEffect(
+        availableQualities,
+        isQualitiesLoaded,
+        currentVideoQualityStr,
+        perProgramExcludedQualities
+    ) {
+        if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
+            val matched = availableQualities.find { it.value == currentVideoQualityStr }
+            if (matched != null) {
+                vs.currentQuality = matched
+            } else {
+                val fallback = availableQualities.first()
+                vs.currentQuality = fallback
+                // ★ 修正: 以前はここで無条件に saveVideoQuality() を呼び、フォールバック先を
+                // VIDEO_QUALITYへ書き戻していた。この書き戻しは 2c3d8c0「バックエンド変更時に
+                // 画質設定が正常に反映されない問題に暫定対応」で、バックエンドを切り替えて
+                // 値空間が変わったときに古い設定値を正規化する目的で入ったもので、その用途では
+                // 今も必要なため残す。
+                //
+                // 一方、値空間には存在するのにこの録画番組でだけ使えない画質(KonomiTVの
+                // original画質)まで同じ扱いにしていたのが不具合だった。original非対応の録画を
+                // 一度再生しただけで既定画質が"1080p-60fps"へ黙って変わり、以降は対応録画を
+                // 開いてもoriginalに戻らなくなっていた。KonomiTV本家(PlayerController.ts)も
+                // この場合は再生時のdefault_qualityを差し替えるだけで設定値は書き換えていない。
+                //
+                // そのため、番組固有の理由で除外された値(perProgramExcludedQualities)のときだけ
+                // 書き戻しを見送る。設定画面は保存値が一覧に無い場合を既に考慮しているため
+                // (SettingContents.kt / SettingScreen.kt)、書き戻さなくても表示は壊れない。
+                if (currentVideoQualityStr !in perProgramExcludedQualities) {
+                    videoPlayerViewModel.saveVideoQuality(fallback.value)
+                }
+            }
+        }
+    }
 
     val commentSpeedStr by settingsViewModel.commentSpeed.collectAsState()
     val commentFontSizeStr by settingsViewModel.commentFontSize.collectAsState()
@@ -118,6 +224,13 @@ fun VideoPlayerScreen(
     val commentDefaultDisplayStr by settingsViewModel.commentDefaultDisplay.collectAsState()
     val subtitleCommentLayer by settingsViewModel.subtitleCommentLayer.collectAsState()
     val videoSubtitleDefaultStr by settingsViewModel.videoSubtitleDefault.collectAsState()
+
+    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+    val cfAccessClientId by settingsViewModel.cfAccessClientId.collectAsState()
+    val cfAccessClientSecret by settingsViewModel.cfAccessClientSecret.collectAsState()
+    val cfAccessHeaders = remember(cfAccessClientId, cfAccessClientSecret) {
+        SettingsRepository.buildCfAccessHeaders(cfAccessClientId, cfAccessClientSecret)
+    }
 
     val commentSpeed = commentSpeedStr.toFloatOrNull() ?: 1.0f
     val commentFontSizeScale = commentFontSizeStr.toFloatOrNull() ?: 1.0f
@@ -138,133 +251,322 @@ fun VideoPlayerScreen(
     val isEmulator =
         remember { Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk") }
     val currentSessionId = remember(vs.currentQuality) { UUID.randomUUID().toString() }
-    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    val subtitleEvents = remember {
+        MutableSharedFlow<NativeCaptionCue>(
+            extraBufferCapacity = 10,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
+    var subtitleLanguages by remember(currentProgram.id) {
+        mutableStateOf(emptyList<NativeCaptionLanguage>())
+    }
+    var currentSubtitleLanguageId by remember(currentProgram.id) { mutableIntStateOf(1) }
 
     val mainFocusRequester = remember { FocusRequester() }
     val subMenuFocusRequester = remember { FocusRequester() }
+    val playerControlsFocusRequester = remember { FocusRequester() }
 
-    var videoWidth by remember { mutableIntStateOf(0) }
-    var videoHeight by remember { mutableIntStateOf(0) }
-    var pixelWidthHeightRatio by remember { mutableFloatStateOf(1f) }
+    var isProgramInfoOpen by remember { mutableStateOf(false) }
+    var isModernSettingsOpen by remember { mutableStateOf(false) }
+
+    var videoWidth by remember { mutableStateOf(0) }
+    var videoHeight by remember { mutableStateOf(0) }
+    var pixelWidthHeightRatio by remember { mutableStateOf(1f) }
 
     var isChapterListOpen by remember { mutableStateOf(false) }
-    var rightKeyDownTime by remember { mutableLongStateOf(0L) }
-    var isRightKeyLongPressed by remember { mutableStateOf(false) }
-    var leftKeyDownTime by remember { mutableLongStateOf(0L) }
-    var isLeftKeyLongPressed by remember { mutableStateOf(false) }
-    var downKeyDownTime by remember { mutableLongStateOf(0L) }
-    var isDownKeyLongPressed by remember { mutableStateOf(false) }
+    var isSeekingPreviewVisible by remember { mutableStateOf(false) }
+    var seekingPreviewJob by remember { mutableStateOf<Job?>(null) }
 
-    LaunchedEffect(program.recordedVideo.id) {
-        allComments.clear()
-        allComments.addAll(recordViewModel.getArchivedComments(program.recordedVideo.id))
+    // ★ 修正: L字クロップのメニュー表示中(lCropMode==MENU)も他のオーバーレイと同様に扱う。
+    // これが漏れていると、キー入力が VideoPlayerState.handleKeyEvent 側の一般処理に流れてしまい、
+    // メニュー内のフォーカス移動が効かず、戻るキーでメニューを閉じずにプレイヤーごと終了してしまう。
+    val isSubOverlayOpen =
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen || vs.lCropMode == LCropMode.MENU
+    // ★ 修正: 以前から isSubOverlayOpen と完全に同一の式が重複定義されていたため、
+    // 一方を修正してももう一方に反映し忘れる乖離リスクがあった。同じ意味なので一本化する。
+    val isSubtitleBlockingOverlayOpen = isSubOverlayOpen
+    val subtitleOffset by animateDpAsState(
+        targetValue = if (
+            showControls &&
+            !isSubOverlayOpen &&
+            vs.lCropMode == LCropMode.HIDDEN
+        ) {
+            PLAYER_CONTROLS_SUBTITLE_OFFSET
+        } else {
+            0.dp
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "playerControlsSubtitleOffset"
+    )
+
+    val triggerSeekingPreview: () -> Unit = {
+        isSeekingPreviewVisible = true
+        seekingPreviewJob?.cancel()
+        seekingPreviewJob = scope.launch { delay(2000); isSeekingPreviewVisible = false }
     }
 
-    val exoPlayer = remember(vs.currentQuality) {
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            override fun buildAudioSink(
-                ctx: Context,
-                enableFloat: Boolean,
-                enableParams: Boolean
-            ): DefaultAudioSink? {
-                return DefaultAudioSink.Builder(ctx)
-                    .setEnableAudioTrackPlaybackParams(false)
-                    .build()
+    LaunchedEffect(program.recordedVideo.id) {
+        if (smbItem == null) {
+            allComments.clear()
+            allComments.addAll(videoPlayerViewModel.getArchivedComments(program.recordedVideo.id))
+        }
+    }
+
+    var smbDurationMs by remember { mutableLongStateOf(0L) }
+    val isBackground = remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val backendType by settingsViewModel.backendType.collectAsState()
+    val edcbPlayMethod by settingsViewModel.edcbRecordPlayMethod.collectAsState()
+    val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
+    // ★ 追加: KonomiTVのoriginal画質(MPEG-2直接再生)も、EDCB直接再生と同じくExoPlayerの
+    // SeekMapに頼らないバイト位置計算シーク方式で扱う必要がある
+    val isKonomiOriginal = (backendType == "KONOMITV" && vs.currentQuality.value == "original")
+
+    // ★ 修正: 録画直接TS再生(isEdcbDirect)は、ExoPlayerのSeekMap機構(seekTo())に頼らず、
+    // シーク要求のたびにアプリ側で目標バイト位置を計算してMediaItemを作り直す方式にした
+    // (VideoPlayerManager.ktのコメント参照)。fileSizeBytesRef はその計算に必要なファイル全体
+    // サイズを、pendingSeekByteRef は次回open()時に読み始めるバイト位置の予約値を保持する。
+    val (exoPlayer, fileSizeBytesRef, pendingSeekByteRef) = rememberManagedExoPlayer(
+        program = program,
+        vs = vs,
+        scope = scope,
+        onSubtitleCue = { subtitleEvents.tryEmit(it) },
+        subtitleLanguageId = currentSubtitleLanguageId,
+        onSubtitleLanguagesChanged = { subtitleLanguages = it },
+        onVideoSizeChanged = { w, h, ratio ->
+            videoWidth = w
+            videoHeight = h
+            pixelWidthHeightRatio = ratio
+        },
+        onBufferingChanged = { isBuffering = it },
+        onDurationChanged = { smbDurationMs = it },
+        onStopOrDispose = { player ->
+            if (smbItem == null) {
+                val posMs =
+                    if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + player.currentPosition else player.currentPosition
+                videoPlayerViewModel.updateWatchHistory(program, posMs / 1000.0)
             }
-        }.apply {
-            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
-            setEnableDecoderFallback(true)
+        },
+        cfAccessHeaders = cfAccessHeaders,
+        onFatalError = { message ->
+            onShowToast(message)
+            onBackPressed()
+        }
+    )
+
+    // ★ 修正: 以前は remember(vs, exoPlayer) でメモ化していたが、isEdcbDirect/isOffsetBasedStream
+    // (どちらも非同期に確定する値)がキーに含まれておらず、アプリ起動直後の読み込み中の一瞬に
+    // この関数が初回メモ化されると、その後正しい値になっても古いクロージャのままシークバー/
+    // 実況コメントの追従位置がズレ続ける不具合があった。performSeek等と同様、毎回の
+    // リコンポジションで最新の値を捕捉する普通のラムダにする(memo化するほど重い処理ではない)。
+    val getCurrentPositionMs: () -> Long =
+        { if (isOffsetBasedStream || isEdcbDirect || isKonomiOriginal) vs.playbackOffsetMs + exoPlayer.currentPosition else exoPlayer.currentPosition }
+    val subtitleCue = rememberNativeCaptionCue(
+        events = subtitleEvents,
+        enabled = vs.isSubtitleEnabled,
+        resetKey = currentProgram.id to currentSubtitleLanguageId,
+        positionMs = { exoPlayer.currentPosition }
+    )
+
+    // ★ 追加: 直接TS再生でシーク先バイト位置を計算するためのヘルパー。番組全体時間(秒)に対する
+    // 目標時刻の比率と、直近に取得済みのファイル全体サイズから、HTTP Rangeの開始位置を概算する
+    // (線形補間のため、可変ビットレートのファイルでは数秒〜十数秒程度の誤差が生じ得る)。
+    val computeSeekByteOffset: (Long) -> Long? = { targetMs: Long ->
+        val durationSec = currentProgram.recordedVideo.duration
+        val size = fileSizeBytesRef.get()
+        if (durationSec > 0.0 && size > 0L) {
+            ((targetMs / 1000.0 / durationSec) * size).toLong().coerceIn(0L, size)
+        } else {
+            null
+        }
+    }
+
+    val getEffectivePositionMs = { vs.pendingSeekPositionMs ?: getCurrentPositionMs() }
+
+    val totalDurationForControls =
+        if (smbItem != null) smbDurationMs.coerceAtLeast(0L) else (currentProgram.recordedVideo.duration * 1000).toLong()
+
+    val performSeek: (Long) -> Unit = { targetMs: Long ->
+        val safeTarget = targetMs.coerceIn(
+            0L,
+            if (totalDurationForControls > 0) totalDurationForControls else Long.MAX_VALUE
+        )
+        // 一瞬だけpendingSeekに記録してUI表示をサクサク進める
+        vs.pendingSeekPositionMs = safeTarget
+        scope.launch {
+            delay(800)
+            if (vs.pendingSeekPositionMs == safeTarget) {
+                vs.pendingSeekPositionMs = null
+            }
         }
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory().apply {
-            setUserAgent("DTVClient/1.0")
-            setAllowCrossProtocolRedirects(true)
-            setConnectTimeoutMs(90000)
-            setReadTimeoutMs(90000)
-        }
-
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                30000,
-                30000,
-                1500,
-                3000
-            )
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
-
-        val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
-
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(hlsMediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build().apply {
-                setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
-
-                val mediaItem = MediaItem.Builder().setUri(
-                    UrlBuilder.getVideoPlaylistUrl(
-                        konomiIp,
-                        konomiPort,
-                        program.recordedVideo.id,
-                        currentSessionId,
-                        vs.currentQuality.value
-                    )
-                ).setMimeType(MimeTypes.APPLICATION_M3U8).build()
-
-                setMediaItem(mediaItem)
-                setAudioAttributes(
-                    AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .setUsage(C.USAGE_MEDIA).build(), true
+        if (isOffsetBasedStream && smbItem == null) {
+            scope.launch {
+                isBuffering = true; exoPlayer.pause()
+                vs.playbackOffsetMs = safeTarget
+                val newOffsetSec = safeTarget / 1000.0
+                val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                    currentProgram.id,
+                    vs.currentQuality.value,
+                    currentSessionId,
+                    newOffsetSec
                 )
-                addListener(object : Player.Listener {
-                    override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        videoWidth = videoSize.width
-                        videoHeight = videoSize.height
-                        pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio
-                    }
-
-                    override fun onIsPlayingChanged(playing: Boolean) {
-                        vs.isPlayerPlaying = playing
-                    }
-
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        isBuffering = (playbackState == Player.STATE_BUFFERING)
-                    }
-
-                    override fun onPlayerError(error: PlaybackException) {
-                        Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
-                        scope.launch {
-                            isBuffering = true
-                            delay(3000L)
-                            prepare()
-                            playWhenReady = true
-                        }
-                    }
-
-                    override fun onMetadata(metadata: Metadata) {
-                        if (!vs.isSubtitleEnabled) return
-                        for (i in 0 until metadata.length()) {
-                            val entry = metadata.get(i)
-                            if (entry is PrivFrame && (entry.owner.contains(
-                                    "aribb24",
-                                    true
-                                ) || entry.owner.contains("B24", true))
-                            ) {
-                                val base64Data =
-                                    Base64.encodeToString(entry.privateData, Base64.NO_WRAP)
-                                webViewRef.value?.post {
-                                    webViewRef.value?.evaluateJavascript(
-                                        "if(window.receiveSubtitleData){ window.receiveSubtitleData($currentPosition, '$base64Data'); }",
-                                        null
-                                    )
-                                }
-                            }
-                        }
-                    }
-                })
-                if (initialPositionMs > 0) seekTo(initialPositionMs)
-                prepare(); playWhenReady = true
+                if (newUrl.isNotEmpty()) {
+                    val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
+                    resolveMimeType(newUrl)?.let { mediaItemBuilder.setMimeType(it) }
+                    exoPlayer.setMediaItem(mediaItemBuilder.build())
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                } else {
+                    if (fetchedDetail != null) onShowToast("シーク先ストリームの取得に失敗しました")
+                }
             }
+        } else if ((isEdcbDirect || isKonomiOriginal) && smbItem == null) {
+            // ★ 追加: 録画直接TS再生のシークはExoPlayerネイティブのseekTo()に頼らず、
+            // 目標バイト位置を計算してMediaItemを作り直す(VideoPlayerManager.kt参照)
+            val byteOffset = computeSeekByteOffset(safeTarget)
+            if (byteOffset != null) {
+                val currentItem = exoPlayer.currentMediaItem
+                if (currentItem != null) {
+                    vs.playbackOffsetMs = safeTarget
+                    pendingSeekByteRef.set(byteOffset)
+                    isBuffering = true
+                    exoPlayer.stop()
+                    exoPlayer.setMediaItem(currentItem)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }
+            } else {
+                onShowToast("ファイルサイズを取得できていないためシークできません")
+            }
+        } else {
+            exoPlayer.seekTo(safeTarget)
+        }
+        Unit
+    }
+
+    val skipToNextChapter = {
+        val basePos = getEffectivePositionMs()
+        val nextChapter = chapters.find { it.startTimeMs > basePos + 3000 }
+        if (nextChapter != null) {
+            performSeek(nextChapter.startTimeMs)
+        } else {
+            onShowToast("次のチャプターはありません")
+        }
+    }
+
+    val skipToPreviousChapter = {
+        val basePos = getEffectivePositionMs()
+        val reversedChapters = chapters.sortedByDescending { it.startTimeMs }
+        val prevChapter = reversedChapters.find { it.startTimeMs < basePos - 5000 }
+        if (prevChapter != null) {
+            performSeek(prevChapter.startTimeMs)
+        } else {
+            performSeek(0L)
+        }
+    }
+
+    LaunchedEffect(vs.isAutoCmSkipEnabled, chapters) {
+        var hasWarnedEmptyChapters = false
+        while (isActive) {
+            if (vs.isAutoCmSkipEnabled && exoPlayer.isPlaying) {
+                if (chapters.isNotEmpty()) {
+                    val currentPos = getCurrentPositionMs()
+                    val cmChapter =
+                        chapters.find { it.isCm && currentPos >= it.startTimeMs && currentPos < (it.endTimeMs - 1500) }
+                    if (cmChapter != null) {
+                        performSeek(cmChapter.endTimeMs)
+                        onShowToast("自動CMスキップ: 本編へ移動しました")
+                        delay(3000)
+                    }
+                } else {
+                    if (!hasWarnedEmptyChapters) {
+                        hasWarnedEmptyChapters = true
+                    }
+                }
+            } else {
+                hasWarnedEmptyChapters = false
+            }
+            delay(500)
+        }
+    }
+
+    var isFirstLoad by remember { mutableStateOf(true) }
+
+    // ★ 修正: 以前は isQualitiesLoaded がキーに含まれておらず、本文中でガード条件にだけ
+    // 使われていた。availableQualities の更新(再取得完了)と isQualitiesLoaded が true に
+    // 戻るタイミングがわずかにズレるレースがあり、
+    //  1. availableQualities の参照更新でこのeffectが再起動される
+    //  2. その瞬間はまだ isQualitiesLoaded=false(再取得の過渡状態)のため早期return
+    //  3. 直後に isQualitiesLoaded が true に戻るが、キーに含まれていないため
+    //     effectは再発火せず、再生開始処理(setMediaItem/prepare/play)が永久に走らない
+    // という不具合があった(実機ログで確認済み)。isQualitiesLoaded をキーに追加し、
+    // trueに戻った時点で確実にeffectが再評価されるようにする。
+    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities, isQualitiesLoaded) {
+        if (smbItem != null) {
+            isBuffering = true
+            vs.playbackOffsetMs = 0L
+            val mediaItem = MediaItem.fromUri(smbItem.path)
+            exoPlayer.setMediaItem(mediaItem)
+            if (isFirstLoad && initialPositionMs > 0) {
+                exoPlayer.seekTo(initialPositionMs)
+            }
+            isFirstLoad = false
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+            return@LaunchedEffect
+        }
+
+        if (currentProgram.id == 0 || !isQualitiesLoaded || vs.currentQuality.value.isBlank()) return@LaunchedEffect
+        if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) return@LaunchedEffect
+
+        isBuffering = true
+        val offsetSec = if (isFirstLoad && initialPositionMs > 0) {
+            vs.playbackOffsetMs = initialPositionMs; initialPositionMs / 1000.0
+        } else {
+            val currentPos = getCurrentPositionMs()
+            vs.playbackOffsetMs = currentPos; currentPos / 1000.0
+        }
+
+        val url = videoPlayerViewModel.resolveStreamUrl(
+            currentProgram.id,
+            vs.currentQuality.value,
+            currentSessionId,
+            offsetSec
+        )
+
+        if (url.isNotEmpty()) {
+            val mediaItemBuilder = MediaItem.Builder().setUri(url)
+            resolveMimeType(url)?.let { mediaItemBuilder.setMimeType(it) }
+            val mediaItem = mediaItemBuilder.build()
+            exoPlayer.setMediaItem(mediaItem)
+            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
+                exoPlayer.seekTo(initialPositionMs)
+            }
+            // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、初回再生位置の
+            // 復元はここではできない。ファイルサイズが判明してからバイト位置ベースで
+            // シークし直す(下のscope.launch参照)。
+            val shouldResumeViaByteSeek =
+                (isEdcbDirect || isKonomiOriginal) && isFirstLoad && initialPositionMs > 0
+            isFirstLoad = false
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+            if (shouldResumeViaByteSeek) {
+                scope.launch {
+                    var waitedMs = 0L
+                    while (fileSizeBytesRef.get() <= 0L && waitedMs < 8000L) {
+                        delay(200L)
+                        waitedMs += 200L
+                    }
+                    if (fileSizeBytesRef.get() > 0L) {
+                        performSeek(initialPositionMs)
+                    }
+                }
+            }
+        } else {
+            if (fetchedDetail != null) onShowToast("ストリームURLの取得に失敗しました")
+        }
     }
 
     LaunchedEffect(isSceneSearchOpen, isChapterListOpen) {
@@ -278,18 +580,19 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(vs.indicatorState) {
         if (vs.indicatorState != null) {
-            delay(2000)
-            vs.indicatorState = null
+            delay(2000); vs.indicatorState = null
         }
     }
 
-    DisposableEffect(vs.currentQuality, currentSessionId) {
-        recordViewModel.startStreamMaintenance(
-            program,
-            vs.currentQuality.value,
-            currentSessionId
-        ) { exoPlayer.currentPosition / 1000.0 }
-        onDispose { recordViewModel.stopStreamMaintenance() }
+    DisposableEffect(vs.currentQuality, currentSessionId, smbItem) {
+        if (smbItem == null) {
+            videoPlayerViewModel.startStreamMaintenance(
+                program,
+                vs.currentQuality.value,
+                currentSessionId
+            ) { getCurrentPositionMs() / 1000.0 }
+        }
+        onDispose { if (smbItem == null) videoPlayerViewModel.stopStreamMaintenance() }
     }
 
     LaunchedEffect(
@@ -297,287 +600,141 @@ fun VideoPlayerScreen(
         isSubMenuOpen,
         isSceneSearchOpen,
         isChapterListOpen,
-        vs.lastInteractionTime
+        isProgramInfoOpen,
+        isModernSettingsOpen,
+        vs.lCropMode,
+        vs.lastInteractionTime,
+        vs.isSeekBarFocused
     ) {
-        if (showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen) {
+        if (showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen && !isProgramInfoOpen && !isModernSettingsOpen && !vs.isSeekBarFocused && vs.lCropMode == LCropMode.HIDDEN) {
             delay(5000); onShowControlsChange(false)
         }
     }
 
-    LaunchedEffect(isSubMenuOpen, isSceneSearchOpen, isChapterListOpen, showControls) {
-        // ★ PiPモード中はフォーカスを奪わないようにする
+    var wasControlsVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(
+        isSubMenuOpen,
+        isSceneSearchOpen,
+        isChapterListOpen,
+        isProgramInfoOpen,
+        isModernSettingsOpen,
+        showControls
+    ) {
         if (isPiPMode) return@LaunchedEffect
-
         delay(150)
+
         if (isSubMenuOpen) {
             subMenuFocusRequester.safeRequestFocus(TAG)
-        } else if (!isSceneSearchOpen && !isChapterListOpen && !showControls) {
+        } else if (showControls && isModern && !isSubOverlayOpen) {
+            if (!wasControlsVisible) {
+                playerControlsFocusRequester.safeRequestFocus(TAG)
+            }
+        } else if (!showControls && vs.lCropMode == LCropMode.HIDDEN) {
             mainFocusRequester.safeRequestFocus(TAG)
         }
+
+        wasControlsVisible = showControls
     }
+
+    BackHandler(enabled = isPiPMode) {}
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onKeyEvent { keyEvent ->
-                // ★ PiPモード中はキーイベントを全てスルー（裏側のホーム画面に処理させる）
-                if (isPiPMode) return@onKeyEvent false
-
-                if (isSubMenuOpen || isSceneSearchOpen || isChapterListOpen) return@onKeyEvent false
-
-                val keyCode = keyEvent.nativeKeyEvent.keyCode
-                val repeatCount = keyEvent.nativeKeyEvent.repeatCount
-                val isActionDown = keyEvent.type == KeyEventType.KeyDown
-                val isActionUp = keyEvent.type == KeyEventType.KeyUp
-
-                if (isActionDown) {
+            .onPreviewKeyEvent { keyEvent ->
+                // ★ UIのボタンにフォーカスがある場合に操作していてもUIが消えてしまう問題の修正
+                // キー操作が行われるたびに最終インタラクション時間を更新し、非表示タイマーをリセットする
+                if (keyEvent.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
                     vs.lastInteractionTime = System.currentTimeMillis()
                 }
 
-                when (keyCode) {
-                    // ★ 戻るキー長押しの実装
-                    NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                vs.backKeyDownTime = System.currentTimeMillis()
-                                vs.isBackKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - vs.backKeyDownTime
-                                if (!vs.isBackKeyLongPressed && elapsed > 500) {
-                                    vs.isBackKeyLongPressed = true
-                                    onPiPRequested()
-                                }
-                            }
-                            return@onKeyEvent true
-                        } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - vs.backKeyDownTime
-                            if (!vs.isBackKeyLongPressed && elapsed < 500) {
-                                onBackPressed()
-                            }
-                            vs.backKeyDownTime = 0L
-                            vs.isBackKeyLongPressed = false
-                            return@onKeyEvent true
-                        }
-                        false
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
-                        if (isActionDown) {
-                            onShowControlsChange(true)
-                            vs.togglePlayPause(exoPlayer.isPlaying)
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                rightKeyDownTime = System.currentTimeMillis()
-                                isRightKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - rightKeyDownTime
-                                if (!isRightKeyLongPressed && elapsed > 500) {
-                                    isRightKeyLongPressed = true
-                                    onShowControlsChange(true)
-                                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val boundaries = getChapterBoundaries(duration, mergedCms)
-                                    if (boundaries.size <= 2) {
-                                        exoPlayer.seekTo(
-                                            (exoPlayer.currentPosition + 180_000).coerceAtMost(
-                                                duration
-                                            )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastForward, "+3m")
-                                    } else {
-                                        val currentPos = exoPlayer.currentPosition
-                                        val nextBoundary =
-                                            boundaries.firstOrNull { it > currentPos + 1000 }
-                                        exoPlayer.seekTo(nextBoundary ?: duration)
-                                        vs.updateIndicator(Icons.Default.SkipNext, "次チャプター")
-                                    }
-                                }
-                            }
-                        } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - rightKeyDownTime
-                            if (!isRightKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                exoPlayer.seekTo(exoPlayer.currentPosition + 30000)
-                                vs.updateIndicator(Icons.Default.FastForward, "+30s")
-                            }
-                            rightKeyDownTime = 0L
-                            isRightKeyLongPressed = false
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                leftKeyDownTime = System.currentTimeMillis()
-                                isLeftKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - leftKeyDownTime
-                                if (!isLeftKeyLongPressed && elapsed > 500) {
-                                    isLeftKeyLongPressed = true
-                                    onShowControlsChange(true)
-                                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val boundaries = getChapterBoundaries(duration, mergedCms)
-                                    if (boundaries.size <= 2) {
-                                        exoPlayer.seekTo(
-                                            (exoPlayer.currentPosition - 60_000).coerceAtLeast(
-                                                0L
-                                            )
-                                        )
-                                        vs.updateIndicator(Icons.Default.FastRewind, "-1m")
-                                    } else {
-                                        val currentPos = exoPlayer.currentPosition
-                                        val prevBoundary =
-                                            boundaries.lastOrNull { it < currentPos - 1000 }
-                                        exoPlayer.seekTo(prevBoundary ?: 0L)
-                                        vs.updateIndicator(
-                                            Icons.Default.SkipPrevious,
-                                            "前チャプター"
-                                        )
-                                    }
-                                }
-                            }
-                        } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - leftKeyDownTime
-                            if (!isLeftKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                exoPlayer.seekTo(exoPlayer.currentPosition - 10000)
-                                vs.updateIndicator(Icons.Default.FastRewind, "-10s")
-                            }
-                            leftKeyDownTime = 0L
-                            isLeftKeyLongPressed = false
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (isActionDown) {
-                            if (repeatCount == 0) {
-                                downKeyDownTime = System.currentTimeMillis()
-                                isDownKeyLongPressed = false
-                            } else {
-                                val elapsed = System.currentTimeMillis() - downKeyDownTime
-                                if (!isDownKeyLongPressed && elapsed > 500) {
-                                    isDownKeyLongPressed = true
-                                    val duration = exoPlayer.duration.coerceAtLeast(1L)
-                                    val mergedCms =
-                                        mergeCmSections(currentProgram.recordedVideo.cmSections)
-                                    val hasChapters =
-                                        getChapterBoundaries(duration, mergedCms).size > 2
-                                    if (hasChapters) {
-                                        isChapterListOpen = true
-                                        onShowControlsChange(true)
-                                    }
-                                }
-                            }
-                        } else if (isActionUp) {
-                            val elapsed = System.currentTimeMillis() - downKeyDownTime
-                            if (!isDownKeyLongPressed && elapsed < 500) {
-                                onShowControlsChange(true)
-                                onSceneSearchToggle(true)
-                            }
-                            downKeyDownTime = 0L
-                            isDownKeyLongPressed = false
-                        }
-                        true
-                    }
-
-                    NativeKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (isActionDown) {
-                            onShowControlsChange(true)
-                            onSubMenuToggle(true)
-                        }
-                        true
-                    }
-
-                    else -> false
-                }
-            }) {
+                vs.handleKeyEvent(
+                    keyEvent = keyEvent,
+                    isPiPMode = isPiPMode,
+                    isModern = isModern,
+                    showControls = showControls,
+                    isSubOverlayOpen = isSubOverlayOpen,
+                    chapters = chapters,
+                    totalDurationMs = totalDurationForControls,
+                    getCurrentPositionMs = getCurrentPositionMs,
+                    performSeek = performSeek,
+                    triggerSeekingPreview = triggerSeekingPreview,
+                    onShowControlsChange = onShowControlsChange,
+                    onPiPRequested = onPiPRequested,
+                    onBackPressed = onBackPressed,
+                    onSceneSearchToggle = { onSceneSearchToggle(it) },
+                    onChapterListToggle = { isChapterListOpen = it },
+                    onSubMenuToggle = onSubMenuToggle,
+                    exoPlayerIsPlaying = exoPlayer.playWhenReady,
+                    onPause = { exoPlayer.pause() },
+                    onPlay = { exoPlayer.play() },
+                    onSkipPreviousChapter = skipToPreviousChapter,
+                    onSkipNextChapter = skipToNextChapter
+                )
+            }
+    ) {
         AndroidView(
             factory = { ctx ->
                 AspectRatioFrameLayout(ctx).apply {
                     keepScreenOn = true
-
-                    val textureView = TextureView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                    }
-                    addView(textureView)
+                    val surfaceView =
+                        SurfaceView(ctx).apply { layoutParams = ViewGroup.LayoutParams(-1, -1) }
+                    addView(surfaceView)
                 }
             },
             update = { view ->
-                val textureView = view.getChildAt(0) as TextureView
-                exoPlayer.setVideoTextureView(textureView)
-
+                val surfaceView = view.getChildAt(0) as SurfaceView
+                exoPlayer.setVideoSurfaceView(surfaceView)
                 if (videoWidth > 0 && videoHeight > 0) {
                     val ratio =
                         (videoWidth.toFloat() * pixelWidthHeightRatio) / videoHeight.toFloat()
                     view.setAspectRatio(ratio)
-
-                    val isAnamorphic =
-                        (videoWidth == 1440 && videoHeight == 1080 && pixelWidthHeightRatio == 1.0f)
-                    val is16by9 = ratio >= 1.7f
-                    val targetMode = if (isAnamorphic || is16by9) {
-                        AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    } else {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                    if (view.resizeMode != targetMode) {
-                        view.resizeMode = targetMode
-                    }
+                    val targetMode =
+                        if (ratio >= 1.7f) AspectRatioFrameLayout.RESIZE_MODE_FILL else AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    if (view.resizeMode != targetMode) view.resizeMode = targetMode
                 }
             },
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    if (vs.lCropEnabled) {
+                        scaleX = vs.lCropZoom / 100f; scaleY = vs.lCropZoom / 100f
+                        translationX = size.width * (vs.lCropX / 100f); translationY =
+                            size.height * (vs.lCropY / 100f)
+                        transformOrigin = when (vs.lCropOrigin) {
+                            ZoomOrigin.TopLeft -> TransformOrigin(0f, 0f)
+                            ZoomOrigin.TopRight -> TransformOrigin(1f, 0f)
+                            ZoomOrigin.BottomLeft -> TransformOrigin(0f, 1f)
+                            ZoomOrigin.BottomRight -> TransformOrigin(1f, 1f)
+                        }
+                    } else {
+                        scaleX = 1f; scaleY = 1f; translationX = 0f; translationY =
+                            0f; transformOrigin = TransformOrigin.Center
+                    }
+                }
                 .focusRequester(mainFocusRequester)
-                // ★ PiPモード中はフォーカスを受け取らないようにする
-                // ★ VideoPlayerScreenにはisMiniListOpenが存在しないため削除
-                .focusable(!isPiPMode && !isSubMenuOpen)
+                .focusable(!isPiPMode && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN)
         )
 
-        // ★ PiPモード時は字幕や実況などのリソースを食うUIはすべて非表示にし、パフォーマンスを確保する
         if (!isPiPMode) {
             val commentLayer = @Composable {
                 if (isHeavyUiReady && vs.isCommentEnabled) {
                     ArchivedCommentOverlay(
-                        Modifier.fillMaxSize(), allComments, { exoPlayer.currentPosition },
+                        Modifier.fillMaxSize(), allComments, { getCurrentPositionMs() },
                         vs.isPlayerPlaying, vs.isCommentEnabled, commentSpeed,
                         commentFontSizeScale, commentOpacity, commentMaxLines, isEmulator
                     )
                 }
             }
-
             val subtitleLayer = @Composable {
                 if (isHeavyUiReady) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                webViewRef.value = this
-                            }
-                        },
-                        update = {
-                            it.visibility =
-                                if (vs.isSubtitleEnabled) View.VISIBLE else View.INVISIBLE
-                        },
-                        modifier = Modifier.fillMaxSize()
+                    NativeCaptionOverlay(
+                        cue = subtitleCue.value,
+                        visible = vs.isSubtitleEnabled && !isSubtitleBlockingOverlayOpen,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset(y = -subtitleOffset)
                     )
                 }
             }
@@ -587,62 +744,224 @@ fun VideoPlayerScreen(
             } else {
                 commentLayer(); subtitleLayer()
             }
-
-            if (isBuffering) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center),
-                    color = androidx.compose.ui.graphics.Color.White
-                )
-            }
+            if (isBuffering) CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.White
+            )
 
             PlayerControls(
-                exoPlayer,
-                currentProgram.title,
-                showControls && !isSubMenuOpen && !isSceneSearchOpen && !isChapterListOpen
+                exoPlayer = exoPlayer,
+                program = currentProgram,
+                tiledThumbnailUrl = tiledThumbnailUrl,
+                allComments = allComments,
+                isVisible = showControls && !isSubOverlayOpen && vs.lCropMode == LCropMode.HIDDEN,
+                isSeekingPreviewVisible = isSeekingPreviewVisible,
+                isModernUi = isModern,
+                isPlaying = exoPlayer.playWhenReady,
+                hasChapters = chapters.isNotEmpty(),
+                externalChapters = chapters,
+                currentPositionMs = getEffectivePositionMs(),
+                totalDurationMs = totalDurationForControls,
+                controlsFocusRequester = playerControlsFocusRequester,
+                onSeekBarFocusChanged = { vs.isSeekBarFocused = it },
+                onPlayPauseToggle = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    vs.togglePlayPause(exoPlayer.playWhenReady)
+                    if (exoPlayer.playWhenReady) exoPlayer.pause() else exoPlayer.play()
+                },
+                onSeekBack = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos - 10_000).coerceAtLeast(0L))
+                },
+                onSeekForward = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    val basePos = getEffectivePositionMs()
+                    performSeek((basePos + 30_000).coerceAtMost(totalDurationForControls))
+                },
+                onSeekRequested = { performSeek(it) }, // ★ 追加: シークバー操作によるシーク実行
+                onSkipPreviousChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    skipToPreviousChapter()
+                },
+                onSkipNextChapter = {
+                    vs.lastInteractionTime = System.currentTimeMillis()
+                    skipToNextChapter()
+                },
+                onChapterListToggle = { isChapterListOpen = true; onShowControlsChange(true) },
+                onInfoToggle = { isProgramInfoOpen = true; onShowControlsChange(true) },
+                onSettingsToggle = {
+                    if (isModern) isModernSettingsOpen = true else onSubMenuToggle(
+                        true
+                    )
+                }
             )
+
+            AnimatedVisibility(visible = isProgramInfoOpen, enter = fadeIn(), exit = fadeOut()) {
+                ProgramInfoOverlay(
+                    program = currentProgram,
+                    onClose = { isProgramInfoOpen = false })
+            }
 
             AnimatedVisibility(
                 isSceneSearchOpen,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-            ) {
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()) {
                 SceneSearchOverlay(
-                    currentProgram,
-                    exoPlayer.currentPosition,
-                    konomiIp,
-                    konomiPort,
-                    {
-                        exoPlayer.seekTo(it); onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
-                    }
-                    },
-                    {
-                        onSceneSearchToggle(false); scope.launch {
-                        delay(200); mainFocusRequester.safeRequestFocus(TAG)
-                    }
-                    })
+                    program = currentProgram,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = getEffectivePositionMs(),
+                    onSeekRequested = { performSeek(it); onSceneSearchToggle(false) },
+                    onClose = { onSceneSearchToggle(false) },
+                    requestHeaders = cfAccessHeaders)
             }
 
             AnimatedVisibility(
                 isChapterListOpen,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-            ) {
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()) {
                 ChapterListOverlay(
-                    currentProgram,
-                    exoPlayer.currentPosition,
-                    konomiIp,
-                    konomiPort,
-                    {
-                        exoPlayer.seekTo(it)
-                        isChapterListOpen = false
-                        scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
+                    program = currentProgram,
+                    chapters = chapters,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = getEffectivePositionMs(),
+                    onSeekRequested = { performSeek(it); isChapterListOpen = false },
+                    onClose = { isChapterListOpen = false },
+                    requestHeaders = cfAccessHeaders)
+            }
+
+            AnimatedVisibility(visible = isModernSettingsOpen, enter = fadeIn(), exit = fadeOut()) {
+                ModernVideoSettingsOverlay(
+                    currentAudioMode = vs.currentAudioMode,
+                    currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
+                    currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled,
+                    isLCropEnabled = vs.lCropEnabled,
+                    isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
+                    availableQualities = availableQualities,
+                    onAudioToggle = {
+                        // Stateを変更するだけ。実際の適用は VideoPlayerManager の LaunchedEffect が検知して行います。
+                        vs.currentAudioMode =
+                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
-                    {
-                        isChapterListOpen = false
-                        scope.launch { delay(200); mainFocusRequester.safeRequestFocus(TAG) }
-                    }
+                    onSpeedToggle = {
+                        val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); vs.currentSpeed =
+                        speeds[(speeds.indexOf(vs.currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(
+                        vs.currentSpeed
+                    ); onShowToast("速度: ${vs.currentSpeed}x")
+                    },
+                    onSubtitleToggle = {
+                        vs.isSubtitleEnabled =
+                            !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
+                    },
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull {
+                            it.id == currentSubtitleLanguageId
+                        }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
+                    },
+                    onQualitySelect = {
+                        if (smbItem != null) {
+                            onShowToast("SMB再生中は画質の変更はできません")
+                            isModernSettingsOpen = false
+                            return@ModernVideoSettingsOverlay
+                        }
+                        if (vs.currentQuality != it) {
+                            vs.playbackOffsetMs = getCurrentPositionMs()
+                            vs.currentQuality = it
+                            videoPlayerViewModel.saveVideoQuality(it.value)
+                            val player = exoPlayer
+                            val currentPos = getCurrentPositionMs()
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
+                                scope.launch {
+                                    isBuffering = true
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        0.0
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
+                                }
+                            } else {
+                                vs.playbackOffsetMs =
+                                    currentPos - (initialPositionMs * 1000).toLong()
+                                scope.launch {
+                                    isBuffering = true;
+                                    val offsetSec = currentPos / 1000.0;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        offsetSec
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()
+                                }
+                            }
+                            onShowToast("画質を ${it.label} に変更しました")
+                        }
+                        isModernSettingsOpen = false; vs.lastInteractionTime =
+                        System.currentTimeMillis()
+                    },
+                    onCommentToggle = {
+                        vs.isCommentEnabled =
+                            !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
+                    },
+                    onLCropToggle = {
+                        vs.lCropEnabled = !vs.lCropEnabled
+                        if (vs.lCropEnabled) {
+                            // ★ 修正: このコールバックはモダン設定パネル(isModernSettingsOpen)側のものなので、
+                            // 別UIのフラグ(isSubMenuOpen)を閉じるonSubMenuToggle(false)では自分自身が
+                            // 閉じない。isModernSettingsOpenを直接falseにしてL字クロップメニューに
+                            // 差し替える(閉じないとVideoLCropOverlayと二重表示・フォーカス競合する)。
+                            vs.lCropMode =
+                                LCropMode.MENU; isModernSettingsOpen = false; onShowControlsChange(false)
+                        } else {
+                            vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
+                                0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
+                        }
+                    },
+                    onAutoCmSkipToggle = {
+                        vs.isAutoCmSkipEnabled = !vs.isAutoCmSkipEnabled
+                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) onShowToast("チャプター情報がないためスキップできません") else onShowToast(
+                            "自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}"
+                        )
+                    },
+                    onClose = { isModernSettingsOpen = false }
                 )
+            }
+
+            AnimatedVisibility(
+                visible = vs.lCropMode != LCropMode.HIDDEN,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                VideoLCropOverlay(
+                    state = vs,
+                    onClose = {
+                        vs.lCropMode = LCropMode.HIDDEN
+                        scope.launch {
+                            delay(200)
+                            mainFocusRequester.safeRequestFocus(TAG)
+                        }
+                    })
             }
 
             AnimatedVisibility(
@@ -650,57 +969,118 @@ fun VideoPlayerScreen(
                 enter = slideInVertically { -it } + fadeIn(),
                 exit = slideOutVertically { -it } + fadeOut()) {
                 VideoTopSubMenuUI(
-                    vs.currentAudioMode, vs.currentSpeed, vs.isSubtitleEnabled,
-                    vs.currentQuality, vs.isCommentEnabled, subMenuFocusRequester,
-                    {
+                    currentAudioMode = vs.currentAudioMode,
+                    currentSpeed = vs.currentSpeed,
+                    isSubtitleEnabled = vs.isSubtitleEnabled,
+                    subtitleLanguages = subtitleLanguages,
+                    currentSubtitleLanguageId = currentSubtitleLanguageId,
+                    currentQuality = vs.currentQuality,
+                    isCommentEnabled = vs.isCommentEnabled,
+                    isLCropEnabled = vs.lCropEnabled,
+                    isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
+                    availableQualities = availableQualities,
+                    focusRequester = subMenuFocusRequester,
+                    onAudioToggle = {
+                        // Stateを変更するだけ。実際の適用は VideoPlayerManager の LaunchedEffect が検知して行います。
                         vs.currentAudioMode =
-                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN;
-                        val tracks =
-                            exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }; if (tracks.size >= 2) exoPlayer.trackSelectionParameters =
-                        exoPlayer.trackSelectionParameters.buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO).addOverride(
-                                TrackSelectionOverride(
-                                    tracks[if (vs.currentAudioMode == AudioMode.SUB) 1 else 0].mediaTrackGroup,
-                                    0
-                                )
-                            )
-                            .build(); onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
+                            if (vs.currentAudioMode == AudioMode.MAIN) AudioMode.SUB else AudioMode.MAIN
+                        onShowToast("音声: ${if (vs.currentAudioMode == AudioMode.MAIN) "主音声" else "副音声"}")
                     },
-                    {
+                    onSpeedToggle = {
                         val speeds = listOf(1.0f, 1.5f, 2.0f, 0.8f); vs.currentSpeed =
                         speeds[(speeds.indexOf(vs.currentSpeed) + 1) % speeds.size]; exoPlayer.setPlaybackSpeed(
                         vs.currentSpeed
                     ); onShowToast("速度: ${vs.currentSpeed}x")
                     },
-                    {
+                    onSubtitleToggle = {
                         vs.isSubtitleEnabled =
                             !vs.isSubtitleEnabled; onShowToast("字幕: ${if (vs.isSubtitleEnabled) "表示" else "非表示"}")
                     },
-                    { vs.currentQuality = it; onShowToast("画質: ${it.label}") },
-                    {
+                    onSubtitleLanguageToggle = {
+                        currentSubtitleLanguageId = if (currentSubtitleLanguageId == 1) 2 else 1
+                        val selectedLanguage = subtitleLanguages.firstOrNull { it.id == currentSubtitleLanguageId }
+                        onShowToast(
+                            "字幕言語: 第${currentSubtitleLanguageId}言語" +
+                                (selectedLanguage?.let { "・${it.displayName}" } ?: "")
+                        )
+                    },
+                    onQualitySelect = {
+                        if (smbItem != null) {
+                            onShowToast("SMB再生中は画質の変更はできません")
+                            onSubMenuToggle(false)
+                            return@VideoTopSubMenuUI
+                        }
+                        if (vs.currentQuality != it) {
+                            vs.playbackOffsetMs = getCurrentPositionMs()
+                            vs.currentQuality = it
+                            videoPlayerViewModel.saveVideoQuality(it.value)
+                            val player = exoPlayer
+                            val currentPos = getCurrentPositionMs()
+                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
+                            // 参照するため、ここでは切替先(it.value)から改めて判定する
+                            val isTargetKonomiOriginal =
+                                backendType == "KONOMITV" && it.value == "original"
+                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                                // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
+                                // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
+                                scope.launch {
+                                    isBuffering = true
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        0.0
+                                    )
+                                    val byteOffset = computeSeekByteOffset(currentPos)
+                                    if (byteOffset != null) pendingSeekByteRef.set(byteOffset)
+                                    player.setMediaItem(MediaItem.fromUri(newUrl))
+                                    player.prepare()
+                                    player.playWhenReady = true
+                                }
+                            } else {
+                                vs.playbackOffsetMs =
+                                    currentPos - (initialPositionMs * 1000).toLong()
+                                scope.launch {
+                                    isBuffering = true;
+                                    val offsetSec = currentPos / 1000.0;
+                                    val newUrl = videoPlayerViewModel.resolveStreamUrl(
+                                        program.id,
+                                        it.value,
+                                        currentSessionId,
+                                        offsetSec
+                                    ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()
+                                }
+                            }
+                            onShowToast("画質を ${it.label} に変更しました")
+                        }
+                        onSubMenuToggle(false); vs.lastInteractionTime = System.currentTimeMillis()
+                    },
+                    onCommentToggle = {
                         vs.isCommentEnabled =
                             !vs.isCommentEnabled; onShowToast("実況: ${if (vs.isCommentEnabled) "表示" else "非表示"}")
-                    }
+                    },
+                    onLCropToggle = {
+                        vs.lCropEnabled = !vs.lCropEnabled
+                        if (vs.lCropEnabled) {
+                            vs.lCropMode =
+                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
+                        } else {
+                            vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
+                                0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
+                        }
+                    },
+                    onAutoCmSkipToggle = {
+                        vs.isAutoCmSkipEnabled = !vs.isAutoCmSkipEnabled
+                        if (vs.isAutoCmSkipEnabled && chapters.size <= 1) onShowToast("チャプター情報がないためスキップできません") else onShowToast(
+                            "自動CMスキップ: ${if (vs.isAutoCmSkipEnabled) "ON" else "OFF"}"
+                        )
+                    },
                 )
             }
-            PlaybackIndicator(vs.indicatorState)
-        }
-    }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, exoPlayer) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                exoPlayer.pause(); recordViewModel.updateWatchHistory(
-                    program,
-                    exoPlayer.currentPosition / 1000.0
-                )
+            if (!isModern) {
+                PlaybackIndicator(vs.indicatorState)
             }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            recordViewModel.updateWatchHistory(program, exoPlayer.currentPosition / 1000.0)
-            lifecycleOwner.lifecycle.removeObserver(observer); exoPlayer.release()
         }
     }
 }

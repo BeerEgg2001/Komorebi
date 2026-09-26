@@ -66,6 +66,48 @@ void CServiceFilter::SetSuperimposeMode(int mode)
     m_superimposeInsertManagementPacket = !!(mode & 4);
 }
 
+CServiceFilter::State CServiceFilter::ExportState() const
+{
+    State state;
+    // m_pcrPid が0のまま(PAT/PMT未解決)の状態を持ち出しても意味が無いため無効扱いにする。
+    if (m_pcrPid == 0) {
+        return state;
+    }
+    state.valid = true;
+    state.videoPid = m_videoPid;
+    state.audio1Pid = m_audio1Pid;
+    state.audio2Pid = m_audio2Pid;
+    state.captionPid = m_captionPid;
+    state.superimposePid = m_superimposePid;
+    state.pcrPid = m_pcrPid;
+    state.audio1StreamType = m_audio1StreamType;
+    state.audio2StreamType = m_audio2StreamType;
+    state.audio1PtsPcrDiff = m_audio1PtsPcrDiff;
+    state.audio2PtsPcrDiff = m_audio2PtsPcrDiff;
+    state.isAudio1DualMono = m_isAudio1DualMono;
+    return state;
+}
+
+void CServiceFilter::ImportState(const State &state)
+{
+    if (!state.valid) {
+        return;
+    }
+    // PID自体はAddPmt()が次のPMTで即座に上書きするため、ここでの目的は
+    // 「PMTを拾い直すまでの一瞬」を過去の値で埋めることと、PTS-PCR差分の学習結果を引き継ぐこと。
+    m_videoPid = state.videoPid;
+    m_audio1Pid = state.audio1Pid;
+    m_audio2Pid = state.audio2Pid;
+    m_captionPid = state.captionPid;
+    m_superimposePid = state.superimposePid;
+    m_pcrPid = state.pcrPid;
+    m_audio1StreamType = state.audio1StreamType;
+    m_audio2StreamType = state.audio2StreamType;
+    m_audio1PtsPcrDiff = state.audio1PtsPcrDiff;
+    m_audio2PtsPcrDiff = state.audio2PtsPcrDiff;
+    m_isAudio1DualMono = state.isAudio1DualMono;
+}
+
 void CServiceFilter::AddPacket(const uint8_t *packet)
 {
     if (m_programNumberOrIndex == 0) {

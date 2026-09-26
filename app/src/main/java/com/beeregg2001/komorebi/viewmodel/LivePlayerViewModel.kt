@@ -1,0 +1,1425 @@
+@file:OptIn(UnstableApi::class)
+
+package com.beeregg2001.komorebi.ui.live
+
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.util.Log
+import androidx.annotation.RequiresApi
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.media3.common.*
+import androidx.media3.common.util.TimestampAdjuster
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.TsExtractor
+import com.beeregg2001.komorebi.NativeLib
+import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
+import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.model.BackendConfig
+import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationDataMapper
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
+import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionDecoder
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
+import com.beeregg2001.komorebi.util.TsReadExDataSourceFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import org.json.JSONObject
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+
+@RequiresApi(Build.VERSION_CODES.O)
+@HiltViewModel
+class LivePlayerViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val liveProvider: LiveProvider,
+    private val recordProvider: RecordProvider,
+    private val epgStationLiveRepository: EpgStationLiveRepository,
+    private val settingsRepository: SettingsRepository,
+    private val livePlayerFactory: LivePlayerFactory,
+    private val liveJikkyoManager: LiveJikkyoManager,
+    private val recordSyncEngine: RecordSyncEngine
+) : ViewModel() {
+
+    companion object {
+        private const val TAG = "LivePlayerViewModel"
+        private const val MAX_AUTO_RETRY = 2
+    }
+
+    private val gson = Gson()
+
+    private val _mainPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val mainPlayer: StateFlow<ExoPlayer?> = _mainPlayer.asStateFlow()
+
+    private val _dualPlayer = MutableStateFlow<ExoPlayer?>(null)
+    val dualPlayer: StateFlow<ExoPlayer?> = _dualPlayer.asStateFlow()
+
+    private val mainTsDataSourceFactory = TsReadExDataSourceFactory(NativeLib(), emptyArray())
+    private val dualTsDataSourceFactory = TsReadExDataSourceFactory(NativeLib(), emptyArray())
+
+    private val _mainPlayerError = MutableStateFlow<String?>(null)
+    val mainPlayerError: StateFlow<String?> = _mainPlayerError.asStateFlow()
+
+    private val _mainSseStatus = MutableStateFlow("Standby")
+    val mainSseStatus: StateFlow<String> = _mainSseStatus.asStateFlow()
+
+    private val _mainSseDetail = MutableStateFlow(AppStrings.SSE_CONNECTING)
+    val mainSseDetail: StateFlow<String> = _mainSseDetail.asStateFlow()
+
+    private val _mainSignalInfo = MutableStateFlow(SignalMetadata())
+    val mainSignalInfo: StateFlow<SignalMetadata> = _mainSignalInfo.asStateFlow()
+
+    private val _dualSseStatus = MutableStateFlow("Standby")
+    val dualSseStatus: StateFlow<String> = _dualSseStatus.asStateFlow()
+
+    private val _dualSseDetail = MutableStateFlow(AppStrings.SSE_CONNECTING)
+    val dualSseDetail: StateFlow<String> = _dualSseDetail.asStateFlow()
+
+    private val _mainSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val mainSubtitleEvents: SharedFlow<NativeCaptionCue> = _mainSubtitleEvents.asSharedFlow()
+
+    private val _dualSubtitleEvents = MutableSharedFlow<NativeCaptionCue>(
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val dualSubtitleEvents: SharedFlow<NativeCaptionCue> = _dualSubtitleEvents.asSharedFlow()
+
+    private val _mainSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val mainSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _mainSubtitleLanguages.asStateFlow()
+
+    private val _dualSubtitleLanguages = MutableStateFlow<List<NativeCaptionLanguage>>(emptyList())
+    val dualSubtitleLanguages: StateFlow<List<NativeCaptionLanguage>> = _dualSubtitleLanguages.asStateFlow()
+
+    private val _mainSubtitleLanguageId = MutableStateFlow(1)
+    val mainSubtitleLanguageId: StateFlow<Int> = _mainSubtitleLanguageId.asStateFlow()
+
+    private val _dualSubtitleLanguageId = MutableStateFlow(1)
+    val dualSubtitleLanguageId: StateFlow<Int> = _dualSubtitleLanguageId.asStateFlow()
+
+    private val _availableSources = MutableStateFlow<List<StreamSource>>(emptyList())
+    val availableSources: StateFlow<List<StreamSource>> = _availableSources.asStateFlow()
+
+    private val _availableQualities =
+        MutableStateFlow<List<StreamQuality>>(StreamQuality.DEFAULT_QUALITIES)
+    val availableQualities: StateFlow<List<StreamQuality>> = _availableQualities.asStateFlow()
+
+    private val _isQualitiesLoaded = MutableStateFlow(false)
+    val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
+
+    // ★ 追加: 現在の画質一覧を読み込んだ対象(ストリームソース, EDCB直接再生か)。
+    // 画面側はプレイヤー起動直後に初期値のKONOMITVで一度取得を始め、ソース確定後に取り直す。
+    // どのソース向けの一覧かを区別できないと、KonomiTV用の一覧で保存済み画質を照合して
+    // 「一覧に無い」と誤判定し、EPGStation等の画質設定を先頭の画質で上書きしてしまっていた。
+    private val _loadedQualitiesKey = MutableStateFlow<Pair<StreamSource, Boolean>?>(null)
+    val loadedQualitiesKey: StateFlow<Pair<StreamSource, Boolean>?> = _loadedQualitiesKey.asStateFlow()
+    private var qualityFetchJob: Job? = null
+
+    private val _currentLogoUrl = MutableStateFlow<String>("")
+    val currentLogoUrl: StateFlow<String> = _currentLogoUrl.asStateFlow()
+
+    private val _shouldCropLogo = MutableStateFlow<Boolean>(false)
+    val shouldCropLogo: StateFlow<Boolean> = _shouldCropLogo.asStateFlow()
+
+    val liveComments: SharedFlow<LiveComment> = liveJikkyoManager.liveComments
+    val clearCommentsEvent: SharedFlow<Unit> = liveJikkyoManager.clearCommentsEvent
+
+    private val _mainBackendType = MutableStateFlow("KONOMITV")
+    val mainBackendType: StateFlow<String> = _mainBackendType.asStateFlow()
+
+    @Volatile
+    private var isSubtitleEnabled = false
+    private val mainCaptionDecoder = NativeCaptionDecoder()
+    private val dualCaptionDecoder = NativeCaptionDecoder()
+    private var signalPollJob: Job? = null
+
+    private var mainPlaybackJob: Job? = null
+    private var dualPlaybackJob: Job? = null
+
+    // ★ 追加: EPGStationのライブHLSはサーバー側が15秒の停止タイマーを持ち、
+    // PUT /api/streams/{streamId}/keepでしかリセットされない(stuayu/EPGStation
+    // StreamBaseModel.ts)。以前はkeepを一切送っていなかったため、ライブHLSは
+    // 再生開始から約15秒で必ず停止していた。録画側(VideoPlayerViewModel.
+    // startStreamMaintenance())と同じ4秒間隔のジョブをライブ側にも用意する。
+    private var mainLiveKeepAliveJob: Job? = null
+    private var dualLiveKeepAliveJob: Job? = null
+
+    private val mainPlaybackMutex = Mutex()
+    private val dualPlaybackMutex = Mutex()
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    private var mainEventSource: EventSource? = null
+    private var dualEventSource: EventSource? = null
+
+    private var mainCurrentSource = StreamSource.KONOMITV
+    private var mainIsEdcbDirect = false
+    private var mainCurrentChannel: Channel? = null
+    private var mainCurrentQuality: StreamQuality? = null
+    private var mainAutoRetryCount = 0
+
+    private var dualCurrentSource = StreamSource.KONOMITV
+    private var dualIsEdcbDirect = false
+    private var dualCurrentChannel: Channel? = null
+    private var dualCurrentQuality: StreamQuality? = null
+    private var dualAutoRetryCount = 0
+
+    init {
+        viewModelScope.launch {
+            settingsRepository.backendType.collect { type ->
+                _mainBackendType.value = type
+                _shouldCropLogo.value = type == "KONOMITV"
+            }
+        }
+        startSignalPolling()
+    }
+
+    suspend fun getInitialEdcbDirect(): Boolean {
+        val backendStr = settingsRepository.backendType.first()
+        val prefStr = settingsRepository.preferredStreamSource.first()
+        if (backendStr == "EDCB") {
+            if (prefStr == "EDCB") return true
+            if (prefStr == "KONOMITV") return false
+        } else if (backendStr == "KONOMITV" || backendStr == "MIRAKURUN_ONLY") {
+            if (prefStr == "EDCB") return true
+        }
+        return false
+    }
+
+    fun fetchAvailableQualities(source: StreamSource, isEdcbDirect: Boolean) {
+        // 前回の取得(別ソース向け)が後から完了して一覧を上書きしないよう、先に取り消す
+        qualityFetchJob?.cancel()
+        _isQualitiesLoaded.value = false
+        _loadedQualitiesKey.value = null
+        qualityFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (source == StreamSource.EDCB) {
+                    if (isEdcbDirect) {
+                        _availableQualities.value = listOf(
+                            StreamQuality(
+                                label = "オリジナル (Direct)",
+                                value = "direct",
+                                isRawTs = true
+                            )
+                        )
+                    } else {
+                        // ★ 修正(再修正): 以前はキャッシュ済みJSONを最優先し、キャッシュが空/不正な
+                        // 場合しかresolver.luaへ動的取得しに行かなかったため、EDCBサーバー側で
+                        // トランスコード(xcode)プロファイルの設定を変更しても、Komorebi側の設定
+                        // (IP/ポート/再生方式)を変更しない限りキャッシュが更新されず、
+                        // 「トランスコードを設定しても画質が動的に取得できない」不具合があった。
+                        //
+                        // そこで一度「常にresolver.luaへ動的取得し、失敗時のみキャッシュへ
+                        // フォールバック」に変更したが、これは再生開始のたびに毎回ネットワーク
+                        // 往復を待つ形になり、resolver.luaが遅い/不安定な環境では逆に
+                        // 「画質がオリジナルしか取得できない(取得失敗のフォールバックに
+                        // 落ちてしまう)」regressionを引き起こした。1.1.0-beta6まではキャッシュ
+                        // 優先で確実に動いていたため、キャッシュがあればまずそれを即座に反映して
+                        // 表示をブロックしないようにしつつ、裏で最新値を取得して更新する
+                        // (stale-while-revalidate)方式にする。
+                        val cached = readCachedQualities()
+                        if (!cached.isNullOrEmpty()) {
+                            // キャッシュがあれば即座に表示し、再生開始をブロックしない
+                            // (beta6までの挙動)。裏で最新値を取得し、取得できれば差し替える。
+                            _availableQualities.value = cached
+                            // ★ 修正: viewModelScope直下で起動すると、ソース切替で取得ジョブを
+                            // 取り消しても裏更新だけが生き残り、切替後のソースの画質一覧を
+                            // EDCBの一覧で上書きしてしまう。取得ジョブの子として起動し、一緒に取り消す。
+                            launch(Dispatchers.IO) {
+                                try {
+                                    val fetched = recordProvider.getStreamQualities()
+                                    if (fetched.isNotEmpty()) {
+                                        settingsRepository.saveString(
+                                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                            gson.toJson(fetched)
+                                        )
+                                        _availableQualities.value = fetched
+                                    }
+                                    // 空の場合は取得失敗とみなし、表示済みのキャッシュを維持する。
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Background quality refresh failed. Keeping cache.", e)
+                                }
+                            }
+                        } else {
+                            // キャッシュが無い(初回起動等)場合のみ、最低限選べる状態にするため
+                            // 動的取得の完了を待つ。
+                            try {
+                                val fetched = recordProvider.getStreamQualities()
+                                if (fetched.isNotEmpty()) {
+                                    settingsRepository.saveString(
+                                        SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                                        gson.toJson(fetched)
+                                    )
+                                    _availableQualities.value = fetched
+                                } else {
+                                    useDefaultQuality()
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Initial quality fetch failed.", e)
+                                useDefaultQuality()
+                            }
+                        }
+                    }
+                } else if (source == StreamSource.KONOMITV) {
+                    // ★ 追加: Original画質(ライブ)はKonomiTVのmasterブランチでのみ対応しており、
+                    // 正式リリース版では422で拒否される。しかもサーバーのバージョン文字列だけでは
+                    // masterと直近の正式リリースを区別できないため、実際に再生を試みて拒否された
+                    // ことが確認済み(KonomiOriginalQualityGate)であれば選択肢自体から除外する。
+                    _availableQualities.value = if (KonomiOriginalQualityGate.isUnsupported()) {
+                        StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
+                    } else {
+                        StreamQuality.DEFAULT_QUALITIES
+                    }
+                } else if (source == StreamSource.EPGSTATION) {
+                    _availableQualities.value =
+                        epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
+                            // EPGStationの一部バージョンでは /api/config の streamConfig が
+                            // 空でも、ライブm2ts/m2tsllのmode 1/2は利用できる。
+                            // mode 0は無変換配信で、サーバー設定によってはデータが流れないため、
+                            // トランスコード配信を先に試す。
+                            listOf(
+                                StreamQuality("m2ts mode 1", "m2ts:1"),
+                                StreamQuality("m2ts mode 2", "m2ts:2"),
+                                StreamQuality("m2tsll mode 1", "m2tsll:1"),
+                                StreamQuality("m2tsll mode 2", "m2tsll:2"),
+                                StreamQuality("HLS", "hls:0"),
+                                StreamQuality("そのまま視聴 (m2ts)", "m2ts:0", isRawTs = true)
+                            )
+                        }
+                } else {
+                    _availableQualities.value = listOf(
+                        StreamQuality(
+                            label = "オリジナル (Direct)",
+                            value = "direct",
+                            isRawTs = true
+                        )
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load stream qualities", e)
+                val currentLive = settingsRepository.liveQuality.first()
+                _availableQualities.value = listOf(
+                    StreamQuality(
+                        label = "設定値 ($currentLive)",
+                        value = currentLive,
+                        isRawTs = false
+                    )
+                )
+            } finally {
+                // 取り消された(別ソース向けの取得に置き換えられた)場合は完了扱いにしない
+                if (isActive) {
+                    _loadedQualitiesKey.value = source to isEdcbDirect
+                    _isQualitiesLoaded.value = true
+                }
+            }
+        }
+    }
+
+    // EDCB(トランスコード)の画質キャッシュを読み出す。無ければ/壊れていればnullを返す。
+    private suspend fun readCachedQualities(): List<StreamQuality>? {
+        val json = settingsRepository.availableStreamQualities.first()
+        if (json.isBlank()) return null
+        return try {
+            val type = object : TypeToken<List<StreamQuality>>() {}.type
+            gson.fromJson<List<StreamQuality>>(json, type)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // キャッシュも動的取得も両方失敗した場合の最終フォールバック。
+    private suspend fun useDefaultQuality() {
+        val currentLive = settingsRepository.liveQuality.first()
+        _availableQualities.value = listOf(
+            StreamQuality(
+                label = "設定値 ($currentLive)",
+                value = currentLive,
+                isRawTs = false
+            )
+        )
+    }
+
+    fun saveLiveQuality(qualityValue: String) {
+        viewModelScope.launch {
+            settingsRepository.saveString(
+                SettingsRepository.LIVE_QUALITY,
+                qualityValue
+            )
+        }
+    }
+
+    suspend fun getInitialStreamSource(): StreamSource {
+        val backendStr = settingsRepository.backendType.first()
+        val prefStr = settingsRepository.preferredStreamSource.first()
+
+        val mainSource = when (backendStr) {
+            "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
+            "MIRAKURUN_ONLY", "MIRAKURUN" -> StreamSource.MIRAKURUN
+            else -> StreamSource.KONOMITV
+        }
+
+        val preferredSource = when (prefStr) {
+            "EDCB" -> StreamSource.EDCB
+            "EPGSTATION" -> StreamSource.EPGSTATION
+            "MIRAKURUN" -> StreamSource.MIRAKURUN
+            "KONOMITV" -> mainSource
+            else -> mainSource
+        }
+
+        val sources = mutableListOf<StreamSource>()
+        if (settingsRepository.getBackendConfig(preferredSource).isValid) sources.add(
+            preferredSource
+        )
+        if (!sources.contains(mainSource) && settingsRepository.getBackendConfig(mainSource).isValid) sources.add(
+            mainSource
+        )
+        if (sources.isEmpty()) sources.add(mainSource)
+
+        _availableSources.value = sources
+        return sources.first()
+    }
+
+    private fun stopMainPlaybackSafely() {
+        mainEventSource?.cancel(); mainEventSource = null
+        mainLiveKeepAliveJob?.cancel(); mainLiveKeepAliveJob = null
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
+
+        // ★ 修正: KonomiTV等でセッションが残らないよう、確実にstop()とclearMediaItems()を呼ぶ
+        _mainPlayer.value?.stop()
+        _mainPlayer.value?.clearMediaItems()
+        _mainPlayer.value?.release(); _mainPlayer.value = null
+
+        _mainSseStatus.value = "Standby"; _mainSseDetail.value = AppStrings.SSE_CONNECTING
+        liveJikkyoManager.stopJikkyo()
+    }
+
+    private fun stopDualPlaybackSafely() {
+        dualEventSource?.cancel(); dualEventSource = null
+        dualLiveKeepAliveJob?.cancel(); dualLiveKeepAliveJob = null
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
+        _dualSubtitleLanguages.value = emptyList()
+
+        // ★ 修正: サブプレイヤー側も同様に確実なクリーンアップを行う
+        _dualPlayer.value?.stop()
+        _dualPlayer.value?.clearMediaItems()
+        _dualPlayer.value?.release(); _dualPlayer.value = null
+
+        _dualSseStatus.value = "Standby"; _dualSseDetail.value = AppStrings.SSE_CONNECTING
+    }
+
+    fun releasePlayers() {
+        recordSyncEngine.setThrottled(false)
+        mainPlaybackJob?.cancel(); dualPlaybackJob?.cancel()
+        mainEventSource?.cancel(); dualEventSource?.cancel()
+
+        // ★ 修正: release()の前に必ずstop()とclearMediaItems()を呼んでゾンビ化を防ぐ
+        _mainPlayer.value?.stop()
+        _mainPlayer.value?.clearMediaItems()
+        _mainPlayer.value?.release(); _mainPlayer.value = null
+
+        _dualPlayer.value?.stop()
+        _dualPlayer.value?.clearMediaItems()
+        _dualPlayer.value?.release(); _dualPlayer.value = null
+
+        mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
+        dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
+        _mainSubtitleLanguages.value = emptyList()
+        _dualSubtitleLanguages.value = emptyList()
+
+        _mainSseStatus.value = "Standby"; _dualSseStatus.value = "Standby"
+        liveJikkyoManager.stopJikkyo()
+    }
+
+    private fun handleMainError(uiContext: Context, error: PlaybackException) {
+        viewModelScope.launch {
+            val cause = error.cause
+            val is404 =
+                cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode == 404
+            val isEdcbTranscode = mainCurrentSource == StreamSource.EDCB && !mainIsEdcbDirect
+
+            if (isEdcbTranscode && is404 && mainAutoRetryCount < 5) {
+                mainAutoRetryCount++
+                Log.w(TAG, "EDCB HLS 404: Retrying prepare... ($mainAutoRetryCount/5)")
+                _mainSseDetail.value = "セグメント生成待機中... ($mainAutoRetryCount/5)"
+                delay(2500); _mainPlayer.value?.prepare(); _mainPlayer.value?.play()
+                return@launch
+            }
+
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = mainCurrentSource == StreamSource.KONOMITV &&
+                mainCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && mainCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    mainCurrentQuality = fallback
+                    mainAutoRetryCount = 0
+                    _mainSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopMainPlaybackSafely()
+                    playMainChannel(
+                        uiContext,
+                        mainCurrentChannel!!,
+                        mainCurrentSource,
+                        mainIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
+            }
+
+            val errorMsg = analyzePlayerError(error)
+            val epgFallback = if (
+                mainCurrentSource == StreamSource.EPGSTATION &&
+                (mainCurrentQuality?.value?.startsWith("m2ts:") == true ||
+                    mainCurrentQuality?.value?.startsWith("m2tsll:") == true)
+            ) {
+                _availableQualities.value.firstOrNull { it.value.startsWith("hls:") }
+            } else null
+            if (epgFallback != null && mainCurrentChannel != null) {
+                Log.w(TAG, "EPGStation TS playback failed. Falling back to HLS: ${epgFallback.value}")
+                mainCurrentQuality = epgFallback
+                mainAutoRetryCount = 0
+                _mainSseDetail.value = "HLSへ切り替え中..."
+                stopMainPlaybackSafely()
+                playMainChannel(
+                    uiContext,
+                    mainCurrentChannel!!,
+                    mainCurrentSource,
+                    mainIsEdcbDirect,
+                    epgFallback,
+                    true
+                )
+                return@launch
+            }
+            if (mainAutoRetryCount < MAX_AUTO_RETRY) {
+                mainAutoRetryCount++; _mainSseDetail.value =
+                    "通信復旧中... ($mainAutoRetryCount/$MAX_AUTO_RETRY)"
+                stopMainPlaybackSafely(); delay(2000)
+                if (mainCurrentChannel != null && mainCurrentQuality != null) {
+                    playMainChannel(
+                        uiContext,
+                        mainCurrentChannel!!,
+                        mainCurrentSource,
+                        mainIsEdcbDirect,
+                        mainCurrentQuality!!,
+                        true
+                    )
+                }
+            } else {
+                _mainPlayerError.value = errorMsg
+                stopMainPlaybackSafely()
+            }
+        }
+    }
+
+    private fun handleDualError(uiContext: Context, error: PlaybackException) {
+        viewModelScope.launch {
+            val cause = error.cause
+            val is404 =
+                cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode == 404
+            val isEdcbTranscode = dualCurrentSource == StreamSource.EDCB && !dualIsEdcbDirect
+
+            if (isEdcbTranscode && is404 && dualAutoRetryCount < 5) {
+                dualAutoRetryCount++; _dualSseDetail.value =
+                    "セグメント生成待機中... ($dualAutoRetryCount/5)"
+                delay(2500); _dualPlayer.value?.prepare(); _dualPlayer.value?.play()
+                return@launch
+            }
+
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = dualCurrentSource == StreamSource.KONOMITV &&
+                dualCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && dualCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    dualCurrentQuality = fallback
+                    dualAutoRetryCount = 0
+                    _dualSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopDualPlaybackSafely()
+                    playDualChannel(
+                        uiContext,
+                        dualCurrentChannel!!,
+                        dualCurrentSource,
+                        dualIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
+            }
+
+            val errorMsg = analyzePlayerError(error)
+            if (dualAutoRetryCount < MAX_AUTO_RETRY) {
+                dualAutoRetryCount++; _dualSseDetail.value =
+                    "通信復旧中... ($dualAutoRetryCount/$MAX_AUTO_RETRY)"
+                stopDualPlaybackSafely(); delay(2000)
+                if (dualCurrentChannel != null && dualCurrentQuality != null) {
+                    playDualChannel(
+                        uiContext,
+                        dualCurrentChannel!!,
+                        dualCurrentSource,
+                        dualIsEdcbDirect,
+                        dualCurrentQuality!!,
+                        true
+                    )
+                }
+            } else {
+                _dualSseStatus.value = "Error"; _dualSseDetail.value = errorMsg
+                stopDualPlaybackSafely()
+            }
+        }
+    }
+
+    fun playMainChannel(
+        uiContext: Context, channel: Channel, source: StreamSource,
+        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
+    ) {
+        if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (mainCurrentChannel?.id != channel.id) setMainSubtitleLanguage(1)
+        recordSyncEngine.setThrottled(true)
+        if (!isAutoRetry) {
+            mainAutoRetryCount = 0; _mainPlayerError.value = null
+        }
+        mainCurrentChannel = channel; mainCurrentSource = source; mainIsEdcbDirect =
+            isEdcbDirect; mainCurrentQuality = quality
+
+        viewModelScope.launch { _currentLogoUrl.value = liveProvider.getChannelLogoUrl(channel.id) }
+
+        mainPlaybackJob?.cancel()
+        mainPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                mainPlaybackMutex.withLock {
+                    withContext(Dispatchers.Main) {
+                        stopMainPlaybackSafely(); _mainSseStatus.value =
+                        "Standby"; _mainSseDetail.value = "ストリームを準備中..."
+                    }
+                    delay(if (isAutoRetry) 0 else 600)
+
+                    val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
+                    val newPlayer = withContext(Dispatchers.Main) {
+                        livePlayerFactory.createExoPlayer(
+                            audioOutputMode = audioOutputMode,
+                            isKonomiTvSource = { mainCurrentSource == StreamSource.KONOMITV },
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitMainSubtitle(pts, data)
+                            },
+                            onError = { error -> handleMainError(uiContext, error) }
+                        )
+                    }
+                    _mainPlayer.value = newPlayer
+
+                    val config = settingsRepository.getBackendConfig(source)
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
+                        withContext(Dispatchers.Main) {
+                            _mainSseDetail.value = "トランスコード開始を待機中..."
+                        }
+                        val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 0)
+                        if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
+                        hlsUrl
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        mainTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
+                            _mainSseStatus.value = "ONAir"; _mainSseDetail.value = ""
+                        } else if (config is BackendConfig.KonomiTv) {
+                            startMainSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
+                        }
+                        startPlayback(
+                            uiContext,
+                            newPlayer,
+                            streamUrl,
+                            source,
+                            isEdcbDirect,
+                            quality,
+                            mainTsDataSourceFactory,
+                            ::decodeAndEmitMainSubtitle,
+                            cfAccessHeaders
+                        )
+                        liveJikkyoManager.startJikkyo(channel, source)
+
+                        // ★ 追加: EPGStationのライブHLS再生中のみkeep-aliveジョブを回す。
+                        // stopMainPlaybackSafely()で必ずcancelされるため、チャンネル切替・
+                        // 画質切替・再生終了時に取り残される心配はない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            mainLiveKeepAliveJob?.cancel()
+                            mainLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 0)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep main live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "playMainChannel: Job cancelled.")
+            } catch (e: Exception) {
+                Log.e(TAG, "playMainChannel: Failed", e)
+                withContext(Dispatchers.Main) {
+                    handleMainError(
+                        uiContext,
+                        PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+                    )
+                }
+            }
+        }
+    }
+
+    fun playDualChannel(
+        uiContext: Context, channel: Channel, source: StreamSource,
+        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
+    ) {
+        if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
+        if (dualCurrentChannel?.id != channel.id) setDualSubtitleLanguage(1)
+        recordSyncEngine.setThrottled(true)
+        if (!isAutoRetry) dualAutoRetryCount = 0
+        dualCurrentChannel = channel; dualCurrentSource = source; dualIsEdcbDirect =
+            isEdcbDirect; dualCurrentQuality = quality
+
+        dualPlaybackJob?.cancel()
+        dualPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dualPlaybackMutex.withLock {
+                    withContext(Dispatchers.Main) {
+                        stopDualPlaybackSafely(); _dualSseStatus.value =
+                        "Standby"; _dualSseDetail.value = "ストリームを準備中..."
+                    }
+                    delay(if (isAutoRetry) 0 else 600)
+
+                    val audioOutputMode = settingsRepository.audioOutputMode.first()
+                    // ★ 追加: Cloudflare Zero Trust サービストークン (未設定なら空Map)
+                    val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
+                    val newDualPlayer = withContext(Dispatchers.Main) {
+                        livePlayerFactory.createExoPlayer(
+                            audioOutputMode = audioOutputMode,
+                            isKonomiTvSource = { dualCurrentSource == StreamSource.KONOMITV },
+                            onSubtitleDataReceived = { pts, data ->
+                                decodeAndEmitDualSubtitle(pts, data)
+                            },
+                            onError = { error -> handleDualError(uiContext, error) }
+                        )
+                    }
+                    _dualPlayer.value = newDualPlayer
+
+                    val config = settingsRepository.getBackendConfig(source)
+                    val streamUrl = if (
+                        (source == StreamSource.EDCB && !isEdcbDirect) ||
+                        (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
+                    ) {
+                        withContext(Dispatchers.Main) {
+                            _dualSseDetail.value = "トランスコード開始を待機中..."
+                        }
+                        val hlsUrl = liveProvider.getLiveStreamUrl(channel.id, quality.value, 1)
+                        if (hlsUrl.isBlank()) throw Exception("HLSトランスコードの開始に失敗しました")
+                        hlsUrl
+                    } else buildStreamUrl(
+                        channel,
+                        source,
+                        quality,
+                        config,
+                        dualTsDataSourceFactory,
+                        cfAccessHeaders
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        if (source == StreamSource.MIRAKURUN ||
+                            source == StreamSource.EPGSTATION ||
+                            (source == StreamSource.EDCB && isEdcbDirect) ||
+                            (source == StreamSource.EDCB && !isEdcbDirect)
+                        ) {
+                            _dualSseStatus.value = "ONAir"; _dualSseDetail.value = ""
+                        } else if (config is BackendConfig.KonomiTv) {
+                            startDualSse(
+                                uiContext,
+                                channel.displayChannelId,
+                                quality.value,
+                                config,
+                                cfAccessHeaders
+                            )
+                        }
+                        startPlayback(
+                            uiContext,
+                            newDualPlayer,
+                            streamUrl,
+                            source,
+                            isEdcbDirect,
+                            quality,
+                            dualTsDataSourceFactory,
+                            ::decodeAndEmitDualSubtitle,
+                            cfAccessHeaders
+                        )
+
+                        // ★ 追加: メイン側と同じ理由でサブ側にもkeep-aliveジョブを回す。
+                        // streamNumber=1を使うため、メイン(0)と同時にEPGStation HLSを
+                        // 選んでもstreamIdが競合しない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            dualLiveKeepAliveJob?.cancel()
+                            dualLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 1)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep dual live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "playDualChannel: Job cancelled.")
+            } catch (e: Exception) {
+                Log.e(TAG, "playDualChannel: Failed", e)
+                withContext(Dispatchers.Main) {
+                    handleDualError(
+                        uiContext,
+                        PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+                    )
+                }
+            }
+        }
+    }
+
+    fun stopAllPlayers() {
+        mainPlaybackJob?.cancel(); dualPlaybackJob?.cancel()
+        viewModelScope.launch {
+            mainPlaybackMutex.withLock { stopMainPlaybackSafely() }
+            dualPlaybackMutex.withLock { stopDualPlaybackSafely() }
+        }
+    }
+
+    fun stopDualPlayer() {
+        dualPlaybackJob?.cancel()
+        viewModelScope.launch { dualPlaybackMutex.withLock { stopDualPlaybackSafely() } }
+    }
+
+    fun setSubtitlesEnabled(enabled: Boolean) {
+        this.isSubtitleEnabled = enabled
+    }
+
+    fun setMainSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _mainSubtitleLanguageId.value = languageId
+        mainCaptionDecoder.switchLanguage(languageId)
+    }
+
+    fun setDualSubtitleLanguage(languageId: Int) {
+        if (languageId !in 1..2) return
+        _dualSubtitleLanguageId.value = languageId
+        dualCaptionDecoder.switchLanguage(languageId)
+    }
+
+    private fun decodeAndEmitMainSubtitle(ptsMs: Long, data: ByteArray) {
+        decodeAndEmitSubtitle(
+            decoder = mainCaptionDecoder,
+            languagesState = _mainSubtitleLanguages,
+            events = _mainSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
+    }
+
+    private fun decodeAndEmitDualSubtitle(ptsMs: Long, data: ByteArray) {
+        decodeAndEmitSubtitle(
+            decoder = dualCaptionDecoder,
+            languagesState = _dualSubtitleLanguages,
+            events = _dualSubtitleEvents,
+            ptsMs = ptsMs,
+            data = data
+        )
+    }
+
+    private fun decodeAndEmitSubtitle(
+        decoder: NativeCaptionDecoder,
+        languagesState: MutableStateFlow<List<NativeCaptionLanguage>>,
+        events: MutableSharedFlow<NativeCaptionCue>,
+        ptsMs: Long,
+        data: ByteArray
+    ) {
+        val renderCaptions = isSubtitleEnabled
+        val cue = decoder.decode(data, ptsMs, renderCaptions = renderCaptions)
+        val languages = decoder.availableLanguages()
+        if (languages != languagesState.value) languagesState.value = languages
+        if (renderCaptions && cue != null) events.tryEmit(cue)
+    }
+
+    fun setVolumes(mainVolume: Float, dualVolume: Float) {
+        _mainPlayer.value?.volume = mainVolume; _dualPlayer.value?.volume = dualVolume
+    }
+
+    fun retry() {
+        mainAutoRetryCount = 0; _mainPlayerError.value = null
+    }
+
+    private fun buildStreamUrl(
+        channel: Channel,
+        source: StreamSource,
+        quality: StreamQuality,
+        config: BackendConfig,
+        factory: TsReadExDataSourceFactory,
+        cfAccessHeaders: Map<String, String> = emptyMap()
+    ): String {
+        return when (source) {
+            StreamSource.EDCB -> {
+                val ip = if (config.ip.isNotBlank()) config.ip else "127.0.0.1"
+                val port = if (config.port.isNotBlank()) config.port else "4510"
+                val parts = channel.id.split("_")
+                val isEdcbFormat = parts.size >= 4 && parts[0].startsWith("edcb", ignoreCase = true)
+                val finalOnid = if (isEdcbFormat) parts[1] else channel.networkId.toString()
+                val finalTsid =
+                    if (isEdcbFormat) parts[2] else if (channel.transportStreamId != 0L) channel.transportStreamId.toString() else channel.networkId.toString()
+                val finalSid = if (isEdcbFormat) parts[3] else channel.serviceId.toString()
+                factory.tsArgs = arrayOf(
+                    "-x",
+                    "18/38/39",
+                    "-n",
+                    finalSid,
+                    "-a",
+                    "13",
+                    "-b",
+                    "4",
+                    "-c",
+                    "5",
+                    "-u",
+                    "1",
+                    "-d",
+                    "13"
+                )
+                "edcb://$ip:$port/live?onid=$finalOnid&tsid=$finalTsid&sid=$finalSid"
+            }
+
+            StreamSource.MIRAKURUN -> {
+                if (config.isValid) {
+                    factory.tsArgs = arrayOf(
+                        "-x",
+                        "18/38/39",
+                        "-n",
+                        channel.serviceId.toString(),
+                        "-a",
+                        "13",
+                        "-b",
+                        "4",
+                        "-c",
+                        "5",
+                        "-u",
+                        "1",
+                        "-d",
+                        "13"
+                    )
+                    // ★ 追加: Mirakurun ストリームにも Cloudflare Access ヘッダーを付与
+                    factory.requestHeaders = cfAccessHeaders
+                    UrlBuilder.getMirakurunStreamUrl(
+                        config.ip,
+                        config.port,
+                        channel.networkId,
+                        channel.serviceId
+                    )
+                } else ""
+            }
+
+            StreamSource.KONOMITV -> {
+                // ★ 追加: original画質はサーバー側で再エンコードせず、tsreadexを通しただけの
+                // 生MPEG-TSがそのまま流れてくる。サーバー側tsreadexは-a/-b/-c/-uでPID存在保証は
+                // 行うがID3変換(-d)や音声デュアルモノ分離は行わないため、EDCB/Mirakurunの生放送波
+                // 直接再生と同じ状態(生PESの字幕・未分離の音声)。再エンコードを挟まないぶん
+                // program_number/service_idは放送そのままのはずなので、EDCB/Mirakurunと同様に
+                // channel.serviceIdでCServiceFilterに正しく対象サービスを絞らせ、音声デュアルモノ
+                // 分離とID3変換(id3convは独立してPMTからPIDを検出するためservice絞り込みの影響を
+                // 受けない)の両方を有効にする
+                if (quality.value == "original") {
+                    factory.tsArgs = arrayOf(
+                        "-x",
+                        "18/38/39",
+                        "-n",
+                        channel.serviceId.toString(),
+                        "-a",
+                        "13",
+                        "-b",
+                        "4",
+                        "-c",
+                        "5",
+                        "-u",
+                        "1",
+                        "-d",
+                        "13"
+                    )
+                    factory.requestHeaders = cfAccessHeaders
+                }
+                UrlBuilder.getKonomiTvLiveStreamUrl(
+                    config.ip,
+                    config.port,
+                    channel.displayChannelId,
+                    quality.value
+                )
+            }
+
+            StreamSource.EPGSTATION -> {
+                // EPGStationのmode 1/2はトランスコード後にprogram numberが1へ
+                // 再構成されるため、元チャンネルのserviceIdで絞ると全PIDが除外される。
+                // 配信URL自体がチャンネル単位なので、EPGStationでは全サービスを通す。
+                factory.tsArgs = arrayOf(
+                    "-x",
+                    "18/38/39",
+                    "-n",
+                    "0",
+                    "-a",
+                    "13",
+                    "-b",
+                    "4",
+                    "-c",
+                    "5",
+                    "-u",
+                    "1",
+                    "-d",
+                    "13"
+                )
+                factory.requestHeaders = cfAccessHeaders
+                val channelId = EpgStationDataMapper.parseChannelId(channel.id)
+                val mode = quality.value.substringAfter(":", "").toIntOrNull() ?: 0
+                if (config is BackendConfig.EpgStation && channelId != null) {
+                    if (quality.value.startsWith("m2tsll:")) {
+                        UrlBuilder.getEpgStationLiveM2tsLlUrl(config.ip, config.port, channelId, mode)
+                    } else {
+                        UrlBuilder.getEpgStationLiveM2tsUrl(config.ip, config.port, channelId, mode)
+                    }
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun startPlayback(
+        uiContext: Context,
+        player: ExoPlayer?,
+        streamUrl: String,
+        source: StreamSource,
+        isEdcbDirect: Boolean,
+        quality: StreamQuality,
+        factory: TsReadExDataSourceFactory,
+        onSubtitleDataReceived: (Long, ByteArray) -> Unit,
+        cfAccessHeaders: Map<String, String> = emptyMap()
+    ) {
+        try {
+            val mediaItem = MediaItem.fromUri(streamUrl)
+            val mediaSource =
+                if (streamUrl.contains(".m3u8", ignoreCase = true)) {
+                    val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                        .setDefaultRequestProperties(cfAccessHeaders)
+                        .setAllowCrossProtocolRedirects(true)
+                    HlsMediaSource.Factory(httpDataSourceFactory)
+                        .setAllowChunklessPreparation(false)
+                        .createMediaSource(mediaItem)
+                } else if (source == StreamSource.MIRAKURUN || source == StreamSource.EPGSTATION ||
+                    (source == StreamSource.EDCB && isEdcbDirect) ||
+                    // ★ 追加: KonomiTVのoriginal画質も生MPEG-TSなので同じ経路(TsReadExDataSource +
+                    // 直接PESパース)で再生する
+                    (source == StreamSource.KONOMITV && quality.value == "original")
+                ) {
+                    val extractorsFactory = ExtractorsFactory {
+                        arrayOf(
+                            TsExtractor(
+                                TsExtractor.MODE_SINGLE_PMT,
+                                TimestampAdjuster(0L),
+                                DirectSubtitlePayloadReaderFactory(
+                                    onSubtitleDataReceived = onSubtitleDataReceived
+                                ),
+                                TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES
+                            )
+                        )
+                    }
+                    ProgressiveMediaSource.Factory(factory, extractorsFactory)
+                        .createMediaSource(mediaItem)
+                } else {
+                    if (source == StreamSource.EDCB && !isEdcbDirect) {
+                        val uri = Uri.parse(streamUrl)
+                        val ctok = uri.getQueryParameter("ctok") ?: ""
+                        // ★ 追加: Cookie に加えて Cloudflare Access ヘッダーも付与
+                        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                            .setDefaultRequestProperties(
+                                mapOf("Cookie" to "ctok=$ctok") + cfAccessHeaders
+                            )
+                            .setAllowCrossProtocolRedirects(true)
+                        HlsMediaSource.Factory(httpDataSourceFactory)
+                            .setAllowChunklessPreparation(false).createMediaSource(mediaItem)
+                    } else if (cfAccessHeaders.isNotEmpty()) {
+                        // ★ 追加: KonomiTV ストリームに Cloudflare Access ヘッダーを付与
+                        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                            .setDefaultRequestProperties(cfAccessHeaders)
+                        DefaultMediaSourceFactory(
+                            DefaultDataSource.Factory(uiContext, httpDataSourceFactory)
+                        ).createMediaSource(mediaItem)
+                    } else DefaultMediaSourceFactory(uiContext).createMediaSource(mediaItem)
+                }
+            player?.setMediaSource(mediaSource); player?.prepare(); player?.play()
+        } catch (e: Exception) {
+            handleMainError(
+                uiContext,
+                PlaybackException(e.message, e, PlaybackException.ERROR_CODE_UNSPECIFIED)
+            )
+        }
+    }
+
+    private fun startMainSse(
+        uiContext: Context,
+        channelId: String,
+        quality: String,
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
+    ) {
+        val eventUrl =
+            UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
+        val request =
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Main)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
+        mainEventSource = EventSources.createFactory(okHttpClient)
+            .newEventSource(request, object : EventSourceListener() {
+                override fun onFailure(
+                    eventSource: EventSource,
+                    t: Throwable?,
+                    response: Response?
+                ) {
+                    if (t is java.io.IOException && t.message == "Canceled") return
+                    response?.close()
+                    viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: 以前はresponse.codeをそのままerrorCodeに入れていたため、
+                        // analyzePlayerError()がERROR_CODE_UNSPECIFIED限定でerror.messageを
+                        // 見るよう絞り込んだ後、404/422/503等の正当なHTTPステータスコードが
+                        // errorCodeName()の「invalid error code」表記に埋もれてしまっていた。
+                        // 日本語メッセージをここで組み立て、errorCodeはERROR_CODE_UNSPECIFIEDに
+                        // 揃える。
+                        if (response != null && response.code !in 200..299) handleMainError(
+                            uiContext,
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
+                        )
+                    }
+                }
+
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
+                    viewModelScope.launch(Dispatchers.Main) {
+                        try {
+                            val json = JSONObject(data)
+                            val status = json.optString("status", "Unknown")
+                            val detail = json.optString("detail", AppStrings.STATUS_LOADING)
+                            _mainSseStatus.value = status
+                            _mainSseDetail.value = if (detail.contains("OnAirです")) "" else detail
+                            if (status == "Error" || (status == "Offline" && (detail.contains("失敗") || detail.contains(
+                                    "エラー"
+                                )))
+                            ) {
+                                handleMainError(
+                                    uiContext,
+                                    PlaybackException(
+                                        _mainSseDetail.value.ifEmpty { AppStrings.ERR_TUNER_START_FAILED },
+                                        null,
+                                        PlaybackException.ERROR_CODE_UNSPECIFIED
+                                    )
+                                )
+                                return@launch
+                            }
+                            when (status) {
+                                "Standby", "Restart" -> _mainPlayer.value?.pause()
+                                "ONAir" -> {
+                                    if (_mainPlayer.value?.playerError != null || _mainPlayerError.value != null) {
+                                        _mainPlayerError.value = null; _mainPlayer.value?.prepare()
+                                    }; _mainPlayer.value?.play()
+                                }
+
+                                "Offline" -> _mainPlayer.value?.pause()
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
+                }
+            })
+    }
+
+    private fun startDualSse(
+        uiContext: Context,
+        channelId: String,
+        quality: String,
+        config: BackendConfig.KonomiTv,
+        cfAccessHeaders: Map<String, String> = emptyMap()
+    ) {
+        val eventUrl =
+            UrlBuilder.getKonomiTvLiveEventsUrl(config.ip, config.port, channelId, quality)
+        val request =
+            Request.Builder().url(eventUrl).header("User-Agent", "Komorebi/1.0 (Dual)")
+                // ★ 追加: Cloudflare Access ヘッダーを付与
+                .apply { cfAccessHeaders.forEach { (name, value) -> header(name, value) } }
+                .build()
+        dualEventSource = EventSources.createFactory(okHttpClient)
+            .newEventSource(request, object : EventSourceListener() {
+                override fun onFailure(
+                    eventSource: EventSource,
+                    t: Throwable?,
+                    response: Response?
+                ) {
+                    if (t is java.io.IOException && t.message == "Canceled") return
+                    response?.close()
+                    viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: メイン側と同じ理由(httpStatusErrorMessage定義部のコメント参照)。
+                        if (response != null && response.code !in 200..299) handleDualError(
+                            uiContext,
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
+                        )
+                    }
+                }
+
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
+                    viewModelScope.launch(Dispatchers.Main) {
+                        try {
+                            val json = JSONObject(data)
+                            val status = json.optString("status", "Unknown")
+                            _dualSseStatus.value = status
+                            _dualSseDetail.value =
+                                json.optString("detail", AppStrings.STATUS_LOADING)
+                            if (status == "Error" || (status == "Offline" && (dualSseDetail.value.contains(
+                                    "失敗"
+                                ) || dualSseDetail.value.contains("エラー")))
+                            ) {
+                                handleDualError(
+                                    uiContext,
+                                    PlaybackException(
+                                        dualSseDetail.value.ifEmpty { "エラーが発生しました" },
+                                        null,
+                                        PlaybackException.ERROR_CODE_UNSPECIFIED
+                                    )
+                                )
+                                return@launch
+                            }
+                            when (status) {
+                                "Standby", "Restart" -> _dualPlayer.value?.pause()
+                                "ONAir" -> {
+                                    if (_dualPlayer.value?.playerError != null) _dualPlayer.value?.prepare(); _dualPlayer.value?.play()
+                                }
+
+                                "Offline" -> _dualPlayer.value?.pause()
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
+                }
+            })
+    }
+
+    private fun startSignalPolling() {
+        signalPollJob?.cancel()
+        signalPollJob = viewModelScope.launch(Dispatchers.Main) {
+            while (true) {
+                _mainPlayer.value?.let { player ->
+                    val vFormat = player.videoFormat
+                    val aFormat = player.audioFormat
+                    val vCounters = player.videoDecoderCounters
+                    val bitrateText = if (vFormat != null && vFormat.bitrate > 0) String.format(
+                        "%.2f Mbps",
+                        vFormat.bitrate / 1000000f
+                    ) else {
+                        if (vCounters != null) String.format(
+                            "%.2f Mbps",
+                            (vCounters.renderedOutputBufferCount % 50) / 10f + 12.0f
+                        ) else "-"
+                    }
+                    val audioMime = aFormat?.sampleMimeType ?: ""
+                    val audioCodecName = when {
+                        audioMime.contains("mp4a-latm", true) -> "AAC-LATM"
+                        audioMime.contains("mpeg-l2", true) -> "MPEG2 Audio"
+                        audioMime.contains("ac3", true) -> "Dolby Digital"
+                        else -> audioMime.replace("audio/", "").uppercase()
+                    }
+                    _mainSignalInfo.value = SignalMetadata(
+                        videoRes = if (vFormat != null) "${vFormat.width} x ${vFormat.height}" else "-",
+                        verticalFreq = if (vFormat != null && vFormat.frameRate > 0) String.format(
+                            "%.2f Hz",
+                            vFormat.frameRate
+                        ) else "-",
+                        videoCodec = vFormat?.sampleMimeType?.replace("video/", "")?.uppercase()
+                            ?: "-", videoBitrate = bitrateText, audioCodec = audioCodecName,
+                        audioChannels = if (aFormat != null) "${if (aFormat.channelCount == 6) "5.1" else aFormat.channelCount.toString()}.0ch" else "-",
+                        audioSampleRate = if (aFormat != null) "${aFormat.sampleRate / 1000} kHz" else "-",
+                        bufferDuration = String.format(
+                            "%.1f 秒",
+                            (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) / 1000f
+                        ),
+                        droppedFrames = vCounters?.droppedBufferCount?.toString() ?: "0"
+                    )
+                }
+                delay(1000)
+            }
+        }
+    }
+
+    // ★ 追加: SSE(startMainSse/startDualSse)のonFailureでもHTTPステータスコードから
+    // 同じ文言を組み立てたいため、analyzePlayerErrorのHTTP分岐から切り出した。
+    private fun httpStatusErrorMessage(code: Int): String = when (code) {
+        404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
+        503 -> AppStrings.ERR_TUNER_FULL
+        422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
+        else -> String.format(AppStrings.ERR_SERVER_HTTP, code)
+    }
+
+    private fun analyzePlayerError(error: PlaybackException): String {
+        val cause = error.cause
+        return when {
+            cause is HttpDataSource.InvalidResponseCodeException ->
+                httpStatusErrorMessage(cause.responseCode)
+
+            cause is HttpDataSource.HttpDataSourceException -> when (cause.cause) {
+                is java.net.ConnectException -> AppStrings.ERR_CONNECTION_REFUSED
+                is java.net.SocketTimeoutException -> AppStrings.ERR_TIMEOUT
+                else -> AppStrings.ERR_NETWORK
+            }
+
+            cause is IOException -> String.format(AppStrings.ERR_DATA_READ, cause.message)
+            // ★ 修正: DtvProviderProxy.getLiveStreamUrl()がEDCB側の具体的な失敗理由
+            // (「EDCBの接続設定を確認してください」等)を例外として伝搬するようになったが、
+            // 従来はここでerror.messageを見ずに一律「不明なエラー」に潰していたため、
+            // 原因が特定できるメッセージがユーザーに届いていなかった。
+            // ★ 再修正: 当初はerror.messageの有無だけで判定していたが、これだとExoPlayerが
+            // 投げる本物のPlaybackException(デコーダ初期化失敗等、messageが英語の内部
+            // 文字列で非nullなことが多い)まで拾ってしまい、「不明なエラー」という日本語の
+            // 汎用メッセージが英語の内部文字列に置き換わる退行があった。playMainChannel/
+            // playDualChannelのcatchで自前組み立てた例外はPlaybackException(...,
+            // ERROR_CODE_UNSPECIFIED)で包んでいるため、このコードに限定して判定する。
+            error.errorCode == PlaybackException.ERROR_CODE_UNSPECIFIED && !error.message.isNullOrBlank() ->
+                error.message!!
+            else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        releasePlayers()
+        mainCaptionDecoder.close()
+        dualCaptionDecoder.close()
+        // ★ 修正: 全通信機能を破壊する自爆スイッチ（shutdown）を撤去し、
+        // プレイヤーの releasePlayers() でのクリーンアップに一任する
+    }
+}

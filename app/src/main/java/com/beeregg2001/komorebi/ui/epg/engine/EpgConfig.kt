@@ -10,25 +10,42 @@ import androidx.compose.ui.unit.sp
 import com.beeregg2001.komorebi.ui.theme.NotoSansJP
 import com.beeregg2001.komorebi.ui.theme.KomorebiColors
 
-class EpgConfig(density: Density, colors: KomorebiColors) {
+// ★ 修正: hideSubChannels をコンストラクタの引数に追加
+class EpgConfig(
+    density: Density,
+    colors: KomorebiColors,
+    val screenWidthPx: Float,
+    val screenHeightPx: Float, // ★ 画面の高さ
+    val columnCount: Int = 7,
+    val fontSizeScale: Float = 1.0f,
+    val visibleHours: Int = 6, // ★ 表示時間数
+    val hideSubChannels: Boolean = false
+) {
     // サイズ (px)
-    val cwPx = with(density) { 130.dp.toPx() }
-    val hhPx = with(density) { 75.dp.toPx() }
-    val twPx = with(density) { 60.dp.toPx() }
+    val twPx = with(density) { 60.dp.toPx() } // 左端の時刻カラム幅
+    val cwPx = (screenWidthPx - twPx) / columnCount // 動的チャンネル幅
+
     val hhAreaPx = with(density) { 45.dp.toPx() }
     val tabHeightPx = with(density) { 48.dp.toPx() }
     val minExpHPx = with(density) { 140.dp.toPx() }
     val bPadPx = with(density) { 120.dp.toPx() }
     val sPadPx = with(density) { 32.dp.toPx() }
 
-    // --- 色のテーマ化 ---
-    // ★修正: 番組表自体の背景を透明にして、MainRootScreenの光を通す
-    val colorBg = Color.Transparent
-    val colorHeaderBg = colors.surface.copy(alpha = 0.95f) // ヘッダーは少しだけ透けさせる
+    // ★ 追加: 画面の利用可能な高さから1時間あたりの高さを逆算
+    val availableHeightPx = screenHeightPx - tabHeightPx - hhAreaPx
+    val hhPx = availableHeightPx / visibleHours
 
-    val colorTimeHourEven = if (colors.isDark) Color(0xFF2E2424) else Color(0xFFFDEFEF)
-    val colorTimeHourOdd = if (colors.isDark) Color(0xFF242E24) else Color(0xFFEFFDEE)
-    val colorTimeHourNight = if (colors.isDark) Color(0xFF24242E) else Color(0xFFEEF1FD)
+    // --- 色のテーマ化 ---
+    val colorBg = Color.Transparent
+    val colorHeaderBg = colors.surface.copy(alpha = 0.95f)
+
+    // ★ 修正: ハードコードされた色を廃止し、テーマの surface 色にほんのり色味を乗せて合成する
+    val colorTimeHourEven = Color(0xFFFF5252).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
+    val colorTimeHourOdd = Color(0xFF4CAF50).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
+    val colorTimeHourNight = Color(0xFF448AFF).copy(alpha = if (colors.isDark) 0.05f else 0.08f)
+        .compositeOver(colors.surface.copy(alpha = 0.85f))
 
     val colorGridLine = colors.textPrimary.copy(alpha = 0.1f)
     val colorFocusBg = colors.textPrimary.copy(alpha = 0.2f).compositeOver(colors.background)
@@ -52,16 +69,16 @@ class EpgConfig(density: Density, colors: KomorebiColors) {
     val styleTitle = TextStyle(
         fontFamily = NotoSansJP,
         color = colors.textPrimary,
-        fontSize = 11.sp,
+        fontSize = (11 * fontSizeScale).sp,
         fontWeight = FontWeight.Bold,
-        lineHeight = 14.sp
+        lineHeight = (14 * fontSizeScale).sp
     )
     val styleDesc = TextStyle(
         fontFamily = NotoSansJP,
         color = colors.textSecondary,
-        fontSize = 10.sp,
+        fontSize = (10 * fontSizeScale).sp,
         fontWeight = FontWeight.Normal,
-        lineHeight = 13.sp
+        lineHeight = (13 * fontSizeScale).sp
     )
     val styleChNum = TextStyle(
         fontFamily = NotoSansJP,
@@ -72,7 +89,7 @@ class EpgConfig(density: Density, colors: KomorebiColors) {
     val styleChName = TextStyle(
         fontFamily = NotoSansJP,
         color = colors.textSecondary,
-        fontSize = 10.sp
+        fontSize = (10 * fontSizeScale).sp
     )
     val styleTime = TextStyle(
         fontFamily = NotoSansJP,

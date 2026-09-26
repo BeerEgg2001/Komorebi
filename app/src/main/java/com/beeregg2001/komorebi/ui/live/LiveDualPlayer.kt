@@ -6,8 +6,8 @@
 package com.beeregg2001.komorebi.ui.live
 
 import android.os.Build
+import android.view.SurfaceView
 import android.view.ViewGroup
-import android.webkit.WebView
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -21,8 +21,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,16 +38,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.beeregg2001.komorebi.common.AppStrings
-import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.StreamSource
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionCue
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
+
+/**
+ * 映像の表示アスペクト比（横 / 縦）を求める。
+ *
+ * ExoPlayer が通知するピクセルアスペクト比（1440x1080 のアナモルフィック等）を加味する。
+ * 映像サイズがまだ取得できていない場合は 16:9 とみなす。
+ */
+private fun calcVideoAspectRatio(width: Int, height: Int, pixelRatio: Float): Float {
+    if (width <= 0 || height <= 0) return 16f / 9f
+    val par = if (pixelRatio > 0f) pixelRatio else 1f
+    val ratio = (width.toFloat() * par) / height.toFloat()
+    return if (ratio.isFinite() && ratio > 0f) ratio else 16f / 9f
+}
 
 // ==============================================
 // 本物のプレイヤーを配置した DualDisplayPlayer コンポーネント
@@ -57,23 +71,26 @@ import kotlinx.coroutines.delay
 fun DualDisplayPlayer(
     state: LivePlayerState,
     leftChannel: Channel,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     isMiniListOpen: Boolean,
     isUiVisible: Boolean,
-    mainPlayer: ExoPlayer,
+    mainPlayer: ExoPlayer?,
     mainVideoWidth: Int,
     mainVideoHeight: Int,
     mainPixelRatio: Float,
-    mainWebViewRef: MutableState<WebView?>,
-    dualPlayer: ExoPlayer,
+    mainCaptionCue: NativeCaptionCue?,
+    dualPlayer: ExoPlayer?,
     dualVideoWidth: Int,
     dualVideoHeight: Int,
     dualPixelRatio: Float,
-    dualWebViewRef: MutableState<WebView?>,
-    isSubtitleEnabled: Boolean
+    dualCaptionCue: NativeCaptionCue?,
+    isSubtitleEnabled: Boolean,
+    // ★ 追加: 二画面表示中のフォーカス受け皿。単画面時のPlayerView(AndroidView)と同じ役割で、
+    // 呼び出し側からFocusRequesterを結び付けられるようにする。
+    modifier: Modifier = Modifier,
+    // ★ 追加: ミニリスト/サブメニュー表示中はプレイヤー本体をフォーカス対象から外す(単画面時と同じ挙動)
+    isFocusable: Boolean = true
 ) {
     val colors = KomorebiTheme.colors
     val animatedLeftWeight by animateFloatAsState(
@@ -115,10 +132,14 @@ fun DualDisplayPlayer(
 
     val showInfo = !isIdle || isMiniListOpen
 
+    // 映像の表示アスペクト比。取得できるまでは 16:9 とみなす
+    val mainAspectRatio = calcVideoAspectRatio(mainVideoWidth, mainVideoHeight, mainPixelRatio)
+    val dualAspectRatio = calcVideoAspectRatio(dualVideoWidth, dualVideoHeight, dualPixelRatio)
+
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .focusable()
+            .focusable(isFocusable)
     ) {
         // --- 左画面 (メインプレイヤー) ---
         Box(
@@ -129,123 +150,67 @@ fun DualDisplayPlayer(
                 .background(Color.Black)
                 .border(4.dp, leftBorderColor)
         ) {
-            AndroidView(
-                factory = {
-                    PlayerView(it).apply {
-                        player = mainPlayer
-                        useController = false
-                        keepScreenOn = true
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                },
-                update = { view ->
-                    if (view.player != mainPlayer) {
-                        view.player = mainPlayer
-                    }
-                    view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                },
-                onRelease = { view ->
-                    view.player = null
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
-            androidx.compose.animation.AnimatedVisibility(
-                visible = state.currentStreamSource == StreamSource.KONOMITV && (state.sseStatus == "Standby" || state.sseStatus == "Offline"),
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator(
-                        color = colors.textPrimary,
-                        modifier = Modifier.size(32.dp),
-                        strokeWidth = 3.dp
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = state.sseDetail,
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            if (isSubtitleEnabled) {
+            if (mainPlayer != null) {
                 AndroidView(
                     factory = { ctx ->
-                        WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(-1, -1)
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            settings.apply { javaScriptEnabled = true; domStorageEnabled = true }
-                            loadUrl("file:///android_asset/subtitle_renderer.html")
-                            mainWebViewRef.value = this
-                        }
-                    },
-                    update = { view ->
-                        view.visibility =
-                            if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showInfo,
-                enter = fadeIn(tween(500)),
-                exit = fadeOut(tween(500)),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                DualChannelInfoOverlay(
-                    channel = leftChannel,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    isFocused = state.activeDualPlayerIndex == 0
-                )
-            }
-        }
-
-        // --- 右画面 (サブプレイヤー) ---
-        Box(
-            modifier = Modifier
-                .weight(animatedRightWeight)
-                .fillMaxHeight()
-                .padding(2.dp)
-                .background(Color.Black)
-                .border(4.dp, rightBorderColor)
-        ) {
-            if (state.dualRightChannel != null) {
-                AndroidView(
-                    factory = {
-                        PlayerView(it).apply {
-                            player = dualPlayer
-                            useController = false
+                        AspectRatioFrameLayout(ctx).apply {
+                            // ビュー自体のサイズを Compose 側 (aspectRatio) で映像の矩形そのものに
+                            // 合わせるため、ビュー内部でのレターボックス計算は行わない (FILL)
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                             keepScreenOn = true
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            addView(
+                                SurfaceView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                }
+                            )
                         }
                     },
                     update = { view ->
-                        if (view.player != dualPlayer) {
-                            view.player = dualPlayer
-                        }
-                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        // 全画面表示から二画面表示へ切り替えた直後に、映像の出力先が
+                        // 全画面用の古い Surface に残ったままになると、映像が全画面サイズの
+                        // まま描画され一部だけを切り出したズーム表示になる。
+                        // 毎回この二画面用の SurfaceView へ明示的に結び付け直して防ぐ。
+                        val surfaceView = view.getChildAt(0) as SurfaceView
+                        mainPlayer.setVideoSurfaceView(surfaceView)
                     },
+                    // ★ 修正2: 破棄時に参照を外す
                     onRelease = { view ->
-                        view.player = null
+                        (view.getChildAt(0) as? SurfaceView)?.let {
+                            mainPlayer.clearVideoSurfaceView(it)
+                        }
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(mainAspectRatio)
                 )
 
-                // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
+                var isMainBuffering by remember { mutableStateOf(false) }
+                DisposableEffect(mainPlayer) {
+                    val listener = object : androidx.media3.common.Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            isMainBuffering =
+                                (playbackState == androidx.media3.common.Player.STATE_BUFFERING)
+                        }
+                    }
+                    mainPlayer.addListener(listener)
+                    isMainBuffering =
+                        mainPlayer.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+                    onDispose { mainPlayer.removeListener(listener) }
+                }
+
+                val showMainLoading = if (state.currentStreamSource == StreamSource.KONOMITV) {
+                    state.sseStatus == "Standby" || state.sseStatus == "Offline"
+                } else {
+                    isMainBuffering
+                }
+                val mainLoadingText =
+                    if (state.currentStreamSource == StreamSource.KONOMITV) state.sseDetail else AppStrings.STATUS_LOADING
+
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = state.currentStreamSource == StreamSource.KONOMITV && (state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"),
+                    visible = showMainLoading,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier.align(Alignment.Center)
@@ -260,36 +225,157 @@ fun DualDisplayPlayer(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            text = state.dualSseDetail,
+                            text = mainLoadingText,
                             color = colors.textPrimary,
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        color = colors.textPrimary,
+                        modifier = Modifier.size(32.dp),
+                        strokeWidth = 3.dp
+                    )
+                }
+            }
 
-                if (isSubtitleEnabled) {
+            if (isSubtitleEnabled) {
+                // 字幕は映像の矩形に重ねる (枠いっぱいに広げるとレターボックス分だけ縦に伸びてしまう)
+                NativeCaptionOverlay(
+                    cue = mainCaptionCue,
+                    visible = !isUiVisible,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(mainAspectRatio)
+                )
+            }
+
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showInfo,
+                enter = fadeIn(tween(500)),
+                exit = fadeOut(tween(500)),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                DualChannelInfoOverlay(
+                    channel = leftChannel,
+                    isFocused = state.activeDualPlayerIndex == 0,
+                    getLogoUrl = getLogoUrl,
+                    shouldCropLogo = shouldCropLogo
+                )
+            }
+        }
+
+        // --- 右画面 (サブプレイヤー) ---
+        Box(
+            modifier = Modifier
+                .weight(animatedRightWeight)
+                .fillMaxHeight()
+                .padding(2.dp)
+                .background(Color.Black)
+                .border(4.dp, rightBorderColor)
+        ) {
+            if (state.dualRightChannel != null) {
+                if (dualPlayer != null) {
                     AndroidView(
                         factory = { ctx ->
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(-1, -1)
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                settings.apply {
-                                    javaScriptEnabled = true; domStorageEnabled = true
-                                }
-                                loadUrl("file:///android_asset/subtitle_renderer.html")
-                                dualWebViewRef.value = this
+                            AspectRatioFrameLayout(ctx).apply {
+                                // 左画面と同様、レターボックスは Compose 側で行う
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                keepScreenOn = true
+                                addView(
+                                    SurfaceView(ctx).apply {
+                                        layoutParams = ViewGroup.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT
+                                        )
+                                    }
+                                )
                             }
                         },
                         update = { view ->
-                            view.visibility =
-                                if (!isUiVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                            val surfaceView = view.getChildAt(0) as SurfaceView
+                            dualPlayer.setVideoSurfaceView(surfaceView)
                         },
-                        modifier = Modifier.fillMaxSize()
+                        // ★ 修正2: 破棄時に参照を外す
+                        onRelease = { view ->
+                            (view.getChildAt(0) as? SurfaceView)?.let {
+                                dualPlayer.clearVideoSurfaceView(it)
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .aspectRatio(dualAspectRatio)
+                    )
+
+                    var isDualBuffering by remember { mutableStateOf(false) }
+                    DisposableEffect(dualPlayer) {
+                        val listener = object : androidx.media3.common.Player.Listener {
+                            override fun onPlaybackStateChanged(playbackState: Int) {
+                                isDualBuffering =
+                                    (playbackState == androidx.media3.common.Player.STATE_BUFFERING)
+                            }
+                        }
+                        dualPlayer.addListener(listener)
+                        isDualBuffering =
+                            dualPlayer.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+                        onDispose { dualPlayer.removeListener(listener) }
+                    }
+
+                    val showDualLoading = if (state.currentStreamSource == StreamSource.KONOMITV) {
+                        state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"
+                    } else {
+                        isDualBuffering
+                    }
+                    val dualLoadingText =
+                        if (state.currentStreamSource == StreamSource.KONOMITV) state.dualSseDetail else AppStrings.STATUS_LOADING
+
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showDualLoading,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.Center)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                color = colors.textPrimary,
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                text = dualLoadingText,
+                                color = colors.textPrimary,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            color = colors.textPrimary,
+                            modifier = Modifier.size(32.dp),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                }
+
+                if (isSubtitleEnabled) {
+                    // 左画面と同様、字幕は映像の矩形に重ねる
+                    NativeCaptionOverlay(
+                        cue = dualCaptionCue,
+                        visible = !isUiVisible,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .aspectRatio(dualAspectRatio)
                     )
                 }
 
-                // ★修正: パッケージ名を明記してコンパイラの混乱を防ぐ
                 androidx.compose.animation.AnimatedVisibility(
                     visible = showInfo,
                     enter = fadeIn(tween(500)),
@@ -298,11 +384,9 @@ fun DualDisplayPlayer(
                 ) {
                     DualChannelInfoOverlay(
                         channel = state.dualRightChannel!!,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        isFocused = state.activeDualPlayerIndex == 1
+                        isFocused = state.activeDualPlayerIndex == 1,
+                        getLogoUrl = getLogoUrl,
+                        shouldCropLogo = shouldCropLogo
                     )
                 }
             } else {
@@ -319,205 +403,20 @@ fun DualDisplayPlayer(
 }
 
 @Composable
-fun DualDisplayMock(
-    state: LivePlayerState,
-    leftChannel: Channel,
-    mirakurunIp: String,
-    mirakurunPort: String,
-    konomiIp: String,
-    konomiPort: String,
-    isMiniListOpen: Boolean
-) {
-    val colors = KomorebiTheme.colors
-    val animatedLeftWeight by animateFloatAsState(
-        targetValue = state.leftScreenWeight,
-        label = "leftWeight"
-    )
-    val animatedRightWeight by animateFloatAsState(
-        targetValue = state.rightScreenWeight,
-        label = "rightWeight"
-    )
-
-    var isIdle by remember { mutableStateOf(false) }
-
-    LaunchedEffect(state.lastInteractionTime) {
-        isIdle = false
-        delay(5000L)
-        isIdle = true
-    }
-
-    val leftBorderColor by animateColorAsState(
-        targetValue = if (state.activeDualPlayerIndex == 0) {
-            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
-        } else {
-            Color.Transparent
-        },
-        animationSpec = tween(500),
-        label = "leftBorderColor"
-    )
-
-    val rightBorderColor by animateColorAsState(
-        targetValue = if (state.activeDualPlayerIndex == 1) {
-            if (isIdle && !isMiniListOpen) colors.accent.copy(alpha = 0.3f) else colors.accent
-        } else {
-            Color.Transparent
-        },
-        animationSpec = tween(500),
-        label = "rightBorderColor"
-    )
-
-    val showInfo = !isIdle || isMiniListOpen
-
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .focusable()
-    ) {
-        Box(
-            modifier = Modifier
-                .weight(animatedLeftWeight)
-                .fillMaxHeight()
-                .padding(2.dp)
-                .background(Color.Black)
-                .border(4.dp, leftBorderColor)
-        ) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    AppStrings.DUAL_MOCK_LEFT,
-                    color = Color.White.copy(alpha = 0.5f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    style = MaterialTheme.typography.headlineSmall
-                )
-            }
-
-            // ★修正: パッケージ名を明記
-            androidx.compose.animation.AnimatedVisibility(
-                visible = state.currentStreamSource == StreamSource.KONOMITV && (state.sseStatus == "Standby" || state.sseStatus == "Offline"),
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator(
-                        color = colors.textPrimary,
-                        modifier = Modifier.size(32.dp),
-                        strokeWidth = 3.dp
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = state.sseDetail,
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            // ★修正: パッケージ名を明記
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showInfo,
-                enter = fadeIn(tween(500)),
-                exit = fadeOut(tween(500)),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                DualChannelInfoOverlay(
-                    channel = leftChannel,
-                    mirakurunIp = mirakurunIp,
-                    mirakurunPort = mirakurunPort,
-                    konomiIp = konomiIp,
-                    konomiPort = konomiPort,
-                    isFocused = state.activeDualPlayerIndex == 0
-                )
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .weight(animatedRightWeight)
-                .fillMaxHeight()
-                .padding(2.dp)
-                .background(Color.Black)
-                .border(4.dp, rightBorderColor)
-        ) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                val rightText = when {
-                    state.activeDualPlayerIndex == 1 && isMiniListOpen -> AppStrings.DUAL_MOCK_RIGHT_SELECTING
-                    state.dualRightChannel != null -> AppStrings.DUAL_MOCK_RIGHT_SELECTED
-                    else -> AppStrings.DUAL_MOCK_RIGHT_UNSELECTED
-                }
-                Text(
-                    rightText,
-                    color = Color.White.copy(alpha = 0.5f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    style = MaterialTheme.typography.headlineSmall
-                )
-            }
-
-            // ★修正: パッケージ名を明記
-            androidx.compose.animation.AnimatedVisibility(
-                visible = state.currentStreamSource == StreamSource.KONOMITV && (state.dualSseStatus == "Standby" || state.dualSseStatus == "Offline"),
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator(
-                        color = colors.textPrimary,
-                        modifier = Modifier.size(32.dp),
-                        strokeWidth = 3.dp
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = state.dualSseDetail,
-                        color = colors.textPrimary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            if (state.dualRightChannel != null) {
-                // ★修正: パッケージ名を明記
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = showInfo,
-                    enter = fadeIn(tween(500)),
-                    exit = fadeOut(tween(500)),
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                ) {
-                    DualChannelInfoOverlay(
-                        channel = state.dualRightChannel!!,
-                        mirakurunIp = mirakurunIp,
-                        mirakurunPort = mirakurunPort,
-                        konomiIp = konomiIp,
-                        konomiPort = konomiPort,
-                        isFocused = state.activeDualPlayerIndex == 1
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun DualChannelInfoOverlay(
     channel: Channel,
-    mirakurunIp: String, mirakurunPort: String, konomiIp: String, konomiPort: String,
     isFocused: Boolean,
+    getLogoUrl: suspend (String) -> String,
+    shouldCropLogo: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val logoUrl = if (mirakurunIp.isNotEmpty() && mirakurunPort.isNotEmpty()) {
-        UrlBuilder.getMirakurunLogoUrl(
-            mirakurunIp,
-            mirakurunPort,
-            channel.networkId,
-            channel.serviceId
-        )
-    } else {
-        UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, channel.displayChannelId)
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(channel.id) ?: "")
+    }
+
+    LaunchedEffect(channel.id) {
+        if (logoUrl.isEmpty()) logoUrl = getLogoUrl(channel.id)
     }
 
     val displayType =
@@ -543,7 +442,7 @@ fun DualChannelInfoOverlay(
             modifier = Modifier
                 .width(56.dp)
                 .height(31.5.dp),
-            contentScale = ContentScale.Crop
+            contentScale = if (shouldCropLogo) ContentScale.Crop else ContentScale.Fit
         )
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {

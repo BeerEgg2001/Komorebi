@@ -14,6 +14,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.MarqueeSpacing
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,11 +33,13 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -45,14 +48,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
-import com.beeregg2001.komorebi.common.UrlBuilder
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.UiChannelState
-import com.beeregg2001.komorebi.ui.live.LivePlayerScreen
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.*
+import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -77,9 +80,9 @@ fun LiveContent(
     reserveViewModel: ReserveViewModel,
     timeFormat: String = "24H",
     isPiPMode: Boolean = false,
-    // ★ 追加: AI復帰シグナル
     aiFocusReturnTick: Int = 0,
-    onAiReturnConsumed: () -> Unit = {}
+    onAiReturnConsumed: () -> Unit = {},
+    settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
     val liveRows by channelViewModel.liveRows.collectAsState()
     val listState = rememberLazyListState()
@@ -90,17 +93,12 @@ fun LiveContent(
     val isPlayerActive = selectedChannel != null
     val colors = KomorebiTheme.colors
 
-    var isMiniListOpen by remember { mutableStateOf(false) }
-    var showOverlay by remember { mutableStateOf(true) }
-    var isManualOverlay by remember { mutableStateOf(false) }
-    var isPinnedOverlay by remember { mutableStateOf(false) }
-    var isSubMenuOpen by remember { mutableStateOf(false) }
-
     var pendingChannel by remember { mutableStateOf<UiChannelState?>(null) }
     var focusedChannel by remember { mutableStateOf<UiChannelState?>(null) }
 
-    // ★ 追加(Step4): AIコンシェルジュ復帰時のスクロール＆フォーカス処理
-    // 記憶している lastFocusedChannelId から「何行目の何番目か」を計算して戻ります。
+    // ★ 追加: EDCBメイン判定（勢い表記の非表示制御用）
+    val backendType by settingsViewModel.backendType.collectAsState(initial = "KONOMITV")
+
     LaunchedEffect(aiFocusReturnTick) {
         if (aiFocusReturnTick > 0) {
             delay(150)
@@ -110,7 +108,6 @@ fun LiveContent(
                 var colIndex = -1
                 var genreId = ""
 
-                // 二次元配列（liveRows）の中から、対象のチャンネルIDを持つ要素のインデックスを探す
                 for (i in liveRows.indices) {
                     val idx = liveRows[i].channels.indexOfFirst { it.channel.id == targetId }
                     if (idx != -1) {
@@ -122,12 +119,9 @@ fun LiveContent(
                 }
 
                 if (rowIndex != -1 && colIndex != -1) {
-                    // 行方向（縦）のスクロール
                     listState.scrollToItem(maxOf(0, rowIndex))
-                    // 列方向（横）のスクロール
                     val rState = rowStates.getOrPut(genreId) { LazyListState() }
                     rState.scrollToItem(maxOf(0, colIndex - 1))
-
                     delay(200)
                     targetChannelFocusRequester.safeRequestFocusWithRetry("LiveChannelAiReturn")
                 } else {
@@ -172,14 +166,8 @@ fun LiveContent(
     LaunchedEffect(isPlayerActive) { onPlayerStateChanged(isPlayerActive) }
 
     LaunchedEffect(isReturningFromPlayer, liveRows.isNotEmpty()) {
-        Log.i(
-            "KomorebiFocus",
-            "[LiveContent] 復帰エフェクト起動 - isReturning: $isReturningFromPlayer, isLiveRowsReady: ${liveRows.isNotEmpty()}"
-        )
         if (isReturningFromPlayer && liveRows.isNotEmpty()) {
             val targetId = lastFocusedChannelId
-            Log.i("KomorebiFocus", "[LiveContent] 目標のチャンネルID: $targetId")
-
             if (targetId != null) {
                 var rowIndex = -1
                 var colIndex = -1
@@ -199,7 +187,6 @@ fun LiveContent(
                     listState.scrollToItem(maxOf(0, rowIndex))
                     val rState = rowStates.getOrPut(genreId) { LazyListState() }
                     rState.scrollToItem(maxOf(0, colIndex - 1))
-
                     delay(200)
                     targetChannelFocusRequester.safeRequestFocusWithRetry("LiveChannelTarget")
                     onReturnFocusConsumed()
@@ -222,15 +209,12 @@ fun LiveContent(
                 CircularProgressIndicator(color = colors.textPrimary.copy(alpha = 0.5f))
             }
         } else {
+            // ★ 修正: フルスクリーン再生中に上下左右をCancelする指定を削除した。
+            // 背面ツリーへのフォーカス侵入はMainRootBackground側で遮断済みであり、
+            // 万一フォーカスがここへ残ってしまった場合、この指定があると
+            // 十字キーが完全に無反応(脱出不能)になり操作不能に見えてしまうため。
             Column(
-                modifier = modifier
-                    .fillMaxSize()
-                    .then(if (isPlayerActive && !isPiPMode) Modifier.focusProperties {
-                        up = FocusRequester.Cancel
-                        down = FocusRequester.Cancel
-                        left = FocusRequester.Cancel
-                        right = FocusRequester.Cancel
-                    } else Modifier)
+                modifier = modifier.fillMaxSize()
             ) {
                 Box(
                     modifier = Modifier
@@ -241,8 +225,8 @@ fun LiveContent(
                     if (focusedChannel != null) {
                         HeroDashboard(
                             uiState = focusedChannel!!,
-                            konomiIp = konomiIp,
-                            konomiPort = konomiPort,
+                            channelViewModel = channelViewModel,
+                            backendType = backendType, // ★ バックエンドタイプを渡す
                             timeFormat = timeFormat
                         )
                     }
@@ -253,11 +237,11 @@ fun LiveContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(0.45f)
-                        .focusRequester(contentFirstItemRequester),
+                        .focusGroup(),
                     contentPadding = PaddingValues(bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    items(liveRows, key = { it.genreId }) { row ->
+                    itemsIndexed(liveRows, key = { _, row -> row.genreId }) { rowIndex, row ->
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -276,6 +260,7 @@ fun LiveContent(
                                 contentPadding = PaddingValues(horizontal = 48.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusGroup()
                                     .graphicsLayer(clip = false)
                             ) {
                                 itemsIndexed(
@@ -286,10 +271,14 @@ fun LiveContent(
 
                                     CompactChannelCard(
                                         uiState = uiState,
-                                        konomiIp = konomiIp,
-                                        konomiPort = konomiPort,
+                                        channelViewModel = channelViewModel,
                                         onClick = { onChannelClick(uiState.channel) },
                                         modifier = Modifier
+                                            .then(
+                                                if (rowIndex == 0 && index == 0) Modifier.focusRequester(
+                                                    contentFirstItemRequester
+                                                ) else Modifier
+                                            )
                                             .then(
                                                 if (isTarget) Modifier.focusRequester(
                                                     targetChannelFocusRequester
@@ -317,30 +306,17 @@ fun LiveContent(
             }
         }
 
-        if (selectedChannel != null && !isPiPMode) {
-            LivePlayerScreen(
-                channel = selectedChannel,
-                mirakurunIp = mirakurunIp,
-                mirakurunPort = mirakurunPort,
-                konomiIp = konomiIp,
-                konomiPort = konomiPort,
-                onChannelSelect = { onChannelClick(it) },
-                onBackPressed = { onChannelClick(null) },
-                isMiniListOpen = isMiniListOpen,
-                onMiniListToggle = { isMiniListOpen = it },
-                showOverlay = showOverlay,
-                onShowOverlayChange = { showOverlay = it },
-                isManualOverlay = isManualOverlay,
-                onManualOverlayChange = { isManualOverlay = it },
-                isPinnedOverlay = isPinnedOverlay,
-                onPinnedOverlayChange = { isPinnedOverlay = it },
-                isSubMenuOpen = isSubMenuOpen,
-                onSubMenuToggle = { isSubMenuOpen = it },
-                reserveViewModel = reserveViewModel,
-                epgViewModel = epgViewModel,
-                onShowToast = { }
-            )
-        }
+        // ★ 削除: ここに2つ目のLivePlayerScreenを生成していたが、ライブ再生は
+        // MainRootScreenの前面レイヤー(zIndex=1)が唯一の担当であり、完全な重複だった。
+        //
+        // 以前は「プレイヤー表示中はホーム画面自体をComposeツリーから破棄する」実装だったため
+        // この分岐は事実上到達不能な死にコードだったが、スクロール位置とフォーカスを保持するため
+        // ホーム画面を破棄しない実装へ変更したことで生成されるようになり、
+        // ・前面プレイヤーと同じLivePlayerViewModel(Activityスコープ)を二重に操作する
+        // ・背面に隠れた2つ目のプレイヤーUIがフォーカスを奪い合う
+        //   (十字キーは見えない背面リストの中で動くため無反応に見え、
+        //    決定キーはそのリストのonChannelSelect→onChannelClickでメイン画面の選局が起きる)
+        // という不具合を起こしていた。
     }
 }
 
@@ -348,15 +324,25 @@ fun LiveContent(
 @Composable
 fun HeroDashboard(
     uiState: UiChannelState,
-    konomiIp: String,
-    konomiPort: String,
+    channelViewModel: ChannelViewModel,
+    backendType: String,
     timeFormat: String = "24H"
 ) {
     val colors = KomorebiTheme.colors
     val present = uiState.channel.programPresent
     val following = uiState.channel.programFollowing
     val isHot = (uiState.jikkyoForce ?: 0) > 500
-    val logoUrl = UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, uiState.displayChannelId)
+
+    // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(uiState.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(uiState.channel.displayChannelId) ?: "")
+    }
+    LaunchedEffect(uiState.channel.id) {
+        if (logoUrl.isEmpty()) {
+            logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        }
+    }
 
     val formatTime = { timeStr: String? ->
         if (timeStr.isNullOrEmpty()) ""
@@ -474,6 +460,7 @@ fun HeroDashboard(
 
                             Spacer(modifier = Modifier.width(28.dp))
 
+
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = Icons.Default.Whatshot,
@@ -489,6 +476,7 @@ fun HeroDashboard(
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                     color = if (isHot) Color(0xFFE53935) else colors.textSecondary
                                 )
+
                             }
                         }
 
@@ -574,8 +562,7 @@ fun HeroDashboard(
 @Composable
 fun CompactChannelCard(
     uiState: UiChannelState,
-    konomiIp: String,
-    konomiPort: String,
+    channelViewModel: ChannelViewModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -588,14 +575,28 @@ fun CompactChannelCard(
         label = "cardScale"
     )
 
-    val logoUrl = UrlBuilder.getKonomiTvLogoUrl(konomiIp, konomiPort, uiState.displayChannelId)
+    // ★ 修正: EDCB等で取得を成功させるため displayChannelId を使用する
+    // ★ 最適化: 共有キャッシュから同期的に初期値を取得(チラつき・再解決の防止)
+    var logoUrl by remember(uiState.channel.id) {
+        mutableStateOf(ChannelLogoUrlCache.peek(uiState.channel.displayChannelId) ?: "")
+    }
+    LaunchedEffect(uiState.channel.id) {
+        if (logoUrl.isEmpty()) {
+            logoUrl = channelViewModel.getChannelLogoUrl(uiState.channel.displayChannelId)
+        }
+    }
 
     Surface(
         onClick = onClick,
         modifier = modifier
             .width(140.dp)
             .height(76.dp)
-            .graphicsLayer { scaleX = animatedScale; scaleY = animatedScale }
+            // ★ 修正: graphicsLayerでのscaleはレイアウト座標(bringIntoViewの対象矩形)にも
+            // 反映されてしまい、Android TVの既定のPivotBringIntoViewSpecがこの拡大中の矩形を
+            // 追いかけて親LazyColumnを毎フレーム再スクロールするため、フォーカス移動のたびに
+            // 上下へ微妙にバウンドする不具合があった。描画時のみのスケールに変更し、見た目の
+            // 拡大演出はそのままにレイアウト座標(=カードサイズ76dp固定)を変えないようにする。
+            .drawWithContent { scale(animatedScale) { this@drawWithContent.drawContent() } }
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),

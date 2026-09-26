@@ -9,6 +9,8 @@ import com.beeregg2001.komorebi.data.model.EpgChannelWrapper
 import com.beeregg2001.komorebi.data.model.EpgProgram
 import com.beeregg2001.komorebi.ui.epg.EpgDataConverter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.OffsetDateTime
@@ -60,48 +62,86 @@ class EpgState(
     var targetAnimY by mutableFloatStateOf(0f)
     var targetAnimH by mutableFloatStateOf(config.hhPx)
 
-    val textLayoutCache = mutableMapOf<String, TextLayoutResult>()
+    // ★ 修正: メモリ肥大化(OOM)を防ぎつつ再利用するための LRU (Least Recently Used) キャッシュ
+    val textLayoutCache = object : LinkedHashMap<String, TextLayoutResult>(2000, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TextLayoutResult>?): Boolean {
+            return size > 5000 // 古い計測結果から順に破棄
+        }
+    }
+
+    // ★ 追加: UI解析結果を丸ごと保存して、種別切り替えを0msにするキャッシュ
+    private val uiChannelsCache = mutableMapOf<String, List<UiChannel>>()
+
     var screenWidthPx by mutableFloatStateOf(0f)
     var screenHeightPx by mutableFloatStateOf(0f)
 
-    // ぴったり24時間（60分 × 24時間）
     val maxScrollMinutes = 60 * 24
 
     suspend fun updateData(
         newData: List<EpgChannelWrapper>,
         targetTime: OffsetDateTime,
+        currentType: String, // ★ 追加: キャッシュのキーとして利用
         resetFocus: Boolean = false
     ) {
+        val newBaseTime = targetTime.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
+            if (targetTime.hour < 4) it.minusDays(1) else it
+        }
+        val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
+
+        val filteredData = if (config.hideSubChannels) {
+            newData.filter { !it.channel.is_subchannel }
+        } else {
+            newData
+        }
+
+        // ★ キャッシュの照合（日付と種別が同じなら、計算をすべてスキップ！）
+        val cacheKey = "${currentType}_${newBaseTime.toEpochSecond()}"
+        if (uiChannelsCache.containsKey(cacheKey) && uiChannelsCache[cacheKey]!!.size == filteredData.size) {
+            withContext(Dispatchers.Main) {
+                baseTime = newBaseTime
+                limitTime = newLimitTime
+                uiChannels = uiChannelsCache[cacheKey]!!
+                filledChannelWrappers = uiChannels.map { it.wrapper }
+                jumpToTime(targetTime)
+                isInitialized = true
+                isCalculating = false
+            }
+            return
+        }
+
         isCalculating = true
         withContext(Dispatchers.Default) {
             try {
-                // targetTimeからその日の「朝4時」を起算してベースにする
-                val newBaseTime =
-                    targetTime.withHour(4).withMinute(0).withSecond(0).withNano(0).let {
-                        if (targetTime.hour < 4) it.minusDays(1) else it
-                    }
-                val newLimitTime = newBaseTime.plusMinutes(maxScrollMinutes.toLong())
-
-                val newUiChannels = newData.map { wrapper ->
-                    val filled = EpgDataConverter.getFilledPrograms(
-                        wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime
-                    )
-                    val uiProgs = filled.map { p ->
-                        val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
-                        val topY = (sOff / 60f) * config.hhPx
-                        val height = (dur / 60f) * config.hhPx
-                        val isEmpty = p.title == "（番組情報なし）"
-                        val endMs = try {
-                            EpgDataConverter.safeParseTime(
-                                p.end_time,
-                                newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())
-                            ).toInstant().toEpochMilli()
-                        } catch (e: Exception) {
-                            0L
+                // ★ 修正: async/awaitAll を使って、全チャンネルのパースを並列処理（マルチコアのフル活用）
+                val newUiChannels = filteredData.map { wrapper ->
+                    async {
+                        val filled = EpgDataConverter.getFilledPrograms(
+                            wrapper.channel.id, wrapper.programs, newBaseTime, newLimitTime
+                        )
+                        val uiProgs = filled.map { p ->
+                            val (sOff, dur) = EpgDataConverter.calculateSafeOffsets(p, newBaseTime)
+                            val topY = (sOff / 60f) * config.hhPx
+                            val height = (dur / 60f) * config.hhPx
+                            val isEmpty = p.title == "（番組情報なし）"
+                            val endMs = try {
+                                EpgDataConverter.safeParseTime(
+                                    p.end_time,
+                                    newBaseTime.plusMinutes(sOff.toLong() + dur.toLong())
+                                ).toInstant().toEpochMilli()
+                            } catch (e: Exception) {
+                                0L
+                            }
+                            UiProgram(p, topY, height, isEmpty, endMs)
                         }
-                        UiProgram(p, topY, height, isEmpty, endMs)
+                        UiChannel(wrapper.copy(programs = filled), uiProgs)
                     }
-                    UiChannel(wrapper.copy(programs = filled), uiProgs)
+                }.awaitAll()
+
+                // キャッシュに保存（最新の10件のみ保持）
+                uiChannelsCache[cacheKey] = newUiChannels
+                if (uiChannelsCache.size > 10) {
+                    val keysToRemove = uiChannelsCache.keys.take(uiChannelsCache.size - 10)
+                    keysToRemove.forEach { uiChannelsCache.remove(it) }
                 }
 
                 withContext(Dispatchers.Main) {
@@ -109,9 +149,9 @@ class EpgState(
                     limitTime = newLimitTime
                     uiChannels = newUiChannels
                     filledChannelWrappers = newUiChannels.map { it.wrapper }
-                    textLayoutCache.clear()
 
-                    // データが来たら常に目的の時刻へジャンプする
+                    // ★ textLayoutCache.clear() を削除し、文字サイズの計算を再利用
+
                     jumpToTime(targetTime)
                     isInitialized = true
                     isCalculating = false
@@ -188,16 +228,12 @@ class EpgState(
 
         val focusY = (safeMin / 60f) * config.hhPx
 
-        // ★神修正: 浮動小数点の誤差や秒単位のズレによる「上のセルへの誤爆」「隙間落ち」を防ぐため、
-        // 判定用のY座標に 0.5分相当 のマージン（下方向への押し込み）を加える！
         val searchY = focusY + ((0.5f / 60f) * config.hhPx)
 
         var uiProg = channel.uiPrograms.find {
             searchY >= it.topY && searchY < it.topY + it.height
         }
 
-        // ★神修正: 時間の切り捨てによって生じた「空番組（隙間）」に落ちた場合は、
-        // 最も近い下方向の実在する番組を強制的に選択する（スキップや迷子の完全防止！）
         if (uiProg == null || uiProg.isEmpty) {
             uiProg = channel.uiPrograms.firstOrNull { it.topY + it.height > searchY && !it.isEmpty }
         }
@@ -247,18 +283,15 @@ class EpgState(
         targetScrollY = nextTargetY.coerceIn(maxScrollY, 0f)
     }
 
-    // 🌟 追加: EPGの魔法の「座標復元関数」
     fun restoreFocus(
         targetChannelId: String,
         targetTime: OffsetDateTime
     ) {
         if (uiChannels.isEmpty()) return
 
-        // チャンネルIDからX座標（列）を特定
         val colIndex = uiChannels.indexOfFirst { it.wrapper.channel.id == targetChannelId }
         if (colIndex == -1) return
 
-        // 時間からY座標（分数）を特定
         val minutesDiff = try {
             Duration.between(baseTime, targetTime).toMinutes().toInt()
         } catch (e: Exception) {
@@ -267,7 +300,6 @@ class EpgState(
 
         if (minutesDiff < 0 || minutesDiff > maxScrollMinutes) return
 
-        // 既存のメソッドを利用して強引にスクロール＆アニメーションを合わせる
         updatePositionsInternal(colIndex, minutesDiff, forceScroll = false)
     }
 }

@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.rememberAsyncImagePainter
 import com.beeregg2001.komorebi.data.model.EpgProgram
@@ -42,6 +43,7 @@ import com.beeregg2001.komorebi.ui.epg.engine.*
 import com.beeregg2001.komorebi.viewmodel.EpgUiState
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import java.time.Duration
 import java.time.OffsetDateTime
 import kotlinx.coroutines.delay
@@ -67,17 +69,41 @@ fun ModernEpgCanvasEngine_Smooth(
     onRequestJumpToNow: () -> Unit,
     searchButtonFocusRequester: FocusRequester,
     onSearchClick: () -> Unit,
-    timeFormat: String
+    timeFormat: String,
+    settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
     val density = LocalDensity.current
     val colors = KomorebiTheme.colors
 
-    val config = remember(density, colors) { EpgConfig(density, colors) }
-    val epgState = remember { EpgState(config) }
+    val hideSubChannels by settingsViewModel.hideSubChannels.collectAsState(initial = false)
+    val epgColumnCountStr by settingsViewModel.epgColumnCount.collectAsState()
+    val epgFontSizeScaleStr by settingsViewModel.epgFontSizeScale.collectAsState()
+    val epgVisibleHoursStr by settingsViewModel.epgVisibleHours.collectAsState(initial = "6")
 
-    val textMeasurer = rememberTextMeasurer()
-    val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
-    val logoPainters = logoUrls.map { rememberAsyncImagePainter(model = it) }
+    val columnCount = remember(epgColumnCountStr) { epgColumnCountStr.toIntOrNull() ?: 7 }
+    val fontSizeScale =
+        remember(epgFontSizeScaleStr) { epgFontSizeScaleStr.toFloatOrNull() ?: 1.0f }
+    val visibleHours = remember(epgVisibleHoursStr) { epgVisibleHoursStr.toIntOrNull() ?: 6 }
+
+    val filteredLogoUrls = remember(uiState, hideSubChannels, logoUrls) {
+        if (uiState is EpgUiState.Success) {
+            val allChannels = uiState.data
+            if (allChannels.size == logoUrls.size) {
+                allChannels.mapIndexedNotNull { index, wrapper ->
+                    if (hideSubChannels && wrapper.channel.is_subchannel) null else logoUrls[index]
+                }
+            } else {
+                logoUrls
+            }
+        } else {
+            emptyList()
+        }
+    }
+
+    val filteredLogoPainters = filteredLogoUrls.map { url ->
+        rememberAsyncImagePainter(model = url)
+    }
+
     val clockPainter = rememberVectorPainter(Icons.Default.Schedule)
     val reserveMap = remember(reserves) { reserves.associateBy { it.program.id } }
 
@@ -92,40 +118,6 @@ fun ModernEpgCanvasEngine_Smooth(
     val epgViewModel: com.beeregg2001.komorebi.viewmodel.EpgViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
 
-    LaunchedEffect(epgViewModel.epgRestoreTrigger) {
-        if (epgViewModel.epgRestoreTrigger > 0L) {
-            val targetCh = epgViewModel.lastFocusedChannelId
-            val targetTime = epgViewModel.lastFocusedTime
-            if (targetCh != null && targetTime != null) {
-                Log.i(
-                    "KomorebiFocus",
-                    "[ModernEpgCanvas] 復元トリガー検知！ $targetCh - $targetTime へジャンプします"
-                )
-                epgState.restoreFocus(targetCh, targetTime)
-                delay(150)
-                gridFocusRequester.requestFocus()
-                epgViewModel.clearEpgFocus()
-            }
-        }
-    }
-
-    androidx.compose.runtime.LaunchedEffect(
-        epgState.focusedCol,
-        epgState.focusedMin,
-        epgState.currentFocusedProgram
-    ) {
-        val ch = epgState.uiChannels.getOrNull(epgState.focusedCol)
-        val prog = epgState.currentFocusedProgram
-
-        if (ch != null && prog != null && prog.title != "（番組情報なし）") {
-            val time = com.beeregg2001.komorebi.ui.epg.EpgDataConverter.safeParseTime(
-                prog.start_time,
-                epgState.baseTime
-            )
-            epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
-        }
-    }
-
     var isHeaderVisible by remember { mutableStateOf(true) }
     var pendingHeaderFocusIndex by remember { mutableStateOf<Int?>(null) }
     var lastLoadedType by remember { mutableStateOf<String?>(null) }
@@ -137,76 +129,142 @@ fun ModernEpgCanvasEngine_Smooth(
     var lastRequestedTargetTime by remember { mutableStateOf<OffsetDateTime?>(null) }
     var isNextUpdateSeamless by remember { mutableStateOf(false) }
 
-    LaunchedEffect(epgState.hasData) {
-        if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
-    }
-
-    LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
-        if (isHeaderVisible && pendingHeaderFocusIndex != null) {
-            val index = pendingHeaderFocusIndex!!
-            delay(50)
-            if (index == -2) topTabFocusRequester.safeRequestFocus("Epg_TopTab")
-            else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].safeRequestFocus(
-                "Epg_SubTab"
-            )
-            pendingHeaderFocusIndex = null
-        }
-    }
-
-    // ==========================================================
-    // ★ 修正箇所: ジャンプ後に元のチャンネル列を復元するロジック
-    // ==========================================================
-    LaunchedEffect(uiState) {
-        if (uiState is EpgUiState.Success) {
-            val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
-            lastLoadedType = currentType
-            if (isTypeChanged) hasRenderedFirstFrame = false
-
-            isJumping = true
-            lastRequestedTargetTime = null
-
-            // ★ 修正: データ更新（ジャンプ）直前に見ていたチャンネルのIDを保存しておく
-            val prevChannelId = epgViewModel.lastFocusedChannelId
-
-            epgState.updateData(
-                newData = uiState.data,
-                targetTime = uiState.targetTime,
-                resetFocus = isTypeChanged
-            )
-
-            // ★ 修正: 放送波(地デジ等)の切り替えでなければ、直前にフォーカスしていたチャンネル列へ復元する
-            if (!isTypeChanged && prevChannelId != null) {
-                // targetTimeがある場合はその時間へ、なければ直前に見ていた時間へジャンプ
-                val targetTime =
-                    uiState.targetTime ?: epgViewModel.lastFocusedTime ?: OffsetDateTime.now()
-                epgState.restoreFocus(prevChannelId, targetTime)
-            }
-
-            isNextUpdateSeamless = false
-
-            delay(100)
-            isJumping = false
-        }
-    }
-
     BoxWithConstraints {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
 
+        val config = remember(
+            density,
+            colors,
+            hideSubChannels,
+            columnCount,
+            fontSizeScale,
+            visibleHours,
+            w,
+            h
+        ) {
+            EpgConfig(
+                density,
+                colors,
+                w,
+                h,
+                columnCount,
+                fontSizeScale,
+                visibleHours,
+                hideSubChannels
+            )
+        }
+        val epgState = remember(config) { EpgState(config) }
+        val textMeasurer = rememberTextMeasurer()
+        val drawer = remember(config, textMeasurer) { EpgDrawer(config, textMeasurer) }
+
         LaunchedEffect(w, h) { epgState.updateScreenSize(w, h) }
+
+        LaunchedEffect(epgViewModel.epgRestoreTrigger) {
+            val triggerTime = epgViewModel.epgRestoreTrigger
+            if (triggerTime > 0L) {
+                val targetCh = epgViewModel.lastFocusedChannelId
+                val targetTime = epgViewModel.lastFocusedTime
+                val now = System.currentTimeMillis()
+
+                if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
+                    epgState.restoreFocus(targetCh, targetTime)
+                    delay(150)
+                    gridFocusRequester.requestFocus()
+                }
+                epgViewModel.clearEpgFocus()
+            }
+        }
+
+        androidx.compose.runtime.LaunchedEffect(
+            epgState.focusedCol,
+            epgState.focusedMin,
+            epgState.currentFocusedProgram
+        ) {
+            val ch = epgState.uiChannels.getOrNull(epgState.focusedCol)
+            val prog = epgState.currentFocusedProgram
+
+            if (ch != null && prog != null && prog.title != "（番組情報なし）") {
+                val time = com.beeregg2001.komorebi.ui.epg.EpgDataConverter.safeParseTime(
+                    prog.start_time,
+                    epgState.baseTime
+                )
+                epgViewModel.saveEpgFocus(ch.wrapper.channel.id, time)
+            }
+        }
+
+        LaunchedEffect(epgState.hasData) {
+            if (epgState.hasData && !hasRenderedFirstFrame) epgState.jumpToNow()
+        }
+
+        LaunchedEffect(isHeaderVisible, pendingHeaderFocusIndex) {
+            if (isHeaderVisible && pendingHeaderFocusIndex != null) {
+                val index = pendingHeaderFocusIndex!!
+                delay(50)
+                if (index == -2) topTabFocusRequester.safeRequestFocus("Epg_TopTab")
+                else if (index in subTabFocusRequesters.indices) subTabFocusRequesters[index].safeRequestFocus(
+                    "Epg_SubTab"
+                )
+                pendingHeaderFocusIndex = null
+            }
+        }
+
+        LaunchedEffect(uiState, hideSubChannels, config) {
+            if (uiState is EpgUiState.Success) {
+                val isTypeChanged = lastLoadedType != null && lastLoadedType != currentType
+                lastLoadedType = currentType
+                if (isTypeChanged) hasRenderedFirstFrame = false
+
+                isJumping = true
+                lastRequestedTargetTime = null
+
+                val prevChannelId = epgViewModel.lastFocusedChannelId
+
+                epgState.updateData(
+                    newData = uiState.data,
+                    targetTime = uiState.targetTime,
+                    currentType = currentType,
+                    resetFocus = isTypeChanged
+                )
+
+                if (!isTypeChanged && prevChannelId != null) {
+                    val targetTime =
+                        uiState.targetTime ?: epgViewModel.lastFocusedTime ?: OffsetDateTime.now()
+                    epgState.restoreFocus(prevChannelId, targetTime)
+                }
+
+                isNextUpdateSeamless = false
+
+                delay(100)
+                isJumping = false
+            }
+        }
 
         val scrollSpec = if (isJumping) snap() else spring<Float>(
             dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = 2500f
         )
 
-        val scrollX by animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
-        val scrollY by animateFloatAsState(epgState.targetScrollY, scrollSpec, label = "sY")
-        val animX by animateFloatAsState(epgState.targetAnimX, scrollSpec, label = "aX")
-        val animY by animateFloatAsState(epgState.targetAnimY, scrollSpec, label = "aY")
-        val animH by animateFloatAsState(epgState.targetAnimH, scrollSpec, label = "aH")
-
-        val animValues = EpgAnimValues(scrollX, scrollY, animX, animY, animH)
+        // ★ 最適化(最重要): アニメーション値を「コンポーズ段階では読まない」。
+        //
+        // 従来は `val scrollX by animateFloatAsState(...)` のように委譲プロパティで
+        // 値を読んでいたため、スクロール／フォーカス移動のアニメーション中は
+        // 毎フレーム BoxWithConstraints 配下の巨大な Composable ツリー全体が
+        // 再コンポーズされていた。1 フレームごとに
+        //   - filteredLogoPainters の map と rememberAsyncImagePainter の再実行
+        //   - EpgHeaderSection を含む全子要素の再評価
+        //   - 全 remember キーの再比較と onKeyEvent ラムダの再生成
+        // が走るため、非力な Android TV では番組表のスクロールが露骨に重くなる。
+        //
+        // State オブジェクトのまま保持し、`.value` の読み取りを onDrawBehind の中
+        // （＝描画フェーズ）まで遅延させることで、アニメーション中の無効化を
+        // 「描画のみ」に限定できる。アニメーション自体は内部のコルーチンで進むため、
+        // コンポーズ段階で読まなくても正しく動作する。
+        val scrollXState = animateFloatAsState(epgState.targetScrollX, scrollSpec, label = "sX")
+        val scrollYState = animateFloatAsState(epgState.targetScrollY, scrollSpec, label = "sY")
+        val animXState = animateFloatAsState(epgState.targetAnimX, scrollSpec, label = "aX")
+        val animYState = animateFloatAsState(epgState.targetAnimY, scrollSpec, label = "aY")
+        val animHState = animateFloatAsState(epgState.targetAnimH, scrollSpec, label = "aH")
 
         Column(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
@@ -369,17 +427,27 @@ fun ModernEpgCanvasEngine_Smooth(
                             .fillMaxSize()
                             .drawWithCache {
                                 onDrawBehind {
+                                    // ★ アニメーション値はここ（描画フェーズ）で初めて読む。
+                                    //   これにより値の変化は再コンポーズではなく再描画のみを誘発する。
                                     drawer.draw(
                                         drawScope = this,
                                         state = epgState,
-                                        animValues = animValues,
-                                        logoPainters = logoPainters,
+                                        animValues = EpgAnimValues(
+                                            scrollXState.value,
+                                            scrollYState.value,
+                                            animXState.value,
+                                            animYState.value,
+                                            animHState.value
+                                        ),
+                                        logoPainters = filteredLogoPainters,
                                         isGridFocused = isContentFocused || epgState.hasData,
                                         reserveMap = reserveMap,
                                         clockPainter = clockPainter,
                                         timeFormat = timeFormat
                                     )
-                                    hasRenderedFirstFrame = true
+                                    // 初回フレーム到達フラグ。毎フレーム書き込むと
+                                    // 描画フェーズからの state 書き込みが繰り返されるためガードする。
+                                    if (!hasRenderedFirstFrame) hasRenderedFirstFrame = true
                                 }
                             })
                 }

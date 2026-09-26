@@ -147,11 +147,7 @@ object AppStrings {
     const val PROGRAM_INFO_NONE = "番組情報なし"
     const val STATUS_RECORDING = "録画中"
 
-    // 二画面・モック関連
-    const val DUAL_MOCK_LEFT = "左画面\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_SELECTING = "チャンネル選択中...\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_SELECTED = "右画面\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_UNSELECTED = "右画面\n（未選択）\n(720p上限 モック)"
+    // 二画面関連
     const val DUAL_RIGHT_SELECTING = "チャンネル選択中..."
     const val DUAL_RIGHT_UNSELECTED = "（未選択）"
 
@@ -214,6 +210,18 @@ object AppStrings {
     const val SETTINGS_INPUT_MIRAKURUN_ADDRESS = "Mirakurun IPアドレス"
     const val SETTINGS_INPUT_MIRAKURUN_PORT = "Mirakurun ポート番号"
 
+    // Cloudflare Zero Trust 設定
+    const val SETTINGS_SECTION_CLOUDFLARE = "Cloudflare Zero Trust (オプション)"
+    const val SETTINGS_ITEM_CF_CLIENT_ID = "Access Client ID"
+    const val SETTINGS_ITEM_CF_CLIENT_SECRET = "Access Client Secret"
+    const val SETTINGS_INPUT_CF_CLIENT_ID = "Cloudflare Access Client ID"
+    const val SETTINGS_INPUT_CF_CLIENT_SECRET = "Cloudflare Access Client Secret"
+    const val SETTINGS_VALUE_CF_SET = "設定済み"
+    const val SETTINGS_PLACEHOLDER_CF_CLIENT_ID =
+        "例: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.access"
+    const val SETTINGS_PLACEHOLDER_CF_CLIENT_SECRET =
+        "例: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
     // 再生設定
     const val SETTINGS_SECTION_QUALITY = "画質設定"
     const val SETTINGS_ITEM_LIVE_QUALITY = "ライブ視聴画質"
@@ -254,6 +262,20 @@ object AppStrings {
     const val SETTINGS_VALUE_SEASON_AUTUMN = "秋"
     const val SETTINGS_VALUE_SEASON_WINTER = "冬"
     const val SETTINGS_VALUE_SEASON_DEFAULT = "デフォルト"
+
+    // --- テーマ設定の追加分 ---
+// --- 時間連動テーマ用動的ラベル ---
+    const val THEME_NAME_MORNING_KOMOREBI = "朝焼け"
+    const val THEME_NAME_DAY_KOMOREBI = "木漏れ日"
+    const val THEME_NAME_EVENING_KOMOREBI = "夕焼け"
+    const val THEME_NAME_NIGHT_KOMOREBI = "月光"
+
+    const val THEME_NAME_MORNING_KYLE = "朝凪のカイル"
+    const val THEME_NAME_DAY_KYLE = "海辺のカイル"
+    const val THEME_NAME_EVENING_KYLE = "夕凪のカイル"
+    const val THEME_NAME_NIGHT_KYLE = "深海のカイル"
+
+    const val SETTINGS_VALUE_THEME_TIME_LINKED = "時間連動テーマ"
 
     // ★追加: 起動時のチャンネル設定
     const val SETTINGS_ITEM_STARTUP_TAB = "起動時のデフォルトタブ"

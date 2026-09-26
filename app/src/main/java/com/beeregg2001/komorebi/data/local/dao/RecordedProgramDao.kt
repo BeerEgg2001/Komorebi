@@ -27,6 +27,49 @@ interface RecordedProgramDao {
     @Query("DELETE FROM recorded_programs WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
 
+    // =========================================================================
+    // ★ 修正: 「全ての録画」用のソートクエリ群 (日時、名前、録画時間)
+    // =========================================================================
+    @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
+    fun getAll_DateDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY start_time ASC")
+    fun getAll_DateAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY title DESC")
+    fun getAll_TitleDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY title ASC")
+    fun getAll_TitleAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY video_duration DESC")
+    fun getAll_DurationDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs ORDER BY video_duration ASC")
+    fun getAll_DurationAsc(): PagingSource<Int, RecordedProgramEntity>
+
+
+    // =========================================================================
+    // ★ 修正: 「未視聴」用のソートクエリ群 (日時、名前、録画時間)
+    // =========================================================================
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY start_time DESC")
+    fun getUnwatched_DateDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY start_time ASC")
+    fun getUnwatched_DateAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY title DESC")
+    fun getUnwatched_TitleDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY title ASC")
+    fun getUnwatched_TitleAsc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY video_duration DESC")
+    fun getUnwatched_DurationDesc(): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE playback_position <= 10 ORDER BY video_duration ASC")
+    fun getUnwatched_DurationAsc(): PagingSource<Int, RecordedProgramEntity>
+
     @Query("SELECT * FROM recorded_programs ORDER BY start_time DESC")
     fun getAllPagingSource(): PagingSource<Int, RecordedProgramEntity>
 
@@ -35,6 +78,18 @@ interface RecordedProgramDao {
 
     @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY start_time DESC")
     fun searchPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%' ORDER BY episode_number IS NULL, episode_number ASC, start_time ASC")
+    fun searchSeriesPagingSource(keyword: String): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT * FROM recorded_programs WHERE series_id = :seriesId ORDER BY episode_number IS NULL, episode_number ASC, start_time ASC")
+    fun searchSeriesPagingSourceById(seriesId: Int): PagingSource<Int, RecordedProgramEntity>
+
+    @Query("SELECT id FROM recorded_programs WHERE (title LIKE '%' || :keyword || '%' OR series_name LIKE '%' || :keyword || '%') ORDER BY CASE WHEN playback_position <= 5.0 THEN 0 ELSE 1 END, episode_number IS NULL, episode_number ASC, start_time ASC LIMIT 1")
+    suspend fun getSeriesFocusProgramId(keyword: String): Int?
+
+    @Query("SELECT id FROM recorded_programs WHERE series_id = :seriesId ORDER BY CASE WHEN playback_position <= 5.0 THEN 0 ELSE 1 END, episode_number IS NULL, episode_number ASC, start_time ASC LIMIT 1")
+    suspend fun getSeriesFocusProgramIdById(seriesId: Int): Int?
 
     @Query("SELECT * FROM recorded_programs WHERE genres LIKE '%' || :genre || '%' ORDER BY start_time DESC")
     fun getPagingSourceByGenre(genre: String): PagingSource<Int, RecordedProgramEntity>
@@ -68,18 +123,22 @@ interface RecordedProgramDao {
     @Query("SELECT DISTINCT channel_id as channelId, channel_type as channelType, channel_name as channelName FROM recorded_programs WHERE channel_id IS NOT NULL")
     suspend fun getDistinctChannels(): List<ChannelProjection>
 
+    // ★ 修正: direct_thumbnail_url と api_thumbnail_url をクエリの取得対象に追加
     @Query(
         """
-    SELECT 
-        series_name as seriesName, 
-        COUNT(id) as programCount, 
-        MAX(id) as representativeVideoId, 
-        MAX(is_episodic) as isEpisodic,
-        MAX(genres) as genres 
-    FROM recorded_programs 
-    WHERE series_name != '' 
-    GROUP BY series_name
-"""
+        SELECT 
+            series_name as seriesName, 
+            COUNT(id) as programCount, 
+            MAX(id) as representativeVideoId, 
+            MAX(is_episodic) as isEpisodic,
+            MAX(genres) as genres,
+            MAX(direct_thumbnail_url) as directThumbnailUrl,
+            MAX(api_thumbnail_url) as apiThumbnailUrl,
+            MAX(end_time) as lastAiredAt
+        FROM recorded_programs 
+        WHERE series_name != '' 
+        GROUP BY series_name
+        """
     )
     suspend fun getGroupedSeries(): List<SeriesProjection>
 
@@ -149,7 +208,10 @@ data class SeriesProjection(
     val programCount: Int,
     val representativeVideoId: Int,
     val isEpisodic: Boolean,
-    val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?
+    val genres: List<com.beeregg2001.komorebi.data.model.EpgGenre>?,
+    val directThumbnailUrl: String?,
+    val apiThumbnailUrl: String?,
+    val lastAiredAt: String?
 )
 
 data class ProgramTitleProjection(

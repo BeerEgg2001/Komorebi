@@ -3,7 +3,12 @@ package com.beeregg2001.komorebi.ui.video.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -14,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,10 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.foundation.lazy.grid.TvGridCells
-import androidx.tv.foundation.lazy.grid.TvLazyGridState
-import androidx.tv.foundation.lazy.grid.TvLazyVerticalGrid
-import androidx.tv.foundation.lazy.grid.itemsIndexed
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -38,7 +39,13 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.viewmodel.SeriesInfo
+import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Dp
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -46,7 +53,8 @@ fun RecordSeriesGridContent(
     seriesList: List<SeriesInfo>,
     konomiIp: String,
     konomiPort: String,
-    onSeriesClick: (String) -> Unit,
+    settingViewModel: SettingsViewModel = hiltViewModel(),
+    onSeriesClick: (SeriesInfo) -> Unit,
     onOpenNavPane: () -> Unit,
     firstItemFocusRequester: FocusRequester,
     contentContainerFocusRequester: FocusRequester,
@@ -54,13 +62,14 @@ fun RecordSeriesGridContent(
     backButtonFocusRequester: FocusRequester,
     isSearchBarVisible: Boolean,
     onBackPress: () -> Unit,
-    gridState: TvLazyGridState,
+    gridState: LazyGridState,
     ticketManager: FocusTicketManager,
     onFirstItemBound: (Boolean) -> Unit = {},
     onFocusedSeriesChanged: (SeriesInfo) -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
     val isListReady by remember { derivedStateOf { gridState.layoutInfo.visibleItemsInfo.isNotEmpty() } }
+    val backendType by settingViewModel.backendType.collectAsState()
     val isScrollInProgress = gridState.isScrollInProgress
     val upFocusTarget =
         if (isSearchBarVisible) searchInputFocusRequester else backButtonFocusRequester
@@ -83,17 +92,18 @@ fun RecordSeriesGridContent(
         }
     }
 
-    TvLazyVerticalGrid(
+    LazyVerticalGrid(
         state = gridState,
-        columns = TvGridCells.Fixed(4),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+        columns = GridCells.Fixed(4),
+        contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp, end = 28.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(contentContainerFocusRequester)
-            // ★修正: focusGroup を削除し、focusRestorer を追加。
-            .focusRestorer { firstItemFocusRequester }
+            // ★ 修正: クラッシュの原因だった focusRestorer を安全な focusGroup に変更
+            .focusGroup()
+            .simpleGridVerticalScrollbar(state = gridState, color = colors.textPrimary)
     ) {
         itemsIndexed(seriesList) { index, series ->
             var isFocused by remember { mutableStateOf(false) }
@@ -142,7 +152,7 @@ fun RecordSeriesGridContent(
                 }
 
             Surface(
-                onClick = { onSeriesClick(series.searchKeyword) }, modifier = itemModifier,
+                onClick = { onSeriesClick(series) }, modifier = itemModifier,
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
                 colors = ClickableSurfaceDefaults.colors(
                     containerColor = colors.surface, focusedContainerColor = colors.surface
@@ -158,17 +168,30 @@ fun RecordSeriesGridContent(
                 )
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    val fallbackUrl = series.apiThumbnailUrl ?: UrlBuilder.getThumbnailUrl(
+                        backendType,
+                        konomiIp,
+                        konomiPort,
+                        series.representativeVideoId.toString()
+                    )
+                    val primaryUrl = series.directThumbnailUrl ?: fallbackUrl
+                    var currentThumbnailUrl by remember(
+                        series.representativeVideoId,
+                        primaryUrl
+                    ) { mutableStateOf(primaryUrl) }
+
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current).data(
-                            UrlBuilder.getThumbnailUrl(
-                                konomiIp,
-                                konomiPort,
-                                series.representativeVideoId.toString()
-                            )
-                        ).crossfade(true).build(),
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(currentThumbnailUrl)
+                            .crossfade(true).build(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        onError = {
+                            if (currentThumbnailUrl == primaryUrl && primaryUrl != fallbackUrl) {
+                                currentThumbnailUrl = fallbackUrl
+                            }
+                        }
                     )
                     Box(
                         modifier = Modifier
@@ -183,6 +206,38 @@ fun RecordSeriesGridContent(
                                 )
                             )
                     )
+                    if (series.unwatchedCount > 0 || series.isOnAir) {
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (series.unwatchedCount > 0) {
+                                Text(
+                                    text = "未視聴 ${series.unwatchedCount}",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .background(Color(0xFFE53935), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 3.dp)
+                                )
+                            }
+                            if (series.isOnAir) {
+                                Text(
+                                    text = "放送中",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .background(Color(0xFF1E88E5), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -199,7 +254,7 @@ fun RecordSeriesGridContent(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "${series.programCount}",
+                            text = if (series.totalEpisodes != null) "${series.programCount} / ${series.totalEpisodes}" else "${series.programCount}",
                             color = Color.White,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
@@ -221,4 +276,29 @@ fun RecordSeriesGridContent(
             }
         }
     }
+}
+
+private fun Modifier.simpleGridVerticalScrollbar(
+    state: LazyGridState,
+    color: Color,
+    width: Dp = 4.dp,
+    paddingEnd: Dp = 4.dp
+): Modifier = drawWithContent {
+    drawContent()
+    val totalItems = state.layoutInfo.totalItemsCount
+    val visibleItems = state.layoutInfo.visibleItemsInfo.size
+    if (totalItems == 0 || visibleItems == 0 || visibleItems >= totalItems) return@drawWithContent
+
+    val firstVisible = state.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0
+    val thumbHeightRatio = (visibleItems.toFloat() / totalItems.toFloat()).coerceIn(0.05f, 0.8f)
+    val thumbHeight = size.height * thumbHeightRatio
+    val thumbOffsetRatio = (firstVisible.toFloat() / (totalItems - visibleItems).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+    val thumbY = (size.height - thumbHeight) * thumbOffsetRatio
+
+    drawRoundRect(
+        color = color.copy(alpha = 0.5f),
+        topLeft = Offset(size.width - width.toPx() - paddingEnd.toPx(), thumbY),
+        size = Size(width.toPx(), thumbHeight),
+        cornerRadius = CornerRadius(width.toPx() / 2f, width.toPx() / 2f)
+    )
 }

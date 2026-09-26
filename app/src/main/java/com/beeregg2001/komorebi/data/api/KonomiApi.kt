@@ -110,4 +110,13 @@ interface KonomiApi {
     suspend fun deleteReservationCondition(
         @Path("reservation_condition_id") conditionId: Int
     ): Response<Unit>
+
+    // EPG
+    @GET("api/programs/timetable")
+    suspend fun getEpgPrograms(
+        @Query("start_time") startTime: String? = null,
+        @Query("end_time") endTime: String? = null,
+        @Query("channel_type") channelType: String? = null,
+        @Query("pinned_channel_ids") pinnedChannelIds: String? = null
+    ): EpgChannelResponse
 }

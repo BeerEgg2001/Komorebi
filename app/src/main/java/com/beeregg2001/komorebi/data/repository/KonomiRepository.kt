@@ -3,32 +3,33 @@ package com.beeregg2001.komorebi.data.repository
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.api.KonomiApi
-import com.beeregg2001.komorebi.data.local.dao.LastChannelDao
-import com.beeregg2001.komorebi.data.local.dao.WatchHistoryDao
-import com.beeregg2001.komorebi.data.local.entity.LastChannelEntity
-import com.beeregg2001.komorebi.data.local.entity.WatchHistoryEntity
 import com.beeregg2001.komorebi.data.model.*
-import com.beeregg2001.komorebi.data.model.ChannelApiResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "Komorebi_Repo"
 
+// KonomiTV API の既定ページサイズ
+private const val DEFAULT_RECORDED_LIMIT = 24
+
 /**
- * KonomiTVバックエンド（API）およびローカルデータベース（Room）との通信を抽象化するリポジトリ。
- * ViewModelに対して、データの取得元（ネットワークかローカルか）を意識させずに
- * 統合されたデータアクセス手段を提供します。
+ * KonomiTVバックエンド（API）との通信を抽象化するリポジトリ。
+ * ローカルDBに関する処理はそれぞれ WatchHistoryRepository, LastChannelRepository に分離しました。
  */
 @Singleton
 class KonomiRepository @Inject constructor(
     private val apiService: KonomiApi,
-    private val watchHistoryDao: WatchHistoryDao,
-    private val lastChannelDao: LastChannelDao
-) {
+    // ★ 追加: URL生成のためにIP/Portを取得する SettingsRepository を Inject
+    private val settingsRepository: SettingsRepository
+) : LiveProvider, RecordProvider, ReserveProvider, EpgProvider { // ★ インターフェースを実装
+
     // ==========================================
     // ユーザー設定・セッション管理
     // ==========================================
@@ -48,111 +49,102 @@ class KonomiRepository @Inject constructor(
     // チャンネル・録画リスト取得
     // ==========================================
 
-    /**
-     * 放送中のチャンネル一覧（地デジ、BS、CSなど）をAPIから取得します。
-     */
-    suspend fun getChannels(): ChannelApiResponse = apiService.getChannels()
-
-    /**
-     * 録画済みの番組一覧をページネーション形式でAPIから取得します。
-     * （主にRecordSyncEngineでのバックグラウンド同期に使用されます）
-     */
-    suspend fun getRecordedPrograms(page: Int = 1) = apiService.getRecordedPrograms(page = page)
-
-    /**
-     * ★追加: 指定された録画番組の詳細情報（CMセクション、詳細なあらすじ等）を取得します。
-     * ローカルDBではなく、常に最新の情報をKonomiTV APIから直接取得します。
-     */
-    suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> = runCatching {
-        apiService.getRecordedProgram(videoId)
+    override suspend fun getChannels(): ChannelApiResponse {
+        try {
+            return apiService.getChannels()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch KonomiTV channels", e)
+            // ★ 修正: エラーを握りつぶして空リストを返さず、例外をスローして知らせる
+            throw Exception("KonomiTVからのチャンネル一覧取得に失敗しました。\nサーバーが稼働しているか確認してください。\n[詳細]: ${e.message}")
+        }
     }
 
-    /**
-     * KonomiTVのサーバーサイド検索を利用して録画番組を検索します。
-     */
-    suspend fun searchRecordedPrograms(keyword: String, page: Int = 1) = run {
-        Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
-        apiService.searchVideos(keyword = keyword, page = page)
+    override suspend fun getRecordedPrograms(page: Int): RecordedApiResponse =
+        getRecordedPrograms(page = page, limit = DEFAULT_RECORDED_LIMIT)
+
+    // 端末プロファイルごとのフェッチ数 (50/100/200) を KonomiTV API の limit に反映する
+    override suspend fun getRecordedPrograms(page: Int, limit: Int): RecordedApiResponse {
+        return try {
+            val response = apiService.getRecordedPrograms(
+                limit = limit,
+                page = page,
+                order = "desc"
+            )
+
+            val ip = settingsRepository.konomiIp.first()
+            val port = settingsRepository.konomiPort.first()
+            val updatedPrograms = response.recordedPrograms.map { program ->
+                val fallbackUrl =
+                    UrlBuilder.getThumbnailUrl("KONOMITV", ip, port, program.id.toString())
+                program.copy(apiThumbnailUrl = fallbackUrl)
+            }
+
+            response.copy(recordedPrograms = updatedPrograms)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get recorded programs", e)
+            // ★ 修正: 例外をスロー
+            throw Exception("録画番組の取得に失敗しました。\nKonomiTVサーバーの状態を確認してください。\n[詳細]: ${e.message}")
+        }
     }
 
-    /**
-     * 動画のストリーミング再生中、サーバーに「まだ視聴している」ことを伝えるための生存信号（KeepAlive）を送信します。
-     * これを定期的に送らないと、サーバー側で不要な通信とみなされてストリーミングが強制切断されます。
-     */
-    @UnstableApi
-    suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
-        runCatching {
+    override suspend fun getRecordedProgram(videoId: Int): Result<RecordedProgram> {
+        return try {
+            val program = apiService.getRecordedProgram(videoId)
+            val ip = settingsRepository.konomiIp.first()
+            val port = settingsRepository.konomiPort.first()
+            val fallbackUrl =
+                UrlBuilder.getThumbnailUrl("KONOMITV", ip, port, program.id.toString())
+            Result.success(program.copy(apiThumbnailUrl = fallbackUrl))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch recorded program $videoId", e)
+            // ★ 修正
+            Result.failure(Exception("録画番組詳細の取得に失敗しました。\n[詳細]: ${e.message}"))
+        }
+    }
+
+    override suspend fun searchRecordedPrograms(
+        keyword: String,
+        page: Int
+    ): RecordedApiResponse {
+        return try {
+            Log.d(TAG, "Calling API searchVideos. Keyword: $keyword, Page: $page")
+            apiService.searchVideos(keyword = keyword, page = page)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to search recorded programs", e)
+            // ★ 修正: 例外をスロー
+            throw Exception("録画番組の検索に失敗しました。\n[詳細]: ${e.message}")
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
+        try {
             val response = apiService.keepAlive(videoId, quality, sessionId)
             if (!response.isSuccessful) {
                 Log.w(TAG, "KeepAlive Failed: ${response.code()}")
             }
-        }.onFailure {
-            it.printStackTrace()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to keep alive", e)
         }
     }
 
+    // ★ 追加: KonomiTV仕様のタイル画像URLを生成
+    override suspend fun getTiledThumbnailUrl(videoId: Int): String? {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        // 既存の UrlBuilder.getTiledThumbnailUrl をそのまま利用します
+        return UrlBuilder.getTiledThumbnailUrl(ip, port, videoId)
+    }
+
     // ==========================================
-    // マイリスト・視聴履歴の管理
+    // マイリスト・視聴履歴の管理 (API通信のみ)
     // ==========================================
 
     suspend fun getBookmarks(): Result<List<KonomiProgram>> =
         runCatching { apiService.getBookmarks() }
 
-    /**
-     * サーバー（KonomiTV）から全デバイスで共有されている視聴履歴を取得します。
-     */
     suspend fun getWatchHistory(): Result<List<KonomiHistoryProgram>> =
         runCatching { apiService.getWatchHistory() }
-
-    /**
-     * ローカルDBにキャッシュされている視聴履歴（レジュームポイント）をFlowとして取得します。
-     */
-    fun getLocalWatchHistory() = watchHistoryDao.getAllHistory()
-
-    suspend fun getHistoryEntityById(id: Int): WatchHistoryEntity? {
-        return watchHistoryDao.getById(id)
-    }
-
-    /**
-     * ★追加: 複数の録画番組の視聴履歴をローカルDBから一括で取得します。
-     * 同期時の差分チェックなどでパフォーマンスを向上させるために使用します。
-     */
-    suspend fun getHistoryEntitiesByIds(ids: List<Int>): List<WatchHistoryEntity> {
-        return watchHistoryDao.getByIds(ids)
-    }
-
-    suspend fun saveToLocalHistory(entity: WatchHistoryEntity) {
-        watchHistoryDao.insertOrUpdate(entity)
-    }
-
-    /**
-     * ★追加: サーバーから取得した最新の視聴履歴リストをローカルDBへ一括保存します。
-     */
-    suspend fun saveAllToLocalHistory(entities: List<WatchHistoryEntity>) {
-        watchHistoryDao.insertOrUpdateAll(entities)
-    }
-
-    // ==========================================
-    // チャンネル視聴履歴の管理 (ザッピング・レジューム用)
-    // ==========================================
-
-    /**
-     * アプリ内で最後に視聴したチャンネル（放送局）のリストをローカルDBから取得します。
-     */
-    fun getLastChannels() = lastChannelDao.getLastChannels()
-
-    @OptIn(UnstableApi::class)
-    suspend fun saveLastChannel(entity: LastChannelEntity) {
-        lastChannelDao.insertOrUpdate(entity)
-        Log.d(TAG, "Channel saved: ${entity.name}")
-    }
-
-    /**
-     * ★追加: チャンネルの視聴履歴をすべて消去します（設定画面からのリセット用）。
-     */
-    suspend fun clearLastChannels() {
-        lastChannelDao.clearAll()
-    }
 
     // ==========================================
     // ニコニコ実況 (コメント) 関連
@@ -166,125 +158,208 @@ class KonomiRepository @Inject constructor(
         runCatching { apiService.updateWatchHistory(HistoryUpdateRequest(programId, position)) }
     }
 
-    /**
-     * 録画番組に対応する、当時のニコニコ実況のコメント（過去ログ）を取得します。
-     */
-    suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> = runCatching {
-        val response = apiService.getArchivedJikkyo(videoId)
-        if (response.is_success) response.comments else emptyList()
+    override suspend fun getArchivedJikkyo(videoId: Int): Result<List<ArchivedComment>> {
+        return try {
+            val response = apiService.getArchivedJikkyo(videoId)
+            Result.success(if (response.is_success) response.comments else emptyList())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch archived jikkyo", e)
+            // ★ 修正
+            Result.failure(Exception("過去ログ実況の取得に失敗しました。\n[詳細]: ${e.message}"))
+        }
     }
 
     // ==========================================
     // 録画予約（EDCB連携）の管理
     // ==========================================
 
-    /**
-     * 現在EDCB（バックエンド）に登録されている「すべての録画予約（単発・自動）」を取得します。
-     */
-    suspend fun getReserves(): Result<List<ReserveItem>> = runCatching {
-        apiService.getReserves().reservations
-    }
-
-    /**
-     * 特定の番組を「単発予約」として新規追加します。
-     */
-    suspend fun addReserve(request: ReserveRequest): Result<Unit> = runCatching {
-        val response = apiService.addReserve(request)
-        if (!response.isSuccessful) {
-            val errorBody = response.errorBody()?.string()
-            Log.e(TAG, "Reservation failed: $errorBody")
-            throw Exception("Reservation failed: ${response.code()} $errorBody")
+    override suspend fun getReserves(): Result<List<ReserveItem>> {
+        return try {
+            Result.success(apiService.getReserves().reservations)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch reserves", e)
+            // ★ 修正
+            Result.failure(Exception("予約一覧の取得に失敗しました。\nKonomiTVサーバーの状態を確認してください。\n[詳細]: ${e.message}"))
         }
     }
 
-    /**
-     * 既に登録されている単発予約の設定（優先度や録画モードなど）を更新します。
-     */
-    suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> =
-        runCatching {
+    override suspend fun addReserve(request: ReserveRequest): Result<Unit> {
+        return try {
+            val response = apiService.addReserve(request)
+            if (!response.isSuccessful) {
+                val errorBody = response.errorBody()?.string()
+                throw Exception("Reservation failed: ${response.code()} $errorBody")
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add reserve", e)
+            // ★ 修正
+            Result.failure(Exception("予約の追加に失敗しました。\n[詳細]: ${e.message}"))
+        }
+    }
+
+    override suspend fun updateReserve(reservationId: Int, request: ReserveRequest): Result<Unit> {
+        return try {
             val response = apiService.updateReserve(reservationId, request)
             if (!response.isSuccessful) {
                 val errorBody = response.errorBody()?.string()
-                Log.e(TAG, "Update reservation failed: $errorBody")
                 throw Exception("Update reservation failed: ${response.code()} $errorBody")
             }
-        }
-
-    /**
-     * 登録済みの単発予約を削除（キャンセル）します。
-     */
-    suspend fun deleteReservation(reservationId: Int): Result<Unit> = runCatching {
-        val response = apiService.deleteReservation(reservationId)
-        if (!response.isSuccessful) {
-            // 既に削除されていた場合（404）は成功とみなして握りつぶす
-            if (response.code() == 404) {
-                Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
-                return@runCatching
-            }
-            throw Exception(
-                "Delete reservation failed: ${response.code()} ${
-                    response.errorBody()?.string()
-                }"
-            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update reserve", e)
+            // ★ 修正
+            Result.failure(Exception("予約の更新に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
-    /**
-     * 自動予約条件（キーワード、ジャンル、時間帯などのルールに基づく録画予約）の一覧を取得します。
-     */
-    suspend fun getReservationConditions(): Result<List<ReservationCondition>> {
+    override suspend fun deleteReservation(reservationId: Int): Result<Unit> {
+        return try {
+            val response = apiService.deleteReservation(reservationId)
+            if (!response.isSuccessful) {
+                if (response.code() == 404) {
+                    Log.w(TAG, "Reservation $reservationId not found (already deleted?)")
+                    return Result.success(Unit)
+                }
+                throw Exception(
+                    "Delete reservation failed: ${response.code()} ${
+                        response.errorBody()?.string()
+                    }"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete reservation", e)
+            // ★ 修正
+            Result.failure(Exception("予約の削除に失敗しました。\n[詳細]: ${e.message}"))
+        }
+    }
+
+    override suspend fun getReservationConditions(): Result<List<ReservationCondition>> {
         return try {
             val response = apiService.getReservationConditions()
             Result.success(response.reservationConditions)
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Failed to fetch reservation conditions", e)
+            // ★ 修正
+            Result.failure(Exception("自動録画ルールの取得に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
-    /**
-     * 新しい自動予約条件（キーワード予約）をサーバーに登録します。
-     */
-    suspend fun addReservationCondition(request: ReservationConditionAddRequest): Result<Unit> {
+    override suspend fun addReservationCondition(request: ReservationConditionAddRequest): Result<Unit> {
         return try {
             val response = apiService.addReservationCondition(request)
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                Result.failure(Exception("Failed to add condition: ${response.code()}"))
+                throw Exception("Failed to add condition: ${response.code()}")
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Failed to add reservation condition", e)
+            // ★ 修正
+            Result.failure(Exception("自動録画ルールの追加に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
-    /**
-     * ★自動予約条件の更新（キーワードの変更や、条件の一時的なON/OFF切り替えなど）
-     */
-    suspend fun updateReservationCondition(
+    override suspend fun updateReservationCondition(
         conditionId: Int,
         request: ReservationConditionUpdateRequest
     ): Result<ReservationCondition> {
         return try {
-            val response = apiService.updateReservationCondition(conditionId, request)
-            Result.success(response)
+            val condition = apiService.updateReservationCondition(conditionId, request)
+            Result.success(condition)
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Failed to update reservation condition", e)
+            // ★ 修正
+            Result.failure(Exception("自動録画ルールの更新に失敗しました。\n[詳細]: ${e.message}"))
         }
     }
 
-    /**
-     * ★自動予約条件（ルールそのもの）の削除
-     */
-    suspend fun deleteReservationCondition(conditionId: Int): Result<Unit> {
+    override suspend fun deleteReservationCondition(conditionId: Int): Result<Unit> {
         return try {
             val response = apiService.deleteReservationCondition(conditionId)
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                Result.failure(Exception("Failed to delete condition: ${response.code()}"))
+                throw Exception("Failed to delete condition: ${response.code()}")
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Failed to delete reservation condition", e)
+            // ★ 修正
+            Result.failure(Exception("自動録画ルールの削除に失敗しました。\n[詳細]: ${e.message}"))
         }
+    }
+
+    // ==========================================
+    // ★ 追加: UrlBuilderへの依存をリポジトリ内に隠蔽
+    // ==========================================
+
+    override suspend fun getLiveStreamUrl(
+        channelId: String,
+        quality: String,
+        streamNumber: Int
+    ): String {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        return UrlBuilder.getKonomiTvLiveStreamUrl(ip, port, channelId, quality)
+    }
+
+    override suspend fun getChannelLogoUrl(channelId: String): String {
+        val backend = settingsRepository.backendType.first()
+
+        return if (backend == "MIRAKURUN_ONLY") {
+            val ip = settingsRepository.mirakurunIp.first()
+            val port = settingsRepository.mirakurunPort.first()
+
+            // "mirakurun_32736_1024" のようなIDからネットワークIDとサービスIDを抽出
+            val parts = channelId.split("_")
+            val nid = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+            val sid = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+
+            UrlBuilder.getMirakurunLogoUrl(ip, port, nid, sid)
+        } else {
+            val ip = settingsRepository.konomiIp.first()
+            val port = settingsRepository.konomiPort.first()
+            UrlBuilder.getKonomiTvLogoUrl(ip, port, channelId)
+        }
+    }
+
+    override suspend fun getRecordStreamUrl(
+        videoId: Int,
+        quality: String,
+        sessionId: String,
+        offsetSec: Double
+    ): String {
+        val ip = settingsRepository.konomiIp.first()
+        val port = settingsRepository.konomiPort.first()
+        // ★ 追加: original画質はHLS(VideoEncodingTask)を経由せず、録画ファイルダウンロードAPIを
+        // 生MPEG-TS直接再生ソースとしてそのまま使う(KonomiTVサーバー側もoriginal指定時はHLS系
+        // APIを422で拒否する実装になっている)。session_id/offsetSecはHLS専用のため使用しない。
+        if (quality == "original") {
+            return UrlBuilder.getKonomiTvVideoDownloadUrl(ip, port, videoId)
+        }
+        return UrlBuilder.getVideoPlaylistUrl(ip, port, videoId, sessionId, quality)
+    }
+
+    // ==========================================
+    // ★ 追加: EpgProvider の実装
+    // ※ 以前 EpgRepository 内にあった KonomiTvApiService の通信処理をここに移動
+    // ==========================================
+    override suspend fun getEpgPrograms(
+        startTime: String?,
+        endTime: String?,
+        channelType: String?
+    ): List<EpgChannelWrapper> {
+        return try {
+            apiService.getEpgPrograms(startTime, endTime, channelType).channels
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch EPG from KonomiTV", e)
+            // ★ 修正: 例外をスロー
+            throw Exception("KonomiTVからの番組表データ取得に失敗しました。\n[詳細]: ${e.message}")
+        }
+    }
+
+    override suspend fun getPinnedEpgPrograms(pinnedChannelIds: String): List<EpgChannelWrapper> {
+        return apiService.getEpgPrograms(pinnedChannelIds = pinnedChannelIds).channels
     }
 }

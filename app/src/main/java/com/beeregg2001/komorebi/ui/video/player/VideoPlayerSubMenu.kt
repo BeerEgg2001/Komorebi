@@ -3,16 +3,24 @@
 package com.beeregg2001.komorebi.ui.video.player
 
 import android.view.KeyEvent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -28,73 +36,126 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamQuality
+import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
+import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+
+/** サブメニュー内の遷移先と、遷移前後のフォーカス位置を保持する。 */
+@Stable
+internal class SubMenuNavigationState<T : Any> {
+    var destination by mutableStateOf<T?>(null)
+        private set
+
+    private var returnFocusRequester: FocusRequester? = null
+    private var destinationFocusRequester: FocusRequester? = null
+
+    fun navigateTo(
+        destination: T,
+        returnFocusRequester: FocusRequester,
+        destinationFocusRequester: FocusRequester
+    ) {
+        this.returnFocusRequester = returnFocusRequester
+        this.destinationFocusRequester = destinationFocusRequester
+        this.destination = destination
+    }
+
+    fun navigateBack() {
+        destination = null
+        destinationFocusRequester = null
+    }
+
+    fun currentDestinationFocusRequester(): FocusRequester? = destinationFocusRequester
+
+    fun consumeReturnFocusRequester(): FocusRequester? {
+        return returnFocusRequester.also { returnFocusRequester = null }
+    }
+}
+
+@Composable
+internal fun <T : Any> rememberSubMenuNavigationState(): SubMenuNavigationState<T> =
+    remember { SubMenuNavigationState() }
 
 @Composable
 fun VideoTopSubMenuUI(
     currentAudioMode: AudioMode,
     currentSpeed: Float,
     isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
+    currentSubtitleLanguageId: Int = 1,
     currentQuality: StreamQuality,
-    // ★追加: コメント機能用パラメータ
     isCommentEnabled: Boolean,
+    isLCropEnabled: Boolean,
+    isAutoCmSkipEnabled: Boolean,
+    availableQualities: List<StreamQuality>,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit = {},
     onQualitySelect: (StreamQuality) -> Unit,
-    // ★追加: コメント切り替えコールバック
-    onCommentToggle: () -> Unit
+    onCommentToggle: () -> Unit,
+    onLCropToggle: () -> Unit,
+    onAutoCmSkipToggle: () -> Unit,
+    // ★ 追加: 各機能のサポート状況を受け取るフラグ (既存に影響しないようデフォルトは true)
+    isAudioSupported: Boolean = true,
+    isQualitySupported: Boolean = true,
+    isCommentSupported: Boolean = true,
+    isSubtitleSupported: Boolean = true,
+    isAutoCmSkipSupported: Boolean = true
 ) {
-    // 展開中のカテゴリ管理
+    val colors = KomorebiTheme.colors
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
-
-    // 画質ボタン（親）へのフォーカス復帰用
     val qualityButtonRequester = remember { FocusRequester() }
-    // 画質リスト（子）へのフォーカス移動用
     val qualityListRequester = remember { FocusRequester() }
+    val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+        it.id == currentSubtitleLanguageId
+    } ?: subtitleLanguages.firstOrNull()
 
     LaunchedEffect(Unit) {
         delay(50)
-        focusRequester.requestFocus()
+        try {
+            focusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
     }
 
-    // 画質選択モードが開いた時にリストへフォーカスを移す
     LaunchedEffect(selectedCategory) {
         if (selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
-            try { qualityListRequester.requestFocus() } catch (e: Exception) {}
+            try {
+                qualityListRequester.requestFocus()
+            } catch (e: Exception) {
+            }
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .wrapContentHeight() // コンテンツに合わせて高さを可変に
+            .wrapContentHeight()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent)
+                    colors = listOf(colors.background.copy(alpha = 0.9f), Color.Transparent)
                 )
             )
             .padding(top = 24.dp, bottom = 48.dp)
-            // Backキーで展開を閉じる制御
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown &&
                     (keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BACK ||
-                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)) {
+                            keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)
+                ) {
                     if (selectedCategory != null) {
                         selectedCategory = null
-                        // 閉じた時は画質ボタンにフォーカスを戻す
-                        try { qualityButtonRequester.requestFocus() } catch (e: Exception) {}
+                        try {
+                            qualityButtonRequester.requestFocus()
+                        } catch (e: Exception) {
+                        }
                         true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                    } else false
+                } else false
             },
         contentAlignment = Alignment.TopCenter
     ) {
@@ -102,9 +163,7 @@ fun VideoTopSubMenuUI(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // --- 第一階層 (メインメニュー) ---
             Row(
-                // 中央揃えかつ間隔を指定
                 horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
                 modifier = Modifier
                     .horizontalScroll(rememberScrollState())
@@ -117,58 +176,102 @@ fun VideoTopSubMenuUI(
                     onClick = onAudioToggle,
                     modifier = Modifier
                         .focusRequester(focusRequester)
-                        .focusProperties { down = FocusRequester.Cancel } // 展開していない時は下に行かない
+                        .focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = isAudioSupported // ★ 適用
                 )
                 VideoMenuTileItem(
                     title = "再生速度",
                     icon = Icons.Default.Speed,
                     subtitle = "${currentSpeed}x",
                     onClick = onSpeedToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = true // 速度は常に利用可能
                 )
                 VideoMenuTileItem(
                     title = "字幕",
                     icon = Icons.Default.Subtitles,
                     subtitle = if (isSubtitleEnabled) "表示" else "非表示",
                     onClick = onSubtitleToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = isSubtitleSupported // ★ 適用
                 )
-                // ★追加: コメント切り替えボタン
                 VideoMenuTileItem(
-                    title = "コメント",
+                    title = "字幕言語",
+                    icon = Icons.Default.Translate,
+                    subtitle = currentSubtitleLanguage?.let {
+                        "第${it.id}言語・${it.displayName}"
+                    } ?: "利用不可",
+                    onClick = onSubtitleLanguageToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = isSubtitleSupported && subtitleLanguages.size > 1
+                )
+                VideoMenuTileItem(
+                    title = "L字クロップ",
+                    icon = Icons.Default.Crop,
+                    subtitle = if (isLCropEnabled) "有効" else "設定",
+                    onClick = onLCropToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = if (isLCropEnabled) colors.accent else colors.textPrimary,
+                    enabled = true // L字クロップは常に利用可能
+                )
+
+                VideoMenuTileItem(
+                    title = "自動CMスキップ",
+                    icon = Icons.Default.FastForward,
+                    subtitle = if (isAutoCmSkipEnabled) "有効" else "無効",
+                    onClick = onAutoCmSkipToggle,
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = if (isAutoCmSkipEnabled) colors.accent else colors.textPrimary,
+                    enabled = isAutoCmSkipSupported // ★ 適用
+                )
+
+                VideoMenuTileItem(
+                    title = "実況コメント",
                     icon = Icons.Default.Chat,
                     subtitle = if (isCommentEnabled) "表示" else "非表示",
                     onClick = onCommentToggle,
-                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel }
+                    modifier = Modifier.focusProperties { down = FocusRequester.Cancel },
+                    contentColor = colors.textPrimary,
+                    enabled = isCommentSupported // ★ 適用
                 )
-                // 画質ボタン（トグル動作）
                 VideoMenuTileItem(
                     title = "画質",
                     icon = Icons.Default.HighQuality,
                     subtitle = currentQuality.label,
                     onClick = {
-                        selectedCategory = if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                        if (isQualitySupported && availableQualities.isNotEmpty()) { // ★ 修正: 無効時は無視
+                            selectedCategory =
+                                if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                        }
                     },
                     modifier = Modifier
                         .focusRequester(qualityButtonRequester)
                         .focusProperties {
-                            // 展開中なら下キーでリストへ、そうでなければキャンセル
-                            if (selectedCategory != SubMenuCategory.QUALITY) down = FocusRequester.Cancel
-                        }
+                            if (selectedCategory != SubMenuCategory.QUALITY) down =
+                                FocusRequester.Cancel
+                        },
+                    contentColor = colors.textPrimary,
+                    enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
                 )
             }
 
-            // --- 第二階層 (画質選択) ---
-            // ライブ視聴と同じように下に展開
             AnimatedVisibility(
                 visible = selectedCategory == SubMenuCategory.QUALITY,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 区切り線
                     Spacer(Modifier.height(16.dp))
-                    Box(modifier = Modifier.width(400.dp).height(2.dp).background(Color.White.copy(0.2f)))
+                    Box(
+                        modifier = Modifier
+                            .width(400.dp)
+                            .height(2.dp)
+                            .background(colors.textPrimary.copy(alpha = 0.2f))
+                    )
                     Spacer(Modifier.height(16.dp))
 
                     Row(
@@ -178,8 +281,8 @@ fun VideoTopSubMenuUI(
                             .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 32.dp, vertical = 8.dp)
                     ) {
-                        StreamQuality.entries.forEachIndexed { index, quality ->
-                            val isSelected = currentQuality == quality
+                        availableQualities.forEach { quality ->
+                            val isSelected = currentQuality.value == quality.value
 
                             VideoMenuTileItem(
                                 title = quality.label,
@@ -187,17 +290,25 @@ fun VideoTopSubMenuUI(
                                 subtitle = if (isSelected) "選択中" else "",
                                 onClick = {
                                     onQualitySelect(quality)
-                                    selectedCategory = null // 選択したら閉じる
-                                    try { qualityButtonRequester.requestFocus() } catch (e: Exception) {}
+                                    selectedCategory = null
+                                    try {
+                                        qualityButtonRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
                                 modifier = Modifier
-                                    .then(if (isSelected) Modifier.focusRequester(qualityListRequester) else Modifier)
+                                    .then(
+                                        if (isSelected) Modifier.focusRequester(
+                                            qualityListRequester
+                                        ) else Modifier
+                                    )
                                     .focusProperties {
-                                        up = qualityButtonRequester // 上キーで親に戻る
+                                        up = qualityButtonRequester
                                         down = FocusRequester.Cancel
-                                    }
+                                    },
+                                contentColor = colors.textPrimary
                             )
                         }
                     }
@@ -207,9 +318,6 @@ fun VideoTopSubMenuUI(
     }
 }
 
-/**
- * ライブ視聴画面 (LivePlayerSubMenu.kt) の MenuTileItem とデザインを統一したタイルコンポーネント
- */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun VideoMenuTileItem(
@@ -219,23 +327,26 @@ fun VideoMenuTileItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    width: Dp = 160.dp, // ライブ側に合わせてサイズ調整
-    height: Dp = 100.dp
+    width: Dp = 160.dp,
+    height: Dp = 100.dp,
+    contentColor: Color = Color.White
 ) {
+    val colors = KomorebiTheme.colors
     Surface(
         onClick = onClick,
         enabled = enabled,
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
         colors = ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(0.1f),
-            contentColor = if (enabled) Color.White else Color.White.copy(0.3f),
-            focusedContainerColor = Color.White,
-            focusedContentColor = Color.Black
+            containerColor = colors.textPrimary.copy(alpha = 0.1f),
+            contentColor = if (enabled) contentColor else colors.textPrimary.copy(alpha = 0.3f),
+            focusedContainerColor = colors.textPrimary,
+            focusedContentColor = if (colors.isDark) Color.Black else Color.White
         ),
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(12.dp)),
         modifier = modifier
             .size(width, height)
-            .alpha(if (enabled) 1f else 0.5f)
+            // ★ 追加: 非対応項目は半透明にしてグレーアウトを強調
+            .alpha(if (enabled) 1f else 0.4f)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -260,6 +371,279 @@ fun VideoMenuTileItem(
                     color = LocalContentColor.current.copy(alpha = 0.7f)
                 )
             }
+        }
+    }
+}
+
+@OptIn(
+    ExperimentalTvMaterial3Api::class,
+    ExperimentalComposeUiApi::class,
+    ExperimentalAnimationApi::class
+)
+@Composable
+fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
+    currentAudioMode: AudioMode,
+    currentSpeed: Float,
+    isSubtitleEnabled: Boolean,
+    subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
+    currentSubtitleLanguageId: Int = 1,
+    currentQuality: StreamQuality,
+    isCommentEnabled: Boolean,
+    isLCropEnabled: Boolean,
+    isAutoCmSkipEnabled: Boolean,
+    availableQualities: List<StreamQuality>,
+    onAudioToggle: () -> Unit,
+    onSpeedToggle: () -> Unit,
+    onSubtitleToggle: () -> Unit,
+    onSubtitleLanguageToggle: () -> Unit = {},
+    onQualitySelect: (StreamQuality) -> Unit,
+    onCommentToggle: () -> Unit,
+    onLCropToggle: () -> Unit,
+    onAutoCmSkipToggle: () -> Unit,
+    // ★ 追加: 各機能のサポート状況を受け取るフラグ
+    isAudioSupported: Boolean = true,
+    isQualitySupported: Boolean = true,
+    isCommentSupported: Boolean = true,
+    isSubtitleSupported: Boolean = true,
+    isAutoCmSkipSupported: Boolean = true,
+    onClose: () -> Unit
+) {
+    val colors = KomorebiTheme.colors
+    val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
+        it.id == currentSubtitleLanguageId
+    } ?: subtitleLanguages.firstOrNull()
+    val navigationState = rememberSubMenuNavigationState<SubMenuCategory>()
+    val selectedCategory = navigationState.destination
+    val initialFocusRequester = remember { FocusRequester() }
+    val qualityButtonRequester = remember { FocusRequester() }
+    val qualityListRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(150)
+        try {
+            initialFocusRequester.requestFocus()
+        } catch (e: Exception) {
+        }
+    }
+
+    LaunchedEffect(selectedCategory) {
+        if (selectedCategory != null) {
+            navigationState.currentDestinationFocusRequester()
+                ?.safeRequestFocusWithRetry("ModernVideoSettings_Destination")
+        } else {
+            navigationState.consumeReturnFocusRequester()
+                ?.safeRequestFocusWithRetry("ModernVideoSettings_Return")
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.4f))
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown &&
+                    (it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK ||
+                            it.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE)
+                ) {
+                    if (selectedCategory != null) {
+                        navigationState.navigateBack()
+                        true
+                    } else {
+                        onClose()
+                        true
+                    }
+                } else false
+            },
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Column(
+            modifier = Modifier
+                .animateEnterExit(
+                    enter = slideInHorizontally { fullWidth -> fullWidth },
+                    exit = slideOutHorizontally { fullWidth -> fullWidth }
+                )
+                .fillMaxHeight()
+                .width(360.dp)
+                .background(colors.surface.copy(alpha = 0.95f))
+                .border(1.dp, colors.textPrimary.copy(alpha = 0.1f))
+                .padding(horizontal = 24.dp, vertical = 32.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = colors.textPrimary)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = if (selectedCategory == SubMenuCategory.QUALITY) "画質の選択" else "プレイヤー設定",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+
+            AnimatedContent(targetState = selectedCategory, label = "SettingsMenu") { category ->
+                if (category == null) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        ModernSettingRow(
+                            title = "音声切替",
+                            value = if (currentAudioMode == AudioMode.MAIN) "主音声" else "副音声",
+                            icon = Icons.Default.Audiotrack,
+                            onClick = onAudioToggle,
+                            modifier = Modifier.focusRequester(initialFocusRequester),
+                            enabled = isAudioSupported // ★ 適用
+                        )
+                        ModernSettingRow(
+                            title = "再生速度",
+                            value = "${currentSpeed}x",
+                            icon = Icons.Default.Speed,
+                            onClick = onSpeedToggle,
+                            enabled = true
+                        )
+                        ModernSettingRow(
+                            title = "字幕",
+                            value = if (isSubtitleEnabled) "表示" else "非表示",
+                            icon = Icons.Default.Subtitles,
+                            onClick = onSubtitleToggle,
+                            enabled = isSubtitleSupported // ★ 適用
+                        )
+                        ModernSettingRow(
+                            title = "字幕言語",
+                            value = currentSubtitleLanguage?.let {
+                                "第${it.id}言語・${it.displayName}"
+                            } ?: "利用不可",
+                            icon = Icons.Default.Translate,
+                            onClick = onSubtitleLanguageToggle,
+                            enabled = isSubtitleSupported && subtitleLanguages.size > 1
+                        )
+                        ModernSettingRow(
+                            title = "画質",
+                            value = currentQuality.label,
+                            icon = Icons.Default.HighQuality,
+                            onClick = {
+                                if (isQualitySupported) {
+                                    navigationState.navigateTo(
+                                        destination = SubMenuCategory.QUALITY,
+                                        returnFocusRequester = qualityButtonRequester,
+                                        destinationFocusRequester = qualityListRequester
+                                    )
+                                }
+                            }, // ★ 無効時は開かない
+                            modifier = Modifier.focusRequester(qualityButtonRequester),
+                            enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
+                        )
+                        ModernSettingRow(
+                            title = "自動CMスキップ",
+                            value = if (isAutoCmSkipEnabled) "有効" else "無効",
+                            icon = Icons.Default.FastForward,
+                            onClick = onAutoCmSkipToggle,
+                            highlight = isAutoCmSkipEnabled,
+                            enabled = isAutoCmSkipSupported // ★ 適用
+                        )
+                        ModernSettingRow(
+                            title = "実況コメント",
+                            value = if (isCommentEnabled) "表示" else "非表示",
+                            icon = Icons.Default.Chat,
+                            onClick = onCommentToggle,
+                            enabled = isCommentSupported // ★ 適用
+                        )
+                        ModernSettingRow(
+                            title = "L字クロップ",
+                            value = if (isLCropEnabled) "有効" else "設定",
+                            icon = Icons.Default.Crop,
+                            onClick = onLCropToggle,
+                            highlight = isLCropEnabled,
+                            enabled = true
+                        )
+                    }
+                } else if (category == SubMenuCategory.QUALITY) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        availableQualities.forEach { quality ->
+                            val isSelected = currentQuality.value == quality.value
+                            ModernSettingRow(
+                                title = quality.label,
+                                value = if (isSelected) "✓" else "",
+                                icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                onClick = {
+                                    onQualitySelect(quality)
+                                    navigationState.navigateBack()
+                                },
+                                highlight = isSelected,
+                                modifier = if (isSelected) Modifier.focusRequester(
+                                    qualityListRequester
+                                ) else Modifier
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun ModernSettingRow(
+    title: String,
+    value: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    highlight: Boolean = false,
+    enabled: Boolean = true
+) {
+    val colors = KomorebiTheme.colors
+    var isFocused by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = { if (enabled) onClick() },
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+        scale = if (enabled) ClickableSurfaceDefaults.scale(focusedScale = 1.05f) else ClickableSurfaceDefaults.scale(
+            focusedScale = 1f
+        ),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (highlight && enabled) colors.accent.copy(alpha = 0.1f) else Color.Transparent,
+            focusedContainerColor = if (enabled) colors.accent else Color.White.copy(alpha = 0.1f),
+            contentColor = if (enabled) colors.textPrimary else colors.textSecondary.copy(alpha = 0.5f),
+            focusedContentColor = if (enabled) (if (colors.isDark) Color.Black else Color.White) else colors.textSecondary.copy(
+                alpha = 0.5f
+            )
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            // ★ 追加: 非対応項目は半透明にしてグレーアウトを強調
+            .alpha(if (enabled) 1f else 0.4f)
+            .onFocusChanged { isFocused = it.isFocused }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = if (isFocused) Color.Unspecified else if (highlight && enabled) colors.accent else colors.textSecondary
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isFocused) Color.Unspecified else colors.textSecondary
+            )
         }
     }
 }

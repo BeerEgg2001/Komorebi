@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.media3.common.util.UnstableApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -17,12 +16,16 @@ import com.beeregg2001.komorebi.data.local.dao.SeriesProjection
 import com.beeregg2001.komorebi.data.mapper.RecordDataMapper
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.RecordedProgram
-import com.beeregg2001.komorebi.data.repository.KonomiRepository
+import com.beeregg2001.komorebi.data.repository.LiveProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationRecordRepository
+import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.repository.ReserveProvider
 import com.beeregg2001.komorebi.data.repository.WatchHistoryRepository
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.sync.SyncProgress
 import com.beeregg2001.komorebi.ui.video.components.RecordCategory
 import com.beeregg2001.komorebi.util.TitleNormalizer
+import com.beeregg2001.komorebi.common.UrlBuilder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -31,49 +34,57 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.time.Instant
+import java.time.OffsetDateTime
 import javax.inject.Inject
 
 private const val TAG = "Komorebi_RecordVM"
 private const val PREF_NAME = "search_history_pref"
 private const val KEY_HISTORY = "history_list"
 
-/**
- * 録画リストの検索・絞り込み状態をカプセル化するデータクラス。
- * Paging3のクエリ再生成タイミングを判定するために使用されます。
- */
+// ★ 追加: 録画リスト用のソート列挙型
+enum class RecordSortType { DATE, TITLE, DURATION }
+enum class RecordSortOrder { ASC, DESC }
+enum class SeriesSortType { LAST_AIRED, TITLE, PROGRAM_COUNT, UNWATCHED_COUNT }
+
 private data class FilterState(
     val category: RecordCategory,
     val channelId: String?,
     val genre: String?,
     val day: String?,
-    val query: String
+    val query: String,
+    val sortType: RecordSortType,  // ★ 追加
+    val sortOrder: RecordSortOrder, // ★ 追加
+    val seriesId: Int? = null
 )
 
-/**
- * 「シリーズ別」表示のためのメタデータを保持するデータクラス。
- * 名寄せされた番組群の代表画像や、検索用のキーワードを管理します。
- */
 data class SeriesInfo(
     val displayTitle: String,
     val searchKeyword: String,
     val programCount: Int,
     val representativeVideoId: Int,
-    val isEpisodic: Boolean = false
+    val isEpisodic: Boolean = false,
+    val directThumbnailUrl: String? = null,
+    val apiThumbnailUrl: String? = null,
+    val lastAiredAt: String? = null,
+    val seriesId: Int? = null,
+    val seasonYear: Int? = null,
+    val seasonName: String? = null,
+    val unwatchedCount: Int = 0,
+    val totalEpisodes: Int? = null,
+    val isOnAir: Boolean = false
 )
 
-/**
- * 録画タブ（ビデオタブおよび録画リスト画面）のUI状態とビジネスロジックを管理するViewModel。
- * KonomiTVからのメタデータ同期、Paging3による無限スクロールリストの生成、
- * 検索履歴の管理、AI名寄せによるシリーズグループ化などを統括します。
- */
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class RecordViewModel @Inject constructor(
-    private val repository: KonomiRepository,
+    private val liveProvider: LiveProvider,
+    private val recordProvider: RecordProvider,
+    private val epgStationRecordRepository: EpgStationRecordRepository,
+    private val reserveProvider: ReserveProvider,
     private val historyRepository: WatchHistoryRepository,
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
@@ -81,12 +92,8 @@ class RecordViewModel @Inject constructor(
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
-    // KonomiTVから録画データをローカルDBに同期するエンジンの進行状況
     val syncProgress: StateFlow<SyncProgress> = syncEngine.syncProgress
 
-    // ==========================================
-    // 録画リストの絞り込み状態 (Filter States)
-    // ==========================================
     private val _selectedCategory = MutableStateFlow(RecordCategory.ALL)
     val selectedCategory: StateFlow<RecordCategory> = _selectedCategory.asStateFlow()
 
@@ -99,26 +106,27 @@ class RecordViewModel @Inject constructor(
     private val _selectedDay = MutableStateFlow<String?>(null)
     val selectedDay: StateFlow<String?> = _selectedDay.asStateFlow()
 
+    // ★ 追加: ソート状態の管理
+    private val _sortType = MutableStateFlow(RecordSortType.DATE)
+    val sortType: StateFlow<RecordSortType> = _sortType.asStateFlow()
+
+    private val _sortOrder = MutableStateFlow(RecordSortOrder.DESC)
+    val sortOrder: StateFlow<RecordSortOrder> = _sortOrder.asStateFlow()
+
     private val _activeSearchQuery = MutableStateFlow("")
     val activeSearchQuery: StateFlow<String> = _activeSearchQuery.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    // 検索モードに入る前のカテゴリ状態を保持（検索解除時に復帰するため）
     private val _categoryBeforeSearch = MutableStateFlow<RecordCategory?>(null)
     val categoryBeforeSearch: StateFlow<RecordCategory?> = _categoryBeforeSearch.asStateFlow()
 
     private val _selectedSeriesGenre = MutableStateFlow<String?>(null)
     val selectedSeriesGenre: StateFlow<String?> = _selectedSeriesGenre.asStateFlow()
 
-    // ユーザーによる一時的なリストビュー/グリッドビューの切り替え状態
     private val _manualListViewOverride = MutableStateFlow<Boolean?>(null)
 
-    /**
-     * 現在の表示モードが「リスト形式」かどうかを判定します。
-     * 設定のデフォルト値をベースに、ユーザーがUI上で手動切り替えを行ったらそちらを優先します。
-     */
     val isListView: StateFlow<Boolean> = combine(
         settingsRepository.defaultRecordListView,
         _manualListViewOverride
@@ -126,7 +134,6 @@ class RecordViewModel @Inject constructor(
         manualOverride ?: (defaultType == "LIST")
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    // ローディング状態の管理
     private val _isRecordingLoading = MutableStateFlow(false)
     val isRecordingLoading: StateFlow<Boolean> = _isRecordingLoading.asStateFlow()
 
@@ -136,17 +143,31 @@ class RecordViewModel @Inject constructor(
     private val _isSeriesLoading = MutableStateFlow(false)
     val isSeriesLoading: StateFlow<Boolean> = _isSeriesLoading.asStateFlow()
 
-    // 検索履歴
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
 
-    // ジャンル一覧（DBにあるものから動的に生成）
     private val _availableGenres = MutableStateFlow<List<String>>(emptyList())
     val availableGenres: StateFlow<List<String>> = _availableGenres.asStateFlow()
 
-    // シリーズ（名寄せ）およびチャンネルのグループ化データ
     private val _groupedSeries = MutableStateFlow<Map<String, List<SeriesInfo>>>(emptyMap())
     val groupedSeries: StateFlow<Map<String, List<SeriesInfo>>> = _groupedSeries.asStateFlow()
+
+    private val _availableSeasons = MutableStateFlow<List<Pair<Int, String>>>(emptyList())
+    val availableSeasons: StateFlow<List<Pair<Int, String>>> = _availableSeasons.asStateFlow()
+    private val _selectedSeason = MutableStateFlow<Pair<Int, String>?>(null)
+    val selectedSeason: StateFlow<Pair<Int, String>?> = _selectedSeason.asStateFlow()
+    private val _isOnAirOnly = MutableStateFlow(false)
+    val isOnAirOnly: StateFlow<Boolean> = _isOnAirOnly.asStateFlow()
+    private val _seriesSortType = MutableStateFlow(SeriesSortType.LAST_AIRED)
+    val seriesSortType: StateFlow<SeriesSortType> = _seriesSortType.asStateFlow()
+    private val _seriesSortOrder = MutableStateFlow(RecordSortOrder.DESC)
+    val seriesSortOrder: StateFlow<RecordSortOrder> = _seriesSortOrder.asStateFlow()
+    private var epgSeriesItems: List<com.beeregg2001.komorebi.data.model.EsSeriesListItem> = emptyList()
+    private var epgLocalByTitle: Map<String, SeriesProjection> = emptyMap()
+    private val _seriesSearch = MutableStateFlow(false)
+    private val _selectedSeriesId = MutableStateFlow<Int?>(null)
+    private val _seriesFocusProgramId = MutableStateFlow<Int?>(null)
+    val seriesFocusProgramId: StateFlow<Int?> = _seriesFocusProgramId.asStateFlow()
 
     private val _groupedChannels =
         MutableStateFlow<Map<String, List<Pair<String, String>>>>(emptyMap())
@@ -154,33 +175,23 @@ class RecordViewModel @Inject constructor(
         _groupedChannels.asStateFlow()
 
     private var currentSearchQuery: String = ""
+    private var epgStationIp: String = ""
+    private var epgStationPort: String = "8888"
 
-    // KonomiTVのストリーム維持（KeepAlive）用のコルーチンジョブ
-    private var streamMaintenanceJob: Job? = null
-
-    // フォーカス時の番組詳細データ（あらすじ等、APIから都度取得するもの）
     private val _programDetail = MutableStateFlow<RecordedProgram?>(null)
     val programDetail: StateFlow<RecordedProgram?> = _programDetail.asStateFlow()
 
-    // 詳細データ取得APIの連打防止用Job（フォーカスが高速移動した際にAPIを叩きすぎないための遅延処理用）
     private var detailFetchJob: Job? = null
 
-    /**
-     * 同期エラーの状態をクリアします。
-     */
     fun clearSyncError() {
         syncEngine.clearError()
     }
 
-    /**
-     * 指定された録画番組の詳細情報（CMセクションや詳細なあらすじなど）をKonomiTV APIから取得します。
-     * フォーカスが当たってから0.3秒間その場に留まった場合のみ実際にAPI通信を行います（連打防止）。
-     */
     fun fetchProgramDetail(videoId: Int) {
         detailFetchJob?.cancel()
         detailFetchJob = viewModelScope.launch(Dispatchers.IO) {
-            delay(300) // 0.3秒フォーカスが留まったらAPIを叩く
-            repository.getRecordedProgram(videoId).onSuccess {
+            delay(300)
+            recordProvider.getRecordedProgram(videoId).onSuccess {
                 _programDetail.value = it
             }.onFailure { Log.e(TAG, "Failed to fetch program detail", it) }
         }
@@ -190,9 +201,6 @@ class RecordViewModel @Inject constructor(
         _programDetail.value = null
     }
 
-    /**
-     * ホーム画面やビデオタブのトップに表示するための、最近録画された番組のリスト（Pagingなし）。
-     */
     val recentRecordings: StateFlow<List<RecordedProgram>> = programDao.getRecentRecordingsFlow()
         .map { entities -> entities.map { RecordDataMapper.toDomainModel(it) } }
         .stateIn(
@@ -202,33 +210,49 @@ class RecordViewModel @Inject constructor(
         )
 
     init {
-        // 初期化時にSharedPreferencesから検索履歴をロード
         loadSearchHistory()
 
-        // 同期エンジンの進行状態を監視し、同期が完了（非アクティブ化）したら
-        // シリーズやチャンネルのグループ化インデックスを再構築します。
         viewModelScope.launch(Dispatchers.IO) {
             syncEngine.syncProgress.map { it.isSyncing }.distinctUntilChanged()
                 .collect { isSyncing ->
                     if (!isSyncing) {
                         val seriesList = programDao.getGroupedSeries()
                         val channelsList = programDao.getDistinctChannels()
-                        if (seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
-                            buildSeriesAndChannelMaps(seriesList, channelsList)
+                        if (settingsRepository.backendType.first() == "EPGSTATION" || seriesList.isNotEmpty() || channelsList.isNotEmpty()) {
+                            if (settingsRepository.backendType.first() == "EPGSTATION") {
+                                epgStationIp = settingsRepository.epgStationIp.first()
+                                epgStationPort = settingsRepository.epgStationPort.first()
+                                val apiSeries = epgStationRecordRepository.getSeriesList()
+                                if (apiSeries != null) {
+                                    epgSeriesItems = apiSeries
+                                    buildEpgSeriesAndChannelMaps(apiSeries, seriesList, channelsList)
+                                } else {
+                                    buildSeriesAndChannelMaps(seriesList, channelsList)
+                                }
+                            } else {
+                                buildSeriesAndChannelMaps(seriesList, channelsList)
+                            }
                         }
                     }
                 }
         }
 
-        // アプリ起動時にローカルDBとKonomiTVサーバーの録画データを同期（差分更新）
-        syncEngine.launchSyncAllRecords()
+        viewModelScope.launch {
+            // 録画一覧の同期はネットワーク・Room 書き込みともに重い。
+            //
+            // 初回構築が終わっていない場合はこの同期自体が起動のクリティカルパス
+            // (ローディング画面に進捗が出る) なので早めに始める。
+            // 一方、構築済みの通常起動では差分確認にすぎないため、ホーム画面が
+            // 描画されてフォーカスが落ち着くまで待ってから始める。ここで
+            // 起動直後に走らせると、Room への書き込みのたびに録画一覧の Flow が
+            // 発火し、ホーム画面の初回描画と CPU / ディスクを奪い合って
+            // 「起動直後だけ操作が極端に重い」状態を作っていた。
+            val alreadyBuilt = syncEngine.isInitialBuildCompleted()
+            delay(if (alreadyBuilt) 6000L else 1500L)
+            syncEngine.launchSyncAllRecords()
+        }
     }
 
-    /**
-     * Android TVのリモコンの「戻る（Back）」ボタンが押された際のルーティング。
-     * 検索中であれば検索を解除し、カテゴリ絞り込み中であれば全件表示に戻し、
-     * それ以外であればアクティビティを終了(onExit)させます。
-     */
     fun handleBackNavigation(onExit: () -> Unit) {
         when {
             _activeSearchQuery.value.isNotEmpty() -> clearSearch()
@@ -241,33 +265,40 @@ class RecordViewModel @Inject constructor(
         syncEngine.launchSmartSync()
     }
 
-    /**
-     * 録画リストのコアとなる Paging3 データストリーム。
-     * カテゴリ、チャンネル、ジャンル、曜日、検索クエリの状態を監視し、
-     * いずれかが変更されるたびに新しい PagingData を生成して UI に流します。
-     */
+    // ★ 修正: ソート状態も Pager のトリガーとして Combine に含める
     val pagedRecordings: Flow<PagingData<RecordedProgram>> = combine(
-        _selectedCategory, _selectedChannelId, _selectedGenre, _selectedDay, _activeSearchQuery
-    ) { category, channelId, genre, day, query ->
-        FilterState(category, channelId, genre, day, query)
+        combine(
+            _selectedCategory,
+            _selectedChannelId,
+            _selectedGenre,
+            _selectedDay,
+            _activeSearchQuery
+        ) { c, ch, g, d, q ->
+            FilterState(c, ch, g, d, q, RecordSortType.DATE, RecordSortOrder.DESC)
+        }.combine(_selectedSeriesId) { state, seriesId -> state.copy(seriesId = seriesId) },
+        _sortType,
+        _sortOrder
+    ) { partialState, type, order ->
+        partialState.copy(sortType = type, sortOrder = order)
     }.flatMapLatest { state ->
         flow {
-            // ★修正: 検索条件が変わった瞬間に空のPagingDataを流し、UI上の古いリスト（残像）を強制的に消去する
-            // これにより、遷移時に一瞬全件リストが見えてフォーカスが飛ぶバグを完全に防ぎます。
             emit(PagingData.empty())
-            delay(50) // UIが空リストを描画してフォーカスをリセットする隙を作る
+            delay(50)
 
-            // 状態（FilterState）に基づいて、RoomのDAOから適切なPagingSourceを取得
             val pager = Pager(
                 config = PagingConfig(
                     pageSize = 30,
                     prefetchDistance = 10,
                     initialLoadSize = 20,
-                    enablePlaceholders = false
+                    enablePlaceholders = true
                 )
             ) {
+                val isDesc = state.sortOrder == RecordSortOrder.DESC
+
                 when {
-                    state.query.isNotBlank() -> programDao.searchPagingSource(state.query)
+                    state.seriesId != null && _seriesSearch.value -> programDao.searchSeriesPagingSourceById(state.seriesId)
+                    // 検索やカテゴリ指定時はソートボタンを非表示にするため、デフォルトの降順クエリを使う
+                    state.query.isNotBlank() -> if (_seriesSearch.value) programDao.searchSeriesPagingSource(state.query) else programDao.searchPagingSource(state.query)
                     state.category == RecordCategory.CHANNEL && !state.channelId.isNullOrEmpty() -> programDao.getPagingSourceByChannel(
                         state.channelId
                     )
@@ -277,31 +308,44 @@ class RecordViewModel @Inject constructor(
                     )
 
                     state.category == RecordCategory.TIME && !state.day.isNullOrEmpty() -> {
-                        // "月曜日" などの文字列を Calendar の曜日数値（0=日, 1=月...）にマッピング
                         val dayOfWeekStr = when (state.day.replace("曜日", "")) {
-                            "日" -> "0"
-                            "月" -> "1"
-                            "火" -> "2"
-                            "水" -> "3"
-                            "木" -> "4"
-                            "金" -> "5"
-                            "土" -> "6"
-                            else -> "0"
+                            "日" -> "0"; "月" -> "1"; "火" -> "2"; "水" -> "3"
+                            "木" -> "4"; "金" -> "5"; "土" -> "6"; else -> "0"
                         }
                         programDao.getPagingSourceByDayOfWeek(dayOfWeekStr)
                     }
 
-                    state.category == RecordCategory.UNWATCHED -> programDao.getPagingSourceUnwatched()
-                    else -> programDao.getAllPagingSource()
+                    // ★「未視聴」の場合、選択されたソート条件に応じてDaoを切り替える
+                    state.category == RecordCategory.UNWATCHED -> {
+                        when (state.sortType) {
+                            RecordSortType.DATE -> if (isDesc) programDao.getUnwatched_DateDesc() else programDao.getUnwatched_DateAsc()
+                            RecordSortType.TITLE -> if (isDesc) programDao.getUnwatched_TitleDesc() else programDao.getUnwatched_TitleAsc()
+                            RecordSortType.DURATION -> if (isDesc) programDao.getUnwatched_DurationDesc() else programDao.getUnwatched_DurationAsc()
+                        }
+                    }
+
+                    // ★「全ての録画」の場合、選択されたソート条件に応じてDaoを切り替える
+                    else -> {
+                        when (state.sortType) {
+                            RecordSortType.DATE -> if (isDesc) programDao.getAll_DateDesc() else programDao.getAll_DateAsc()
+                            RecordSortType.TITLE -> if (isDesc) programDao.getAll_TitleDesc() else programDao.getAll_TitleAsc()
+                            RecordSortType.DURATION -> if (isDesc) programDao.getAll_DurationDesc() else programDao.getAll_DurationAsc()
+                        }
+                    }
                 }
             }
 
-            // Roomから取得したEntityを、UI層で扱うDomainModel(RecordedProgram)に変換してEmit
             emitAll(pager.flow.map { pagingData ->
                 pagingData.map { entity -> RecordDataMapper.toDomainModel(entity) }
             })
         }
     }.cachedIn(viewModelScope)
+
+    // ★ 追加: メニューから指定されたソート条件を適用する
+    fun setSort(type: RecordSortType, order: RecordSortOrder) {
+        _sortType.value = type
+        _sortOrder.value = order
+    }
 
     fun updateListView(isList: Boolean) {
         _manualListViewOverride.value = isList
@@ -315,15 +359,13 @@ class RecordViewModel @Inject constructor(
         _selectedSeriesGenre.value = genre
     }
 
-    // ==========================================
-    // カテゴリ・絞り込み状態の更新メソッド群
-    // ==========================================
     fun updateCategory(category: RecordCategory) {
         if (_selectedCategory.value == category) return
         _selectedCategory.value = category
         _selectedGenre.value = null
         _selectedChannelId.value = null
         _selectedDay.value = null
+        _selectedSeriesId.value = null
         if (category == RecordCategory.SERIES) buildSeriesIndex()
     }
 
@@ -345,14 +387,12 @@ class RecordViewModel @Inject constructor(
         currentSearchQuery = ""
     }
 
-    /**
-     * 検索を実行し、履歴に保存します。
-     * 検索モードに入る前のカテゴリ（ALLなど）を保持しておき、クリア時に復元できるようにします。
-     */
     fun searchRecordings(query: String) {
         if (_activeSearchQuery.value.isEmpty() && query.isNotEmpty()) {
             _categoryBeforeSearch.value = _selectedCategory.value
         }
+        _seriesSearch.value = false
+        _selectedSeriesId.value = null
         _activeSearchQuery.value = query
         _searchQuery.value = query
         currentSearchQuery = query
@@ -364,6 +404,8 @@ class RecordViewModel @Inject constructor(
     }
 
     fun clearSearch() {
+        _seriesSearch.value = false
+        _selectedSeriesId.value = null
         _activeSearchQuery.value = ""
         _searchQuery.value = ""
         currentSearchQuery = ""
@@ -379,26 +421,25 @@ class RecordViewModel @Inject constructor(
 
     fun loadNextPage() {}
 
-    // ==========================================
-    // 検索履歴の管理 (SharedPreferences)
-    // ==========================================
     private fun loadSearchHistory() {
-        try {
-            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            val jsonString = prefs.getString(KEY_HISTORY, "[]")
-            val jsonArray = JSONArray(jsonString)
-            val list = ArrayList<String>()
-            for (i in 0 until jsonArray.length()) list.add(jsonArray.getString(i))
-            _searchHistory.value = list
-        } catch (e: Exception) {
-            _searchHistory.value = emptyList()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                val jsonString = prefs.getString(KEY_HISTORY, "[]")
+                val jsonArray = JSONArray(jsonString)
+                val list = ArrayList<String>()
+                for (i in 0 until jsonArray.length()) list.add(jsonArray.getString(i))
+                _searchHistory.value = list
+            } catch (e: Exception) {
+                _searchHistory.value = emptyList()
+            }
         }
     }
 
     private fun addSearchHistory(query: String) {
         val currentList = _searchHistory.value.toMutableList()
-        currentList.remove(query); currentList.add(0, query) // 重複排除と先頭への追加
-        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex) // 最大5件まで保持
+        currentList.remove(query); currentList.add(0, query)
+        if (currentList.size > 5) currentList.removeAt(currentList.lastIndex)
         _searchHistory.value = currentList
         saveSearchHistory(currentList)
     }
@@ -412,7 +453,7 @@ class RecordViewModel @Inject constructor(
     }
 
     private fun saveSearchHistory(list: List<String>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                 val jsonArray = JSONArray(list)
@@ -422,9 +463,6 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // ==========================================
-    // 視聴履歴（レジュームポイント）の管理
-    // ==========================================
     fun updateWatchHistory(program: RecordedProgram, positionSeconds: Double) {
         viewModelScope.launch { historyRepository.saveWatchHistory(program, positionSeconds) }
     }
@@ -438,129 +476,178 @@ class RecordViewModel @Inject constructor(
         }
     }
 
-    // ==========================================
-    // KonomiTV ストリーミング維持 (Keep Alive)
-    // ==========================================
-    /**
-     * KonomiTVの動画ストリーミング（HLS）のセッションを維持するためのメソッドです。
-     * 定期的にAPIを叩かないと、サーバー側で視聴終了とみなされエンコードプロセスが破棄されてしまいます。
-     * 同時に視聴履歴（どこまで見たか）も更新します。
-     */
-    @UnstableApi
-    fun startStreamMaintenance(
-        program: RecordedProgram,
-        quality: String,
-        sessionId: String,
-        currentPositionProvider: () -> Double
-    ) {
-        // 既存のジョブがあればキャンセル
-        streamMaintenanceJob?.cancel()
-
-        streamMaintenanceJob = viewModelScope.launch {
-            // セッションが破棄されるまでループ
-            while (isActive) {
-                try {
-                    // ★ポイント1: KonomiTV API へ Keep-Alive (生存報告) のリクエストを送る
-                    // ※以下のメソッド名は実際のAPIクライアントの実装に合わせてください
-                    val position = currentPositionProvider()
-                    repository.keepAlive(
-                        videoId = program.recordedVideo.id,
-                        sessionId = sessionId,
-                        quality = quality
-                    )
-
-                    Log.d("StreamMaintenance", "Keep-Alive sent. Session: $sessionId")
-                } catch (e: Exception) {
-                    Log.e("StreamMaintenance", "Failed to send Keep-Alive", e)
-                }
-
-                // ★ポイント2: 10秒の壁に絶対に引っかからないよう、3〜5秒間隔で高頻度にPingを打つ
-                delay(4000L)
-            }
-        }
-    }
-
-    fun stopStreamMaintenance() {
-        streamMaintenanceJob?.cancel()
-        streamMaintenanceJob = null
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        stopStreamMaintenance()
-    }
-
-    // ==========================================
-    // ニコニコ実況過去ログの取得
-    // ==========================================
     suspend fun getArchivedComments(videoId: Int): List<ArchivedComment> {
         return withContext(Dispatchers.IO) {
-            repository.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
+            recordProvider.getArchivedJikkyo(videoId).getOrDefault(emptyList()).sortedBy { it.time }
         }
     }
 
     fun buildSeriesIndex() {}
 
-    // ==========================================
-    // サイドメニュー用データの構築 (シリーズ・チャンネル)
-    // ==========================================
+    fun setSeasonFilter(season: Pair<Int, String>?) {
+        _selectedSeason.value = season
+        rebuildEpgSeries()
+    }
+
+    fun setOnAirOnly(enabled: Boolean) {
+        _isOnAirOnly.value = enabled
+        rebuildEpgSeries()
+    }
+
+    fun setSeriesSort(type: SeriesSortType, order: RecordSortOrder) {
+        _seriesSortType.value = type
+        _seriesSortOrder.value = order
+        if (epgSeriesItems.isEmpty()) {
+            _groupedSeries.value = _groupedSeries.value.mapValues { (_, series) -> sortSeries(series) }
+        } else {
+            rebuildEpgSeries()
+        }
+    }
+
+    fun sortSeriesForDisplay(series: List<SeriesInfo>): List<SeriesInfo> = sortSeries(series)
+
+    fun searchSeries(title: String) = searchSeries(null, title)
+
+    fun searchSeries(seriesId: Int?, title: String) {
+        _seriesSearch.value = true
+        _selectedSeriesId.value = seriesId
+        _activeSearchQuery.value = TitleNormalizer.toSqlSearchQuery(title)
+        _searchQuery.value = _activeSearchQuery.value
+        currentSearchQuery = _activeSearchQuery.value
+        viewModelScope.launch(Dispatchers.IO) {
+            _seriesFocusProgramId.value = seriesId?.let { programDao.getSeriesFocusProgramIdById(it) }
+                ?: programDao.getSeriesFocusProgramId(_activeSearchQuery.value)
+        }
+        _selectedCategory.value = RecordCategory.ALL
+    }
+
+    private fun buildEpgSeriesAndChannelMaps(
+        items: List<com.beeregg2001.komorebi.data.model.EsSeriesListItem>,
+        localSeries: List<SeriesProjection>,
+        channelsList: List<ChannelProjection>
+    ) {
+        _isSeriesLoading.value = true
+        try {
+            // シリーズ一覧は EPGStation 由来だが、チャンネル絞り込みはローカルの録画情報から作る。
+            buildChannelMap(channelsList)
+            val localByTitle = localSeries.associateBy { it.seriesName }
+            _availableSeasons.value = items.mapNotNull { item ->
+                item.seasonYear?.let { year ->
+                    item.seasonName?.let { name -> year to name }
+                }
+            }.distinct()
+                .sortedWith(compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second })
+            epgLocalByTitle = localByTitle
+            rebuildEpgSeries(localByTitle)
+        } catch (e: Exception) {
+            // 例外でローディング表示が固まらないように必ず握って落とす
+            Log.e(TAG, "EPGStation Series Map Build Error", e)
+        } finally {
+            _isSeriesLoading.value = false
+        }
+    }
+
+    private fun rebuildEpgSeries(localByTitle: Map<String, SeriesProjection> = emptyMap()) {
+        if (epgSeriesItems.isEmpty()) return
+        val localMap = if (localByTitle.isEmpty()) epgLocalByTitle else localByTitle
+        val selected = _selectedSeason.value
+        val filtered = epgSeriesItems.filter { item ->
+            (selected == null || item.seasonYear == selected.first && item.seasonName == selected.second) &&
+                (!_isOnAirOnly.value || item.isOnAir)
+        }
+        val grouped = mutableMapOf<String, MutableList<SeriesInfo>>()
+        filtered.forEach { item ->
+            val local = localMap[item.title]
+            val genre = local?.genres?.firstOrNull()?.major ?: "その他"
+            grouped.getOrPut(genre) { mutableListOf() }.add(
+                SeriesInfo(
+                    displayTitle = item.title,
+                    searchKeyword = TitleNormalizer.toSqlSearchQuery(item.title),
+                    programCount = item.recordedCount,
+                    representativeVideoId = local?.representativeVideoId ?: 0,
+                    isEpisodic = true,
+                    directThumbnailUrl = null,
+                    apiThumbnailUrl = if (item.hasImage) {
+                        UrlBuilder.getEpgStationSeriesImageUrl(
+                            epgStationIp,
+                            epgStationPort,
+                            item.id
+                        )
+                    } else null,
+                    seriesId = item.id,
+                    lastAiredAt = item.lastAiredAt?.toString(),
+                    seasonYear = item.seasonYear,
+                    seasonName = item.seasonName,
+                    unwatchedCount = item.unwatchedCount,
+                    totalEpisodes = item.totalEpisodes,
+                    isOnAir = item.isOnAir
+                )
+            )
+        }
+        _availableGenres.value = grouped.keys.sorted()
+        _groupedSeries.value = grouped
+            .toSortedMap()
+            .mapValues { (_, series) -> sortSeries(series) }
+    }
+
     /**
-     * 録画番組リストから、「チャンネル別」と「シリーズ別（AI名寄せ）」の
-     * サイドナビゲーション用データを構築します。
-     * 重い処理のため、Dispatchers.IO を通じてバックグラウンドで実行されます。
+     * 録画のチャンネル絞り込みペイン用のマップを組み立てる。
+     * シリーズ一覧をどこから作るか (ローカル集計 / EPGStation API) に関係なく必要なので切り出してある。
      */
+    private fun buildChannelMap(channelsList: List<ChannelProjection>) {
+        val allChannelMap =
+            mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
+        channelsList.forEach { ch ->
+            val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
+            val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
+            if (!channelTypeMap.containsKey(ch.channelId)) {
+                channelTypeMap[ch.channelId] =
+                    Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
+            }
+        }
+
+        val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
+        val extractNumber = { idStr: String ->
+            Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
+        }
+        _groupedChannels.value = allChannelMap.entries
+            .sortedBy { (type, _) ->
+                typePriority.indexOf(type).let { if (it != -1) it else typePriority.size }
+            }
+            .associate { entry ->
+                entry.key to entry.value.values.sortedWith(
+                    compareBy({ extractNumber(it.third) }, { it.third })
+                ).map { Pair(it.first, it.second) }
+            }
+    }
+
     private suspend fun buildSeriesAndChannelMaps(
         seriesList: List<SeriesProjection>,
         channelsList: List<ChannelProjection>
     ) {
         _isSeriesLoading.value = true
         try {
-            // --- チャンネル一覧の構築 ---
-            val allChannelMap =
-                mutableMapOf<String, MutableMap<String, Triple<String, String, String>>>()
-            channelsList.forEach { ch ->
-                val type = if (ch.channelType == "GR") "地デジ" else ch.channelType ?: "その他"
-                val channelTypeMap = allChannelMap.getOrPut(type) { mutableMapOf() }
-                if (!channelTypeMap.containsKey(ch.channelId)) {
-                    channelTypeMap[ch.channelId] =
-                        Triple(ch.channelName ?: "", ch.channelId, ch.channelId)
-                }
-            }
+            buildChannelMap(channelsList)
 
-            // 放送波ごとのソート順序を定義し、さらに各波の中ではチャンネル番号順にソート
-            val typePriority = listOf("地デジ", "BS", "BS4K", "CS", "SKY", "その他")
-            val extractNumber = { idStr: String ->
-                Regex("\\d+").find(idStr)?.value?.toIntOrNull() ?: Int.MAX_VALUE
-            }
-            _groupedChannels.value = allChannelMap.entries
-                .sortedBy { (type, _) ->
-                    typePriority.indexOf(type).let { if (it != -1) it else typePriority.size }
-                }
-                .associate { entry ->
-                    entry.key to entry.value.values.sortedWith(
-                        compareBy({ extractNumber(it.third) }, { it.third })
-                    ).map { Pair(it.first, it.second) }
-                }
-
-            // --- シリーズ（名寄せ）一覧の構築 ---
             val genresSet = mutableSetOf<String>()
             val finalGroupedSeries = mutableMapOf<String, MutableList<SeriesInfo>>()
 
             seriesList.forEach { proj ->
-                // 番組数が2つ以上、またはアニメなどのエピソード形式（isEpisodic = true）のものだけをシリーズとして扱う
                 if (proj.programCount >= 2 || proj.isEpisodic) {
                     val majorGenre = proj.genres?.firstOrNull()?.major ?: "その他"
                     genresSet.add(majorGenre)
 
-                    // SQLでのLIKE検索用にキーワードを正規化（全角半角、記号のブレを吸収）
                     val searchKeyword = TitleNormalizer.toSqlSearchQuery(proj.seriesName)
 
                     val seriesInfo = SeriesInfo(
                         displayTitle = proj.seriesName,
                         searchKeyword = searchKeyword,
                         programCount = proj.programCount,
-                        representativeVideoId = proj.representativeVideoId, // サムネイル用
-                        isEpisodic = proj.isEpisodic
+                        representativeVideoId = proj.representativeVideoId,
+                        isEpisodic = proj.isEpisodic,
+                        directThumbnailUrl = proj.directThumbnailUrl,
+                        apiThumbnailUrl = proj.apiThumbnailUrl,
+                        lastAiredAt = proj.lastAiredAt
                     )
 
                     val list = finalGroupedSeries.getOrPut(majorGenre) { mutableListOf() }
@@ -570,9 +657,8 @@ class RecordViewModel @Inject constructor(
 
             _availableGenres.value = genresSet.sorted()
 
-            // ジャンルごとにあいうえお順（タイトル順）でソート
-            _groupedSeries.value = finalGroupedSeries.mapValues { entry ->
-                entry.value.sortedBy { it.displayTitle }
+            _groupedSeries.value = finalGroupedSeries.toSortedMap().mapValues { (_, series) ->
+                sortSeries(series)
             }.filterValues { it.isNotEmpty() }
 
         } catch (e: Exception) {
@@ -580,5 +666,26 @@ class RecordViewModel @Inject constructor(
         } finally {
             _isSeriesLoading.value = false
         }
+    }
+
+    private fun sortSeries(series: List<SeriesInfo>): List<SeriesInfo> {
+        val comparator = when (_seriesSortType.value) {
+            SeriesSortType.LAST_AIRED -> compareBy<SeriesInfo> { lastAiredAtKey(it.lastAiredAt) }
+            SeriesSortType.TITLE -> compareBy<SeriesInfo> { it.displayTitle.lowercase() }
+            SeriesSortType.PROGRAM_COUNT -> compareBy { it.programCount }
+            SeriesSortType.UNWATCHED_COUNT -> compareBy { it.unwatchedCount }
+        }
+        return if (_seriesSortOrder.value == RecordSortOrder.ASC) {
+            series.sortedWith(comparator)
+        } else {
+            series.sortedWith(comparator.reversed())
+        }
+    }
+
+    private fun lastAiredAtKey(value: String?): Long {
+        value?.toLongOrNull()?.let { return it }
+        return runCatching { Instant.parse(value).toEpochMilli() }
+            .recoverCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+            .getOrDefault(0L)
     }
 }

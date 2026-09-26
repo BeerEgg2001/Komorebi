@@ -19,6 +19,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -30,10 +32,13 @@ import androidx.tv.material3.*
 fun InputDialog(
     title: String,
     initialValue: String,
+    isLongToken: Boolean = false,
+    placeholder: String? = null,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
     var text by remember { mutableStateOf(initialValue) }
+    val clipboardManager = LocalClipboardManager.current
 
     // フォーカス制御用
     val textFieldFocusRequester = remember { FocusRequester() }
@@ -48,7 +53,7 @@ fun InputDialog(
             shape = RoundedCornerShape(16.dp),
             // ダイアログ背景: 暗いグレー
             colors = SurfaceDefaults.colors(containerColor = Color(0xFF1E1E1E)),
-            modifier = Modifier.width(400.dp)
+            modifier = Modifier.width(if (isLongToken) 560.dp else 400.dp)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
@@ -65,8 +70,24 @@ fun InputDialog(
                 // --- テキスト入力フィールド (モノトーンスタイル) ---
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
+                    onValueChange = {
+                        // 複数行対応のフィールドは TV のソフトキーボードが
+                        // 改行キーを誤って改行文字として挿入することがあるため除去する
+                        text = if (isLongToken) it.replace("\n", "") else it
+                    },
+                    singleLine = !isLongToken,
+                    minLines = if (isLongToken) 3 else 1,
+                    placeholder = placeholder?.let {
+                        {
+                            Text(
+                                text = it,
+                                style = if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = FontFamily.Monospace
+                                ) else MaterialTheme.typography.bodyLarge,
+                                color = Color.Gray
+                            )
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(textFieldFocusRequester),
@@ -82,7 +103,9 @@ fun InputDialog(
                         unfocusedTextColor = Color.White,
                         unfocusedBorderColor = Color.Gray
                     ),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    textStyle = (if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace
+                    ) else MaterialTheme.typography.bodyLarge).copy(
                         fontWeight = FontWeight.Medium
                     ),
                     interactionSource = textFieldInteractionSource,
@@ -94,6 +117,30 @@ fun InputDialog(
                         }
                     )
                 )
+
+                if (isLongToken) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${text.length} 文字",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.Gray
+                        )
+                        MonochromeButton(
+                            text = "クリップボードから貼り付け",
+                            onClick = {
+                                clipboardManager.getText()?.text?.let {
+                                    // コピー元の改行・空白(トークンには本来含まれない)を除去
+                                    text = it.replace(Regex("\\s+"), "")
+                                }
+                            }
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(32.dp))
 

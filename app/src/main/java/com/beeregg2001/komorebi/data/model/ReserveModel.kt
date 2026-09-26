@@ -74,6 +74,7 @@ data class ReserveRequest(
  */
 data class ReserveRecordSettings(
     @SerializedName("is_enabled") val isEnabled: Boolean = true,
+    @Transient val allowEndLack: Boolean = true,
     @SerializedName("priority") val priority: Int = 3,
     @SerializedName("recording_folders") val recordingFolders: List<String>? = emptyList(),
     @SerializedName("recording_start_margin") val startMargin: Int = 0,

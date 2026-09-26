@@ -12,12 +12,22 @@ android {
     namespace = "com.beeregg2001.komorebi"
     compileSdk = 35
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a")
+            // ★ true にすると、分割版(25MB)と、Universal版(50MB)の両方を出力してくれます！
+            isUniversalApk = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.beeregg2001.Komorebi"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10 // 数値を1つ上げる
-        versionName = "1.0.0"
+        versionCode = 18 // 数値を1つ上げる
+        versionName = "1.1.0-Stable"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -25,13 +35,13 @@ android {
         externalNativeBuild {
             cmake {
                 // 必要に応じて C++ コンパイラ引数を追加
-                cppFlags("-std=c++11")
+                cppFlags("-std=c++17")
             }
         }
         ndk {
             // 低スペック端末(Android TV等)で一般的なアーキテクチャに限定してビルド時間を短縮
             // 実機が 64bit なら arm64-v8a、32bit なら armeabi-v7a です
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
     }
 
@@ -39,6 +49,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.30.5"
         }
     }
 
@@ -48,16 +59,20 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+//            isMinifyEnabled = true       // コード圧縮を有効化
+//            isShrinkResources = true     // 未使用の画像やリソースも削除
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // java.time などの Java 8+ API を Android 7.0(API 24)以降で利用する。
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
+        buildConfig = true // ★ BuildConfigクラスの生成を有効化
     }
     kotlin {
         compilerOptions {
@@ -104,6 +119,8 @@ ksp {
 //}
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
     // 1. Compose BOM を最新に近いバージョンに更新 (ここが最重要)
     // 2023.10.01 だと Tv-Foundation 1.0.0-alpha11 と互換性がありません
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))
@@ -120,13 +137,15 @@ dependencies {
     // --- TV用ライブラリ ---
     // これらは BOM に含まれないため、バージョンを固定します
     implementation("androidx.tv:tv-material:1.0.0")
-    implementation("androidx.tv:tv-foundation:1.0.0-alpha11")
+    implementation("androidx.tv:tv-foundation:1.0.0-rc01")
 
     // --- Hilt ---
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("com.google.dagger:hilt-android:2.59.2")
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.hilt.work)
+    implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.runtime)
     "baselineProfile"(project(":baselineprofile"))
     ksp("com.google.dagger:hilt-compiler:2.59.2")
 
@@ -166,8 +185,8 @@ dependencies {
 
     // NDK Bitmap (バージョンは 0.9.21 を指定する必要があります)
     implementation("com.github.ctiao:ndkbitmap-armv7a:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
-    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-armv5:0.9.21")
+//    implementation("com.github.ctiao:ndkbitmap-x86:0.9.21")
 
     compileOnly("org.checkerframework:checker-qual:3.33.0")
 
@@ -185,7 +204,15 @@ dependencies {
     implementation("com.google.ai.client.generativeai:generativeai:0.7.0")
 
     // --- Ktor Local Server & QR Code ---
-    implementation("io.ktor:ktor-server-core:2.3.8")
-    implementation("io.ktor:ktor-server-cio:2.3.8")
+    // BOMを使って、Geminiが裏で使うKtorクライアントとローカルサーバーのバージョンを強制統一
+    implementation(platform("io.ktor:ktor-bom:2.3.12"))
+    implementation("io.ktor:ktor-server-core") // ← バージョン番号はBOMが管理するので消す
+    implementation("io.ktor:ktor-server-cio")  // ← バージョン番号はBOMが管理するので消す
     implementation("com.google.zxing:core:3.5.3")
+
+    // ★ 追加: SMB (ファイルライブラリ) 用
+    implementation("eu.agno3.jcifs:jcifs-ng:2.1.10")
+
+//    implementation("org.videolan.android:libvlc-all:3.7.0")
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 }
