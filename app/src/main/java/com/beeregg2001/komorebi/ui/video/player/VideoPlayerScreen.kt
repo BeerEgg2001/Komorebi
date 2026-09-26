@@ -77,6 +77,43 @@ private val KONOMI_TV_ORIGINAL_VIDEO_REGEX = Regex("/api/videos/\\d+/download$")
 private fun isKonomiTvOriginalVideoUrl(url: String): Boolean =
     KONOMI_TV_ORIGINAL_VIDEO_REGEX.containsMatchIn(url.substringBefore("?"))
 
+/**
+ * EPGStationの録画mp4/webm配信 (`/api/streams/recorded/{videoFileId}/mp4|webm`) かどうかを判定する。
+ * サーバーは実際にContent-Type: video/mp4 または video/webmで応答するTSではないコンテナで
+ * あり、HLSではない(stuayu/EPGStation src/model/service/api/streams/recorded/{id}/mp4.ts等で
+ * Content-Type明示を確認済み)。UrlBuilder.getEpgStationRecordedStreamUrl()が生成するURL形式。
+ */
+private val EPG_STATION_RECORDED_CONTAINER_REGEX = Regex("/api/streams/recorded/\\d+/(mp4|webm)$")
+
+private fun epgStationRecordedContainerMimeType(url: String): String? {
+    val path = url.substringBefore("?")
+    if (!EPG_STATION_RECORDED_CONTAINER_REGEX.containsMatchIn(path)) return null
+    return if (path.endsWith("/webm")) MimeTypes.VIDEO_WEBM else MimeTypes.VIDEO_MP4
+}
+
+/**
+ * 再生URLからMIMEタイプを解決する。
+ * ★ 修正: 以前はEPGStationの録画mp4/webm URL(`/api/streams/recorded/{id}/mp4|webm`)が
+ * isEpgStationDirectVideoUrl(`/api/videos/\d+$`)にマッチせず、次の
+ * `url.contains("/api/streams/")`分岐でHLSと誤判定されてAPPLICATION_M3U8が明示指定されて
+ * いたため、fragmented MP4/WebMバイトストリームにHlsMediaSourceが誤って割り当てられ
+ * 再生に失敗していた。コンテナ判定を先に行うよう判定順序を修正する。
+ */
+private fun resolveMimeType(url: String): String? {
+    return when {
+        isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url) -> MimeTypes.VIDEO_MP2T
+        else -> epgStationRecordedContainerMimeType(url) ?: run {
+            if (url.contains("/api/streams/") || url.contains("/api/videos/") ||
+                url.contains("konomi.tv") || url.contains("m3u8")
+            ) {
+                MimeTypes.APPLICATION_M3U8
+            } else {
+                null
+            }
+        }
+    }
+}
+
 @UnstableApi
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -111,12 +148,14 @@ fun VideoPlayerScreen(
     val tiledThumbnailUrl by videoPlayerViewModel.tiledThumbnailUrl.collectAsState()
     val chapters by videoPlayerViewModel.chapters.collectAsState()
     // 再生 URL がオフセット付き (EDCB xcode の擬似ライブ、または EPGStation の
-    // トランスコード再生) かどうか。ViewModel 側の isLiveStream は EDCB xcode 判定という
-    // 別用途の名残りなので、この画面での位置補正・シーク判定にはこちらの専用フラグを使う。
+    // トランスコード再生) かどうか。位置補正・シーク判定にはこのフラグを使う。
     val isOffsetBasedStream by videoPlayerViewModel.isOffsetBasedStream.collectAsState()
 
     val availableQualities by videoPlayerViewModel.availableQualities.collectAsState()
     val isQualitiesLoaded by videoPlayerViewModel.isQualitiesLoaded.collectAsState()
+    // ★ 追加: 「この録画番組に限って使えない」画質の値(理由の区別は ViewModel 側のコメント参照)
+    val perProgramExcludedQualities by
+        videoPlayerViewModel.perProgramExcludedQualities.collectAsState()
     val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
@@ -143,7 +182,12 @@ fun VideoPlayerScreen(
         vs.isAutoCmSkipEnabled = (autoCmSkipStr == "ON")
     }
 
-    LaunchedEffect(availableQualities, isQualitiesLoaded, currentVideoQualityStr) {
+    LaunchedEffect(
+        availableQualities,
+        isQualitiesLoaded,
+        currentVideoQualityStr,
+        perProgramExcludedQualities
+    ) {
         if (isQualitiesLoaded && availableQualities.isNotEmpty()) {
             val matched = availableQualities.find { it.value == currentVideoQualityStr }
             if (matched != null) {
@@ -151,7 +195,24 @@ fun VideoPlayerScreen(
             } else {
                 val fallback = availableQualities.first()
                 vs.currentQuality = fallback
-                videoPlayerViewModel.saveVideoQuality(fallback.value)
+                // ★ 修正: 以前はここで無条件に saveVideoQuality() を呼び、フォールバック先を
+                // VIDEO_QUALITYへ書き戻していた。この書き戻しは 2c3d8c0「バックエンド変更時に
+                // 画質設定が正常に反映されない問題に暫定対応」で、バックエンドを切り替えて
+                // 値空間が変わったときに古い設定値を正規化する目的で入ったもので、その用途では
+                // 今も必要なため残す。
+                //
+                // 一方、値空間には存在するのにこの録画番組でだけ使えない画質(KonomiTVの
+                // original画質)まで同じ扱いにしていたのが不具合だった。original非対応の録画を
+                // 一度再生しただけで既定画質が"1080p-60fps"へ黙って変わり、以降は対応録画を
+                // 開いてもoriginalに戻らなくなっていた。KonomiTV本家(PlayerController.ts)も
+                // この場合は再生時のdefault_qualityを差し替えるだけで設定値は書き換えていない。
+                //
+                // そのため、番組固有の理由で除外された値(perProgramExcludedQualities)のときだけ
+                // 書き戻しを見送る。設定画面は保存値が一覧に無い場合を既に考慮しているため
+                // (SettingContents.kt / SettingScreen.kt)、書き戻さなくても表示は壊れない。
+                if (currentVideoQualityStr !in perProgramExcludedQualities) {
+                    videoPlayerViewModel.saveVideoQuality(fallback.value)
+                }
             }
         }
     }
@@ -216,10 +277,14 @@ fun VideoPlayerScreen(
     var isSeekingPreviewVisible by remember { mutableStateOf(false) }
     var seekingPreviewJob by remember { mutableStateOf<Job?>(null) }
 
+    // ★ 修正: L字クロップのメニュー表示中(lCropMode==MENU)も他のオーバーレイと同様に扱う。
+    // これが漏れていると、キー入力が VideoPlayerState.handleKeyEvent 側の一般処理に流れてしまい、
+    // メニュー内のフォーカス移動が効かず、戻るキーでメニューを閉じずにプレイヤーごと終了してしまう。
     val isSubOverlayOpen =
-        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
-    val isSubtitleBlockingOverlayOpen =
-        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen
+        isSubMenuOpen || isSceneSearchOpen || isChapterListOpen || isProgramInfoOpen || isModernSettingsOpen || vs.lCropMode == LCropMode.MENU
+    // ★ 修正: 以前から isSubOverlayOpen と完全に同一の式が重複定義されていたため、
+    // 一方を修正してももう一方に反映し忘れる乖離リスクがあった。同じ意味なので一本化する。
+    val isSubtitleBlockingOverlayOpen = isSubOverlayOpen
     val subtitleOffset by animateDpAsState(
         targetValue = if (
             showControls &&
@@ -349,15 +414,7 @@ fun VideoPlayerScreen(
                 )
                 if (newUrl.isNotEmpty()) {
                     val mediaItemBuilder = MediaItem.Builder().setUri(newUrl)
-                    if (isEpgStationDirectVideoUrl(newUrl) || isKonomiTvOriginalVideoUrl(newUrl)) {
-                        // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
-                        mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
-                    } else if (newUrl.contains("/api/streams/") || newUrl.contains("/api/videos/") || newUrl.contains(
-                            "konomi.tv"
-                        ) || newUrl.contains("m3u8")
-                    ) {
-                        mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-                    }
+                    resolveMimeType(newUrl)?.let { mediaItemBuilder.setMimeType(it) }
                     exoPlayer.setMediaItem(mediaItemBuilder.build())
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
@@ -481,15 +538,7 @@ fun VideoPlayerScreen(
 
         if (url.isNotEmpty()) {
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
-            if (isEpgStationDirectVideoUrl(url) || isKonomiTvOriginalVideoUrl(url)) {
-                // EPGStation/KonomiTVの無変換(original)再生はMPEG-TSがそのまま流れてくる (HLSではない)
-                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
-            } else if (url.contains("/api/streams/") || url.contains("/api/videos/") || url.contains("konomi.tv") || url.contains(
-                    "m3u8"
-                )
-            ) {
-                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
-            }
+            resolveMimeType(url)?.let { mediaItemBuilder.setMimeType(it) }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
             if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
@@ -586,10 +635,6 @@ fun VideoPlayerScreen(
 
         wasControlsVisible = showControls
     }
-
-    val safeHouseFocusRequester = remember { FocusRequester() }
-    val sceneSearchFocusRequester = remember { FocusRequester() }
-    var isLongPressHandled by remember { mutableStateOf(false) }
 
     BackHandler(enabled = isPiPMode) {}
 
@@ -759,6 +804,19 @@ fun VideoPlayerScreen(
             }
 
             AnimatedVisibility(
+                isSceneSearchOpen,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()) {
+                SceneSearchOverlay(
+                    program = currentProgram,
+                    tiledThumbnailUrl = tiledThumbnailUrl,
+                    currentPositionMs = getEffectivePositionMs(),
+                    onSeekRequested = { performSeek(it); onSceneSearchToggle(false) },
+                    onClose = { onSceneSearchToggle(false) },
+                    requestHeaders = cfAccessHeaders)
+            }
+
+            AnimatedVisibility(
                 isChapterListOpen,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut()) {
@@ -869,8 +927,12 @@ fun VideoPlayerScreen(
                     onLCropToggle = {
                         vs.lCropEnabled = !vs.lCropEnabled
                         if (vs.lCropEnabled) {
+                            // ★ 修正: このコールバックはモダン設定パネル(isModernSettingsOpen)側のものなので、
+                            // 別UIのフラグ(isSubMenuOpen)を閉じるonSubMenuToggle(false)では自分自身が
+                            // 閉じない。isModernSettingsOpenを直接falseにしてL字クロップメニューに
+                            // 差し替える(閉じないとVideoLCropOverlayと二重表示・フォーカス競合する)。
                             vs.lCropMode =
-                                LCropMode.MENU; onSubMenuToggle(false); onShowControlsChange(false)
+                                LCropMode.MENU; isModernSettingsOpen = false; onShowControlsChange(false)
                         } else {
                             vs.lCropMode = LCropMode.HIDDEN; vs.lCropZoom = 100f; vs.lCropX =
                                 0f; vs.lCropY = 0f; vs.lCropOrigin = ZoomOrigin.TopRight
@@ -884,6 +946,22 @@ fun VideoPlayerScreen(
                     },
                     onClose = { isModernSettingsOpen = false }
                 )
+            }
+
+            AnimatedVisibility(
+                visible = vs.lCropMode != LCropMode.HIDDEN,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                VideoLCropOverlay(
+                    state = vs,
+                    onClose = {
+                        vs.lCropMode = LCropMode.HIDDEN
+                        scope.launch {
+                            delay(200)
+                            mainFocusRequester.safeRequestFocus(TAG)
+                        }
+                    })
             }
 
             AnimatedVisibility(

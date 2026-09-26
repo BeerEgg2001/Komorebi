@@ -255,18 +255,71 @@ data class EsReserveItem(
     val name: String = "",
     val description: String? = null,
     val genre1: Int? = null,
-    val subGenre1: Int? = null
+    val subGenre1: Int? = null,
+    // PUT /api/reserves/{id} は saveOption/encodeOption を省略するとサーバー側で
+    // null に上書きされる(stuayu/EPGStation ReservationManageModel.setSaveOptionToReserve()
+    // で確認済み)。更新時に既存値を送り返すため、予約の保存先・エンコード設定も受け取る。
+    val tags: List<Int>? = null,
+    val parentDirectoryName: String? = null,
+    val directory: String? = null,
+    val recordedFormat: String? = null,
+    val encodeMode1: String? = null,
+    val encodeParentDirectoryName1: String? = null,
+    val encodeDirectory1: String? = null,
+    val encodeMode2: String? = null,
+    val encodeParentDirectoryName2: String? = null,
+    val encodeDirectory2: String? = null,
+    val encodeMode3: String? = null,
+    val encodeParentDirectoryName3: String? = null,
+    val encodeDirectory3: String? = null,
+    val isDeleteOriginalAfterEncode: Boolean = false
 )
 
 data class EsManualReserveOption(
     val programId: Long? = null,
     val allowEndLack: Boolean = true
 )
-data class EsEditManualReserveOption(val allowEndLack: Boolean = true)
+data class EsEditManualReserveOption(
+    val allowEndLack: Boolean = true,
+    val tags: List<Int>? = null,
+    val saveOption: EsRuleSaveOption? = null,
+    val encodeOption: EsRuleEncodeOption? = null
+)
+// ★ 修正: PUT /api/rules/{id} は全置換(full replace)であり、送らなかったフィールドは
+// サーバー側でnull/falseに正規化される(stuayu/EPGStation RuleDB.convertRuleToDBRule()で
+// 確認済み)。以前はsaveOption/encodeOptionをモデルにすら持っておらず、Komorebiから
+// 自動予約条件を1回更新するたびにEPGStation Web UI側で設定した保存先・エンコード設定が
+// 消えていた。EditRuleRepositoryのupdateReservationCondition()で既存ルールを読み直し、
+// これらのフィールドを保持して再送する(read-modify-write)ために追加した。
 data class EsAddRuleOption(
     val isTimeSpecification: Boolean = false,
     val searchOption: EsRuleSearchOption = EsRuleSearchOption(),
-    val reserveOption: EsRuleReserveOption = EsRuleReserveOption()
+    val reserveOption: EsRuleReserveOption = EsRuleReserveOption(),
+    val saveOption: EsRuleSaveOption? = null,
+    val encodeOption: EsRuleEncodeOption? = null
+)
+data class EsRuleSaveOption(
+    val parentDirectoryName: String? = null,
+    val directory: String? = null,
+    val recordedFormat: String? = null
+)
+// ★ 修正: mode1/2/3はInt型で定義していたが、stuayu/EPGStation本家api.d.tsの
+// ReserveEncodedOptionでは実際はString型(エンコードプロファイル名。DB実体
+// src/db/entities/Rule.tsも"string | null")だった。EsRuleにこのフィールドを
+// 追加したことで、既にエンコード設定を持つルールが1件でもあるとapi.getRules()/
+// api.getRule()のGsonパースが例外を投げ、自動予約条件一覧が丸ごと取得失敗していた。
+// あわせて欠けていたencodeParentDirectoryName1/2/3も追加した。
+data class EsRuleEncodeOption(
+    val mode1: String? = null,
+    val encodeParentDirectoryName1: String? = null,
+    val directory1: String? = null,
+    val mode2: String? = null,
+    val encodeParentDirectoryName2: String? = null,
+    val directory2: String? = null,
+    val mode3: String? = null,
+    val encodeParentDirectoryName3: String? = null,
+    val directory3: String? = null,
+    val isDeleteOriginalAfterEncode: Boolean = false
 )
 data class EsRuleSearchOption(
     val keyword: String? = null,
@@ -332,8 +385,12 @@ data class EsRuleSearchOption(
     val times: List<EsRuleTime>? = null,
     val isFree: Boolean? = null,
     val durationMin: Int? = null,
-    val durationMax: Int? = null
+    val durationMax: Int? = null,
+    // ★ 追加: 検索対象期間。Komorebi側では編集しないが、PUT /api/rules/{id} は全置換のため
+    // モデルに持っていないと更新のたびに消えていた(stuayu/EPGStation RuleDB.ts)。
+    val searchPeriods: List<EsSearchPeriod>? = null
 )
+data class EsSearchPeriod(val startAt: Long = 0, val endAt: Long = 0)
 data class EsRuleGenre(val genre: Int = 0, val subGenre: Int? = null)
 data class EsRuleTime(
     val start: Int? = null,
@@ -344,29 +401,55 @@ data class EsRuleReserveOption(
     val enable: Boolean = true,
     val allowEndLack: Boolean = true,
     val avoidDuplicate: Boolean = false,
-    val periodToAvoidDuplicate: Int? = null
+    val periodToAvoidDuplicate: Int? = null,
+    // ★ 追加: 録画後の自動タグ付与。以前はモデルに無く、更新のたびに失われていた。
+    val tags: List<Int>? = null
 )
 data class EsRule(
     val id: Int = 0,
     val reservesCnt: Int? = null,
     val isTimeSpecification: Boolean = false,
     val searchOption: EsRuleSearchOption = EsRuleSearchOption(),
-    val reserveOption: EsRuleReserveOption = EsRuleReserveOption()
+    val reserveOption: EsRuleReserveOption = EsRuleReserveOption(),
+    // ★ 追加: GET /api/rules/{id} のレスポンスにも同フィールドが含まれるため、
+    // 更新時にread-modify-writeでそのまま保持できるようにここにも追加する。
+    val saveOption: EsRuleSaveOption? = null,
+    val encodeOption: EsRuleEncodeOption? = null
 )
 data class EsRules(val rules: List<EsRule> = emptyList(), val total: Int = 0)
 
-data class EsConfig(val streamConfig: EsStreamConfig? = null)
+data class EsConfig(
+    val streamConfig: EsStreamConfig? = null,
+    // サーバーに定義されているエンコードモード名の一覧(予約更新時の整合確認に使う)
+    val encode: List<String>? = null,
+    // ★ 追加: idベースの配信プリセット(新形式)。config.ymlを新形式(streamProfiles)だけで
+    // 書いているサーバーでは streamConfig が空オブジェクトで返り、画質一覧はこちらにしか無い
+    // (stuayu/EPGStation ConfigApiModel.ts)。
+    val streamProfiles: EsStreamProfiles? = null
+)
+data class EsStreamProfiles(
+    val live: List<EsClientStreamProfile>? = null,
+    val recorded: EsRecordedStreamProfiles? = null
+)
+data class EsRecordedStreamProfiles(
+    val ts: List<EsClientStreamProfile>? = null,
+    val encoded: List<EsClientStreamProfile>? = null
+)
+data class EsClientStreamProfile(
+    val id: String = "",
+    val name: String = "",
+    val container: String = "",
+    val isUnconverted: Boolean = false
+)
 data class EsStreamConfig(
     val live: EsLiveStreamConfig? = null,
     val recorded: EsRecordedStreamConfig? = null
 )
-data class EsLiveStreamConfig(
-    val m2ts: List<EsM2tsStreamParam>? = null,
-    val m2tsll: List<String>? = null,
-    val webm: List<String>? = null,
-    val mp4: List<String>? = null,
-    val hls: List<String>? = null
-)
+// ★ 修正: サーバーの/api/configレスポンスは streamConfig.live.ts.m2ts のように1段深い
+// 構造で返る(stuayu/EPGStation ConfigApiModel.ts・api.d.tsで確認済み。本家l3tnun版も同一構造)。
+// 以前はm2ts/m2tsll/hls等をliveの直下に置いていたため、Gsonが未知フィールド"ts"を
+// 読み捨てて全フィールドがnullになり、getLiveStreamQualities()が常に空を返していた。
+data class EsLiveStreamConfig(val ts: EsLiveFormatConfig? = null)
 data class EsRecordedStreamConfig(
     val ts: EsFormatConfig? = null,
     val encoded: EsFormatConfig? = null
@@ -379,10 +462,13 @@ data class EsLiveFormatConfig(
     val hls: List<String>? = null
 )
 data class EsM2tsStreamParam(val name: String = "", val isUnconverted: Boolean = false)
+// ★ 修正: 録画配信もm2tsllをサポートしている(stuayu/EPGStation api.d.ts・
+// StreamProfileManageModel.tsで確認済み)が、以前はフィールドが無く読み捨てられていた。
 data class EsFormatConfig(
     val mp4: List<String>? = null,
     val hls: List<String>? = null,
-    val webm: List<String>? = null
+    val webm: List<String>? = null,
+    val m2tsll: List<String>? = null
 )
 data class EsPlaybackPosition(val position: Double = 0.0, val duration: Double = 0.0)
 

@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.main.AiFocusTicket
 import com.beeregg2001.komorebi.ui.main.AiFocusTicketManager
@@ -79,9 +80,14 @@ fun AiConciergePanel(
 
     val defaultRequester = if (isSpeechSupported) micFocusRequester else keyboardFocusRequester
 
-    // パネルが開いて、かつ履歴がある（2回目以降）の時の即時フォーカス復帰
-    LaunchedEffect(isOpen) {
-        if (isOpen && chatHistory.isNotEmpty()) {
+    // パネルが開いた時の即時フォーカス復帰。
+    // ・履歴がある(2回目以降)場合
+    // ・APIキー未設定の場合(挨拶のタイピングが走らないため「設定画面へ進む」ボタン以外に
+    //   フォーカス対象が無く、下のticketManager経由のPANEL_DEFAULTだけに頼ると
+    //   チケットの取りこぼし時にフォーカスが背面のホーム画面へ抜けてしまう)
+    // はチケットを待たずここで確保する。
+    LaunchedEffect(isOpen, apiKey) {
+        if (isOpen && (chatHistory.isNotEmpty() || apiKey.isBlank())) {
             delay(150); defaultRequester.safeRequestFocusWithRetry("AiPanel_Open")
         }
     }
@@ -113,6 +119,12 @@ fun AiConciergePanel(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .zIndex(100f)
+                .focusGroup()
+                // ★ 追加: 十字キーのフォーカス探索がパネルの外(背面のホーム画面)へ抜けるのを防ぐ。
+                // MainRootBackground側のcanFocus=false+onEnter=cancelFocusChange()と対になる保険で、
+                // パネル自身の境界からもフォーカスが漏れ出さないようにする。
+                .focusProperties { exit = { FocusRequester.Cancel } }
                 .onKeyEvent { event ->
                     if (event.key == Key.Back || event.key == Key.Escape) return@onKeyEvent false
                     val isDpad = event.key == Key.DirectionUp || event.key == Key.DirectionDown ||

@@ -147,11 +147,7 @@ object AppStrings {
     const val PROGRAM_INFO_NONE = "番組情報なし"
     const val STATUS_RECORDING = "録画中"
 
-    // 二画面・モック関連
-    const val DUAL_MOCK_LEFT = "左画面\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_SELECTING = "チャンネル選択中...\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_SELECTED = "右画面\n(720p上限 モック)"
-    const val DUAL_MOCK_RIGHT_UNSELECTED = "右画面\n（未選択）\n(720p上限 モック)"
+    // 二画面関連
     const val DUAL_RIGHT_SELECTING = "チャンネル選択中..."
     const val DUAL_RIGHT_UNSELECTED = "（未選択）"
 

@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -31,6 +32,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -40,6 +42,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.Extractor
 import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.metadata.id3.PrivFrame
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.mkv.MatroskaExtractor
@@ -360,6 +363,21 @@ fun rememberManagedExoPlayer(
                     true
                 )
                 addListener(object : Player.Listener {
+                    override fun onMetadata(metadata: Metadata) {
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is PrivFrame && (entry.owner.contains("aribb24", true) || entry.owner.contains("B24", true))) {
+                                val cue = captionDecoder.decode(
+                                    entry.privateData,
+                                    currentPosition,
+                                    renderCaptions = vs.isSubtitleEnabled
+                                )
+                                onSubtitleLanguagesChanged(captionDecoder.availableLanguages())
+                                if (vs.isSubtitleEnabled && cue != null) onSubtitleCue(cue)
+                            }
+                        }
+                    }
+
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
                         onVideoSizeChanged(
                             videoSize.width,
@@ -392,7 +410,12 @@ fun rememberManagedExoPlayer(
                         newPosition: Player.PositionInfo,
                         reason: Int
                     ) {
-                        clearSubtitle()
+                        // ★ 修正: DISCONTINUITY_REASON_INTERNAL(バッファ内部調整等、実際の視聴位置は
+                        // ジャンプしていない)まで無条件に字幕を消していたため、通常再生中でも字幕が
+                        // 頻繁にちらついていた。シーク/番組またぎ/区間削除等、実際に位置が飛ぶ場合のみ消す。
+                        if (reason != Player.DISCONTINUITY_REASON_INTERNAL) {
+                            clearSubtitle()
+                        }
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -403,10 +426,16 @@ fun rememberManagedExoPlayer(
                         Log.e(TAG, "ExoPlayer Source Error: ${error.message}", error)
 
                         // ★ 原因チェーンをたどり、録画ファイル消失(HTTP 404)かどうかを判定
+                        // EDCB直接アクセス/KonomiTV original経路は FileNotFoundException、
+                        // EDCB API経由/HLS等のHTTP経路は HttpDataSource.InvalidResponseCodeException(404) で来るため両方見る
                         var cause: Throwable? = error
                         var isFileMissing = false
                         while (cause != null) {
                             if (cause is java.io.FileNotFoundException) {
+                                isFileMissing = true
+                                break
+                            }
+                            if (cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode == 404) {
                                 isFileMissing = true
                                 break
                             }

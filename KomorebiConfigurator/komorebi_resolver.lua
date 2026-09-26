@@ -1,81 +1,225 @@
 -- ==========================================
--- Komorebi File Resolver
+-- Komorebi File Resolver (Cross-Platform)
 -- ==========================================
+WIN32 = not package.config:find('^/')
+DIR_SEPS = WIN32 and '\\/' or '/'
+DIR_SEP = WIN32 and '\\' or '/'
+
+-- EMWUIの標準util.luaを読み込む (GetVarIntやCsrfTokenなどのため)
+local utilPath = mg.document_root:gsub('['..DIR_SEPS..']*$', DIR_SEP) .. 'api' .. DIR_SEP .. 'util.lua'
+if not package.loaded["api.util"] then
+    pcall(dofile, utilPath)
+end
+
+-- ====================================================
+-- ★追加: 安全なファイル検索関数 (util.luaへの依存を断ち切る)
+-- ====================================================
+local function SafeFindFile(path)
+    if not edcb.FindFile then return nil end
+    local ff = edcb.FindFile(path, 1)
+    return ff and ff[1]
+end
+
+-- ====================================================
+-- 簡易JSONエンコーダ (Lua環境非依存)
+-- ====================================================
+local function EncodeJson(val)
+    local t = type(val)
+    if t == "string" then
+        local escaped = val:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+        return '"' .. escaped .. '"'
+    elseif t == "number" or t == "boolean" then
+        return tostring(val)
+    elseif t == "table" then
+        local isArray = true
+        local maxKey = 0
+        local count = 0
+        for k, v in pairs(val) do
+            if type(k) ~= "number" or k <= 0 or math.floor(k) ~= k then
+                isArray = false
+                break
+            end
+            if k > maxKey then maxKey = k end
+            count = count + 1
+        end
+
+        if isArray and count == maxKey then
+            if count == 0 then return "[]" end
+            local parts = {}
+            for i = 1, maxKey do table.insert(parts, EncodeJson(val[i])) end
+            return "[" .. table.concat(parts, ", ") .. "]"
+        else
+            local parts = {}
+            for k, v in pairs(val) do
+                local keyStr = type(k) == "string" and k or tostring(k)
+                table.insert(parts, '"' .. keyStr .. '": ' .. EncodeJson(v))
+            end
+            return "{" .. table.concat(parts, ", ") .. "}"
+        end
+    elseif val == nil then
+        return "null"
+    else
+        return '""'
+    end
+end
+
+-- ====================================================
+-- 共通の安全なJSONレスポンス関数
+-- ====================================================
+local function SafeResponseJson(data)
+    local ok, result = pcall(function()
+        local jsonStr = EncodeJson(data)
+        mg.write("HTTP/1.1 200 OK\r\n")
+        mg.write("Content-Type: application/json; charset=utf-8\r\n")
+        mg.write("Access-Control-Allow-Origin: *\r\n\r\n")
+        mg.write(jsonStr)
+    end)
+
+    if not ok then
+        mg.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json; charset=utf-8\r\n\r\n")
+        local safeErr = tostring(result):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "")
+        mg.write('{"error":"Lua JSON Encoding Error", "detail":"' .. safeErr .. '"}')
+    end
+end
+
+-- ★ ここはユーザー固有のマッピング設定（維持）
 local MAPPING = {
-    -- EDCBが認識しているローカルパスと、公開エイリアスの紐付け
-    -- ※最後の \ は入れないでください。 \ は \\ と2つ重ねてエスケープします。
-    ["D:\\"] = "rec"
+    ["D:\\recorded"] = "rec"
 }
 
--- HTTPヘッダの出力
-mg.write("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\r\n")
+-- 互換性確保: GetVarIntが存在しない場合のフォールバック
+local id_str = mg.get_var(mg.request_info.query_string, 'id')
+local id = id_str and tonumber(id_str) or nil
 
--- URLクエリパラメータからIDを取得
-local id = tonumber(mg.get_var(mg.request_info.query_string, "id"))
+-- ====================================================
+-- 【分岐1】idの指定がない場合 (共通設定・ctok・画質の取得)
+-- ====================================================
 if not id then
-    mg.write('{"error":"Missing or invalid video id"}')
+    local ok, result = pcall(function()
+        local optionList = {}
+        if XCODE_OPTIONS then
+            for i, v in ipairs(XCODE_OPTIONS) do
+                if v.xcoder and v.xcoder ~= '' then
+                    table.insert(optionList, { id = tostring(i), name = v.name or "" })
+                end
+            end
+        end
+
+        local ctok_x = ""
+        local ctok_v = ""
+        if CsrfToken then
+            ctok_x = CsrfToken('view') or ""
+            ctok_v = CsrfToken('tvcast') or ""
+        end
+
+        SafeResponseJson({
+            ctok = { xcode = ctok_x, view = ctok_v },
+            option = optionList,
+            recFolder = EdcbRecFolderPathList and EdcbRecFolderPathList() or {}
+        })
+    end)
+    if not ok then
+        mg.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json; charset=utf-8\r\n\r\n")
+        local safeErr = tostring(result):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "")
+        mg.write('{"error":"Failed to initialize settings", "detail":"' .. safeErr .. '"}')
+    end
     return
 end
 
--- EDCBから録画情報を取得
-local recInfo = edcb.GetRecFileInfo(id)
-if not recInfo then
-    mg.write('{"error":"RecInfo not found for ID: ' .. tostring(id) .. '"}')
-    return
-end
+-- ====================================================
+-- 【分岐2】idが指定された場合 (録画ファイルのパス解決)
+-- ====================================================
+local ok, processErr = pcall(function()
+    local recInfo = edcb.GetRecFileInfo(id)
+    if not recInfo then
+        SafeResponseJson({error = 'RecInfo not found for ID: ' .. tostring(id)})
+        return
+    end
 
-local filePath = recInfo.recFilePath
-local matchedAlias = nil
-local relativePath = nil
+    local filePath = recInfo.recFilePath
+    if not filePath or filePath == "" then
+        SafeResponseJson({error = 'RecFilePath is empty for ID: ' .. tostring(id)})
+        return
+    end
 
--- マッピングの探索
-for localPath, alias in pairs(MAPPING) do
+    -- 不正な制御文字を除去
+    filePath = string.gsub(filePath, "[%z\1-\8\11\12\14-\31]", "")
+
     local normalizedFilePath = filePath:gsub("\\", "/")
-    local normalizedLocalPath = localPath:gsub("\\", "/")
-    
-    -- パスが一致するか前方一致で判定
-    if string.sub(normalizedFilePath, 1, string.len(normalizedLocalPath)) == normalizedLocalPath then
-        matchedAlias = alias
-        -- ★修正: 一致した部分以降を切り出し、先頭の余分なスラッシュをすべて削除する（文字欠け防止）
-        local remainder = string.sub(normalizedFilePath, string.len(normalizedLocalPath) + 1)
-        relativePath = string.gsub(remainder, "^/+", "")
-        break
+    local matchedAlias = nil
+    local relativePath = nil
+    local cleanRemainder = nil
+
+    for localPath, alias in pairs(MAPPING) do
+        local normalizedLocalPath = localPath:gsub("\\", "/")
+        if string.sub(normalizedFilePath, 1, string.len(normalizedLocalPath)) == normalizedLocalPath then
+            matchedAlias = alias
+            local remainder = string.sub(normalizedFilePath, string.len(normalizedLocalPath) + 1)
+            -- 先頭のスラッシュを取り除く
+            cleanRemainder = string.gsub(remainder, "^/+", "")
+            relativePath = "video/" .. alias .. "/" .. cleanRemainder
+            break
+        end
     end
-end
 
--- マッピングに失敗した場合は、設定のヒントとして実際のパスを返す
-if not matchedAlias then
-    local safePath = filePath:gsub("\\", "\\\\")
-    mg.write('{"error":"Path not mapped in komorebi_resolver.lua", "detected_path":"' .. safePath .. '"}')
-    return
-end
-
--- URLエンコード処理関数
-local function urlencode(str)
-    if str then
-        str = string.gsub(str, "\n", "\r\n")
-        str = string.gsub(str, "([^%w %-%_%.%~])", function(c)
-            return string.format("%%%02X", string.byte(c))
-        end)
-        str = string.gsub(str, " ", "%%20")
+    if not matchedAlias then
+        local safePath = filePath:gsub("\\", "\\\\"):gsub('"', '\\"')
+        SafeResponseJson({error = 'Path not mapped', detected_path = safePath})
+        return
     end
-    return str
+
+    -- エンコード後、スラッシュ (%2F または %2f) を元の / に戻す
+    local encodedPath = mg.url_encode(cleanRemainder):gsub('%%2[fF]', '/')
+    local baseUrl = "/video/" .. matchedAlias .. "/" .. encodedPath
+
+    local thumbnailUrl = ""
+    -- ★修正: EdcbFindFilePlain の代わりに SafeFindFile を使用
+    local ff = SafeFindFile(filePath .. ".jpg")
+    if not ff and not WIN32 then
+        ff = SafeFindFile(filePath .. ".JPG")
+    end
+
+    if ff then
+        thumbnailUrl = baseUrl .. ".jpg"
+    else
+        local thumbHash = mg.md5(string.lower(filePath))
+        thumbnailUrl = "/video/thumbs/" .. thumbHash .. ".jpg"
+    end
+
+    -- 互換性確保: PathAppendがない場合のフォールバック
+    local fullPath = ""
+    if PathAppend then
+        fullPath = PathAppend(mg.document_root, relativePath)
+    else
+        fullPath = mg.document_root:gsub('['..DIR_SEPS..']*$', '') .. DIR_SEP .. relativePath:gsub('^['..DIR_SEPS..']*', '')
+    end
+
+    local chapterUrl = nil
+    for i, ext in ipairs({'.chapter', '.chapters.txt', '.chapter.txt'}) do
+        for j, dir in ipairs({'%1chapters', ''}) do
+            local fpath = fullPath:gsub('(['..DIR_SEPS..'])([^'..DIR_SEPS..']*)$', dir..'%1%2'):gsub('%.[0-9A-Za-z]+$', '') .. ext
+            -- ★修正: EdcbFindFilePlain の代わりに SafeFindFile を使用
+            if SafeFindFile(fpath) then
+                local docPath = NativeToDocumentPath and NativeToDocumentPath(fpath) or fpath:sub(mg.document_root:len() + 1)
+                chapterUrl = '/' .. mg.url_encode(docPath):gsub('%%2[fF]', '/')
+                break
+            end
+        end
+        if chapterUrl then break end
+    end
+
+    SafeResponseJson({
+        video_url = baseUrl,
+        thumbnail_url = thumbnailUrl,
+        chapter_url = baseUrl .. ".chapter.txt",
+        chapter_alt_url = chapterUrl or "",
+        tile_image_url = baseUrl .. ".tile.webp",
+        tile_json_url = baseUrl .. ".tile.json"
+    })
+end)
+
+if not ok then
+    mg.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json; charset=utf-8\r\n\r\n")
+    local safeErrMsg = tostring(processErr):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub('\n', ' '):gsub('\r', '')
+    mg.write('{"error":"Fatal Lua Error", "detail":"' .. safeErrMsg .. '"}')
 end
-
--- 相対パスをエンコードしてベースURLを構築
-local encodedPath = urlencode(relativePath)
-local baseUrl = "/" .. matchedAlias .. "/" .. encodedPath
-
--- JSONレスポンスの構築
-local json = string.format([[
-{
-    "video_url": "%s",
-    "thumbnail_url": "%s.jpg",
-    "chapter_url": "%s.chapter.txt",
-    "chapter_alt_url": "%s",
-    "tile_image_url": "%s.tile.webp",
-    "tile_json_url": "%s.tile.json"
-}
-]], baseUrl, baseUrl, baseUrl, string.gsub(baseUrl, "%.ts$", "") .. ".chapter.txt", baseUrl, baseUrl)
-
-mg.write(json)

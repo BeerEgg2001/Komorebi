@@ -39,6 +39,29 @@ object UrlBuilder {
     }
 
     /**
+     * EDCBのTCP直接通信(生ソケット)用に、設定欄の入力からホスト名/IPだけを取り出す。
+     *
+     * 以前は"^https?://"を剥がすだけで、スキーム付きかつポート込みのURL
+     * (例: "http://192.168.1.5:5510")を入力すると"192.168.1.5:5510"がそのまま
+     * ホスト名としてSocketに渡され、必ず接続に失敗していた。formatBaseUrl()と同様に
+     * HttpUrlでパースし、スキーム・ポート・パスを取り除いたホスト部分のみを返す。
+     */
+    fun extractBareHost(ip: String): String {
+        val cleanIp = ip.trim().removeSuffix("/")
+        val normalized = if (
+            cleanIp.startsWith("http://", ignoreCase = true) ||
+            cleanIp.startsWith("https://", ignoreCase = true)
+        ) {
+            cleanIp
+        } else {
+            "http://$cleanIp"
+        }
+        return normalized.toHttpUrlOrNull()?.host
+            ?: cleanIp.replace(Regex("^https?://", RegexOption.IGNORE_CASE), "")
+                .substringBefore("/").substringBefore(":")
+    }
+
+    /**
      * Mirakurun形式のStreamID
      */
     @OptIn(UnstableApi::class)
@@ -58,6 +81,16 @@ object UrlBuilder {
     fun getKonomiTvLogoUrl(ip: String, port: String, displayChannelId: String): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
         return "$baseUrl/api/channels/$displayChannelId/logo"
+    }
+
+    // ★ 追加: LiveJikkyoManagerが実況セッションURL取得のために素朴な"${ip}:${port}/..."
+    // 文字列連結を直書きしていたため、スキーム無しIPを入力するとRequest.Builder.url()が
+    // IllegalArgumentExceptionを投げ(catchで握り潰され実況コメントが無言で無効化される)、
+    // サブディレクトリ付きURLでは壊れたパスになっていた。他のKonomiTV用URL生成と同じく
+    // formatBaseUrl()に統一する。
+    fun getKonomiTvJikkyoWatchSessionUrl(ip: String, port: String, displayChannelId: String): String {
+        val baseUrl = formatBaseUrl(ip, port, "https")
+        return "$baseUrl/api/channels/$displayChannelId/jikkyo"
     }
 
     // --- サムネイル関連 ---
@@ -141,19 +174,11 @@ object UrlBuilder {
         return "$baseUrl/api/videos/$videoId/jikkyo"
     }
 
-    /**
-     * EDCBの録画フォルダにある静的サムネイル (録画ファイル名.ts.jpg) を直接取得するURL
-     */
-    fun getEdcbDirectThumbnailUrl(ip: String, port: String, recFilePath: String): String {
-        val baseUrl = formatBaseUrl(ip, port, "http")
-        val relativePath = recFilePath
-            .replace(Regex("^[a-zA-Z]:\\\\"), "")
-            .replace("\\", "/")
-
-        // 録画ファイルの末尾に .jpg を足すことで "hoge.ts.jpg" を指定
-        val encodedPath = android.net.Uri.encode(relativePath, "/")
-        return "$baseUrl/rec/$encodedPath.jpg"
-    }
+    // ★ 削除: getEdcbDirectThumbnailUrl() は呼び出し元が存在しないデッドコードだった。
+    // ドライブレター("C:\")しか剥がさずLinuxパス("/mnt/rec/...")やUNCパスでは
+    // 壊れたURLになるうえ、"/rec/"という固定ルート自体もEDCB本体に裏付けが無く
+    // (EMWUI側の設定依存)、将来誤って使われると確実に壊れるため削除した。
+    // サムネイル取得は実績のあるresolver.lua経由(thumbnail_url)を使うこと。
 
     fun getEpgStationLogoUrl(ip: String, port: String, channelId: Long): String =
         "${formatBaseUrl(ip, port, "http")}/api/channels/$channelId/logo"

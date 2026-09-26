@@ -199,14 +199,21 @@ class EdcbApi(private val ip: String, private val port: Int) {
                 requestBuffer.putLong(serviceIdLong)
             }
 
-            // ★ 高速化用: 取得期間を指定された場合、FILETIMEに変換してリクエストに付与
+            // ★ 修正: EDCBの日付はOSのタイムゾーンに関わらず常にJSTの壁時計表記のまま扱われ、
+            // FILETIME化する際もタイムゾーン変換なしにその数値をそのままUTCとみなう設計になっている
+            // (KonomiTV本家のCtrlCmdUtil.pyがSYSTEMTIMEをタイムゾーン変換せずJSTのままエンコードし、
+            // UNIX_EPOCHを「1970/1/1 09:00 JST」と定義してJSTの壁時計表記をUTCエポックとみなしている
+            // ことからも裏付けられる)。以前は atZone(JST).toInstant() で真のUTC時刻(9時間前)に
+            // 変換していたため、EDCB側の座標系で常に9時間手前の時刻を送ってしまい、起動直後の
+            // クイックロード(過去1時間〜未来24時間のつもり)が実質「過去10時間〜未来15時間」に
+            // ずれていた。壁時計の数値をそのままUTCとみなしてFILETIME化するよう修正する。
             val startFileTime = if (startTime != null) {
-                val startMs = startTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                val startMs = startTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
                 EdcbByteUtils.dateTimeToFileTime(startMs)
             } else 0L
 
             val endFileTime = if (endTime != null) {
-                val endMs = endTime.atZone(java.time.ZoneId.of("Asia/Tokyo")).toInstant().toEpochMilli()
+                val endMs = endTime.toInstant(java.time.ZoneOffset.UTC).toEpochMilli()
                 EdcbByteUtils.dateTimeToFileTime(endMs)
             } else Long.MAX_VALUE
 
@@ -336,9 +343,15 @@ class EdcbApi(private val ip: String, private val port: Int) {
             val payload =
                 ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(CMD_VER.toShort())
                     .array()
+            // ★ 修正: sendCommand()がnullを返すのはTCP接続失敗またはEDCB側のエラー応答時のみで、
+            // 「録画0件」という正常なケースはCMD_SUCCESS付きの空配列として読み取れるため
+            // ここには到達しない(KonomiTV本家のCtrlCmdUtil.pyでも同様の呼び出し元で
+            // 通信失敗を成功扱いの空リストにせず、明確に失敗として扱っている)。
+            // 以前はResult.success(emptyList())にフォールバックしていたため、EDCB停止時や
+            // 接続設定ミス時に「録画0件」の一覧が表示され、30秒キャッシュされてしまっていた。
             val res =
-                tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload) ?: return Result.success(
-                    emptyList()
+                tcpClient.sendCommand(CMD_EPG_SRV_ENUM_RECINFO2, payload) ?: return Result.failure(
+                    Exception("EDCBとの通信に失敗しました。EDCBが起動しているか、接続設定(IP/ポート)を確認してください。")
                 )
             EdcbByteUtils.readUshort(res)
 

@@ -8,6 +8,7 @@ import com.beeregg2001.komorebi.data.api.EpgStationApi
 import com.beeregg2001.komorebi.data.jikkyo.JikkyoChannelResolver
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -278,10 +279,18 @@ class EpgStationRecordRepository @Inject constructor(
             "hls" -> api.startRecordedHls(videoFileId, mode, offsetSeconds.toInt()).also {
                 streamId = it.streamId
             }.let { UrlBuilder.getEpgStationHlsPlaylistUrl(ip, port, it.streamId) }
-            "mp4", "webm" -> UrlBuilder.getEpgStationRecordedStreamUrl(
-                ip, port, videoFileId, format, mode, offsetSeconds
-            )
-            else -> UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            // ★ 修正: 以前はHLS以外へ切り替えてもstreamIdがクリアされず、direct/mp4/webm
+            // 再生中もkeepAlive()が4秒おきに古いHLSストリームへPUT /keepを送り続けていた。
+            // サーバーは404を返すだけで実害はないが、古いHLSエンコードプロセスがサーバー上で
+            // 不要に延命され続けるため、切り替え時に明示的にクリアする。
+            "mp4", "webm" -> {
+                streamId = null
+                UrlBuilder.getEpgStationRecordedStreamUrl(ip, port, videoFileId, format, mode, offsetSeconds)
+            }
+            else -> {
+                streamId = null
+                UrlBuilder.getEpgStationVideoDirectUrl(ip, port, videoFileId)
+            }
         }
     }
 
@@ -462,28 +471,68 @@ class EpgStationRecordRepository @Inject constructor(
     /** 開始済み HLS ストリームを維持する。 */
     @UnstableApi
     override suspend fun keepAlive(videoId: Int, quality: String, sessionId: String) {
-        streamId?.let { api.keepStream(it) }
+        val id = streamId ?: return
+        // Response<Unit>は4xxでも例外にならないため、認証による拒否だけは明示的にログへ残す
+        // (401のままだとサーバーの15秒停止タイマーがリセットされず配信が止まる)。
+        if (api.keepStream(id).code() == 401) {
+            Log.w(TAG, EpgStationDataMapper.AUTH_REQUIRED_MESSAGE.format("録画HLSストリームの維持"))
+        }
     }
 
     override suspend fun getTiledThumbnailUrl(videoId: Int): String? = null
 
-    /** EPGStation の録画設定から利用可能な画質を生成する。 */
+    /**
+     * EPGStation の録画設定から利用可能な画質を生成する。
+     *
+     * ★ 修正: 以前はts側/encoded側の両方を回して"$format:$index"を画質値にしていたため、
+     * 例えば"ts: xxx"と"encoded: xxx"が両方とも値"mp4:0"になり衝突していた。しかも
+     * サーバー側(stuayu/EPGStation StreamApiModel.ts)は再生対象のvideoFileId自体から
+     * kind(ts/encoded)を自動判定する設計で、クライアントが明示的に選べる余地が無い。
+     * このメソッドは`RecordProvider`インターフェース上video非依存(video単位の呼び出しでは
+     * ない)のため、実際に再生されるファイルのtypeをここで知ることはできないが、
+     * resolveVideoFileId()が常にts側のファイルを優先する実装になっているため、
+     * ts側の設定のみを画質候補として出す(サーバーの実際の挙動と一致する)。
+     * encoded側だけの録画(ts側ファイルが既に削除済み)では選択肢が実態と合わない
+     * 可能性が残るが、これは元々index衝突で正しく動いていなかった経路であり、
+     * 「ラベルが実態と食い違う縮退」から「選択肢自体が少なくなる」に変わるだけで
+     * 悪化はしない。根本対応にはvideo単位でkindを判定できるAPI設計変更が必要。
+     */
     override suspend fun getStreamQualities(): List<StreamQuality> {
         qualities?.let { return it }
         val result = mutableListOf(StreamQuality("そのまま再生 (無変換)", "direct", true))
         try {
-            val config = api.getConfig().streamConfig?.recorded
-            listOf("ts" to config?.ts, "encoded" to config?.encoded).forEach { (type, formatConfig) ->
+            val esConfig = api.getConfig()
+            // ★ 修正: サーバーは ?mode=N を配信プリセット(streamProfiles)から解決し、新形式の設定が
+            // あれば旧形式(streamConfig)より優先する(stuayu/EPGStation StreamProfileManageModel.
+            // getRecordedProfiles())。streamProfiles があれば常に優先し、返さない古いサーバーでだけ
+            // streamConfig を使う。以前は streamConfig しか見ておらず、新形式だけで設定したサーバーでは
+            // 「そのまま再生」しか選べなかった。
+            val fromProfiles = EpgStationDataMapper.toProfileQualities(
+                esConfig.streamProfiles?.recorded?.ts,
+                listOf("mp4", "hls", "webm")
+            )
+            if (fromProfiles.isNotEmpty()) {
+                result += fromProfiles
+            } else {
+                val config = esConfig.streamConfig?.recorded?.ts
                 listOf(
-                    "mp4" to formatConfig?.mp4,
-                    "hls" to formatConfig?.hls,
-                    "webm" to formatConfig?.webm
+                    "mp4" to config?.mp4,
+                    "hls" to config?.hls,
+                    "webm" to config?.webm
                 ).forEach { (format, labels) ->
+                    // ★ 修正: ラベルをプリセット名のみにしていたため、mp4/hls/webmで
+                    // 同名プリセット(例: "720p")を定義している構成(config.ymlでは一般的)だと
+                    // UIに同じラベルが複数並び、どのコンテナか区別できなくなっていた。
+                    // コンテナ名を接頭辞として復元する(値自体は元々コンテナ別なので
+                    // 衝突しない。ts/encoded間の値衝突を解消した際の副作用のみ修正)。
                     labels.orEmpty().forEachIndexed { index, label ->
-                        result += StreamQuality("$type: $label", "$format:$index")
+                        result += StreamQuality("$format: $label", "$format:$index")
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            // 取り消し時は「直接再生のみ」の一覧をキャッシュに固定しないよう、そのまま伝える
+            throw e
         } catch (_: Exception) {
             // 設定取得に失敗しても直接再生は利用できる。
         }

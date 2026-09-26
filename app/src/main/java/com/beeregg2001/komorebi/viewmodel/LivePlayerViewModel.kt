@@ -25,6 +25,7 @@ import androidx.media3.extractor.ts.TsExtractor
 import com.beeregg2001.komorebi.NativeLib
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.common.UrlBuilder
+import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.BackendConfig
 import com.beeregg2001.komorebi.data.model.Channel
@@ -53,6 +54,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -151,6 +153,14 @@ class LivePlayerViewModel @Inject constructor(
     private val _isQualitiesLoaded = MutableStateFlow(false)
     val isQualitiesLoaded: StateFlow<Boolean> = _isQualitiesLoaded.asStateFlow()
 
+    // ★ 追加: 現在の画質一覧を読み込んだ対象(ストリームソース, EDCB直接再生か)。
+    // 画面側はプレイヤー起動直後に初期値のKONOMITVで一度取得を始め、ソース確定後に取り直す。
+    // どのソース向けの一覧かを区別できないと、KonomiTV用の一覧で保存済み画質を照合して
+    // 「一覧に無い」と誤判定し、EPGStation等の画質設定を先頭の画質で上書きしてしまっていた。
+    private val _loadedQualitiesKey = MutableStateFlow<Pair<StreamSource, Boolean>?>(null)
+    val loadedQualitiesKey: StateFlow<Pair<StreamSource, Boolean>?> = _loadedQualitiesKey.asStateFlow()
+    private var qualityFetchJob: Job? = null
+
     private val _currentLogoUrl = MutableStateFlow<String>("")
     val currentLogoUrl: StateFlow<String> = _currentLogoUrl.asStateFlow()
 
@@ -171,6 +181,14 @@ class LivePlayerViewModel @Inject constructor(
 
     private var mainPlaybackJob: Job? = null
     private var dualPlaybackJob: Job? = null
+
+    // ★ 追加: EPGStationのライブHLSはサーバー側が15秒の停止タイマーを持ち、
+    // PUT /api/streams/{streamId}/keepでしかリセットされない(stuayu/EPGStation
+    // StreamBaseModel.ts)。以前はkeepを一切送っていなかったため、ライブHLSは
+    // 再生開始から約15秒で必ず停止していた。録画側(VideoPlayerViewModel.
+    // startStreamMaintenance())と同じ4秒間隔のジョブをライブ側にも用意する。
+    private var mainLiveKeepAliveJob: Job? = null
+    private var dualLiveKeepAliveJob: Job? = null
 
     private val mainPlaybackMutex = Mutex()
     private val dualPlaybackMutex = Mutex()
@@ -218,8 +236,11 @@ class LivePlayerViewModel @Inject constructor(
     }
 
     fun fetchAvailableQualities(source: StreamSource, isEdcbDirect: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _isQualitiesLoaded.value = false
+        // 前回の取得(別ソース向け)が後から完了して一覧を上書きしないよう、先に取り消す
+        qualityFetchJob?.cancel()
+        _isQualitiesLoaded.value = false
+        _loadedQualitiesKey.value = null
+        qualityFetchJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (source == StreamSource.EDCB) {
                     if (isEdcbDirect) {
@@ -250,7 +271,10 @@ class LivePlayerViewModel @Inject constructor(
                             // キャッシュがあれば即座に表示し、再生開始をブロックしない
                             // (beta6までの挙動)。裏で最新値を取得し、取得できれば差し替える。
                             _availableQualities.value = cached
-                            viewModelScope.launch(Dispatchers.IO) {
+                            // ★ 修正: viewModelScope直下で起動すると、ソース切替で取得ジョブを
+                            // 取り消しても裏更新だけが生き残り、切替後のソースの画質一覧を
+                            // EDCBの一覧で上書きしてしまう。取得ジョブの子として起動し、一緒に取り消す。
+                            launch(Dispatchers.IO) {
                                 try {
                                     val fetched = recordProvider.getStreamQualities()
                                     if (fetched.isNotEmpty()) {
@@ -261,6 +285,8 @@ class LivePlayerViewModel @Inject constructor(
                                         _availableQualities.value = fetched
                                     }
                                     // 空の場合は取得失敗とみなし、表示済みのキャッシュを維持する。
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Background quality refresh failed. Keeping cache.", e)
                                 }
@@ -279,6 +305,8 @@ class LivePlayerViewModel @Inject constructor(
                                 } else {
                                     useDefaultQuality()
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 Log.e(TAG, "Initial quality fetch failed.", e)
                                 useDefaultQuality()
@@ -286,7 +314,15 @@ class LivePlayerViewModel @Inject constructor(
                         }
                     }
                 } else if (source == StreamSource.KONOMITV) {
-                    _availableQualities.value = StreamQuality.DEFAULT_QUALITIES
+                    // ★ 追加: Original画質(ライブ)はKonomiTVのmasterブランチでのみ対応しており、
+                    // 正式リリース版では422で拒否される。しかもサーバーのバージョン文字列だけでは
+                    // masterと直近の正式リリースを区別できないため、実際に再生を試みて拒否された
+                    // ことが確認済み(KonomiOriginalQualityGate)であれば選択肢自体から除外する。
+                    _availableQualities.value = if (KonomiOriginalQualityGate.isUnsupported()) {
+                        StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
+                    } else {
+                        StreamQuality.DEFAULT_QUALITIES
+                    }
                 } else if (source == StreamSource.EPGSTATION) {
                     _availableQualities.value =
                         epgStationLiveRepository.getLiveStreamQualities().ifEmpty {
@@ -312,6 +348,8 @@ class LivePlayerViewModel @Inject constructor(
                         )
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load stream qualities", e)
                 val currentLive = settingsRepository.liveQuality.first()
@@ -323,7 +361,11 @@ class LivePlayerViewModel @Inject constructor(
                     )
                 )
             } finally {
-                _isQualitiesLoaded.value = true
+                // 取り消された(別ソース向けの取得に置き換えられた)場合は完了扱いにしない
+                if (isActive) {
+                    _loadedQualitiesKey.value = source to isEdcbDirect
+                    _isQualitiesLoaded.value = true
+                }
             }
         }
     }
@@ -395,6 +437,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopMainPlaybackSafely() {
         mainEventSource?.cancel(); mainEventSource = null
+        mainLiveKeepAliveJob?.cancel(); mainLiveKeepAliveJob = null
         mainCaptionDecoder.reset(_mainSubtitleLanguageId.value)
         _mainSubtitleLanguages.value = emptyList()
 
@@ -409,6 +452,7 @@ class LivePlayerViewModel @Inject constructor(
 
     private fun stopDualPlaybackSafely() {
         dualEventSource?.cancel(); dualEventSource = null
+        dualLiveKeepAliveJob?.cancel(); dualLiveKeepAliveJob = null
         dualCaptionDecoder.reset(_dualSubtitleLanguageId.value)
         _dualSubtitleLanguages.value = emptyList()
 
@@ -456,6 +500,39 @@ class LivePlayerViewModel @Inject constructor(
                 _mainSseDetail.value = "セグメント生成待機中... ($mainAutoRetryCount/5)"
                 delay(2500); _mainPlayer.value?.prepare(); _mainPlayer.value?.play()
                 return@launch
+            }
+
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = mainCurrentSource == StreamSource.KONOMITV &&
+                mainCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && mainCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    mainCurrentQuality = fallback
+                    mainAutoRetryCount = 0
+                    _mainSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopMainPlaybackSafely()
+                    playMainChannel(
+                        uiContext,
+                        mainCurrentChannel!!,
+                        mainCurrentSource,
+                        mainIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
             }
 
             val errorMsg = analyzePlayerError(error)
@@ -515,6 +592,39 @@ class LivePlayerViewModel @Inject constructor(
                     "セグメント生成待機中... ($dualAutoRetryCount/5)"
                 delay(2500); _dualPlayer.value?.prepare(); _dualPlayer.value?.play()
                 return@launch
+            }
+
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
+            // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
+            // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            val isKonomiOriginalRejected = dualCurrentSource == StreamSource.KONOMITV &&
+                dualCurrentQuality?.value == "original" &&
+                cause is HttpDataSource.InvalidResponseCodeException &&
+                cause.responseCode == 422
+            if (isKonomiOriginalRejected && dualCurrentChannel != null) {
+                Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
+                KonomiOriginalQualityGate.markUnsupported()
+                val remaining = _availableQualities.value.filterNot { it.value == "original" }
+                _availableQualities.value = remaining
+                val fallback = remaining.firstOrNull {
+                    it.value.contains("720") || it.label.contains("720")
+                } ?: remaining.firstOrNull()
+                if (fallback != null) {
+                    saveLiveQuality(fallback.value)
+                    dualCurrentQuality = fallback
+                    dualAutoRetryCount = 0
+                    _dualSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
+                    stopDualPlaybackSafely()
+                    playDualChannel(
+                        uiContext,
+                        dualCurrentChannel!!,
+                        dualCurrentSource,
+                        dualIsEdcbDirect,
+                        fallback,
+                        true
+                    )
+                    return@launch
+                }
             }
 
             val errorMsg = analyzePlayerError(error)
@@ -627,6 +737,23 @@ class LivePlayerViewModel @Inject constructor(
                             cfAccessHeaders
                         )
                         liveJikkyoManager.startJikkyo(channel, source)
+
+                        // ★ 追加: EPGStationのライブHLS再生中のみkeep-aliveジョブを回す。
+                        // stopMainPlaybackSafely()で必ずcancelされるため、チャンネル切替・
+                        // 画質切替・再生終了時に取り残される心配はない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            mainLiveKeepAliveJob?.cancel()
+                            mainLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 0)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep main live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -726,6 +853,23 @@ class LivePlayerViewModel @Inject constructor(
                             ::decodeAndEmitDualSubtitle,
                             cfAccessHeaders
                         )
+
+                        // ★ 追加: メイン側と同じ理由でサブ側にもkeep-aliveジョブを回す。
+                        // streamNumber=1を使うため、メイン(0)と同時にEPGStation HLSを
+                        // 選んでもstreamIdが競合しない。
+                        if (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:")) {
+                            dualLiveKeepAliveJob?.cancel()
+                            dualLiveKeepAliveJob = viewModelScope.launch(Dispatchers.IO) {
+                                while (isActive) {
+                                    delay(4000L)
+                                    try {
+                                        epgStationLiveRepository.keepLiveStream(streamNumber = 1)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to keep dual live HLS stream alive", e)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -1047,9 +1191,19 @@ class LivePlayerViewModel @Inject constructor(
                     if (t is java.io.IOException && t.message == "Canceled") return
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: 以前はresponse.codeをそのままerrorCodeに入れていたため、
+                        // analyzePlayerError()がERROR_CODE_UNSPECIFIED限定でerror.messageを
+                        // 見るよう絞り込んだ後、404/422/503等の正当なHTTPステータスコードが
+                        // errorCodeName()の「invalid error code」表記に埋もれてしまっていた。
+                        // 日本語メッセージをここで組み立て、errorCodeはERROR_CODE_UNSPECIFIEDに
+                        // 揃える。
                         if (response != null && response.code !in 200..299) handleMainError(
                             uiContext,
-                            PlaybackException("KonomiTV HTTP Error", null, response.code)
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
                         )
                     }
                 }
@@ -1122,9 +1276,14 @@ class LivePlayerViewModel @Inject constructor(
                     if (t is java.io.IOException && t.message == "Canceled") return
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
+                        // ★ 修正: メイン側と同じ理由(httpStatusErrorMessage定義部のコメント参照)。
                         if (response != null && response.code !in 200..299) handleDualError(
                             uiContext,
-                            PlaybackException("HTTP Error", null, response.code)
+                            PlaybackException(
+                                httpStatusErrorMessage(response.code),
+                                null,
+                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                            )
                         )
                     }
                 }
@@ -1217,15 +1376,20 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
+    // ★ 追加: SSE(startMainSse/startDualSse)のonFailureでもHTTPステータスコードから
+    // 同じ文言を組み立てたいため、analyzePlayerErrorのHTTP分岐から切り出した。
+    private fun httpStatusErrorMessage(code: Int): String = when (code) {
+        404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
+        503 -> AppStrings.ERR_TUNER_FULL
+        422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
+        else -> String.format(AppStrings.ERR_SERVER_HTTP, code)
+    }
+
     private fun analyzePlayerError(error: PlaybackException): String {
         val cause = error.cause
         return when {
-            cause is HttpDataSource.InvalidResponseCodeException -> when (cause.responseCode) {
-                404 -> AppStrings.ERR_CHANNEL_NOT_FOUND
-                503 -> AppStrings.ERR_TUNER_FULL
-                422 -> "サーバーエラー (HTTP 422)\nCSRFトークンの不一致"
-                else -> String.format(AppStrings.ERR_SERVER_HTTP, cause.responseCode)
-            }
+            cause is HttpDataSource.InvalidResponseCodeException ->
+                httpStatusErrorMessage(cause.responseCode)
 
             cause is HttpDataSource.HttpDataSourceException -> when (cause.cause) {
                 is java.net.ConnectException -> AppStrings.ERR_CONNECTION_REFUSED
@@ -1234,6 +1398,18 @@ class LivePlayerViewModel @Inject constructor(
             }
 
             cause is IOException -> String.format(AppStrings.ERR_DATA_READ, cause.message)
+            // ★ 修正: DtvProviderProxy.getLiveStreamUrl()がEDCB側の具体的な失敗理由
+            // (「EDCBの接続設定を確認してください」等)を例外として伝搬するようになったが、
+            // 従来はここでerror.messageを見ずに一律「不明なエラー」に潰していたため、
+            // 原因が特定できるメッセージがユーザーに届いていなかった。
+            // ★ 再修正: 当初はerror.messageの有無だけで判定していたが、これだとExoPlayerが
+            // 投げる本物のPlaybackException(デコーダ初期化失敗等、messageが英語の内部
+            // 文字列で非nullなことが多い)まで拾ってしまい、「不明なエラー」という日本語の
+            // 汎用メッセージが英語の内部文字列に置き換わる退行があった。playMainChannel/
+            // playDualChannelのcatchで自前組み立てた例外はPlaybackException(...,
+            // ERROR_CODE_UNSPECIFIED)で包んでいるため、このコードに限定して判定する。
+            error.errorCode == PlaybackException.ERROR_CODE_UNSPECIFIED && !error.message.isNullOrBlank() ->
+                error.message!!
             else -> "${AppStrings.ERR_UNKNOWN}\n(${error.errorCodeName})"
         }
     }

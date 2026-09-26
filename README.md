@@ -1,13 +1,57 @@
 # Komorebi
 
-**Komorebi** は、KonomiTV、 EDCB バックエンド、Mirakurun（オプション）に対応した、Android TV 向けの高機能視聴クライアントアプリです。
+**Komorebi** は、KonomiTV、EDCB、EPGStation バックエンド、Mirakurun（オプション）に対応した、Android TV 向けの高機能視聴クライアントアプリです。
 モダンな UI と直感的なリモコン操作、市販のハイエンドレコーダーを凌駕する高度なストリーミング制御を組み合わせ、これまでにない快適なテレビ視聴体験を提供します。
 
 ---
 
+## 📥 インストール方法
+
+Komorebiは Google Play ストア等のアプリストアでは配布していません。GitHubの [Releases](https://github.com/BeerEgg2001/Komorebi/releases) ページからAPKファイルを直接ダウンロードし、手動でインストールする形になります。
+初回インストール後は、アプリ起動時の自動チェックに加え、設定画面（一般設定 → システム設定 → 「アップデートを確認する」）からも手動でバージョンアップを確認・適用できるため、毎回この手順を踏む必要はありません。
+
+### 1. 「提供元不明のアプリ」のインストールを許可する
+
+初期状態では、ストア以外からのアプリインストールはブロックされています。事前に端末側で許可設定を行ってください。
+
+* **Fire TV**: 設定 → マイFire TV（Deviceの場合もあり）→ 開発者オプション → 「提供元不明のアプリ」から、インストールに使うアプリ（後述のDownloaderなど）を「オン」にする
+* **Android TV / Google TV**: 設定 → アプリ → 特別なアプリアクセス → 不明なアプリのインストール → インストールに使うアプリを選択し「許可」する
+
+### 2. APKをダウンロードしてインストールする
+
+#### 方法A: Downloaderを使う（推奨・リモコン操作だけで完結）
+
+PCを使わず、テレビ本体だけでインストールできる方法です。
+
+1. Fire TV/Android TVのアプリストアで「**Downloader**」（AFTVnews製）を検索してインストールする
+2. Downloaderを起動し、URL入力欄に以下を入力する
+
+   ```
+   https://github.com/BeerEgg2001/Komorebi/releases/latest/download/Komorebi-universal-release.apk
+   ```
+
+   このURLは常に最新のStable版（Universal版）を指すため、毎回リリースページでバージョンを確認する必要はありません。
+   端末のCPUアーキテクチャに絞った軽量版（`armeabi-v7a` / `arm64-v8a`）を使いたい場合は、[Releasesページ](https://github.com/BeerEgg2001/Komorebi/releases)から該当のAPKを直接ダウンロードしてください。
+3. ダウンロード完了後、画面の指示に従ってインストールする
+
+#### 方法B: PCからadbでインストールする
+
+PC操作に抵抗がない方向けの方法です。
+
+1. TV端末側で「ネットワークADBデバッグ」を有効にする
+2. [Releasesページ](https://github.com/BeerEgg2001/Komorebi/releases)からお使いの端末に合ったAPKをPCへダウンロードする
+3. PCで `adb connect <TV端末のIPアドレス>` を実行して接続し、続けて `adb install <ダウンロードしたAPKのパス>` を実行する
+
+> **配布ファイルについて**: 各リリースには、あらゆる端末で動作する **Universal版**（サイズ大）に加え、`armeabi-v7a` / `arm64-v8a` 向けの軽量版を用意しています。ファイルライブラリ（SMB）機能で使用している `libVLC` のサイズが大きく、低スペック機ではUniversal版のインストールに失敗する場合があるための措置です。動作に不安がある場合は、端末のCPUアーキテクチャに合った軽量版のご利用をおすすめします。
+
+---
+
 ## ⚠️ 【重要】初回セットアップとバックエンド環境について
-* **初回セットアップ**: インストール後の初回起動時は、**KonomiTV** もしくは **EDCB** および **Mirakurun（オプション）** のサーバー設定が必要です。画面の指示に従ってIPアドレスやポート番号を入力してください。バックエンドにMirakurunを使用していない場合は、MirakurunのIPアドレスとポート番号の入力は不要です。
-* **EDCBをご利用の方へ**: 録画番組への「直接アクセス」や「トランスコード視聴」を利用するためには、連携スクリプトの配置が必要です。各リリースに添付されている `Komorebi Configurator`（Windows用）または `setup.sh`（Linux用）を実行し、最新の `resolver.lua` を設定してください。
+* **初回セットアップ**: インストール後の初回起動時は、**KonomiTV**・**EDCB**・**EPGStation** のいずれか、および **Mirakurun（オプション）** のサーバー設定が必要です。画面の指示に従ってIPアドレスやポート番号を入力してください。バックエンドにMirakurunを使用していない場合は、MirakurunのIPアドレスとポート番号の入力は不要です。
+* **EDCBをご利用の方へ**: ライブ視聴・録画視聴のいずれについても、連携スクリプトの配置が必要です。各リリースに添付されている `Komorebi Configurator`（Windows用）または `setup.sh`（Linux用）を実行し、最新の `resolver.lua` を設定してください。さらに、録画番組への「直接アクセス」再生でシーンサーチのサムネイル画像を表示する場合は、同梱の `Komorebi Thumbnailer` によるサムネイル生成も必要です。
+* **EPGStationをご利用の方へ**: [stuayu氏によるFork版EPGStation](https://github.com/stuayu/EPGStation) での動作を確認しています。本家EPGStationでの動作は未確認です。
+  * Komorebiは EPGStation のログイン認証に対応していません。EPGStation の `config.yml` で `auth.enabled: true` にしていると、HLS再生が約15秒で停止し、予約・自動予約条件の追加/変更/削除も失敗します。Komorebiから利用する場合は `auth.enabled` を設定しない（既定で無効）か、`false` にしてください。
+* **Cloudflare Zero Trust（Cloudflare Access）配下の環境をご利用の方へ**: 接続設定画面からサービストークン（Client ID / Client Secret）を入力することで、各バックエンドへ接続できます。
 
 ---
 
@@ -22,6 +66,7 @@
 * Mirakurun（4.0.0-beta.16）＋KonomiTV v0.13.0 beta
 * EDCB-Wine（xtne6f版EDCB＋EMWUI）等の Linux/Windows EDCB 環境
 * LinuxネイティブEDCB（xtne6f版EDCB 260331リリース＋EMWUI）環境
+* EPGStation（stuayu氏によるFork版）環境
 
 ---
 
@@ -45,7 +90,8 @@
 
 * **アプリ内PiP（ピクチャー・イン・ピクチャー）**: ライブ視聴中や録画再生中にリモコンの「戻るキー」を長押しすると小窓表示になり、番組を見ながら録画の検索や番組表の確認などのマルチタスクが可能です。
 * **L字クロップ機能**: ニュース番組等のL字画面（情報テロップ）に合わせて、映像だけをクロップして画面いっぱいに拡大表示できます。
-* **多様なバックエンド対応**: KonomiTV、Mirakurunに加え、EDCB（EMWUI経由のトランスコード再生・二画面同時視聴）にも完全対応しています。
+* **多様なバックエンド対応**: KonomiTV、Mirakurunに加え、EDCB（EMWUI経由のトランスコード再生・二画面同時視聴）、EPGStation（stuayu Fork版）にも対応しています。
+* **オリジナル画質での視聴（KonomiTV）**: KonomiTV最新masterバックエンドと組み合わせることで、トランスコードを介さないオリジナル画質（MPEG-2 TS直接再生）でのライブ視聴が可能です。
 * **サブチャンネル表示切替**: 設定からサブチャンネルの表示・非表示を簡単に切り替え可能です。
 
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/dce9c7be-019d-485f-91be-dae8223b7cce" />
@@ -54,6 +100,7 @@
 
 * **直感的なザッピングUI**: 視聴を止めずに「下キー」でチャンネルのミニリストを展開し、「左右キー」でシームレスにチャンネル切り替えが可能です。「上キー」からは主/副音声、字幕、ストリーミング画質の変更が行えるサブメニューへアクセスできます。
 * **実況コメントのリアルタイム同期**: KonomiTV等のAPIと連携し、専用エンジンでテレビ画面上にコメントを滑らかに描画します。
+* **ARIB字幕のネイティブ描画**: `libaribcaption` ベースのネイティブ実装（JNI経由）を採用し、ライブ視聴・二画面視聴で安定した字幕表示を実現しています。
 * **マニアックな信号情報表示**: 特定のキー操作で、現在の映像解像度、フレームレート、音声フォーマット等を画面左上に表示する「REGZA風オーバーレイ」を搭載しています。
 
 ### 🎬 ビデオタブ & 録画視聴画面 (Video Player)
@@ -61,8 +108,9 @@
 
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/b339b4af-1d9c-41ed-8f39-95f76c8d9ecf" />
 
-* **自動CMチャプタースキップ**: TvtPlayのチャプターファイルやKonomiTVのメタデータに含まれる「CM区間」を自動判定し、本編のみを連続再生します。
-* **EDCB 直接アクセス & トランスコード視聴**: EDCB環境において、`api/xcode` を利用した柔軟な画質でのトランスコード再生や、シークが高速になる公開フォルダへの「直接アクセス」をサポートします。
+* **自動CMチャプタースキップ**: TvtPlay形式・Amatsukaze形式のチャプターファイルやKonomiTVのメタデータに含まれる「CM区間」を自動判定し、本編のみを連続再生します。
+* **EDCB 直接アクセス & トランスコード視聴**: EDCB環境において、`api/xcode` を利用した柔軟な画質でのトランスコード再生や、シークが高速になる公開フォルダへの「直接アクセス」（オリジナル画質でのTS直接再生）をサポートします。
+* **EPGStation 録画視聴**: EPGStation（stuayu Fork版）環境の録画番組も、他バックエンドと同様にシームレスに視聴できます。
 
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/66341a78-96a4-49bd-9977-9d59853920fd" />
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/af6bbb3e-e210-49e7-9f6f-556e4e6d50c1" />
@@ -96,6 +144,7 @@ NASや共有フォルダ上のメディアファイルを直接再生できる�
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/207c969a-5fbf-4cad-9cc2-74cbf2291a9a" />
 
 * **高速・なめらかな描画エンジン**: Canvasを用いた独自の描画エンジンを採用し、数日分・数十チャンネルの巨大なグリッドでもカクつくことなくシームレスにスクロール可能です。
+* **表示カスタマイズ**: 設定から表示チャンネル数、表示時間幅、文字サイズを変更でき、お好みの見やすさに調整できます。
 * **UIブラッシュアップ**: 左側の時間軸（時間バー）の背景色がテーマのベースカラーに馴染む合成色で描画され、ライトモードや時間連動テーマ適用時でもUIが美しく調和します。
 
 <img width="960" height="540" alt="Image" src="https://github.com/user-attachments/assets/1e77cc0b-1715-4051-814b-facef6fdb9cf" />

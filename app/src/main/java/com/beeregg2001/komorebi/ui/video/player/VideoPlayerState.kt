@@ -131,8 +131,25 @@ class VideoPlayerState {
                         lCropZoom = (lCropZoom - 5f).coerceAtLeast(100f); return true
                     }
 
-                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER, NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
-                        lCropMode = LCropMode.MENU; onSubMenuToggle(true); return true
+                    NativeKeyEvent.KEYCODE_DPAD_CENTER, NativeKeyEvent.KEYCODE_ENTER -> {
+                        // ★ 修正: 以前のリファクタリング(56a872d)で誤って戻るキーの分岐と統合され、
+                        // 決定キーを押すとダイレクト調整を抜けてクラシックUIのサブメニューが開いて
+                        // しまう回帰バグが混入していた。オーバーレイの案内文言(「決定ボタン: 倍率切り替え」)
+                        // 通り、決定キーは調整モードを維持したまま倍率をプリセット値でサイクルさせる。
+                        lCropZoom = when {
+                            lCropZoom < 125f -> 125f
+                            lCropZoom < 150f -> 150f
+                            lCropZoom < 175f -> 175f
+                            lCropZoom < 200f -> 200f
+                            else -> 100f
+                        }
+                        return true
+                    }
+
+                    NativeKeyEvent.KEYCODE_BACK, NativeKeyEvent.KEYCODE_ESCAPE -> {
+                        // ★ 修正: メニューへ戻るだけでよく、クラシックUIのサブメニュー(isSubMenuOpen)を
+                        // 開く必要はない(VideoLCropOverlay自身がlCropModeを見て描画を切り替える)。
+                        lCropMode = LCropMode.MENU; return true
                     }
                 }
             }

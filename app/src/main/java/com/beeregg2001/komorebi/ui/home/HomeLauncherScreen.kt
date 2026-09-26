@@ -173,6 +173,10 @@ fun HomeLauncherScreen(
     onReturnToPlayerClick: () -> Unit = {},
     aiFocusReturnTick: Int = 0,
     onAiReturnConsumed: () -> Unit = {},
+    // ★ 追加: AIコンシェルジュパネルが前面に出ている間は true。
+    // パネルはMainRootDialogs側の別オーバーレイとして描画されホーム画面はツリーに残り続けるため、
+    // フォーカス自動復帰処理と戻るキー処理をこの画面側でも明示的に止める必要がある。
+    isAiConciergeOpen: Boolean = false,
     // フルスクリーンのプレイヤーが手前に出ている間は true。
     // ホーム画面はプレイヤー表示中も(スクロール位置とフォーカスを保つため)
     // Compose ツリーに残り続けるので、見えていない間の定期通信を明示的に止める。
@@ -219,6 +223,11 @@ fun HomeLauncherScreen(
         isSettingsOpen, isRecordListOpen, isReserveOverlayOpen,
         hasActivePlayer = hasActivePlayer
     )
+
+    // ★ 追加: AIコンシェルジュパネル表示中はタブ列の表示可否(isFullScreenMode)自体は変えず
+    // (パネルは画面の一部を覆うオーバーレイのため、タブ列を消す見た目の変更は不要)、
+    // フォーカス自動復帰・戻るキー処理だけを止めるための専用フラグ。
+    val isFocusSuspended = isFullScreenMode || isAiConciergeOpen
 
     // ★ 追加: PR #103でプレイヤー表示中もこのホーム画面自体が破棄されず常駐するようになった影響で、
     // プレイヤーを開く直前にフォーカスしていた項目の論理フォーカスが残留し、プレイヤーから戻った際の
@@ -465,11 +474,14 @@ fun HomeLauncherScreen(
         launcherHasFocus,
         contentFocusStranded,
         ui.selectedTabIndex,
-        isFullScreenMode,
+        isFocusSuspended,
         isReturningFromPlayer,
         isStrandedDetectable
     ) {
-        if (isFullScreenMode || isReturningFromPlayer) return@LaunchedEffect
+        // ★ 修正: isFullScreenModeだけではAIコンシェルジュパネル表示中を検知できず、
+        // パネル側へフォーカスが移った直後にこのループがフォーカスを奪い返してしまっていた
+        // (パネルは表示されたままキー操作だけ背面のホーム画面に効く操作不能状態になる不具合)。
+        if (isFocusSuspended || isReturningFromPlayer) return@LaunchedEffect
 
         val isLost = { !launcherHasFocus || (contentFocusStranded && isStrandedDetectable) }
         if (!isLost()) return@LaunchedEffect
@@ -483,7 +495,7 @@ fun HomeLauncherScreen(
         var attempt = 0
         while (attempt < 5 && isLost()) {
             delay(if (attempt == 0) 120 else 220)
-            if (isFullScreenMode || isReturningFromPlayer || !isLost()) return@LaunchedEffect
+            if (isFocusSuspended || isReturningFromPlayer || !isLost()) return@LaunchedEffect
 
             val tabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
             // 直前までコンテンツを操作していたなら、コンテンツ先頭へ戻す方が違和感が少ない。
@@ -644,6 +656,12 @@ fun HomeLauncherScreen(
                         .padding(top = 8.dp, start = 40.dp, end = 40.dp)
                         .onFocusChanged { ui.topNavHasFocus = it.hasFocus }
                         .onPreviewKeyEvent { event ->
+                            // ★ 修正: AIコンシェルジュパネル表示中、まだフォーカスが背面のタブ列に
+                            // 迷い込んでいるレース区間で左右キー(タブ切替)やBACKキーをここで消費すると、
+                            // パネルの裏でタブが切り替わったり、パネル側のBackHandlerに戻るキーが
+                            // 届かずパネルが閉じなくなったりする。パネル表示中はここでは一切処理しない。
+                            if (isAiConciergeOpen) return@onPreviewKeyEvent false
+
                             // 左右キーによるタブ切替は、タブ列にフォーカスがあるときだけ行う。
                             // 設定ボタン・再生中ボタンにフォーカスがある状態で拾ってしまうと、
                             // ボタンから離れる操作をしていないのにタブだけが切り替わってしまう。

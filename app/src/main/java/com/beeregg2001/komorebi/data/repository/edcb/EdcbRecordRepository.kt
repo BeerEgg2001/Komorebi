@@ -14,12 +14,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -42,6 +43,14 @@ class EdcbRecordRepository @Inject constructor(
         // 呼び出し側から limit の指定がない場合のページサイズ
         private const val DEFAULT_RECORDED_PAGE_SIZE = 50
         private const val MAX_ALLOWED_DROPS = 1000L
+
+        // ★ 追加: 1ページ分の録画を並列でmapToRecordedProgram()する際の同時実行数上限。
+        // 1件あたりresolver.lua・チャプター(最大2回)・tile.jsonと最大4回のHTTPリクエストを
+        // 投げるため、ページサイズ(既定50件)をそのまま無制限に並列化すると、EMWUI
+        // (civetweb)へ瞬間的に大量のリクエストが集中しread timeoutが多発していた
+        // (低スペック端末だけでなく、EMWUI側の同時接続処理能力の問題でもある)。
+        // 6並列に絞ることで、体感速度を大きく損なわずにタイムアウト頻度を抑える。
+        private const val ITEM_MAP_CONCURRENCY = 6
     }
 
     private val baseEdcbHttpClient: OkHttpClient by lazy {
@@ -51,6 +60,7 @@ class EdcbRecordRepository @Inject constructor(
     private val recordMutex = Mutex()
     private var cachedRecInfos: List<EdcbRecFileInfo>? = null
     private var lastRecFetchTime = 0L
+    private val itemMapSemaphore = Semaphore(ITEM_MAP_CONCURRENCY)
 
     private data class KomorebiResolverUrls(
         val videoUrl: String, val thumbnailUrl: String, val chapterUrl: String,
@@ -63,9 +73,12 @@ class EdcbRecordRepository @Inject constructor(
         val options: List<StreamQuality>
     )
 
+    // ★ 修正: 以前は"^https?://"を剥がすだけでポート・パスは剥がしていなかったため、
+    // EDCBのIP欄にスキーム付きかつポート込みのURL(例: "http://192.168.1.5:5510")を
+    // 入力すると、ホスト名が"192.168.1.5:5510"のままSocketに渡され必ず接続に失敗していた。
     private suspend fun getTcpIpAndPort(): Pair<String, Int> {
         val rawIp = settingsRepository.edcbIp.first()
-        val cleanIp = rawIp.replace(Regex("^https?://"), "")
+        val cleanIp = com.beeregg2001.komorebi.common.UrlBuilder.extractBareHost(rawIp)
         val port = settingsRepository.edcbPort.first().toIntOrNull() ?: 4510
         return Pair(cleanIp, port)
     }
@@ -104,7 +117,17 @@ class EdcbRecordRepository @Inject constructor(
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
-                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        // ★ 修正: resolverが"Path not mapped"時に返すdetected_path(EDCB上の
+                        // 実際の物理パス)を捨てずに含める。マッピング設定ミスの切り分けに必要。
+                        val detectedPath = json.optString("detected_path", "")
+                        val fullMsg = buildString {
+                            append(errMsg)
+                            if (errDetail.isNotBlank()) append("\n").append(errDetail)
+                            if (detectedPath.isNotBlank()) {
+                                append("\nEDCB上の実際のパス: ").append(detectedPath)
+                                append("\n(設定画面の録画フォルダのマッピング設定を確認してください)")
+                            }
+                        }
                         Log.e(TAG, "Resolver Lua Error: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
@@ -194,7 +217,17 @@ class EdcbRecordRepository @Inject constructor(
                     if (json.has("error")) {
                         val errMsg = json.optString("error", "Unknown Resolver Error")
                         val errDetail = json.optString("detail", "")
-                        val fullMsg = if (errDetail.isNotBlank()) "$errMsg\n$errDetail" else errMsg
+                        // ★ 修正: resolverが"Path not mapped"時に返すdetected_path(EDCB上の
+                        // 実際の物理パス)を捨てずに含める。マッピング設定ミスの切り分けに必要。
+                        val detectedPath = json.optString("detected_path", "")
+                        val fullMsg = buildString {
+                            append(errMsg)
+                            if (errDetail.isNotBlank()) append("\n").append(errDetail)
+                            if (detectedPath.isNotBlank()) {
+                                append("\nEDCB上の実際のパス: ").append(detectedPath)
+                                append("\n(設定画面の録画フォルダのマッピング設定を確認してください)")
+                            }
+                        }
                         Log.e(TAG, "Resolver Lua Error for ID $videoId: $fullMsg")
                         // 例外をスローして上位へ伝搬させる
                         throw Exception("Komorebi Resolver エラー:\n$fullMsg")
@@ -248,7 +281,15 @@ class EdcbRecordRepository @Inject constructor(
                             cachedRecInfos = validInfos.sortedByDescending { it.startTime }
                             lastRecFetchTime = System.currentTimeMillis()
                         } else {
-                            return@withContext RecordedApiResponse(0, emptyList())
+                            // ★ 修正: 以前はここで空リストを返して成功扱いにしていたため、
+                            // EDCB停止時やIP/ポート設定ミス時に「録画0件」と表示された上、
+                            // 30秒間その空リストがキャッシュされ、EDCB復旧後もすぐには
+                            // 反映されなかった。TCP通信失敗を握りつぶさず例外として投げ、
+                            // 下のcatchでUIにエラーを伝搬させる(smartSync等の背景同期側は
+                            // 従来通り例外を静かにログするだけなので、ここで例外化しても
+                            // バックグラウンド更新でダイアログが乱発することはない)。
+                            throw result.exceptionOrNull()
+                                ?: Exception("EDCBとの通信に失敗しました。")
                         }
                     }
 
@@ -261,8 +302,10 @@ class EdcbRecordRepository @Inject constructor(
                     val to = (from + pageSize).coerceAtMost(total)
                     val baseUrl = getHttpBaseUrl()
 
+                    // ★ 修正: 同時実行数をitemMapSemaphoreで絞ることでEMWUIへの
+                    // リクエスト集中を防ぐ(ITEM_MAP_CONCURRENCY定義部のコメント参照)
                     val programs = all.subList(from, to).map { info ->
-                        async { mapToRecordedProgram(info, ip, baseUrl) }
+                        async { itemMapSemaphore.withPermit { mapToRecordedProgram(info, ip, baseUrl) } }
                     }.awaitAll()
 
                     Log.i(TAG, "[getRecordedPrograms] Page $page 返却完了 (件数: ${programs.size})")
@@ -306,42 +349,19 @@ class EdcbRecordRepository @Inject constructor(
         val resolverUrls = fetchResolverUrls(baseUrl, videoId)
         val videoPath = resolverUrls?.videoUrl
 
-        if (playMethod == "DIRECT") {
-            if (!videoPath.isNullOrEmpty()) {
-                val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
-                val videoUri = "$baseUrl/$safePath"
-                Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
-                return videoUri
-            } else {
-                try {
-                    val (ip, port) = getTcpIpAndPort()
-                    val info =
-                        cachedRecInfos?.find { it.id == videoId } ?: EdcbApi(ip, port).getRecInfo(
-                            videoId
-                        ).getOrNull()
-
-                    if (info != null && info.recFilePath.isNotBlank()) {
-                        val fileName =
-                            info.recFilePath.substringAfterLast("\\").substringAfterLast("/")
-                        val encodedFileName =
-                            URLEncoder.encode("video/rec/$fileName", "UTF-8").replace("+", "%20")
-                        val ctokView = fetchResolverSettings(baseUrl)?.ctokView ?: ""
-
-                        val builder = android.net.Uri.parse(baseUrl).buildUpon()
-                            .appendPath("api").appendPath("xcode")
-                            .appendQueryParameter("fname", encodedFileName)
-                            .appendQueryParameter("option", "10")
-                            .appendQueryParameter("ctok", ctokView)
-                        if (offsetSeconds > 0) builder.appendQueryParameter(
-                            "ofssec",
-                            offsetSeconds.toInt().toString()
-                        )
-                        return builder.build().toString()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to generate DIRECT fallback URI", e)
-                }
-            }
+        // ★ 修正: 以前はresolver.luaがvideoPathを返せなかった場合のフォールバックとして、
+        // EDCB TCPから直接recFilePathを取得しURLを組み立て直す経路があったが、
+        // Uri.Builder.appendQueryParameter()が値を再度パーセントエンコードするため
+        // URLEncoder.encode()の結果と合わさって二重エンコードになっており、日本語ファイル名では
+        // 正しいURLにならなかった。fetchResolverUrls()は失敗時に例外を投げる仕様のため、この経路は
+        // videoPathがnull/空になる(=HTTPレスポンスのボディが空だった)というごく限定的なケースでしか
+        // 到達せず、実質ほぼ機能していなかった。到達時は下の汎用フォールバック(id指定のapi/xcode)に
+        // 任せるようにし、壊れた再構築ロジックを削除する。
+        if (playMethod == "DIRECT" && !videoPath.isNullOrEmpty()) {
+            val safePath = if (videoPath.startsWith("/")) videoPath.substring(1) else videoPath
+            val videoUri = "$baseUrl/$safePath"
+            Log.i(TAG, "Generated HTTP Stream URL (DIRECT via Lua): $videoUri")
+            return videoUri
         }
 
         if (!videoPath.isNullOrEmpty()) {
@@ -419,16 +439,30 @@ class EdcbRecordRepository @Inject constructor(
         }
 
         val fallbackUrl = "$baseUrl/api/Thumbnail?id=${info.id}"
-        val resolverUrls = fetchResolverUrls(baseUrl, info.id)
+        // ★ 修正: 以前はfetchResolverUrls()の例外(タイムアウト等)がここで捕捉されず、
+        // async{}.awaitAll()経由でページ全体を巻き添えにして失敗させていた
+        // (録画数が多い/EMWUIが混雑している環境で1件のタイムアウトが一覧全体の
+        // 「取得失敗」に直結していた)。1件の解決失敗は「サムネイル/チャプターなしで
+        // この録画だけ表示する」フォールバックにとどめ、ページ全体は失敗させない。
+        val resolverUrls = try {
+            fetchResolverUrls(baseUrl, info.id)
+        } catch (e: Exception) {
+            Log.w(TAG, "resolver.lua fetch failed for id=${info.id}. Falling back.", e)
+            null
+        }
         val primaryUrl =
             if (resolverUrls != null) "$baseUrl${resolverUrls.thumbnailUrl}" else fallbackUrl
 
         var cmSections: List<CmSection>? = null
         if (resolverUrls != null) {
             try {
-                val urlsToTry = listOf(
-                    "$baseUrl${resolverUrls.chapterUrl}",
-                    "$baseUrl${resolverUrls.chapterAltUrl}"
+                // ★ 修正: resolverが代替チャプターを見つけられなかった場合chapter_alt_urlは
+                // 空文字になるため、以前は2本目の試行URLが"$baseUrl"そのもの(EMWUIの
+                // トップページ)になり、無駄なリクエスト+HTML誤混入のリスクがあった。
+                // 空のURLは候補から除外する。
+                val urlsToTry = listOfNotNull(
+                    "$baseUrl${resolverUrls.chapterUrl}".takeIf { resolverUrls.chapterUrl.isNotBlank() },
+                    "$baseUrl${resolverUrls.chapterAltUrl}".takeIf { resolverUrls.chapterAltUrl.isNotBlank() }
                 )
                 val client =
                     baseEdcbHttpClient.newBuilder().connectTimeout(1500, TimeUnit.MILLISECONDS)
@@ -443,8 +477,15 @@ class EdcbRecordRepository @Inject constructor(
                                 val bytes = response.body?.bytes()
                                 if (bytes != null && bytes.isNotEmpty()) {
                                     val rawText = decodeEdcbString(bytes)
-                                    // 取得したテキストがHTMLやエラーメッセージでないか簡易チェック
-                                    if (!rawText.contains("Error 404") && !rawText.contains("<!DOCTYPE html>")) {
+                                    // ★ 修正: 大文字小文字を区別する完全一致だけだと、
+                                    // "<!doctype html>"のような表記ゆれのあるHTMLページや
+                                    // DOCTYPE宣言の無いHTMLがすり抜けていた。大文字小文字を
+                                    // 無視した判定にし、<html タグの有無も追加でチェックする。
+                                    val looksLikeHtmlOrError =
+                                        rawText.contains("Error 404", ignoreCase = true) ||
+                                            rawText.trimStart().startsWith("<!doctype", ignoreCase = true) ||
+                                            rawText.contains("<html", ignoreCase = true)
+                                    if (!looksLikeHtmlOrError) {
                                         chapterText = rawText
                                     }
                                 }
@@ -554,20 +595,22 @@ class EdcbRecordRepository @Inject constructor(
 
     private fun decodeEdcbString(bytes: ByteArray): String {
         if (bytes.isEmpty()) return ""
-        try {
-            if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
-                return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
-            }
-            if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
-                return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
-            }
-            return String(bytes, Charsets.UTF_8)
+        if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
+            return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        }
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        }
+        // ★ 修正: String(bytes, UTF_8) は不正バイト列を例外にせずU+FFFD(置換文字)へ
+        // 静かに置き換えるため、以前のtry/catchによるShift_JISフォールバックには
+        // 実質到達できなかった(Windows EDCB環境のShift-JISチャプター名等が文字化けしていた)。
+        // 例外の有無ではなく、置換文字が出たかどうかでUTF-8として妥当だったか判定する。
+        val utf8 = String(bytes, Charsets.UTF_8)
+        if (!utf8.contains('�')) return utf8
+        return try {
+            String(bytes, charset("Shift_JIS"))
         } catch (e: Exception) {
-            return try {
-                String(bytes, charset("Shift_JIS"))
-            } catch (ex: Exception) {
-                String(bytes)
-            }
+            utf8
         }
     }
 

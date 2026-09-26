@@ -33,11 +33,13 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -589,7 +591,12 @@ fun CompactChannelCard(
         modifier = modifier
             .width(140.dp)
             .height(76.dp)
-            .graphicsLayer { scaleX = animatedScale; scaleY = animatedScale }
+            // ★ 修正: graphicsLayerでのscaleはレイアウト座標(bringIntoViewの対象矩形)にも
+            // 反映されてしまい、Android TVの既定のPivotBringIntoViewSpecがこの拡大中の矩形を
+            // 追いかけて親LazyColumnを毎フレーム再スクロールするため、フォーカス移動のたびに
+            // 上下へ微妙にバウンドする不具合があった。描画時のみのスケールに変更し、見た目の
+            // 拡大演出はそのままにレイアウト座標(=カードサイズ76dp固定)を変えないようにする。
+            .drawWithContent { scale(animatedScale) { this@drawWithContent.drawContent() } }
             .onFocusChanged { isFocused = it.isFocused },
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),

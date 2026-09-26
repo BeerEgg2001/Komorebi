@@ -6,17 +6,22 @@ import androidx.annotation.Keep
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.imageLoader
+import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
+import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
+import com.beeregg2001.komorebi.util.AppUpdater
+import com.beeregg2001.komorebi.util.UpdateState
 import com.google.ai.client.generativeai.GenerativeModel
 import com.google.ai.client.generativeai.type.InvalidAPIKeyException
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -64,12 +69,21 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncEngine: RecordSyncEngine,
     private val recordProvider: RecordProvider,
+    // ★ 追加: EPGStationはライブ配信(m2ts:n等)と録画配信(mp4:n/hls:n/webm:n等)で
+    // 画質の値空間が別なため、録画用のrecordProvider.getStreamQualities()とは別に
+    // ライブ用の画質一覧を取得する必要がある(詳細はforceSyncStreamQualities()参照)。
+    private val epgStationLiveRepository: EpgStationLiveRepository,
+    private val appUpdater: AppUpdater,
     private val db: AppDatabase
 ) : ViewModel() {
 
     private val gson = Gson()
 
     private val _dynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
+    // ★ 追加: EPGStationのライブ画質一覧専用のキャッシュ。EDCB/KonomiTVはライブ・録画で
+    // 同じ画質空間を共有するため_dynamicQualitiesをそのまま使い、これはEPGSTATIONの
+    // ときだけ実体を持つ。
+    private val _liveDynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
 
     val availableQualities: StateFlow<List<StreamQuality>> = combine(
         _dynamicQualities,
@@ -78,7 +92,14 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.liveQuality,
         settingsRepository.videoQuality
     ) { dynamicList, json, backend, currentLive, currentVideo ->
-        if (backend == "EDCB") {
+        // ★ 修正: 以前はEDCBかそれ以外の2択で、EPGStationをKonomiTVと同一視していたため、
+        // 設定画面の「デフォルト画質」ダイアログにEPGStationの実画質(m2ts:n等)が出せず、
+        // KonomiTV用のDEFAULT_QUALITIES(original/1080p-60fps等)しか選べなかった。
+        // その状態で決定すると、現在値の照合が必ず不一致になりダイアログは常に先頭
+        // "original"を選択済みとして開くため、決定するとLIVE_QUALITY="original"のような
+        // 無効な値が保存され、再生中の画質設定が黙って上書きされてしまっていた。
+        // EDCBと同じ「動的取得→キャッシュJSON→設定値フォールバック」のロジックを適用する。
+        if (backend == "EDCB" || backend == "EPGSTATION") {
             if (dynamicList != null && dynamicList.isNotEmpty()) {
                 return@combine dynamicList
             }
@@ -115,6 +136,47 @@ class SettingsViewModel @Inject constructor(
             if (dummyList.isEmpty()) StreamQuality.DEFAULT_QUALITIES else dummyList
         } else {
             StreamQuality.DEFAULT_QUALITIES
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreamQuality.DEFAULT_QUALITIES)
+
+    /**
+     * ライブ視聴の「デフォルト画質」ダイアログ専用の画質一覧。
+     *
+     * ★ 追加: 以前は設定画面の「ライブ配信の画質」「録画視聴の画質」ダイアログが同じ
+     * [availableQualities] を共有していた。EDCB(resolver.luaの単一画質空間)や
+     * KonomiTV(original/1080p-60fps等をライブ・録画で共有)ではこれで問題ないが、
+     * EPGStationはライブ(m2ts:n / m2tsll:n / hls:n)と録画(direct / mp4:n / hls:n / webm:n)で
+     * 値空間が別であり、[availableQualities]は録画用のrecordProvider.getStreamQualities()から
+     * 構築される。これをライブ画質ダイアログにも流用していたため、ダイアログでの現在値照合が
+     * 常に不一致になり、決定するたびにLIVE_QUALITYが録画用の値("direct"等)へ黙って
+     * 上書きされてしまっていた(forceSyncStreamQualities()側の自動同期でも同様の理由で
+     * 毎回LIVE_QUALITYがリセットされていた)。EPGSTATIONのときだけライブ専用の取得元
+     * (epgStationLiveRepository.getLiveStreamQualities())を使うよう分離する。
+     */
+    val liveAvailableQualities: StateFlow<List<StreamQuality>> = combine(
+        _liveDynamicQualities,
+        availableQualities,
+        settingsRepository.backendType,
+        settingsRepository.liveQuality
+    ) { liveDynamicList, fallbackList, backend, currentLive ->
+        if (backend == "EPGSTATION") {
+            if (liveDynamicList != null && liveDynamicList.isNotEmpty()) {
+                liveDynamicList
+            } else if (currentLive.isNotBlank()) {
+                listOf(StreamQuality(label = "設定値 ($currentLive)", value = currentLive, isRawTs = false))
+            } else {
+                StreamQuality.DEFAULT_QUALITIES
+            }
+        } else if (backend == "KONOMITV" && KonomiOriginalQualityGate.isUnsupported()) {
+            // ★ 追加: KonomiTVのOriginal画質(ライブ)がサーバー側で非対応と判明した後も、
+            // この設定画面の一覧(availableQualitiesのelse分岐由来)には常にDEFAULT_QUALITIES
+            // (originalを含む)がそのまま出ていたため、ここで選ぶと再び422で失敗する画質が
+            // 選べてしまっていた。LivePlayerViewModel側のフィルタと同じ条件をここにも適用する。
+            fallbackList.filterNot { it.value == "original" }
+        } else {
+            // EDCB/KonomiTV/その他はライブ・録画で画質空間を共有しているため、
+            // 従来通りavailableQualities(録画用と同じ取得元)をそのまま使う。
+            fallbackList
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreamQuality.DEFAULT_QUALITIES)
 
@@ -283,6 +345,21 @@ class SettingsViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5000),
         false
     )
+
+    // ★ 追加: 設定画面からの手動アップデート確認用。AppUpdaterはSingletonのため、
+    // ここで発火した確認結果はホーム画面のアップデートダイアログにもそのまま反映される。
+    val updateCheckState: StateFlow<UpdateState> = appUpdater.updateState
+
+    private val _hasManuallyCheckedForUpdate = MutableStateFlow(false)
+    val hasManuallyCheckedForUpdate: StateFlow<Boolean> = _hasManuallyCheckedForUpdate.asStateFlow()
+
+    fun checkForUpdatesManually() {
+        viewModelScope.launch {
+            val receiveBeta = settingsRepository.receiveBetaUpdates.first()
+            appUpdater.checkForUpdates(receiveBetaUpdates = receiveBeta)
+            _hasManuallyCheckedForUpdate.value = true
+        }
+    }
     val isSettingsInitialized: StateFlow<Boolean> = settingsRepository.isInitialized.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
@@ -434,6 +511,8 @@ class SettingsViewModel @Inject constructor(
                 val preVideo = settingsRepository.videoQuality.first()
 
                 if (backend == "EDCB") {
+                    // EDCBはライブ・録画で画質空間を共有しているため、従来通り単一の
+                    // 取得元(recordProvider.getStreamQualities() = resolver.lua)を両方に適用する。
                     val fetched = recordProvider.getStreamQualities()
                     if (fetched.isNotEmpty()) {
                         _dynamicQualities.value = fetched
@@ -459,6 +538,47 @@ class SettingsViewModel @Inject constructor(
                         }
                     } else {
                         _dynamicQualities.value = emptyList()
+                    }
+                } else if (backend == "EPGSTATION") {
+                    // ★ 修正: EPGStationはライブ(m2ts:n等)と録画(direct/mp4:n/hls:n/webm:n)で
+                    // 画質の値空間が別。以前はrecordProvider.getStreamQualities()(録画用)の
+                    // 結果をLIVE_QUALITYの照合・上書きにも使っていたため、ほぼ必ず不一致となり
+                    // 起動のたびにLIVE_QUALITYが録画用の値("direct"等)へ黙って上書きされていた。
+                    // 録画用とライブ用を別々に取得・同期する。
+                    val videoFetched = recordProvider.getStreamQualities()
+                    if (videoFetched.isNotEmpty()) {
+                        _dynamicQualities.value = videoFetched
+                        settingsRepository.saveString(
+                            SettingsRepository.AVAILABLE_STREAM_QUALITIES,
+                            gson.toJson(videoFetched)
+                        )
+                        val postVideo = settingsRepository.videoQuality.first()
+                        if (preVideo == postVideo && videoFetched.none { it.value == postVideo }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.VIDEO_QUALITY,
+                                videoFetched.first().value
+                            )
+                        }
+                    } else {
+                        _dynamicQualities.value = emptyList()
+                    }
+
+                    val liveFetched = runCatching { epgStationLiveRepository.getLiveStreamQualities() }
+                        .getOrElse {
+                            Log.e("SettingsViewModel", "Failed to sync EPGStation live qualities", it)
+                            emptyList()
+                        }
+                    if (liveFetched.isNotEmpty()) {
+                        _liveDynamicQualities.value = liveFetched
+                        val postLive = settingsRepository.liveQuality.first()
+                        if (preLive == postLive && liveFetched.none { it.value == postLive }) {
+                            settingsRepository.saveString(
+                                SettingsRepository.LIVE_QUALITY,
+                                liveFetched.first().value
+                            )
+                        }
+                    } else {
+                        _liveDynamicQualities.value = emptyList()
                     }
                 } else if (backend == "KONOMITV") {
                     settingsRepository.saveString(SettingsRepository.AVAILABLE_STREAM_QUALITIES, "")

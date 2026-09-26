@@ -774,7 +774,12 @@ fun MainRootScreen(
                 closeAiConcierge = closeAiConcierge,
                 onGoToSettings = {
                     closeAiConcierge(true)
-                    state.settingsInitialCategoryIndex = 7
+                    // ★ 修正: Gemini APIキー設定は「ラボ設定」カテゴリ(SettingScreen.ktの
+                    // categories定義でインデックス8、itemFocusRequesters[8][2]がAPIキー項目)にあるが、
+                    // 番組表設定カテゴリの追加でカテゴリの並びがずれた後もここが7(コメント設定)の
+                    // ままだったため、「設定画面へ進む」ボタンから遷移すると無関係なコメント設定に
+                    // 着地していた。
+                    state.settingsInitialCategoryIndex = 8
                     state.settingsInitialFocusItemIndex = 2
                     state.isSettingsOpen = true
                 }

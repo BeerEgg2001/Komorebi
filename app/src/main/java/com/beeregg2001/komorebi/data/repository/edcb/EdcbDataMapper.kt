@@ -384,7 +384,10 @@ object EdcbDataMapper {
             }
 
             // TvtPlay仕様に完全準拠
-            // oxで始まるならスキップ(CM)開始、ixで始まるならスキップ終了(本編復帰)
+            // ★ 修正: コメントとコードが逆だったので訂正(コードは元々正しい)。
+            // TvtPlay本家(xtne6f/TvtPlay, src/ChapterMap.cpp)のChapterXIn="^ix"/ChapterXOut="^ox"
+            // 定義、およびTvtPlay.cppの実際のスキップ処理(ixで検出したらoxまでシークして
+            // 飛ばす)で裏付け済み。ixで始まるならスキップ(CM)開始、oxで始まるならスキップ終了(本編復帰)
             val isCmStart = name.startsWith("ix", ignoreCase = true)
             val isCmEnd = name.startsWith("ox", ignoreCase = true)
 
