@@ -248,6 +248,13 @@ fun LivePlayerScreen(
         ps.dualSseDetail = dualDetail
     }
 
+    // 信号情報パネルの表示状態を ViewModel へ伝える。
+    // ViewModel 側はこれを見て、パネルを表示している間だけ 1 秒間隔のポーリングを回す
+    // (非表示中も回し続けると、誰も見ていない値の組み立てと再コンポーズが毎秒発生する)。
+    LaunchedEffect(ps.isSignalInfoVisible) {
+        livePlayerViewModel.setSignalInfoVisible(ps.isSignalInfoVisible)
+    }
+
     var isSourceInitialized by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
