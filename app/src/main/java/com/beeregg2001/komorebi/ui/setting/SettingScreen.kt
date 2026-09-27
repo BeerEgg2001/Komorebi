@@ -178,7 +178,8 @@ fun SettingsScreen(
                 FocusRequester()
             ),
             listOf(FocusRequester(), FocusRequester(), FocusRequester()),
-            listOf(FocusRequester())
+            // アプリ情報: 「テレビ再生能力」「オープンソースライセンス」の2項目
+            listOf(FocusRequester(), FocusRequester())
         )
     }
 
@@ -1105,7 +1106,10 @@ fun SettingsScreen(
 
                         9 -> AppInfoContent(
                             { uiState.activeDialog = SettingDialogState.Licenses },
-                            itemFocusRequesters[9][0], categoryFocusRequesters[9]
+                            { uiState.activeDialog = SettingDialogState.DeviceCapabilities },
+                            itemFocusRequesters[9][0],
+                            itemFocusRequesters[9][1],
+                            categoryFocusRequesters[9]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 9 }
                     }
                     Spacer(Modifier.height(32.dp))
@@ -1149,6 +1153,7 @@ fun SettingsScreen(
                 { closeDialog() })
 
             is SettingDialogState.Licenses -> OpenSourceLicensesScreen(onBack = { closeDialog() })
+            is SettingDialogState.DeviceCapabilities -> DeviceCapabilitiesScreen(onBack = { closeDialog() })
             is SettingDialogState.GeminiSetup -> {
                 val localIp by viewModel.localIpAddress.collectAsState()
                 GeminiSetupDialog(
