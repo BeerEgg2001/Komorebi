@@ -597,6 +597,24 @@ val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
 
 **教訓（2）**: 重ねて表示する画面では、方向キーを「封じる」だけでなく**「移動先を明示する」**必要がある。Compose の既定のフォーカス探索は裏の要素も候補に含めるため、画面内の移動であっても任せられない。`OpenSourceLicensesScreen` は一覧→本文の右キー移動が実装されておらず既定の探索に任せていたため、裏へ飛んでいた。
 
+#### 残件: `OpenSourceLicensesScreen` の本文 → 一覧のフォーカス移動（UI刷新時に対応）
+
+PR #117 で他の症状は解消したが、**本文へ一度フォーカスを移すと左キーで一覧へ戻れない**症状が残っている。戻るキーで画面を閉じられるため操作不能ではなく、内容の閲覧・スクロールもできる状態のため、深追いせず残件とした。
+
+有力な仮説: `listFocusRequester` は一覧の**先頭項目（`index == 0`）にのみ**付いている。
+
+```kotlin
+.then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier)
+```
+
+`LazyColumn` の項目は画面外に出ると composition から外れるため、一覧を下にスクロールした状態では `listFocusRequester.requestFocus()` が対象を失って失敗する。加えて、仮に成功しても**フォーカスが先頭項目へ飛ぶ**ため、直前に見ていた項目の位置が失われるという設計上の問題も併せ持つ。
+
+正しくは「最後にフォーカスされていた項目へ戻す」必要があり、項目の識別と復帰先の保持が要る。**この画面は項目4（UI刷新）で作り替える方針で合意済み**（1,241行あり、ライセンス本文を巨大な文字列リテラルで直書きしている構造にも手を入れる価値がある）のため、作り替えの際に以下を設計へ織り込む。
+
+- 一覧の「最後にフォーカスされていた項目」への復帰
+- ライセンス本文をコード内の文字列リテラルから外部リソースへ移す
+- 上記の教訓（1)〜(3) を踏まえたフォーカス設計
+
 **教訓（3）**: `requestFocus()` の失敗は `runCatching` で包むと表に出ない。`OpenSourceLicensesScreen` は Modifier の順序ミスで本文へのフォーカス移動が**最初から一度も動いていなかった**が、`runCatching { … }` に隠れて長く気づかれなかった。フォーカス要求が効かない症状を追うときは、まず Modifier の順序（`focusRequester` が `focusable` より前か）を確認する。
 
 #### 戻るキーは `BackHandler` で受けるのが確実
@@ -610,7 +628,7 @@ Compose のキーイベントは「フォーカスされた要素とその祖先
 | 画面 | 状況 |
 |---|---|
 | `DeviceCapabilitiesScreen` | **修正済み・実機確認済み**（2026-09-27）。フォーカスを「2つのカード」と「閉じるボタン」の3要素に閉じ込めた |
-| `OpenSourceLicensesScreen` | **修正済み**（2026-09-27、実機確認待ち）。一覧の各項目と本文へ `focusProperties` を直接付与し、`BackHandler` も追加 |
+| `OpenSourceLicensesScreen` | **修正済み・実機確認済み**（2026-09-27、PR #117）。フォーカス脱出・戻るキー・本文へのフォーカス移動・本文のスクロールが解消。**残件: 本文から左キーで一覧へ戻れない**（下記） |
 | `SettingScreen` の `canFocus = !isDialogOpen` | **機能していない**（上記参照）。代わりに Back 処理へ `isDialogOpen` の分岐を追加し、戻るキーを `closeDialog()` へ読み替えた（2026-09-27） |
 | その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **フォーカス脱出は未確認**だが、上記の Back 処理の分岐により「戻るキーで閉じられない」症状は解消される見込み |
 
