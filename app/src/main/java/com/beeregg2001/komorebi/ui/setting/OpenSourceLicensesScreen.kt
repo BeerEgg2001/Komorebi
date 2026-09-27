@@ -1169,6 +1169,15 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     // キーを消費する方式で塞ぐ。
                                     Key.DirectionLeft -> true
 
+                                    // 一覧の右には本文があるが、設定画面の上に重ねて表示している
+                                    // 都合上、Compose の既定のフォーカス探索では裏の設定画面の要素が
+                                    // 候補に選ばれてしまう。元の実装は決定キー(onClick)でのみ本文へ
+                                    // 移していたため、方向キーでも移動先を明示する。
+                                    Key.DirectionRight -> {
+                                        runCatching { textFocusRequester.requestFocus() }
+                                        true
+                                    }
+
                                     Key.Back, Key.Escape -> {
                                         onBack()
                                         true
