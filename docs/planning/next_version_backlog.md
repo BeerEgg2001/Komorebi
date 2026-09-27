@@ -571,6 +571,29 @@ val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
 
 そのため、フォーカスを封じる指定は**実際にフォーカスを持つ要素自身**に付けなければ効かない。実例として、`OpenSourceLicensesScreen` の修正では当初親の `Column` に `focusProperties` を付けたが**まったく効果がなく**、一覧の各項目と本文の `Column`（`focusable` を持つ要素）へ付け替えて初めて機能した。
 
+#### 実機検証で分かった「効く方法」と「効かない方法」（2026-09-27）
+
+`OpenSourceLicensesScreen` の修正を実機で2回試した結果、`focusProperties` は**付ける場所の条件が厳しい**ことが分かった。
+
+| 方法 | 結果 |
+|---|---|
+| 親のレイアウト（`Column` 等）に `focusProperties` | **効かない**。フォーカスを持たないノードに付けても、子からの移動時には参照されない |
+| `Surface(onClick = …)`（TV Material3 の ClickableSurface）に外から `focusProperties` | **効かない**。内部に `focusable` を持つため外から渡した指定はその祖先の位置になり、Compose 1.7 以降は継承されない |
+| `Modifier.focusProperties{}` と `Modifier.focusable()` を**同一チェーンに並べる** | **効く**（`DeviceCapabilitiesScreen` で実証） |
+| `onKeyEvent` で方向キーを消費する | **効く**。フォーカスされた要素とその祖先には確実に届く |
+
+つまり**内部に `focusable` を持つコンポーネント（TV Material3 の各種 Surface など）には外から `focusProperties` で封じ込めができない**。この条件は見た目からは判別できないため、`onKeyEvent` でキーを消費する方式のほうが当てにしやすい。
+
+さらに、`focusProperties` を安易に足すと**入る方向の移動まで壊れる**。ライセンス本文に `right` / `up` / `down` の Cancel を足したところ、一覧から右キーで本文へ入れなくなる回帰が発生した。
+
+#### 戻るキーの根本対策は設定画面側にあった
+
+フォーカスが裏へ逃げた状態で戻るキーを押すと**ホーム画面まで抜けてしまう**のは、手前の画面の `BackHandler` が呼ばれないからではなく、**裏の `SettingScreen` の `onKeyEvent` が Back を受けて設定画面自体を閉じていた**ため（`SettingScreen.kt:252`）。裏が先に消費するので、手前の画面に `BackHandler` を置いても届かない。
+
+対策として `SettingScreen` の Back 処理に `isDialogOpen` の分岐を追加し、**ダイアログ・サブ画面表示中の戻るキーを `closeDialog()` へ読み替えた**。これは全ダイアログ・全サブ画面に効く根本対策であり、フォーカスの閉じ込めが完全でなくても「戻るキーで必ず手前の画面を閉じられる」状態を作れる。未確認の他のダイアログも同時に救われる。
+
+**教訓**: 閉じ込め（逃がさない）は個々の画面の作りに左右されて確実性が低い。一方「逃げても閉じられる」経路を1箇所に用意するほうが確実で、影響範囲も広い。**共通化を設計する際は後者を土台に据えるべき。**
+
 #### 戻るキーは `BackHandler` で受けるのが確実
 
 Compose のキーイベントは「フォーカスされた要素とその祖先」にしか届かないため、フォーカスが画面外へ出た時点で `onPreviewKeyEvent` / `onKeyEvent` のどちらも呼ばれず、**閉じる手段が失われる**。`BackHandler` は `OnBackPressedDispatcher` 経由でフォーカス位置に依存せず呼ばれるため、この取りこぼしを確実に受け止められる（`OpenSourceLicensesScreen` に導入済み。`RecordListScreen` / `SmbLibraryScreen` / `AiConciergePanel` など既存画面でも使われている）。
@@ -583,8 +606,8 @@ Compose のキーイベントは「フォーカスされた要素とその祖先
 |---|---|
 | `DeviceCapabilitiesScreen` | **修正済み・実機確認済み**（2026-09-27）。フォーカスを「2つのカード」と「閉じるボタン」の3要素に閉じ込めた |
 | `OpenSourceLicensesScreen` | **修正済み**（2026-09-27、実機確認待ち）。一覧の各項目と本文へ `focusProperties` を直接付与し、`BackHandler` も追加 |
-| `SettingScreen` の `canFocus = !isDialogOpen` | **機能していない**（上記参照）。全ダイアログが影響を受けるため、共通化の際はここを起点に検討する |
-| その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **未確認**。`canFocus` が効いていない以上、同種の不具合を抱えている可能性が高い |
+| `SettingScreen` の `canFocus = !isDialogOpen` | **機能していない**（上記参照）。代わりに Back 処理へ `isDialogOpen` の分岐を追加し、戻るキーを `closeDialog()` へ読み替えた（2026-09-27） |
+| その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **フォーカス脱出は未確認**だが、上記の Back 処理の分岐により「戻るキーで閉じられない」症状は解消される見込み |
 
 #### 戻るキーの処理方法が画面ごとに違う点も併せて整理したい
 
