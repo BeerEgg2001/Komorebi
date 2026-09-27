@@ -1254,8 +1254,10 @@ fun LabSettingsContent(
 
 @Composable
 fun AppInfoContent(
-    onShow: () -> Unit,
+    onShowLicenses: () -> Unit,
+    onShowDeviceCapabilities: () -> Unit,
     licR: FocusRequester,
+    capR: FocusRequester,
     sidebarR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
@@ -1277,6 +1279,20 @@ fun AppInfoContent(
         )
         Spacer(Modifier.height(48.dp))
         SettingItem(
+            AppStrings.SETTINGS_ITEM_DEVICE_CAPABILITIES,
+            "",
+            Icons.Default.Memory,
+            modifier = Modifier
+                .width(400.dp)
+                .focusRequester(capR)
+                .focusProperties {
+                    left = sidebarR
+                    up = FocusRequester.Cancel
+                    down = licR
+                },
+            onClick = { onClick(capR); onShowDeviceCapabilities() })
+        Spacer(Modifier.height(16.dp))
+        SettingItem(
             AppStrings.SETTINGS_ITEM_OSS_LICENSES,
             "",
             Icons.Default.Info,
@@ -1285,9 +1301,9 @@ fun AppInfoContent(
                 .focusRequester(licR)
                 .focusProperties {
                     left = sidebarR
-                    up = FocusRequester.Cancel
+                    up = capR
                     down = FocusRequester.Cancel
                 },
-            onClick = { onClick(licR); onShow() })
+            onClick = { onClick(licR); onShowLicenses() })
     }
 }

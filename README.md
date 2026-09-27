@@ -272,6 +272,7 @@ bash "${MODULE_PATH}/jni/build_ffmpeg.sh" \
 * **[DanmakuFlameMaster](https://github.com/bilibili/DanmakuFlameMaster)**: ニコニコ実況およびNX-Jikkyoのコメント表示。
   |-> 作者の方は逝去されています。長年の貢献に感謝し、心よりご冥福をお祈りいたします。R.I.P.
 * **[SCRename](https://github.com/rigaya/SCRenamePy)**: シリーズから探すの正規表現の参考にさせていただきました。
+* **[Honorebi](https://github.com/makeding/Honorebi)**: Komorebi のフォークです。字幕処理の libaribcaption へのネイティブ移行（[@makeding](https://github.com/makeding) さんより PR をいただきました）に加え、設定画面「テレビ再生能力」のデバイス再生能力検出の実装を参考にさせていただきました。
 
 
 ---

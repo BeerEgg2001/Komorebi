@@ -351,6 +351,40 @@ third-party archives.
         """.trimIndent()
     ),
     OssLibrary(
+        name = "Honorebi (Device Capability Detection)",
+        author = "makeding",
+        licenseName = "MIT License",
+        licenseText = """
+            設定画面「テレビ再生能力」の検出処理・表示は、Komorebi のフォークである
+            Honorebi (https://github.com/makeding/Honorebi) の実装を基にしています。
+            Honorebi は Komorebi と同じ MIT License の下で公開されており、
+            LICENSE ファイルの著作権表記も Komorebi と同一です。
+            以下は Honorebi のリポジトリに含まれる LICENSE の全文です。
+
+            MIT License
+
+            Copyright (c) 2026 BeerEgg2001
+
+            Permission is hereby granted, free of charge, to any person obtaining a copy
+            of this software and associated documentation files (the "Software"), to deal
+            in the Software without restriction, including without limitation the rights
+            to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+            copies of the Software, and to permit persons to whom the Software is
+            furnished to do so, subject to the following conditions:
+
+            The above copyright notice and this permission notice shall be included in all
+            copies or substantial portions of the Software.
+
+            THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+            IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+            FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+            AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+            LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+            OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+            SOFTWARE.
+        """.trimIndent()
+    ),
+    OssLibrary(
         name = "Media3（ExoPlayer）",
         author = "androidx",
         licenseName = "Apache License 2.0",

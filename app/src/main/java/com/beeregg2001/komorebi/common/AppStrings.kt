@@ -342,4 +342,5 @@ object AppStrings {
 
     // アプリ情報
     const val SETTINGS_ITEM_OSS_LICENSES = "オープンソースライセンス"
+    const val SETTINGS_ITEM_DEVICE_CAPABILITIES = "テレビ再生能力"
 }
