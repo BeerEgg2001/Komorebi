@@ -66,5 +66,7 @@ DI は Dagger Hilt。モジュールは `di/`（`NetworkModule`, `DatabaseModule
 - `KomorebiConfigurator/` — .NET(Avalonia)製のセットアップツール。EDCB連携（`resolver.lua`等）を配置する。
 - `KomorebiThumbnailer/` — 録画ファイルからシークバー用サムネイル（`.tile.webp`）を生成するツール。
 - `tools/ts_pmt_monitor/` — 録画TSファイルのPMT（音声トラック等のPID構成）が時間経過でどう変化したかを調査する診断CLI。`app/src/main/cpp`の`servicefilter.cpp`/`util.cpp`をそのまま参照し、Android NDK不要・CMakeのみでmacOS/Linux/Windows向けにビルド可能。映像・音声データは出力せず、PID構成とタイムスタンプ等のメタ情報のみをログ出力する。
+- `tools/ts_synth_gen/` — シーク索引の検証用に、既知のPTS/PCR構造を持つ合成TSを生成するCLI。VBR等の条件を意図的に作り込めるため、線形補間シークの誤差を再現可能な形で測定できる。
+- `tools/ts_index_builder/` — 実録画TSからシーク索引を構築するCLIと、索引の正当性を検証するセルフテスト（T1〜T12）。`tools/ts_synth_gen`が生成した合成TSと実録画の両方を入力に取る。
 
 これらは Android アプリ本体（`app/`）とはビルド系統が異なる独立ツール。
