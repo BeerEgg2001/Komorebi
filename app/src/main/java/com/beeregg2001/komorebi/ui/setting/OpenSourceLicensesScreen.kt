@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -1090,17 +1091,36 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     }
 
     // ★修正: 背景を不透明下地 ＋ 季節のブラシの2重塗りに変更
+    //
+    // フォーカスについて:
+    // この画面は設定画面の上に重ねて表示されるが、裏の設定画面の要素はフォーカス可能なまま残る。
+    // 方向キーでフォーカスが裏へ逃げると、この画面のキーハンドラへイベントが届かなくなり、
+    // 戻るキーで閉じられなくなる(1回目は無反応、2回目でホーム画面まで抜ける)。
+    // そのため各ペインの focusProperties で外向きの移動を FocusRequester.Cancel で封じ、
+    // 戻るキーはフォーカス位置に依存しないようこの Row でまとめて処理している。
     Row(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .background(backgroundBrush)
             .padding(48.dp)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown &&
+                    (event.key == Key.Back || event.key == Key.Escape)
+                ) {
+                    onBack()
+                    true
+                } else {
+                    false
+                }
+            }
     ) {
         // 左ペイン：ライブラリ一覧
         Column(modifier = Modifier
             .weight(0.35f)
-            .fillMaxHeight()) {
+            .fillMaxHeight()
+            // 一覧の左には何も無いため、左キーでは裏の設定画面へ抜けてしまう。
+            .focusProperties { left = FocusRequester.Cancel }) {
             Text(
                 text = "オープンソースライセンス",
                 style = MaterialTheme.typography.headlineMedium,
@@ -1201,6 +1221,9 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     listFocusRequester.requestFocus()
                                     true
                                 }
+
+                                // 本文の右には何も無いため、消費しないと裏の設定画面へ抜けてしまう。
+                                Key.DirectionRight -> true
 
                                 Key.Back, Key.Escape -> {
                                     onBack()
