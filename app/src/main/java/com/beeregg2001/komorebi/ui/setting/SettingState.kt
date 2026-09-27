@@ -58,7 +58,8 @@ class SettingPreferences(
 // ★ 追加: 番組表設定
     val epgColumnCount: String,
     val epgFontSizeScale: String,
-    val epgVisibleHours: String
+    val epgVisibleHours: String,
+    val uiScale: String
 )
 
 @Composable
@@ -142,7 +143,8 @@ fun rememberSettingPreferences(repository: SettingsRepository): SettingPreferenc
         smbServerList = smbList,
         epgColumnCount = repository.epgColumnCount.collectAsState(initial = "7").value,
         epgFontSizeScale = repository.epgFontSizeScale.collectAsState(initial = "1.0").value,
-        epgVisibleHours = repository.epgVisibleHours.collectAsState(initial = "6").value
+        epgVisibleHours = repository.epgVisibleHours.collectAsState(initial = "6").value,
+        uiScale = repository.uiScale.collectAsState(initial = "1.0").value
     )
 }
 

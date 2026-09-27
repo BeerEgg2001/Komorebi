@@ -94,6 +94,11 @@ class SettingsRepository @Inject constructor(
         // ★ 追加: 番組表の設定キー
         val EPG_COLUMN_COUNT = stringPreferencesKey("epg_column_count")
         val EPG_FONT_SIZE_SCALE = stringPreferencesKey("epg_font_size_scale")
+
+        // UI 全体の大きさ。LocalDensity の density をこの倍率で上書きすることで、
+        // 文字サイズと余白を含めた UI 全体を縮小し、画面に入る情報量を増やす。
+        // 値は倍率の文字列("1.0" = 標準)。1.0 未満にすると UI が小さくなる。
+        val UI_SCALE = stringPreferencesKey("ui_scale")
         val EPG_VISIBLE_HOURS = stringPreferencesKey("epg_visible_hours")
 
         // ★ 追加: Cloudflare Zero Trust (Cloudflare Access) サービストークン
@@ -211,6 +216,7 @@ class SettingsRepository @Inject constructor(
     // ★ 追加: 番組表設定の読み込み (デフォルト: 7ch, 等倍サイズ)
     val epgColumnCount: Flow<String> = context.dataStore.data.map { it[EPG_COLUMN_COUNT] ?: "7" }
     val epgFontSizeScale: Flow<String> = context.dataStore.data.map { it[EPG_FONT_SIZE_SCALE] ?: "1.0" }
+    val uiScale: Flow<String> = context.dataStore.data.map { it[UI_SCALE] ?: "1.0" }
     val epgVisibleHours: Flow<String> = context.dataStore.data.map { it[EPG_VISIBLE_HOURS] ?: "6" }
 
     // ★ 追加: Cloudflare Zero Trust サービストークンのFlow

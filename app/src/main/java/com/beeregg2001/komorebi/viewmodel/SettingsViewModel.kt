@@ -618,6 +618,10 @@ class SettingsViewModel @Inject constructor(
         settingsRepository.saveString(SettingsRepository.EPG_FONT_SIZE_SCALE, value)
     }
 
+    fun updateUiScale(value: String) = viewModelScope.launch(Dispatchers.IO) {
+        settingsRepository.saveString(SettingsRepository.UI_SCALE, value)
+    }
+
     fun updateEpgVisibleHours(value: String) = viewModelScope.launch(Dispatchers.IO) {
         settingsRepository.saveString(SettingsRepository.EPG_VISIBLE_HOURS, value)
     }

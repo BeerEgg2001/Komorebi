@@ -978,8 +978,10 @@ fun DisplaySettingsContent(
     onEditDefaultView: () -> Unit,
     onEditTimeFormat: () -> Unit,
     onToggleHideSubChannels: () -> Unit,
+    onEditUiScale: () -> Unit,
     itemRs: List<FocusRequester>,
     hideSubChannelsR: FocusRequester,
+    uiScaleR: FocusRequester,
     onClick: (FocusRequester) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -1051,10 +1053,22 @@ fun DisplaySettingsContent(
                     .focusProperties {
                         left = sidebarR
                         up = itemRs[3]
-                        down = FocusRequester.Cancel
+                        down = uiScaleR
                     },
                 onClick = { onClick(hideSubChannelsR); onToggleHideSubChannels() }
             )
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_UI_SCALE,
+                uiScaleLabel(preferences.uiScale),
+                Icons.Default.FormatSize,
+                modifier = Modifier
+                    .focusRequester(uiScaleR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = hideSubChannelsR
+                        down = FocusRequester.Cancel
+                    },
+                onClick = { onClick(uiScaleR); onEditUiScale() })
         }
     }
 }
@@ -1307,3 +1321,20 @@ fun AppInfoContent(
             onClick = { onClick(licR); onShowLicenses() })
     }
 }
+
+/**
+ * UI の大きさ（[SettingsRepository.UI_SCALE]）の倍率文字列を表示用のラベルへ変換する。
+ * 1.0 未満にすると UI 全体が小さくなり、画面に入る情報量が増える。
+ */
+internal fun uiScaleLabel(value: String): String = when (value) {
+    "1.1" -> "大きめ (110%)"
+    "0.9" -> "小さめ (90%)"
+    "0.8" -> "特小 (80%)"
+    "0.75" -> "最小 (75%)"
+    else -> "標準 (100%)"
+}
+
+/** 設定画面の選択ダイアログに出す「UI の大きさ」の選択肢。 */
+internal val UI_SCALE_OPTIONS: List<Pair<String, String>> = listOf(
+    "1.1", "1.0", "0.9", "0.8", "0.75"
+).map { uiScaleLabel(it) to it }
