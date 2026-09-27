@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -1089,13 +1090,43 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         runCatching { listFocusRequester.requestFocus() }
     }
 
+    // 戻るキーの最終防衛線。
+    //
+    // Compose のキーイベントは「フォーカスされた要素とその祖先」にしか届かないため、
+    // 何らかの理由でフォーカスがこの画面の外(裏に残っている設定画面)へ移ってしまうと、
+    // 下の onPreviewKeyEvent も各項目の onKeyEvent も呼ばれず、戻るキーで閉じられなくなる。
+    // BackHandler はフォーカス位置に依存せず OnBackPressedDispatcher 経由で呼ばれるため、
+    // そうした取りこぼしを確実に受け止められる。
+    //
+    // なお SettingScreen 側には `focusProperties { canFocus = !isDialogOpen }` があり、
+    // ダイアログ表示中は裏をフォーカス不可にする意図で書かれているが、Compose 1.7 以降は
+    // focus properties が子孫へ継承されないため、この指定だけでは裏の各要素はフォーカス可能なまま。
+    BackHandler { onBack() }
+
     // ★修正: 背景を不透明下地 ＋ 季節のブラシの2重塗りに変更
+    //
+    // フォーカスについて:
+    // この画面は設定画面の上に重ねて表示されるが、裏の設定画面の要素はフォーカス可能なまま残る。
+    // 方向キーでフォーカスが裏へ逃げると、この画面のキーハンドラへイベントが届かなくなり、
+    // 戻るキーで閉じられなくなる(1回目は無反応、2回目でホーム画面まで抜ける)。
+    // そのため各ペインの focusProperties で外向きの移動を FocusRequester.Cancel で封じ、
+    // 戻るキーはフォーカス位置に依存しないようこの Row でまとめて処理している。
     Row(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .background(backgroundBrush)
             .padding(48.dp)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown &&
+                    (event.key == Key.Back || event.key == Key.Escape)
+                ) {
+                    onBack()
+                    true
+                } else {
+                    false
+                }
+            }
     ) {
         // 左ペイン：ライブラリ一覧
         Column(modifier = Modifier
@@ -1127,12 +1158,33 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                 }
                             }
                             .onKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown &&
-                                    (event.key == Key.Back || event.key == Key.Escape)
-                                ) {
-                                    onBack()
-                                    true
-                                } else false
+                                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                when (event.key) {
+                                    // 一覧の左には何も無く、消費しないと裏の設定画面へフォーカスが抜ける。
+                                    // focusProperties では封じられなかった: この Surface は
+                                    // TV Material3 の ClickableSurface で、内部に focusable を持つため
+                                    // 外から渡した focusProperties はその祖先の位置になり、
+                                    // Compose 1.7 以降は focus properties が子孫へ継承されない。
+                                    // onKeyEvent は確実に呼ばれる(戻るキーが従来から機能していた)ため、
+                                    // キーを消費する方式で塞ぐ。
+                                    Key.DirectionLeft -> true
+
+                                    // 一覧の右には本文があるが、設定画面の上に重ねて表示している
+                                    // 都合上、Compose の既定のフォーカス探索では裏の設定画面の要素が
+                                    // 候補に選ばれてしまう。元の実装は決定キー(onClick)でのみ本文へ
+                                    // 移していたため、方向キーでも移動先を明示する。
+                                    Key.DirectionRight -> {
+                                        runCatching { textFocusRequester.requestFocus() }
+                                        true
+                                    }
+
+                                    Key.Back, Key.Escape -> {
+                                        onBack()
+                                        true
+                                    }
+
+                                    else -> false
+                                }
                             }
                             .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
                         // ★修正: 録画カードと同様の「反転カラー」を適用して視認性を向上
@@ -1202,6 +1254,9 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     true
                                 }
 
+                                // 本文の右には何も無いため、消費しないと裏の設定画面へ抜けてしまう。
+                                Key.DirectionRight -> true
+
                                 Key.Back, Key.Escape -> {
                                     onBack()
                                     true
@@ -1211,8 +1266,13 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                             }
                         } else false
                     }
-                    .focusable()
+                    // focusRequester は focusable より前に置くこと。
+                    // 後ろに置くと focus target に結び付かず textFocusRequester.requestFocus() が
+                    // 何も起こさないため、決定キー・方向キーのどちらでも本文へフォーカスできず、
+                    // 本文のスクロール(上の onKeyEvent)も使えない状態になっていた。
+                    // 呼び出し側が runCatching で包んでいるため失敗が表に出ていなかった。
                     .focusRequester(textFocusRequester)
+                    .focusable()
                     .verticalScroll(scrollState)
             ) {
                 Text(
