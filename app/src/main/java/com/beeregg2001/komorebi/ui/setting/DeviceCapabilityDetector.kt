@@ -12,10 +12,14 @@ import android.view.WindowManager
 
 // 端末の再生能力(映像デコーダー・HDR・音声出力)を MediaCodec / Display / AudioManager から検出する。
 //
-// 参考実装: Komorebi のフォークである Honorebi (makeding/Honorebi, h-dev ブランチ) の
-// `ui/setting/DeviceCapabilityDetector.kt`。HEVC のみを対象としていた同実装をベースに、
-// Komorebi では地上波(MPEG-2)・H.264・AV1 の判定と、ハードウェアデコーダーの有無、
-// 音声パススルー可否の検出を追加している。
+// このファイルは、Komorebi のフォークである Honorebi の
+// `app/src/main/java/com/beeregg2001/komorebi/ui/setting/DeviceCapabilityDetector.kt` を基にしている。
+//   出所  : https://github.com/makeding/Honorebi (h-dev ブランチ)
+//   作者  : makeding
+//   ライセンス: MIT License (Komorebi 本体と同一。リポジトリルートの LICENSE を参照)
+//
+// HEVC のみを対象としていた同実装をベースに、Komorebi では地上波(MPEG-2)・H.264・AV1 の判定と、
+// ハードウェアデコーダーの有無、音声パススルー可否の検出を追加している。
 //
 // 注意: ここで得られるのは「端末がコーデックとして対応を申告しているか」であり、
 // 実際に再生できるかとは別。同時に使えるデコーダー数の上限や、Media3 側のフォーマット

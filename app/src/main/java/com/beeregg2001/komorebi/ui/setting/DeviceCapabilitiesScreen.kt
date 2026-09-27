@@ -40,7 +40,12 @@ import java.time.LocalTime
 
 // 端末の再生能力を表示する画面。設定の「アプリ情報」から開く。
 //
-// 参考実装: Honorebi (makeding/Honorebi, h-dev) の `ui/setting/DeviceCapabilitiesScreen.kt`。
+// このファイルは、Komorebi のフォークである Honorebi の
+// `app/src/main/java/com/beeregg2001/komorebi/ui/setting/DeviceCapabilitiesScreen.kt` を基にしている。
+//   出所  : https://github.com/makeding/Honorebi (h-dev ブランチ)
+//   作者  : makeding
+//   ライセンス: MIT License (Komorebi 本体と同一。リポジトリルートの LICENSE を参照)
+//
 // HEVC のみを扱っていた同実装に対し、Komorebi では地上波(MPEG-2)の直接再生判定と、
 // コーデック別(MPEG-2 / H.264 / HEVC / AV1)の詳細表示を追加している。
 
