@@ -555,13 +555,36 @@ RecordListContent.kt:159  delay(100); detailPanelFocusRequester.safeRequestFocus
 
 設定画面のサブ画面・ダイアログは `SettingScreen.kt` の `Box` 内に重ねて描画されるだけで、**裏の設定画面の要素はフォーカス可能なまま残っている**。重ねた画面側で外向きのフォーカス移動を封じていないと、方向キーで裏側へ移動できてしまう。Compose には完全なフォーカストラップの機構がないため、各要素の `focusProperties` で `left` / `right` / `up` / `down` に `FocusRequester.Cancel` を指定して明示的に封じる必要がある。
 
+#### 既存の対策が Compose のバージョン更新で機能しなくなっている（2026-09-27 判明）
+
+`SettingScreen.kt:250` には**既に対策が書かれている**。
+
+```kotlin
+val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
+…
+    .focusProperties { canFocus = !isDialogOpen }
+```
+
+ダイアログ表示中は設定画面本体をフォーカス不可にする意図であり、`isDialogOpen` の判定は `activeDialog !is None` なのでサブ画面も正しく含まれている。にもかかわらず実機ではフォーカスが裏へ逃げる。
+
+原因は **Compose 1.7 以降、focus properties が子孫へ継承されなくなった**こと。親ノードに `canFocus = false` を指定しても、子孫の各要素はフォーカス可能なまま残る。つまり**この対策は以前は機能していたが、Compose のバージョン更新に伴って黙って壊れた**と見られる。設定画面のサブ画面・ダイアログ全般が同じ影響を受けている。
+
+そのため、フォーカスを封じる指定は**実際にフォーカスを持つ要素自身**に付けなければ効かない。実例として、`OpenSourceLicensesScreen` の修正では当初親の `Column` に `focusProperties` を付けたが**まったく効果がなく**、一覧の各項目と本文の `Column`（`focusable` を持つ要素）へ付け替えて初めて機能した。
+
+#### 戻るキーは `BackHandler` で受けるのが確実
+
+Compose のキーイベントは「フォーカスされた要素とその祖先」にしか届かないため、フォーカスが画面外へ出た時点で `onPreviewKeyEvent` / `onKeyEvent` のどちらも呼ばれず、**閉じる手段が失われる**。`BackHandler` は `OnBackPressedDispatcher` 経由でフォーカス位置に依存せず呼ばれるため、この取りこぼしを確実に受け止められる（`OpenSourceLicensesScreen` に導入済み。`RecordListScreen` / `SmbLibraryScreen` / `AiConciergePanel` など既存画面でも使われている）。
+
+**フォーカスの封じ込め（＝逃がさない）と `BackHandler`（＝逃げても閉じられる）は役割が違うため、両方入れるのが堅い。**
+
 #### 確認済みの影響範囲
 
 | 画面 | 状況 |
 |---|---|
-| `DeviceCapabilitiesScreen` | **修正済み**（2026-09-27）。フォーカスを「2つのカード」と「閉じるボタン」の3要素に閉じ込めた |
-| `OpenSourceLicensesScreen` | **同じ症状を実機で確認**（2026-09-27）。左右2ペイン構成で各要素が `onKeyEvent` による Back 処理を持つため表面化しにくいが、`focusProperties` による閉じ込めがないため端で方向キーを押すと裏へ抜ける |
-| その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **未確認**。同じ構造なので同種のリスクがある |
+| `DeviceCapabilitiesScreen` | **修正済み・実機確認済み**（2026-09-27）。フォーカスを「2つのカード」と「閉じるボタン」の3要素に閉じ込めた |
+| `OpenSourceLicensesScreen` | **修正済み**（2026-09-27、実機確認待ち）。一覧の各項目と本文へ `focusProperties` を直接付与し、`BackHandler` も追加 |
+| `SettingScreen` の `canFocus = !isDialogOpen` | **機能していない**（上記参照）。全ダイアログが影響を受けるため、共通化の際はここを起点に検討する |
+| その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **未確認**。`canFocus` が効いていない以上、同種の不具合を抱えている可能性が高い |
 
 #### 戻るキーの処理方法が画面ごとに違う点も併せて整理したい
 
