@@ -1,6 +1,7 @@
 package com.beeregg2001.komorebi.ui.setting
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -1090,6 +1091,19 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         runCatching { listFocusRequester.requestFocus() }
     }
 
+    // 戻るキーの最終防衛線。
+    //
+    // Compose のキーイベントは「フォーカスされた要素とその祖先」にしか届かないため、
+    // 何らかの理由でフォーカスがこの画面の外(裏に残っている設定画面)へ移ってしまうと、
+    // 下の onPreviewKeyEvent も各項目の onKeyEvent も呼ばれず、戻るキーで閉じられなくなる。
+    // BackHandler はフォーカス位置に依存せず OnBackPressedDispatcher 経由で呼ばれるため、
+    // そうした取りこぼしを確実に受け止められる。
+    //
+    // なお SettingScreen 側には `focusProperties { canFocus = !isDialogOpen }` があり、
+    // ダイアログ表示中は裏をフォーカス不可にする意図で書かれているが、Compose 1.7 以降は
+    // focus properties が子孫へ継承されないため、この指定だけでは裏の各要素はフォーカス可能なまま。
+    BackHandler { onBack() }
+
     // ★修正: 背景を不透明下地 ＋ 季節のブラシの2重塗りに変更
     //
     // フォーカスについて:
@@ -1118,9 +1132,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
         // 左ペイン：ライブラリ一覧
         Column(modifier = Modifier
             .weight(0.35f)
-            .fillMaxHeight()
-            // 一覧の左には何も無いため、左キーでは裏の設定画面へ抜けてしまう。
-            .focusProperties { left = FocusRequester.Cancel }) {
+            .fillMaxHeight()) {
             Text(
                 text = "オープンソースライセンス",
                 style = MaterialTheme.typography.headlineMedium,
@@ -1153,6 +1165,13 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     onBack()
                                     true
                                 } else false
+                            }
+                            .focusProperties {
+                                // 一覧の左には何も無いため、封じないと裏の設定画面へ抜けてしまう。
+                                left = FocusRequester.Cancel
+                                // 上下は項目間の移動に使うため、端の項目だけ外向きを封じる。
+                                if (index == 0) up = FocusRequester.Cancel
+                                if (index == ossLibraries.lastIndex) down = FocusRequester.Cancel
                             }
                             .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
                         // ★修正: 録画カードと同様の「反転カラー」を適用して視認性を向上
@@ -1233,6 +1252,14 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                 else -> false
                             }
                         } else false
+                    }
+                    .focusProperties {
+                        // 本文の右・上下には何も無いため封じる(上下は onKeyEvent 側でも
+                        // スクロールとして消費しているが、スクロール端での脱出を防ぐ保険)。
+                        right = FocusRequester.Cancel
+                        up = FocusRequester.Cancel
+                        down = FocusRequester.Cancel
+                        left = listFocusRequester
                     }
                     .focusable()
                     .focusRequester(textFocusRequester)
