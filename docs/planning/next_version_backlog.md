@@ -581,6 +581,7 @@ val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
 | `Surface(onClick = …)`（TV Material3 の ClickableSurface）に外から `focusProperties` | **効かない**。内部に `focusable` を持つため外から渡した指定はその祖先の位置になり、Compose 1.7 以降は継承されない |
 | `Modifier.focusProperties{}` と `Modifier.focusable()` を**同一チェーンに並べる** | **効く**（`DeviceCapabilitiesScreen` で実証） |
 | `onKeyEvent` で方向キーを消費する | **効く**。フォーカスされた要素とその祖先には確実に届く |
+| `Modifier.focusRequester()` を `focusable()` の**後**に置く | **`requestFocus()` が何も起こさない**。focus target に結び付かないため。`OpenSourceLicensesScreen` のライセンス本文がこれで、決定キー・方向キーのどちらでも本文へフォーカスできず、本文のスクロールも使えない状態が元から続いていた（リポジトリ内の他の全箇所は `focusRequester` → `focusable` の正しい順序） |
 
 つまり**内部に `focusable` を持つコンポーネント（TV Material3 の各種 Surface など）には外から `focusProperties` で封じ込めができない**。この条件は見た目からは判別できないため、`onKeyEvent` でキーを消費する方式のほうが当てにしやすい。
 
@@ -592,7 +593,11 @@ val isDialogOpen = uiState.activeDialog !is SettingDialogState.None
 
 対策として `SettingScreen` の Back 処理に `isDialogOpen` の分岐を追加し、**ダイアログ・サブ画面表示中の戻るキーを `closeDialog()` へ読み替えた**。これは全ダイアログ・全サブ画面に効く根本対策であり、フォーカスの閉じ込めが完全でなくても「戻るキーで必ず手前の画面を閉じられる」状態を作れる。未確認の他のダイアログも同時に救われる。
 
-**教訓**: 閉じ込め（逃がさない）は個々の画面の作りに左右されて確実性が低い。一方「逃げても閉じられる」経路を1箇所に用意するほうが確実で、影響範囲も広い。**共通化を設計する際は後者を土台に据えるべき。**
+**教訓（1）**: 閉じ込め（逃がさない）は個々の画面の作りに左右されて確実性が低い。一方「逃げても閉じられる」経路を1箇所に用意するほうが確実で、影響範囲も広い。**共通化を設計する際は後者を土台に据えるべき。**
+
+**教訓（2）**: 重ねて表示する画面では、方向キーを「封じる」だけでなく**「移動先を明示する」**必要がある。Compose の既定のフォーカス探索は裏の要素も候補に含めるため、画面内の移動であっても任せられない。`OpenSourceLicensesScreen` は一覧→本文の右キー移動が実装されておらず既定の探索に任せていたため、裏へ飛んでいた。
+
+**教訓（3）**: `requestFocus()` の失敗は `runCatching` で包むと表に出ない。`OpenSourceLicensesScreen` は Modifier の順序ミスで本文へのフォーカス移動が**最初から一度も動いていなかった**が、`runCatching { … }` に隠れて長く気づかれなかった。フォーカス要求が効かない症状を追うときは、まず Modifier の順序（`focusRequester` が `focusable` より前か）を確認する。
 
 #### 戻るキーは `BackHandler` で受けるのが確実
 
