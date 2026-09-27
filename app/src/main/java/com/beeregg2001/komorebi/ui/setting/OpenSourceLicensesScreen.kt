@@ -1266,8 +1266,13 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                             }
                         } else false
                     }
-                    .focusable()
+                    // focusRequester は focusable より前に置くこと。
+                    // 後ろに置くと focus target に結び付かず textFocusRequester.requestFocus() が
+                    // 何も起こさないため、決定キー・方向キーのどちらでも本文へフォーカスできず、
+                    // 本文のスクロール(上の onKeyEvent)も使えない状態になっていた。
+                    // 呼び出し側が runCatching で包んでいるため失敗が表に出ていなかった。
                     .focusRequester(textFocusRequester)
+                    .focusable()
                     .verticalScroll(scrollState)
             ) {
                 Text(
