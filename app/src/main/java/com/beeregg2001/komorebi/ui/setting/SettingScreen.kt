@@ -250,7 +250,17 @@ fun SettingsScreen(
                 .focusProperties { canFocus = !isDialogOpen }
                 .onKeyEvent {
                     if (it.type == KeyEventType.KeyDown && (it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK || it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_ESCAPE)) {
-                        if (!uiState.isSidebarFocused) {
+                        if (isDialogOpen) {
+                            // ダイアログ・サブ画面を表示中に戻るキーがここへ来るのは、
+                            // フォーカスが手前の画面から裏(この設定画面)へ逃げてしまった場合。
+                            // そのまま設定画面を閉じるとホーム画面まで抜けてしまうため、
+                            // 「手前の画面を閉じる」動作に読み替える。
+                            //
+                            // 上の focusProperties { canFocus = !isDialogOpen } は本来この脱出を
+                            // 防ぐためのものだが、Compose 1.7 以降は focus properties が子孫へ
+                            // 継承されないため、裏の各要素はフォーカス可能なまま残っている。
+                            closeDialog()
+                        } else if (!uiState.isSidebarFocused) {
                             categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
                                 ?.safeRequestFocus("Back_To_Sidebar")
                         } else {

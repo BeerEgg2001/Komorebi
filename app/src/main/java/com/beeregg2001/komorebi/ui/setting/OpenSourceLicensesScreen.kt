@@ -16,7 +16,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -1159,19 +1158,24 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                 }
                             }
                             .onKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown &&
-                                    (event.key == Key.Back || event.key == Key.Escape)
-                                ) {
-                                    onBack()
-                                    true
-                                } else false
-                            }
-                            .focusProperties {
-                                // 一覧の左には何も無いため、封じないと裏の設定画面へ抜けてしまう。
-                                left = FocusRequester.Cancel
-                                // 上下は項目間の移動に使うため、端の項目だけ外向きを封じる。
-                                if (index == 0) up = FocusRequester.Cancel
-                                if (index == ossLibraries.lastIndex) down = FocusRequester.Cancel
+                                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                when (event.key) {
+                                    // 一覧の左には何も無く、消費しないと裏の設定画面へフォーカスが抜ける。
+                                    // focusProperties では封じられなかった: この Surface は
+                                    // TV Material3 の ClickableSurface で、内部に focusable を持つため
+                                    // 外から渡した focusProperties はその祖先の位置になり、
+                                    // Compose 1.7 以降は focus properties が子孫へ継承されない。
+                                    // onKeyEvent は確実に呼ばれる(戻るキーが従来から機能していた)ため、
+                                    // キーを消費する方式で塞ぐ。
+                                    Key.DirectionLeft -> true
+
+                                    Key.Back, Key.Escape -> {
+                                        onBack()
+                                        true
+                                    }
+
+                                    else -> false
+                                }
                             }
                             .then(if (index == 0) Modifier.focusRequester(listFocusRequester) else Modifier),
                         // ★修正: 録画カードと同様の「反転カラー」を適用して視認性を向上
@@ -1252,14 +1256,6 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                 else -> false
                             }
                         } else false
-                    }
-                    .focusProperties {
-                        // 本文の右・上下には何も無いため封じる(上下は onKeyEvent 側でも
-                        // スクロールとして消費しているが、スクロール端での脱出を防ぐ保険)。
-                        right = FocusRequester.Cancel
-                        up = FocusRequester.Cancel
-                        down = FocusRequester.Cancel
-                        left = listFocusRequester
                     }
                     .focusable()
                     .focusRequester(textFocusRequester)
