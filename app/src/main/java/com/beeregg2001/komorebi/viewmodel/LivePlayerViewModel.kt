@@ -14,6 +14,7 @@ import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -1197,20 +1198,23 @@ class LivePlayerViewModel @Inject constructor(
                     response: Response?
                 ) {
                     if (t is java.io.IOException && t.message == "Canceled") return
+                    val httpError = response?.takeIf { !it.isSuccessful }?.let { createSseHttpCause(it) }
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         // ★ 修正: 以前はresponse.codeをそのままerrorCodeに入れていたため、
                         // analyzePlayerError()がERROR_CODE_UNSPECIFIED限定でerror.messageを
                         // 見るよう絞り込んだ後、404/422/503等の正当なHTTPステータスコードが
                         // errorCodeName()の「invalid error code」表記に埋もれてしまっていた。
-                        // 日本語メッセージをここで組み立て、errorCodeはERROR_CODE_UNSPECIFIEDに
-                        // 揃える。
+                        // 日本語メッセージはここで組み立て、errorCodeにはMedia3のHTTPエラー分類を使う。
+                        // 復旧判定でもHTTPステータスを参照できるよう、応答情報をcauseに保持する。
+                        // 切替前のSSEの失敗で、現在の再生に対する復旧処理が走るのを防ぐ。
+                        if (eventSource !== mainEventSource) return@launch
                         if (response != null && response.code !in 200..299) handleMainError(
                             uiContext,
                             PlaybackException(
                                 httpStatusErrorMessage(response.code),
-                                null,
-                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                                httpError,
+                                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
                             )
                         )
                     }
@@ -1282,15 +1286,18 @@ class LivePlayerViewModel @Inject constructor(
                     response: Response?
                 ) {
                     if (t is java.io.IOException && t.message == "Canceled") return
+                    val httpError = response?.takeIf { !it.isSuccessful }?.let { createSseHttpCause(it) }
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         // ★ 修正: メイン側と同じ理由(httpStatusErrorMessage定義部のコメント参照)。
+                        // 切替前のSSEの失敗で、現在の再生に対する復旧処理が走るのを防ぐ。
+                        if (eventSource !== dualEventSource) return@launch
                         if (response != null && response.code !in 200..299) handleDualError(
                             uiContext,
                             PlaybackException(
                                 httpStatusErrorMessage(response.code),
-                                null,
-                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                                httpError,
+                                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
                             )
                         )
                     }
@@ -1409,6 +1416,24 @@ class LivePlayerViewModel @Inject constructor(
                 (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) / 1000f
             ),
             droppedFrames = vCounters?.droppedBufferCount?.toString() ?: "0"
+        )
+    }
+
+    // SSEでもストリーム本体と同じHTTP例外で応答情報を保持し、復旧判定と表示処理を共用する。
+    // 応答本文はメモリ使用量を抑えるため上限を設け、読み取りに失敗してもHTTPステータスを伝える。
+    private fun createSseHttpCause(response: Response): HttpDataSource.InvalidResponseCodeException {
+        val responseBody = try {
+            response.peekBody(64 * 1024L).bytes()
+        } catch (_: IOException) {
+            byteArrayOf()
+        }
+        return HttpDataSource.InvalidResponseCodeException(
+            response.code,
+            response.message,
+            null,
+            response.headers.toMultimap(),
+            DataSpec(Uri.parse(response.request.url.toString())),
+            responseBody
         )
     }
 
