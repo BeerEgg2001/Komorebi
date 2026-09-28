@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -112,6 +113,10 @@ class LivePlayerViewModel @Inject constructor(
 
     private val _mainSignalInfo = MutableStateFlow(SignalMetadata())
     val mainSignalInfo: StateFlow<SignalMetadata> = _mainSignalInfo.asStateFlow()
+
+    // 信号情報パネルが表示されているか。UI 側(LivePlayerState.isSignalInfoVisible)から
+    // setSignalInfoVisible() で伝えてもらい、表示中だけポーリングする(startSignalPolling 参照)。
+    private val _isSignalInfoVisible = MutableStateFlow(false)
 
     private val _dualSseStatus = MutableStateFlow("Standby")
     val dualSseStatus: StateFlow<String> = _dualSseStatus.asStateFlow()
@@ -1330,50 +1335,78 @@ class LivePlayerViewModel @Inject constructor(
             })
     }
 
+    /**
+     * 信号情報パネルの表示状態を受け取る。表示中のみポーリングするため、UI 側から
+     * [LivePlayerState.isSignalInfoVisible] の変化を伝えてもらう。
+     */
+    fun setSignalInfoVisible(visible: Boolean) {
+        _isSignalInfoVisible.value = visible
+    }
+
+    /**
+     * 信号情報を 1 秒間隔で更新する。**パネルを表示している間だけ**動く。
+     *
+     * 以前は再生中ずっと回り続けていたため、パネルを表示していない間も毎秒
+     * [String.format] を6回以上呼び、[SignalMetadata] を作り直して StateFlow へ書き込み、
+     * 購読側(`LivePlayerScreen`)の再コンポーズまで誘発していた。パネルの初期状態は非表示
+     * ([LivePlayerState.isSignalInfoVisible] = false)なので、ユーザーが明示的に開かない限り
+     * 誰も見ていない値を作り続けていたことになり、低スペック機では無駄な常時負荷だった。
+     *
+     * [collectLatest] を使っているため、非表示になった時点で内側のループはキャンセルされ、
+     * 再表示時は [delay] を待たずに即座に 1 回更新する(開いた直後に空欄で待たされない)。
+     * [_mainSignalInfo] は StateFlow なので、停止中も最後の値を保持している。
+     */
     private fun startSignalPolling() {
         signalPollJob?.cancel()
         signalPollJob = viewModelScope.launch(Dispatchers.Main) {
-            while (true) {
-                _mainPlayer.value?.let { player ->
-                    val vFormat = player.videoFormat
-                    val aFormat = player.audioFormat
-                    val vCounters = player.videoDecoderCounters
-                    val bitrateText = if (vFormat != null && vFormat.bitrate > 0) String.format(
-                        "%.2f Mbps",
-                        vFormat.bitrate / 1000000f
-                    ) else {
-                        if (vCounters != null) String.format(
-                            "%.2f Mbps",
-                            (vCounters.renderedOutputBufferCount % 50) / 10f + 12.0f
-                        ) else "-"
-                    }
-                    val audioMime = aFormat?.sampleMimeType ?: ""
-                    val audioCodecName = when {
-                        audioMime.contains("mp4a-latm", true) -> "AAC-LATM"
-                        audioMime.contains("mpeg-l2", true) -> "MPEG2 Audio"
-                        audioMime.contains("ac3", true) -> "Dolby Digital"
-                        else -> audioMime.replace("audio/", "").uppercase()
-                    }
-                    _mainSignalInfo.value = SignalMetadata(
-                        videoRes = if (vFormat != null) "${vFormat.width} x ${vFormat.height}" else "-",
-                        verticalFreq = if (vFormat != null && vFormat.frameRate > 0) String.format(
-                            "%.2f Hz",
-                            vFormat.frameRate
-                        ) else "-",
-                        videoCodec = vFormat?.sampleMimeType?.replace("video/", "")?.uppercase()
-                            ?: "-", videoBitrate = bitrateText, audioCodec = audioCodecName,
-                        audioChannels = if (aFormat != null) "${if (aFormat.channelCount == 6) "5.1" else aFormat.channelCount.toString()}.0ch" else "-",
-                        audioSampleRate = if (aFormat != null) "${aFormat.sampleRate / 1000} kHz" else "-",
-                        bufferDuration = String.format(
-                            "%.1f 秒",
-                            (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) / 1000f
-                        ),
-                        droppedFrames = vCounters?.droppedBufferCount?.toString() ?: "0"
-                    )
+            _isSignalInfoVisible.collectLatest { isVisible ->
+                if (!isVisible) return@collectLatest
+                while (isActive) {
+                    updateSignalInfo()
+                    delay(1000)
                 }
-                delay(1000)
             }
         }
+    }
+
+    /** 現在の再生状態から信号情報を組み立てて [_mainSignalInfo] を更新する。 */
+    private fun updateSignalInfo() {
+        val player = _mainPlayer.value ?: return
+        val vFormat = player.videoFormat
+        val aFormat = player.audioFormat
+        val vCounters = player.videoDecoderCounters
+        val bitrateText = if (vFormat != null && vFormat.bitrate > 0) String.format(
+            "%.2f Mbps",
+            vFormat.bitrate / 1000000f
+        ) else {
+            if (vCounters != null) String.format(
+                "%.2f Mbps",
+                (vCounters.renderedOutputBufferCount % 50) / 10f + 12.0f
+            ) else "-"
+        }
+        val audioMime = aFormat?.sampleMimeType ?: ""
+        val audioCodecName = when {
+            audioMime.contains("mp4a-latm", true) -> "AAC-LATM"
+            audioMime.contains("mpeg-l2", true) -> "MPEG2 Audio"
+            audioMime.contains("ac3", true) -> "Dolby Digital"
+            else -> audioMime.replace("audio/", "").uppercase()
+        }
+        _mainSignalInfo.value = SignalMetadata(
+            videoRes = if (vFormat != null) "${vFormat.width} x ${vFormat.height}" else "-",
+            verticalFreq = if (vFormat != null && vFormat.frameRate > 0) String.format(
+                "%.2f Hz",
+                vFormat.frameRate
+            ) else "-",
+            videoCodec = vFormat?.sampleMimeType?.replace("video/", "")?.uppercase()
+                ?: "-", videoBitrate = bitrateText, audioCodec = audioCodecName,
+            audioChannels = if (aFormat != null) "${if (aFormat.channelCount == 6) "5.1" else aFormat.channelCount.toString()}.0ch" else "-",
+            audioSampleRate = if (aFormat != null) "${aFormat.sampleRate / 1000} kHz" else "-",
+            bufferDuration = String.format(
+                "%.1f 秒",
+                (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) / 1000f
+            ),
+            droppedFrames = vCounters?.droppedBufferCount?.toString() ?: "0"
+        )
     }
 
     // ★ 追加: SSE(startMainSse/startDualSse)のonFailureでもHTTPステータスコードから
