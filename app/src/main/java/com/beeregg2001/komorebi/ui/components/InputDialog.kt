@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.beeregg2001.komorebi.ui.theme.ProvideUiScale
 import androidx.tv.material3.*
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -49,122 +50,124 @@ fun InputDialog(
     val isTextFieldFocused by textFieldInteractionSource.collectIsFocusedAsState()
 
     Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            // ダイアログ背景: 暗いグレー
-            colors = SurfaceDefaults.colors(containerColor = Color(0xFF1E1E1E)),
-            modifier = Modifier.width(if (isLongToken) 560.dp else 400.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+        ProvideUiScale {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                // ダイアログ背景: 暗いグレー
+                colors = SurfaceDefaults.colors(containerColor = Color(0xFF1E1E1E)),
+                modifier = Modifier.width(if (isLongToken) 560.dp else 400.dp)
             ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // --- テキスト入力フィールド (モノトーンスタイル) ---
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = {
-                        // 複数行対応のフィールドは TV のソフトキーボードが
-                        // 改行キーを誤って改行文字として挿入することがあるため除去する
-                        text = if (isLongToken) it.replace("\n", "") else it
-                    },
-                    singleLine = !isLongToken,
-                    minLines = if (isLongToken) 3 else 1,
-                    placeholder = placeholder?.let {
-                        {
-                            Text(
-                                text = it,
-                                style = if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
-                                    fontFamily = FontFamily.Monospace
-                                ) else MaterialTheme.typography.bodyLarge,
-                                color = Color.Gray
-                            )
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(textFieldFocusRequester),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        // フォーカス時: 白背景・黒文字
-                        focusedContainerColor = Color.White,
-                        focusedTextColor = Color.Black,
-                        focusedBorderColor = Color.White,
-                        cursorColor = Color.Black,
-
-                        // 非フォーカス時: 暗い背景・白文字
-                        unfocusedContainerColor = Color.White.copy(alpha = 0.1f),
-                        unfocusedTextColor = Color.White,
-                        unfocusedBorderColor = Color.Gray
-                    ),
-                    textStyle = (if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace
-                    ) else MaterialTheme.typography.bodyLarge).copy(
-                        fontWeight = FontWeight.Medium
-                    ),
-                    interactionSource = textFieldInteractionSource,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    // 完了キーで保存ボタンへ移動
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            saveButtonFocusRequester.requestFocus()
-                        }
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
-                )
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                if (isLongToken) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${text.length} 文字",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color.Gray
-                        )
-                        MonochromeButton(
-                            text = "クリップボードから貼り付け",
-                            onClick = {
-                                clipboardManager.getText()?.text?.let {
-                                    // コピー元の改行・空白(トークンには本来含まれない)を除去
-                                    text = it.replace(Regex("\\s+"), "")
-                                }
+                    // --- テキスト入力フィールド (モノトーンスタイル) ---
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = {
+                            // 複数行対応のフィールドは TV のソフトキーボードが
+                            // 改行キーを誤って改行文字として挿入することがあるため除去する
+                            text = if (isLongToken) it.replace("\n", "") else it
+                        },
+                        singleLine = !isLongToken,
+                        minLines = if (isLongToken) 3 else 1,
+                        placeholder = placeholder?.let {
+                            {
+                                Text(
+                                    text = it,
+                                    style = if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = FontFamily.Monospace
+                                    ) else MaterialTheme.typography.bodyLarge,
+                                    color = Color.Gray
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(textFieldFocusRequester),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            // フォーカス時: 白背景・黒文字
+                            focusedContainerColor = Color.White,
+                            focusedTextColor = Color.Black,
+                            focusedBorderColor = Color.White,
+                            cursorColor = Color.Black,
+
+                            // 非フォーカス時: 暗い背景・白文字
+                            unfocusedContainerColor = Color.White.copy(alpha = 0.1f),
+                            unfocusedTextColor = Color.White,
+                            unfocusedBorderColor = Color.Gray
+                        ),
+                        textStyle = (if (isLongToken) MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace
+                        ) else MaterialTheme.typography.bodyLarge).copy(
+                            fontWeight = FontWeight.Medium
+                        ),
+                        interactionSource = textFieldInteractionSource,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        // 完了キーで保存ボタンへ移動
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                saveButtonFocusRequester.requestFocus()
                             }
                         )
+                    )
+
+                    if (isLongToken) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${text.length} 文字",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.Gray
+                            )
+                            MonochromeButton(
+                                text = "クリップボードから貼り付け",
+                                onClick = {
+                                    clipboardManager.getText()?.text?.let {
+                                        // コピー元の改行・空白(トークンには本来含まれない)を除去
+                                        text = it.replace(Regex("\\s+"), "")
+                                    }
+                                }
+                            )
+                        }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(32.dp))
 
-                // --- アクションボタン ---
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    // キャンセルボタン
-                    MonochromeButton(
-                        text = "キャンセル",
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    )
+                    // --- アクションボタン ---
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // キャンセルボタン
+                        MonochromeButton(
+                            text = "キャンセル",
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        )
 
-                    // 保存ボタン
-                    MonochromeButton(
-                        text = "保存",
-                        onClick = { onConfirm(text) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(saveButtonFocusRequester),
-                        isPrimary = true
-                    )
+                        // 保存ボタン
+                        MonochromeButton(
+                            text = "保存",
+                            onClick = { onConfirm(text) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(saveButtonFocusRequester),
+                            isPrimary = true
+                        )
+                    }
                 }
             }
         }
