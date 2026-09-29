@@ -278,6 +278,27 @@ class ReserveViewModel @Inject constructor(
                 serviceId = serviceId
             )
 
+            // networkId / transportStreamId / serviceId がすべて 0 の場合は
+            // 「チャンネル未指定(＝全チャンネル対象)」を意味する。実在する放送サービスに
+            // (0, 0, 0) の組み合わせは無いため、プレースホルダーとして扱える。
+            //
+            // ここで null にしないと、EDCB 側は「サービスID=0 だけを対象に検索する条件」として
+            // 登録してしまい、どの番組にもヒットしない自動録画条件ができあがる
+            // (EdcbDataMapper.encodeSearchKeyInfo は serviceRanges が null のときだけ
+            //  キャッシュ済みの全チャンネルへフォールバックする)。
+            // AI コンシェルジュのキーワード自動予約は常に (0, 0, 0) を渡すため、
+            // この分岐が無いと機能そのものが成立しない。
+            //
+            // null を「全チャンネル対象」として扱うのはアプリ全体の約束事で、
+            // 自動録画条件カード(KeywordConditionCard)も serviceRanges が null/空なら
+            // 「全チャンネル対象」と表示する。EPGStation 側の実装も null/空/(0,0,0) を
+            // いずれも未指定として扱うため、バックエンドによる差は無い。
+            val serviceRanges = if (networkId == 0 && transportStreamId == 0 && serviceId == 0) {
+                null
+            } else {
+                listOf(serviceRange)
+            }
+
             // 検索条件の組み立て（キーワード、除外ワード、あいまい検索など）
             val searchCondition = com.beeregg2001.komorebi.data.model.ProgramSearchCondition(
                 isEnabled = true,
@@ -286,7 +307,7 @@ class ReserveViewModel @Inject constructor(
                 isTitleOnly = isTitleOnly,
                 broadcastType = broadcastType,
                 isFuzzySearchEnabled = isFuzzySearch,
-                serviceRanges = listOf(serviceRange),
+                serviceRanges = serviceRanges,
                 dateRanges = dateRanges,
                 duplicateTitleCheckScope = duplicateScope,
                 duplicateTitleCheckPeriodDays = 6
