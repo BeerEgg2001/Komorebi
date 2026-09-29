@@ -54,6 +54,15 @@ class MainRootState {
 
     // AIコンシェルジュ
     var isAiConciergeOpen by mutableStateOf(false)
+
+    /**
+     * 同期エラーダイアログを表示中か。
+     *
+     * このダイアログも画面全体を覆う前面オーバーレイなので、設定画面・AIコンシェルジュと同様に
+     * 背面ツリーのフォーカスを止める必要がある。止めないと、ホーム画面の「フォーカス迷子検知」が
+     * ダイアログからフォーカスを奪い返し、ダイアログが表示されたまま操作できなくなる。
+     */
+    var isSyncErrorVisible by mutableStateOf(false)
     var showAiKeyboardInput by mutableStateOf(false)
     var toastMessage by mutableStateOf<String?>(null)
 

@@ -76,8 +76,12 @@ fun MainRootBackground(
     // これが漏れていると、パネル表示中も背面のホーム画面がフォーカス可能なままになり、
     // ホーム側の「フォーカス迷子検知」がパネルからフォーカスを奪い返してしまう
     // (パネルは表示されたままキー操作だけ背面画面に効く操作不能状態になる)。
+    // ★ 追加: 同期エラーダイアログ(MainRootDialogs側で描画)も全画面オーバーレイ。
+    // これが漏れていると背面のホーム画面がフォーカス可能なまま残り、ホーム側の
+    // 「フォーカス迷子検知」がダイアログからフォーカスを奪い返してしまう。
     val isBackgroundFocusBlocked =
-        isFullScreenPlayerVisible || state.isSettingsOpen || state.isAiConciergeOpen
+        isFullScreenPlayerVisible || state.isSettingsOpen || state.isAiConciergeOpen ||
+            state.isSyncErrorVisible
 
     Box(
         modifier = Modifier
@@ -325,6 +329,7 @@ fun MainRootBackground(
                         onAiReturnConsumed = { state.aiFocusReturnTick = 0 },
                         // ★ 追加: AIコンシェルジュパネル表示中はフォーカス自動復帰・戻るキー処理を止める
                         isAiConciergeOpen = state.isAiConciergeOpen,
+                        isSyncErrorVisible = state.isSyncErrorVisible,
                         // プレイヤー表示中はホーム画面が見えないため、定期取得を止めさせる
                         isPlayerActiveFullScreen = isFullScreenPlayerVisible
                     )

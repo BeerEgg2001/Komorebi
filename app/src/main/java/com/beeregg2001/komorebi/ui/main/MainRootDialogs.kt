@@ -61,7 +61,6 @@ fun MainRootDialogs(
     updateState: UpdateState,
     timeFormat: String,
     isSettingsInitialized: Boolean,
-    hasSyncError: Boolean,
     detailFocusRequester: FocusRequester,
     apiKey: String, // ★ 追加: 取得したAPIキーを受け取る
     onExitApp: () -> Unit,
@@ -118,13 +117,21 @@ fun MainRootDialogs(
     // ダイアログ & オーバーレイ UI
     // ========================================================================
 
-    if (hasSyncError) {
+    // 表示可否の判定は MainRootScreen 側で行い、ここでは結果だけを見る。
+    // 背面ツリーのフォーカス抑制が同じ値を参照する必要があるため。
+    if (state.isSyncErrorVisible) {
         val errorMessage = recordViewModel.syncProgress.value.error ?: "不明なエラー"
         SyncErrorDialog(
             errorMessage = errorMessage,
             onRetry = {
                 recordViewModel.clearSyncError()
                 recordViewModel.triggerSmartSync()
+            },
+            // 設定画面へ移動する際はエラーを消しておく。残したままだと設定画面を
+            // 閉じた直後に同じダイアログが再び出てしまう。
+            onGoToSettings = {
+                recordViewModel.clearSyncError()
+                state.isSettingsOpen = true
             },
             onDismiss = { recordViewModel.clearSyncError() }
         )

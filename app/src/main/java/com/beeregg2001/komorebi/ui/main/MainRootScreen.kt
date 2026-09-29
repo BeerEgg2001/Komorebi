@@ -349,6 +349,17 @@ fun MainRootScreen(
     val hasSyncError by remember(recordViewModel) {
         recordViewModel.syncProgress.map { it.error != null }.distinctUntilChanged()
     }.collectAsState(initial = false)
+
+    // 同期エラーダイアログの表示可否はここで一元的に判定し、state 経由で共有する。
+    // ダイアログ本体(MainRootDialogs)の表示条件と、背面ツリーのフォーカス抑制
+    // (MainRootBackground の isBackgroundFocusBlocked / HomeLauncherScreen の
+    //  フォーカス迷子検知) が同じ値を見る必要があるため。
+    //
+    // 初期設定が未完了のうちは表示しない。接続先が無いのだから失敗して当然であり、
+    // 初回起動時に「初期設定が必要です」の案内と重なってしまう。
+    LaunchedEffect(hasSyncError, isSettingsInitialized) {
+        state.isSyncErrorVisible = hasSyncError && isSettingsInitialized
+    }
     val isEpgReady by epgViewModel.isInitialLoadComplete.collectAsState()
 
     val mirakurunIp by settingsViewModel.mirakurunIp.collectAsState(initial = "")
@@ -776,7 +787,6 @@ fun MainRootScreen(
                 updateState = updateState,
                 timeFormat = timeFormat,
                 isSettingsInitialized = isSettingsInitialized,
-                hasSyncError = hasSyncError,
                 detailFocusRequester = detailFocusRequester,
                 apiKey = geminiApiKey,
                 onExitApp = onExitApp,
