@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.beeregg2001.komorebi.ui.theme.ProvideUiScale
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
@@ -53,71 +54,73 @@ fun AiTextInputDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        LaunchedEffect(Unit) {
-            delay(300)
-            runCatching { focusRequester.requestFocus() }
-        }
+        ProvideUiScale {
+            LaunchedEffect(Unit) {
+                delay(300)
+                runCatching { focusRequester.requestFocus() }
+            }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.85f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                colors = SurfaceDefaults.colors(containerColor = colors.surface),
-                modifier = Modifier.width(500.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.padding(32.dp)) {
-                    Text(
-                        text = "AIに質問・指示を入力",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.textPrimary
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = SurfaceDefaults.colors(containerColor = colors.surface),
+                    modifier = Modifier.width(500.dp)
+                ) {
+                    Column(modifier = Modifier.padding(32.dp)) {
+                        Text(
+                            text = "AIに質問・指示を入力",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester)
-                            .background(
-                                colors.textPrimary.copy(alpha = 0.1f),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(16.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            color = colors.textPrimary,
-                            fontSize = 18.sp
-                        ),
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = {
-                            onSubmit(text)
-                        }),
-                        cursorBrush = Brush.verticalGradient(listOf(colors.accent, colors.accent))
-                    )
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester)
+                                .background(
+                                    colors.textPrimary.copy(alpha = 0.1f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(16.dp),
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 18.sp
+                            ),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = {
+                                onSubmit(text)
+                            }),
+                            cursorBrush = Brush.verticalGradient(listOf(colors.accent, colors.accent))
+                        )
 
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Button(
-                            onClick = onDismiss,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.colors(
-                                containerColor = colors.textPrimary.copy(alpha = 0.1f),
-                                contentColor = colors.textPrimary
-                            )
-                        ) { Text("キャンセル") }
-                        Button(
-                            onClick = { onSubmit(text) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.colors(
-                                containerColor = colors.accent,
-                                contentColor = if (colors.isDark) Color.Black else Color.White
-                            )
-                        ) { Text("送信") }
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Button(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.textPrimary.copy(alpha = 0.1f),
+                                    contentColor = colors.textPrimary
+                                )
+                            ) { Text("キャンセル") }
+                            Button(
+                                onClick = { onSubmit(text) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = colors.accent,
+                                    contentColor = if (colors.isDark) Color.Black else Color.White
+                                )
+                            ) { Text("送信") }
+                        }
                     }
                 }
             }

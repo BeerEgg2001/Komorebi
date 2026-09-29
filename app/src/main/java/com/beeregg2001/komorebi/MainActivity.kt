@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.Density
 import androidx.media3.common.util.UnstableApi
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.ui.theme.LocalUiScale
 import com.beeregg2001.komorebi.ui.components.ExitDialog
 import com.beeregg2001.komorebi.ui.main.MainRootScreen
 import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
@@ -67,7 +68,10 @@ class MainActivity : ComponentActivity() {
                 LocalDensity provides Density(
                     density = baseDensity.density * scale,
                     fontScale = baseDensity.fontScale
-                )
+                ),
+                // ダイアログの内側では LocalDensity の上書きが引き継がれないため、
+                // 倍率そのものも渡して ProvideUiScale で再適用できるようにする。
+                LocalUiScale provides scale
             ) {
                 KomorebiTheme {
                     var showExitDialog by remember { mutableStateOf(false) }
