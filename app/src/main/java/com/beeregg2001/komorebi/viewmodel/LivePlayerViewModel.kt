@@ -801,6 +801,9 @@ class LivePlayerViewModel @Inject constructor(
                     val cfAccessHeaders = settingsRepository.getCfAccessHeaders()
                     val newDualPlayer = withContext(Dispatchers.Main) {
                         livePlayerFactory.createExoPlayer(
+                            // 副画面は音声フォーカスを要求しない。主画面と奪い合うと、
+                            // 片方が AUDIOFOCUS_LOSS を受けて意図せず停止してしまう。
+                            handleAudioFocus = false,
                             audioOutputMode = audioOutputMode,
                             isKonomiTvSource = { dualCurrentSource == StreamSource.KONOMITV },
                             onSubtitleDataReceived = { pts, data ->
