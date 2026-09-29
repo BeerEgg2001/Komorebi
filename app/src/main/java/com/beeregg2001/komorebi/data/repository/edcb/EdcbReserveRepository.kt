@@ -442,10 +442,31 @@ class EdcbReserveRepository @Inject constructor(
                 val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
                 if (result.isSuccess) return@withContext Result.success(Unit)
 
+                // sendAddAutoAdd は失敗時に EDCB が返したステータスコードを例外メッセージへ
+                // 載せているので、握り潰さず表に出す(原因の切り分けに必要)。
+                // 送信内容の要約もログへ出す。EDCB 側は構造体を解釈できない場合も
+                // 同じ汎用エラーを返すため、どのフィールドが疑わしいかを見分ける手掛かりになる。
+                Log.e(
+                    TAG,
+                    "AddAutoAdd rejected: ${result.exceptionOrNull()?.message}" +
+                        " / services=${searchInfo.serviceList.size}" +
+                        " / dates=${searchInfo.dateList.size}" +
+                        " / andKeyLen=${searchInfo.andKey.length}" +
+                        " / notKeyLen=${searchInfo.notKey.length}" +
+                        " / contents=${searchInfo.contentList.size}" +
+                        " / aimai=${searchInfo.aimaiFlag}" +
+                        " / regExp=${searchInfo.regExpFlag}" +
+                        " / titleOnly=${searchInfo.titleOnlyFlag}" +
+                        " / freeCA=${searchInfo.freeCAFlag}" +
+                        " / chkRecEnd=${searchInfo.chkRecEnd}" +
+                        " / chkRecDay=${searchInfo.chkRecDay}" +
+                        " / chkRecNoService=${searchInfo.chkRecNoService}"
+                )
                 Result.failure(
                     Exception(
                         "EDCBが自動録画条件の追加を拒否しました。" +
-                            "(対象チャンネル数: ${searchInfo.serviceList.size})"
+                            "(対象チャンネル数: ${searchInfo.serviceList.size}, " +
+                            "詳細: ${result.exceptionOrNull()?.message ?: "不明"})"
                     )
                 )
             } catch (e: Exception) {
