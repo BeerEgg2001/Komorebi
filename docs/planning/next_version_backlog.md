@@ -690,6 +690,39 @@ PR #117 で他の症状は解消したが、**本文へ一度フォーカスを�
 
 **教訓（3）**: `requestFocus()` の失敗は `runCatching` で包むと表に出ない。`OpenSourceLicensesScreen` は Modifier の順序ミスで本文へのフォーカス移動が**最初から一度も動いていなかった**が、`runCatching { … }` に隠れて長く気づかれなかった。フォーカス要求が効かない症状を追うときは、まず Modifier の順序（`focusRequester` が `focusable` より前か）を確認する。
 
+#### 【2026-09-29 追記】3つ目のパターン: プログラムからの `requestFocus()` による奪取
+
+**症状**: 同期エラーダイアログ（`SyncErrorDialog`）が表示されても、裏のホーム画面へフォーカスが移ってしまい操作できなくなる。方向キーを封じても直らなかった。
+
+**原因**: ホーム画面に**フォーカス迷子検知**（`HomeLauncherScreen.kt` の `LaunchedEffect`。ログに「フォーカス迷子を検知（hasFocus=… stranded=…）。復帰を試みます」と出る）があり、フォーカスが失われると自動で復帰させる。これがダイアログ表示中にも動き、ダイアログからフォーカスを奪い返していた。
+
+**`focusProperties` は方向キーの移動先しか制御できず、プログラムからの `requestFocus()` は防げない。** 対策は「オーバーレイ表示中であることを復帰機構側に伝える」しかない。
+
+既に2箇所の抑制条件が存在する。
+
+| 箇所 | 役割 |
+|---|---|
+| `MainRootBackground.isBackgroundFocusBlocked` | 背面ツリーをフォーカス不可にする |
+| `HomeLauncherScreen.isFocusSuspended` | フォーカス迷子検知を止める |
+
+設定画面と AI コンシェルジュパネルは過去に同じ問題を踏んで**両方に登録済み**だったが、同期エラーダイアログは**両方から漏れていた**。つまり**新しい全画面オーバーレイを追加するたびに、この2箇所への登録が必要**で、忘れると同じ不具合が再発する構造になっている。
+
+PR #123 では、表示可否の判定を `MainRootScreen` で一元化し `MainRootState.isSyncErrorVisible` として共有することで、ダイアログ本体の表示条件と抑制条件が同じ値を見るようにした。条件が分かれていると今回のような漏れが起きるため。
+
+#### 対策手法が画面ごとにバラバラになっている
+
+ここまでの調査で、**同じ目的に対して5通りの実装**が並存していることが分かった。
+
+| 画面 | 採っている手法 |
+|---|---|
+| `DeviceCapabilitiesScreen` | 各要素の `focusProperties` で方向キーを封じる |
+| `OpenSourceLicensesScreen` | `onKeyEvent` でキーを消費 ＋ `BackHandler` |
+| `SyncErrorDialog` | `focusProperties` ＋ `BackHandler` ＋ 上記2箇所の抑制条件への登録 |
+| `RobustUpdateDialog` | `focusGroup()` ＋ `focusProperties { exit = { Cancel } }` ＋ **自前のフォーカス奪還**（`onFocusChanged` で失ったら `requestFocus()` し直す） |
+| `SettingScreen` | `focusProperties { canFocus = !isDialogOpen }`（Compose 1.7 以降は機能していない） |
+
+どれが確実かは画面の構造（`Dialog` か `Box` オーバーレイか、内部に `focusable` を持つコンポーネントか）に依存し、**新規追加のたびに正解を探し直している**のが現状。`RobustUpdateDialog` の「奪われたら奪い返す」方式は、ホーム側の迷子検知と競合しうる点でも危うい。
+
 #### 戻るキーは `BackHandler` で受けるのが確実
 
 Compose のキーイベントは「フォーカスされた要素とその祖先」にしか届かないため、フォーカスが画面外へ出た時点で `onPreviewKeyEvent` / `onKeyEvent` のどちらも呼ばれず、**閉じる手段が失われる**。`BackHandler` は `OnBackPressedDispatcher` 経由でフォーカス位置に依存せず呼ばれるため、この取りこぼしを確実に受け止められる（`OpenSourceLicensesScreen` に導入済み。`RecordListScreen` / `SmbLibraryScreen` / `AiConciergePanel` など既存画面でも使われている）。
@@ -702,6 +735,8 @@ Compose のキーイベントは「フォーカスされた要素とその祖先
 |---|---|
 | `DeviceCapabilitiesScreen` | **修正済み・実機確認済み**（2026-09-27）。フォーカスを「2つのカード」と「閉じるボタン」の3要素に閉じ込めた |
 | `OpenSourceLicensesScreen` | **修正済み・実機確認済み**（2026-09-27、PR #117）。フォーカス脱出・戻るキー・本文へのフォーカス移動・本文のスクロールが解消。**残件: 本文から左キーで一覧へ戻れない**（下記） |
+| `SyncErrorDialog` | **修正済み・実機確認済み**（2026-09-29、PR #123）。方向キーの封じ込めだけでは直らず、ホーム画面のフォーカス迷子検知を止める必要があった（上記「3つ目のパターン」） |
+| `RobustUpdateDialog` | 独自に対策済み（`focusGroup()` ＋ `exit = Cancel` ＋ 自前のフォーカス奪還）。手法が他画面と揃っていない |
 | `SettingScreen` の `canFocus = !isDialogOpen` | **機能していない**（上記参照）。代わりに Back 処理へ `isDialogOpen` の分岐を追加し、戻るキーを `closeDialog()` へ読み替えた（2026-09-27） |
 | その他のダイアログ（`InputDialog` / `SelectionDialog` / `MultiSelectionDialog` / `GeminiSetupDialog` / SMB系） | **フォーカス脱出は未確認**だが、上記の Back 処理の分岐により「戻るキーで閉じられない」症状は解消される見込み |
 
@@ -791,6 +826,7 @@ Compose のキーイベントは「フォーカスされた要素とその祖先
 6. **移行順序とリグレッション確認範囲** — 画面単位での移行手順と、各段階で実機確認すべき操作の一覧。
 7. **計測方法** — 項目10で整備する `StartupBenchmarks` / frameTimings を、フォーカス整理の効果測定にも流用する。
 8. **オーバーレイ画面のフォーカス閉じ込めと戻るキー処理** — 設定画面の上に重ねる画面がフォーカスを裏へ逃がし、戻るキーで閉じられなくなる問題（項目12の「2026-09-27 追記」参照）。個々の画面で `focusProperties` を書く運用のままにするか、共通ラッパーを用意するかを決める。`OpenSourceLicensesScreen` で同症状を実機確認済みのため、設計を待たずに個別修正を先行させる場合も、後で共通化できる形にしておく。
+9. **全画面オーバーレイの「登録」を1箇所にまとめる** — 新しいオーバーレイを追加するたびに `MainRootBackground.isBackgroundFocusBlocked` と `HomeLauncherScreen.isFocusSuspended` の**両方へ手で足す**必要があり、忘れると「表示されているのにフォーカスを奪われて操作できない」不具合になる（項目12の「3つ目のパターン」参照）。オーバーレイの一覧を1箇所で管理し、両者がそれを参照する形にすれば登録漏れが起きない。共通ラッパー案に含める。また、対策手法が画面ごとに5通りに分かれている現状もこのタイミングで統一する。
 
 設計の成果物は `docs/design/` 配下に置く（`docs/design/ts_seek_index.md` の前例に倣う）。
 
