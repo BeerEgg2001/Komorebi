@@ -131,6 +131,12 @@ fun MainRootDialogs(
                 recordViewModel.clearSyncError()
                 recordViewModel.triggerSmartSync()
             },
+            // 設定画面へ移動する際はエラーを消しておく。残したままだと設定画面を
+            // 閉じた直後に同じダイアログが再び出てしまう。
+            onGoToSettings = {
+                recordViewModel.clearSyncError()
+                state.isSettingsOpen = true
+            },
             onDismiss = { recordViewModel.clearSyncError() }
         )
     }
