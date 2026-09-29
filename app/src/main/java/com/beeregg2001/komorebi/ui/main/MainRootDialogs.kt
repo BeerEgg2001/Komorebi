@@ -118,7 +118,12 @@ fun MainRootDialogs(
     // ダイアログ & オーバーレイ UI
     // ========================================================================
 
-    if (hasSyncError) {
+    // 初期設定が未完了のうちは同期エラーを表示しない。
+    // 接続先が無いのだから失敗して当然であり、初回起動時に「初期設定が必要です」の
+    // 案内と重なって、設定画面へ進むのに決定キーを 2 回押させてしまうため。
+    // (同期自体も RecordViewModel 側で初期設定の完了を待ってから開始するが、
+    //  設定をやり直して未完了に戻した場合など、過去のエラーが残っている場合の保険)
+    if (hasSyncError && isSettingsInitialized) {
         val errorMessage = recordViewModel.syncProgress.value.error ?: "不明なエラー"
         SyncErrorDialog(
             errorMessage = errorMessage,
