@@ -411,6 +411,20 @@ class EdcbReserveRepository @Inject constructor(
                     r.programSearchCondition,
                     cacheManager.cachedServices
                 )
+
+                // EDCB の自動予約条件は対象サービスを明示的に列挙する仕様で、空のリストでは
+                // 登録が拒否される(EpgTimer 側も追加時に全チャンネルを選択した状態から始まる)。
+                // 検索条件がチャンネル未指定(serviceRanges = null)の場合は EPG キャッシュ上の
+                // 全サービスへフォールバックするが、番組表をまだ一度も開いていない等で
+                // キャッシュが空だと、ここで空のまま送ってしまい原因の分からない失敗になる。
+                if (searchInfo.serviceList.isEmpty()) {
+                    return@withContext Result.failure(
+                        Exception(
+                            "対象チャンネルを特定できなかったため、自動録画条件を追加できませんでした。\n" +
+                                "番組表を開いてEPGデータを取得してから、もう一度お試しください。"
+                        )
+                    )
+                }
                 val recSetting = EdcbDataMapper.encodeReserveRecordSettings(
                     ReserveRecordSettings(
                         isEnabled = r.recordSettings.isEnabled,
@@ -428,7 +442,12 @@ class EdcbReserveRepository @Inject constructor(
                 val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
                 if (result.isSuccess) return@withContext Result.success(Unit)
 
-                Result.failure(Exception("Failed to add auto add condition"))
+                Result.failure(
+                    Exception(
+                        "EDCBが自動録画条件の追加を拒否しました。" +
+                            "(対象チャンネル数: ${searchInfo.serviceList.size})"
+                    )
+                )
             } catch (e: Exception) {
                 // ★ 修正
                 Result.failure(Exception("自動録画ルールの追加に失敗しました。\n[詳細]: ${e.message}"))
