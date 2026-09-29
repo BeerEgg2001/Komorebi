@@ -13,6 +13,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Text
+import com.beeregg2001.komorebi.ui.theme.ProvideUiScale
 
 @Composable
 fun ExitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
@@ -23,27 +24,42 @@ fun ExitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF1C1B1F),
         titleContentColor = Color.White,
+        // AlertDialog は内部で Dialog(別ウィンドウ)を使うため LocalDensity の上書きが
+        // 引き継がれない。スロットごとに ProvideUiScale で「UI の大きさ」を再適用する。
         confirmButton = {
-            Button(
-                onClick = onConfirm,
-                modifier = Modifier.focusRequester(focusRequester),
-                colors = ButtonDefaults.colors(
-                    containerColor = Color(0xFF333333),
-                    focusedContainerColor = Color.White
-                ),
-                scale = ButtonDefaults.scale(focusedScale = 1.1f)
-            ) { Text("終了") }
+            ProvideUiScale {
+                Button(
+                    onClick = onConfirm,
+                    modifier = Modifier.focusRequester(focusRequester),
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF333333),
+                        focusedContainerColor = Color.White
+                    ),
+                    scale = ButtonDefaults.scale(focusedScale = 1.1f)
+                ) { Text("終了") }
+            }
         },
         dismissButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.colors(
-                    containerColor = Color(0xFF333333).copy(alpha = 0.1f),
-                    focusedContainerColor = Color.White
-                ),
-                scale = ButtonDefaults.scale(focusedScale = 1.1f)
-            ) { Text("キャンセル") }
+            ProvideUiScale {
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF333333).copy(alpha = 0.1f),
+                        focusedContainerColor = Color.White
+                    ),
+                    scale = ButtonDefaults.scale(focusedScale = 1.1f)
+                ) { Text("キャンセル") }
+            }
         },
-        title = { Text("アプリを終了しますか？", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Left, color = Color.White) }
+        title = {
+            ProvideUiScale {
+                Text(
+                    "アプリを終了しますか？",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Left,
+                    color = Color.White
+                )
+            }
+        }
     )
 }
