@@ -411,6 +411,20 @@ class EdcbReserveRepository @Inject constructor(
                     r.programSearchCondition,
                     cacheManager.cachedServices
                 )
+
+                // EDCB の自動予約条件は対象サービスを明示的に列挙する仕様で、空のリストでは
+                // 登録が拒否される(EpgTimer 側も追加時に全チャンネルを選択した状態から始まる)。
+                // 検索条件がチャンネル未指定(serviceRanges = null)の場合は EPG キャッシュ上の
+                // 全サービスへフォールバックするが、番組表をまだ一度も開いていない等で
+                // キャッシュが空だと、ここで空のまま送ってしまい原因の分からない失敗になる。
+                if (searchInfo.serviceList.isEmpty()) {
+                    return@withContext Result.failure(
+                        Exception(
+                            "対象チャンネルを特定できなかったため、自動録画条件を追加できませんでした。\n" +
+                                "番組表を開いてEPGデータを取得してから、もう一度お試しください。"
+                        )
+                    )
+                }
                 val recSetting = EdcbDataMapper.encodeReserveRecordSettings(
                     ReserveRecordSettings(
                         isEnabled = r.recordSettings.isEnabled,
@@ -428,7 +442,33 @@ class EdcbReserveRepository @Inject constructor(
                 val result = edcbApi.sendAddAutoAdd(listOf(autoAddData))
                 if (result.isSuccess) return@withContext Result.success(Unit)
 
-                Result.failure(Exception("Failed to add auto add condition"))
+                // sendAddAutoAdd は失敗時に EDCB が返したステータスコードを例外メッセージへ
+                // 載せているので、握り潰さず表に出す(原因の切り分けに必要)。
+                // 送信内容の要約もログへ出す。EDCB 側は構造体を解釈できない場合も
+                // 同じ汎用エラーを返すため、どのフィールドが疑わしいかを見分ける手掛かりになる。
+                Log.e(
+                    TAG,
+                    "AddAutoAdd rejected: ${result.exceptionOrNull()?.message}" +
+                        " / services=${searchInfo.serviceList.size}" +
+                        " / dates=${searchInfo.dateList.size}" +
+                        " / andKeyLen=${searchInfo.andKey.length}" +
+                        " / notKeyLen=${searchInfo.notKey.length}" +
+                        " / contents=${searchInfo.contentList.size}" +
+                        " / aimai=${searchInfo.aimaiFlag}" +
+                        " / regExp=${searchInfo.regExpFlag}" +
+                        " / titleOnly=${searchInfo.titleOnlyFlag}" +
+                        " / freeCA=${searchInfo.freeCAFlag}" +
+                        " / chkRecEnd=${searchInfo.chkRecEnd}" +
+                        " / chkRecDay=${searchInfo.chkRecDay}" +
+                        " / chkRecNoService=${searchInfo.chkRecNoService}"
+                )
+                Result.failure(
+                    Exception(
+                        "EDCBが自動録画条件の追加を拒否しました。" +
+                            "(対象チャンネル数: ${searchInfo.serviceList.size}, " +
+                            "詳細: ${result.exceptionOrNull()?.message ?: "不明"})"
+                    )
+                )
             } catch (e: Exception) {
                 // ★ 修正
                 Result.failure(Exception("自動録画ルールの追加に失敗しました。\n[詳細]: ${e.message}"))

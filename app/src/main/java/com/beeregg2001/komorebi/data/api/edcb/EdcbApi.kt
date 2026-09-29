@@ -477,13 +477,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
         return try {
             val req = EdcbByteUtils.writeIntVector(reserveIds)
             val res = tcpClient.sendCommand(1014, req) // CMD_EPG_SRV_DEL_RESERVE
-            if (res != null) {
-                // 成功時は 1 が返る
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "予約の削除")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -494,12 +488,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
         return try {
             val req = EdcbByteUtils.writeIntVector(dataIds)
             val res = tcpClient.sendCommand(1033, req) // CMD_EPG_SRV_DEL_AUTO_ADD
-            if (res != null) {
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "自動予約条件の削除")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -515,12 +504,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
             req.put(vecBytes)
 
             val res = tcpClient.sendCommand(2013, req.array())
-            if (res != null) {
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "予約の追加")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -536,12 +520,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
             req.put(vecBytes)
 
             val res = tcpClient.sendCommand(2015, req.array())
-            if (res != null) {
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "予約の変更")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -556,12 +535,7 @@ class EdcbApi(private val ip: String, private val port: Int) {
             req.put(vecBytes)
 
             val res = tcpClient.sendCommand(2132, req.array())
-            if (res != null) {
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "自動予約条件の追加")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -576,14 +550,35 @@ class EdcbApi(private val ip: String, private val port: Int) {
             req.put(vecBytes)
 
             val res = tcpClient.sendCommand(2134, req.array())
-            if (res != null) {
-                val status = EdcbByteUtils.readInt(res)
-                if (status == 1) Result.success(true) else Result.failure(Exception("EDCB returned failure status: $status"))
-            } else {
-                Result.failure(Exception("Failed response from EDCB"))
-            }
+            toWriteResult(res, "自動予約条件の変更")
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * 書き込み系コマンド(予約・自動予約の追加/変更/削除)の結果を判定する。
+     *
+     * 成否は **[EdcbTcpClient.sendCommand] が返す値そのもの**で決まる。sendCommand は
+     * レスポンスヘッダの先頭にあるエラーコードを読み、EDCB がエラーを返した場合は null を
+     * 返すため、**非 null であれば EDCB 側は成功している**。
+     *
+     * 応答本体の中身は判定に使わない。コマンドによっては CMD_VER や EDCB 内部のデータが
+     * 入っており、先頭 4 バイトを成否コードとして読める形式ではないため。
+     *
+     * 以前はここで応答本体を 4 バイト読んで 1 かどうかを見ていたが、これが常に不一致となり、
+     * **実際には EDCB へ反映されているのに失敗と報告される**状態だった(EpgTimer 側で
+     * 条件が追加されていることを確認済み)。EDCB バックエンドでの予約・自動予約の
+     * 追加/変更/削除がすべてこの状態にあった。
+     */
+    private fun toWriteResult(res: ByteBuffer?, operation: String): Result<Boolean> {
+        if (res == null) {
+            return Result.failure(Exception("EDCBが${operation}を拒否しました。"))
+        }
+        // 応答本体の内容は判定に使わないが、形式を把握できるようデバッグログには残す。
+        if (res.hasRemaining()) {
+            Log.d(TAG, "$operation: 応答本体 ${res.remaining()} バイト (判定には使用しない)")
+        }
+        return Result.success(true)
     }
 }

@@ -276,9 +276,19 @@ fun MainRootScreen(
                         endMinute = 59,
                         excludeKeyword = "",
                         isTitleOnly = false,
-                        broadcastType = "GR,BS,BS4K,CS,SKY",
+                        // broadcast_type は「すべて / 無料のみ / 有料のみ」の3択で、
+                        // 放送波の種別を並べるフィールドではない。KonomiTV 側は
+                        // Literal['All', 'FreeOnly', 'PaidOnly'] のため、以前渡していた
+                        // "GR,BS,BS4K,CS,SKY" はバリデーションで弾かれて HTTP 422 になっていた
+                        // (EDCB 側は == "FreeOnly" / == "PaidOnly" の比較なので既定動作に落ちていた)。
+                        broadcastType = "All",
                         isFuzzySearch = true,
-                        duplicateScope = "SameTitle",
+                        // duplicate_title_check_scope も同様に3択
+                        // (None / SameChannelOnly / AllChannels)。"SameTitle" は不正値で、
+                        // KonomiTV では 422 の原因になっていた。EDCB 側の変換は
+                        // 「"None" 以外なら重複チェック有効」「"AllChannels" ならサービス横断」
+                        // なので、"SameChannelOnly" にすると従来の EDCB 挙動と一致する。
+                        duplicateScope = "SameChannelOnly",
                         priority = 3,
                         isEventRelay = true,
                         isExactRecord = true,
