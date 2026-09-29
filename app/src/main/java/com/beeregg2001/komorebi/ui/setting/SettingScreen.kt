@@ -167,6 +167,8 @@ fun SettingsScreen(
                 FocusRequester(),
                 FocusRequester(),
                 FocusRequester(),
+                FocusRequester(),
+                // ★ 追加: 「UI の大きさ」用に1個増強
                 FocusRequester()
             ),
             listOf(FocusRequester(), FocusRequester(), FocusRequester(), FocusRequester()),
@@ -974,7 +976,17 @@ fun SettingsScreen(
                                 ) { viewModel.updateTimeFormat(it) }
                             },
                             { viewModel.toggleHideSubChannels() },
-                            itemFocusRequesters[5].dropLast(1), itemFocusRequesters[5].last()
+                            {
+                                uiState.activeDialog = SettingDialogState.Selection(
+                                    AppStrings.SETTINGS_ITEM_UI_SCALE,
+                                    UI_SCALE_OPTIONS,
+                                    prefs.uiScale
+                                ) { viewModel.updateUiScale(it) }
+                            },
+                            // [0..3] が通常項目、[4] がサブチャンネル非表示、[5] が UI の大きさ
+                            itemFocusRequesters[5].take(4),
+                            itemFocusRequesters[5][4],
+                            itemFocusRequesters[5][5]
                         ) { uiState.restoreFocusRequester = it; uiState.restoreCategoryIndex = 5 }
 
                         6 -> EpgSettingsContent(
