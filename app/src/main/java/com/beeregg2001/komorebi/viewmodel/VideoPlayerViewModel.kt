@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
+import com.beeregg2001.komorebi.util.ChapterParser
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.ArchivedComment
 import com.beeregg2001.komorebi.data.model.CmSection
@@ -324,7 +325,20 @@ class VideoPlayerViewModel @Inject constructor(
 
                 val durationMs = (program.recordedVideo.duration * 1000).toLong()
                 val cmSections = program.recordedVideo.cmSections ?: emptyList()
-                _chapters.value = calculateChapters(durationMs, cmSections)
+
+                // ★ 修正: チャプターファイルが取得できていれば、そこから全チャプターを組み立てる。
+                // calculateChapters() は CM 区間からチャプターを逆算するため、本編中の
+                // 名前付きチャプターを表現できず、ix / ox の境界しか現れなかった(Issue #79)。
+                // チャプターファイルが無いバックエンド(KonomiTV など)では従来どおり逆算する。
+                val chapterText = program.recordedVideo.chapterText
+                val parsedChapters = if (!chapterText.isNullOrBlank()) {
+                    ChapterParser.parse(chapterText, program.recordedVideo.duration)
+                } else {
+                    emptyList()
+                }
+                _chapters.value = parsedChapters.ifEmpty {
+                    calculateChapters(durationMs, cmSections)
+                }
 
             }.onFailure { Log.e(TAG, "Failed to fetch program detail", it) }
         }
