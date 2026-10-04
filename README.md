@@ -44,6 +44,17 @@ PC操作に抵抗がない方向けの方法です。
 
 > **配布ファイルについて**: 各リリースには、あらゆる端末で動作する **Universal版**（サイズ大）に加え、`armeabi-v7a` / `arm64-v8a` 向けの軽量版を用意しています。ファイルライブラリ（SMB）機能で使用している `libVLC` のサイズが大きく、低スペック機ではUniversal版のインストールに失敗する場合があるための措置です。動作に不安がある場合は、端末のCPUアーキテクチャに合った軽量版のご利用をおすすめします。
 
+> **軽量版の選び方**: 軽量版はCPUアーキテクチャが一致しないとインストールできません（`INSTALL_FAILED_NO_MATCHING_ABIS`）。
+>
+> * **Fire TV シリーズ（Fire TV Stick / Stick 4K / Stick 4K Max / Fire TV Cube など）は、世代やFire OSのバージョンを問わず `armeabi-v7a` を選んでください。** [Amazonの公式仕様](https://developer.amazon.com/docs/device-specs/device-specifications-fire-tv-streaming-media-player.html)では、Fire OS 6 / 7 / 8 のいずれの機種も Application ABI が 32bit と明記されています。SoC自体は64bit対応でも**OS側が32bitに制限されているため、`arm64-v8a` 版はインストールできません**。
+> * **Android TV / Google TV 搭載テレビなどは機種によって異なります。** 以下のコマンドで端末のABIを確認できます（開発者オプションでadbデバッグを有効にした状態で実行）。
+>
+>   ```sh
+>   adb shell getprop ro.product.cpu.abi
+>   ```
+>
+> 確認が難しい場合や判断に迷う場合は、両方のアーキテクチャを含む **Universal版**をご利用ください。
+
 ---
 
 ## ⚠️ 【重要】初回セットアップとバックエンド環境について

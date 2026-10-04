@@ -12,7 +12,17 @@
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--
+      RECORD_AUDIO 権限は android.hardware.microphone を「必須」として暗黙的に要求するため、
+      明示的に required="false" を宣言しないとマイクを持たない端末へインストールできない。
+      (aapt2 dump badging で uses-implied-feature として確認できる)
+      本体にマイクが無い Fire TV Stick へインストールできない原因になっていた。
+      マイクが無い環境では AI コンシェルジュの音声入力が使えないだけで、文字入力で代替できる
+      (MainRootDialogs が音声認識の可否を判定して導線を出し分けている)。
+    -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
 
     <application
         android:name=".MainApplication"
