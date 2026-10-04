@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.util.UpdateState
@@ -605,7 +606,10 @@ fun ConnectionSettingsContent(
 
 @Composable
 fun PlaybackSettingsContent(
+    isKonomiTv: Boolean,
+    liveEncoding: String,
     liveQ: String,
+    videoEncoding: String,
     videoQ: String,
     liveSub: String,
     videoSub: String,
@@ -618,7 +622,9 @@ fun PlaybackSettingsContent(
     // 専用のリストから引く(録画用availableQualitiesを流用すると常に不一致になり、
     // 常に先頭項目のラベルが表示されてしまっていた)。
     liveAvailableQualities: List<StreamQuality>,
+    liveEncodingR: FocusRequester,
     liveR: FocusRequester,
+    videoEncodingR: FocusRequester,
     videoR: FocusRequester,
     liveSubR: FocusRequester,
     videoSubR: FocusRequester,
@@ -627,7 +633,9 @@ fun PlaybackSettingsContent(
     uiModeR: FocusRequester,
     autoCmSkipR: FocusRequester,
     sidebarR: FocusRequester,
+    onLiveEncoding: () -> Unit,
     onL: () -> Unit,
+    onVideoEncoding: () -> Unit,
     onV: () -> Unit,
     onLiveSub: () -> Unit,
     onVideoSub: () -> Unit,
@@ -646,28 +654,54 @@ fun PlaybackSettingsContent(
         )
         SettingsSection(AppStrings.SETTINGS_SECTION_QUALITY) {
             SettingItem(
+                AppStrings.SETTINGS_ITEM_LIVE_ENCODING,
+                StreamEncoding.fromValue(liveEncoding).label,
+                Icons.Default.LiveTv,
+                modifier = Modifier
+                    .focusRequester(liveEncodingR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = FocusRequester.Cancel
+                        down = if (isKonomiTv && liveEncoding == "original") videoEncodingR else liveR
+                    },
+                onClick = { onClick(liveEncodingR); onLiveEncoding() })
+            SettingItem(
                 AppStrings.SETTINGS_ITEM_LIVE_QUALITY,
                 liveAvailableQualities.find { it.value == liveQ }?.label
                     ?: liveAvailableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.LiveTv,
+                enabled = !isKonomiTv || liveEncoding != "original",
                 modifier = Modifier
                     .focusRequester(liveR)
                     .focusProperties {
                         left = sidebarR
-                        up = FocusRequester.Cancel
-                        down = videoR
+                        up = liveEncodingR
+                        down = videoEncodingR
                     },
                 onClick = { onClick(liveR); onL() })
+            SettingItem(
+                AppStrings.SETTINGS_ITEM_VIDEO_ENCODING,
+                StreamEncoding.fromValue(videoEncoding).label,
+                Icons.Default.VideoFile,
+                modifier = Modifier
+                    .focusRequester(videoEncodingR)
+                    .focusProperties {
+                        left = sidebarR
+                        up = if (isKonomiTv && liveEncoding == "original") liveEncodingR else liveR
+                        down = if (isKonomiTv && videoEncoding == "original") liveSubR else videoR
+                    },
+                onClick = { onClick(videoEncodingR); onVideoEncoding() })
             SettingItem(
                 AppStrings.SETTINGS_ITEM_VIDEO_QUALITY,
                 availableQualities.find { it.value == videoQ }?.label
                     ?: availableQualities.firstOrNull()?.label ?: "Unknown",
                 Icons.Default.VideoFile,
+                enabled = !isKonomiTv || videoEncoding != "original",
                 modifier = Modifier
                     .focusRequester(videoR)
                     .focusProperties {
                         left = sidebarR
-                        up = liveR
+                        up = videoEncodingR
                         down = liveSubR
                     },
                 onClick = { onClick(videoR); onV() })
@@ -681,7 +715,7 @@ fun PlaybackSettingsContent(
                     .focusRequester(liveSubR)
                     .focusProperties {
                         left = sidebarR
-                        up = videoR
+                        up = if (isKonomiTv && videoEncoding == "original") videoEncodingR else videoR
                         down = videoSubR
                     },
                 onClick = { onClick(liveSubR); onLiveSub() })

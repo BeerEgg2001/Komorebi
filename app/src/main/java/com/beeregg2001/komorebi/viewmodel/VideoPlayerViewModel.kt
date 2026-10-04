@@ -87,6 +87,11 @@ class VideoPlayerViewModel @Inject constructor(
     val perProgramExcludedQualities: StateFlow<Set<String>> =
         _perProgramExcludedQualities.asStateFlow()
 
+    // 番組固有のエンコード除外も、画質と同様に保存設定を書き換えず再生時だけ反映する。
+    private val _perProgramExcludedEncodings = MutableStateFlow<Set<String>>(emptySet())
+    val perProgramExcludedEncodings: StateFlow<Set<String>> =
+        _perProgramExcludedEncodings.asStateFlow()
+
     private var detailFetchJob: Job? = null
     private var streamMaintenanceJob: Job? = null
 
@@ -108,6 +113,7 @@ class VideoPlayerViewModel @Inject constructor(
             _isQualitiesLoaded.value = false
             // 番組ごとの除外理由は番組を開くたびに再判定する(前の番組の判定を持ち越さない)
             _perProgramExcludedQualities.value = emptySet()
+            _perProgramExcludedEncodings.value = emptySet()
             try {
                 val backend = settingsRepository.backendType.first()
                 if (backend == "EDCB") {
@@ -211,6 +217,9 @@ class VideoPlayerViewModel @Inject constructor(
                         _perProgramExcludedQualities.value = setOf("original")
                         StreamQuality.DEFAULT_QUALITIES.filterNot { it.value == "original" }
                     }
+                    if (!isOriginalAvailable) {
+                        _perProgramExcludedEncodings.value = setOf("original")
+                    }
                 } else if (backend == "EPGSTATION") {
                     val qualities = recordProvider.getStreamQualities()
                     _availableQualities.value = qualities.ifEmpty {
@@ -279,6 +288,10 @@ class VideoPlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.saveString(SettingsRepository.VIDEO_QUALITY, qualityValue)
         }
+    }
+
+    suspend fun saveVideoEncoding(value: String) {
+        settingsRepository.saveString(SettingsRepository.VIDEO_ENCODING, value)
     }
 
     suspend fun resolveStreamUrl(

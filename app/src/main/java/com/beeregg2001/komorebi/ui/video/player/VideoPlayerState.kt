@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.AudioMode
 
@@ -31,6 +32,7 @@ class VideoPlayerState {
     var currentAudioMode by mutableStateOf(AudioMode.MAIN)
     var currentSpeed by mutableFloatStateOf(1.0f)
     var currentQuality by mutableStateOf(StreamQuality("", ""))
+    var currentEncoding by mutableStateOf(StreamEncoding.fromValue("h264"))
     var isSubtitleEnabled by mutableStateOf(false)
     var isCommentEnabled by mutableStateOf(false)
 

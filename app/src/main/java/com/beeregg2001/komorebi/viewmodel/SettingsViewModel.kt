@@ -10,6 +10,7 @@ import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
 import com.beeregg2001.komorebi.data.sync.RecordSyncEngine
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.repository.RecordProvider
 import com.beeregg2001.komorebi.data.repository.epgstation.EpgStationLiveRepository
@@ -84,6 +85,9 @@ class SettingsViewModel @Inject constructor(
     // 同じ画質空間を共有するため_dynamicQualitiesをそのまま使い、これはEPGSTATIONの
     // ときだけ実体を持つ。
     private val _liveDynamicQualities = MutableStateFlow<List<StreamQuality>?>(null)
+
+    fun getLiveAvailableEncodings(): List<StreamEncoding> =
+        StreamEncoding.available(!KonomiOriginalQualityGate.isUnsupported())
 
     val availableQualities: StateFlow<List<StreamQuality>> = combine(
         _dynamicQualities,
@@ -259,10 +263,20 @@ class SettingsViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5000),
         "ON"
     )
+    val liveEncoding: StateFlow<String> = settingsRepository.liveEncoding.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
+    )
     val liveQuality: StateFlow<String> = settingsRepository.liveQuality.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
         "1080p-60fps"
+    )
+    val videoEncoding: StateFlow<String> = settingsRepository.videoEncoding.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        ""
     )
     val videoQuality: StateFlow<String> = settingsRepository.videoQuality.stateIn(
         viewModelScope,
