@@ -46,12 +46,14 @@ PC操作に抵抗がない方向けの方法です。
 
 > **軽量版の選び方**: 軽量版はCPUアーキテクチャが一致しないとインストールできません（`INSTALL_FAILED_NO_MATCHING_ABIS`）。
 >
-> | 端末の例 | OS | 選ぶべき軽量版 |
-> |---|---|---|
-> | Fire TV Stick 4K（第1世代）、Fire TV Stick（第3世代）など | Fire OS 6（Android 7.1.2） | **`armeabi-v7a`** |
-> | Fire TV Stick 4K Max、Fire TV Cube など | Fire OS 7 / 8（Android 9 / 11） | `arm64-v8a` |
+> * **Fire TV シリーズ（Fire TV Stick / Stick 4K / Stick 4K Max / Fire TV Cube など）は、世代やFire OSのバージョンを問わず `armeabi-v7a` を選んでください。** [Amazonの公式仕様](https://developer.amazon.com/docs/device-specs/device-specifications-fire-tv-streaming-media-player.html)では、Fire OS 6 / 7 / 8 のいずれの機種も Application ABI が 32bit と明記されています。SoC自体は64bit対応でも**OS側が32bitに制限されているため、`arm64-v8a` 版はインストールできません**。
+> * **Android TV / Google TV 搭載テレビなどは機種によって異なります。** 以下のコマンドで端末のABIを確認できます（開発者オプションでadbデバッグを有効にした状態で実行）。
 >
-> Fire OS 6 の端末は、CPU自体は64bit対応でも**OSが32bitのため `arm64-v8a` 版はインストールできません**。判断に迷う場合は、両方を含む **Universal版**をご利用ください。
+>   ```sh
+>   adb shell getprop ro.product.cpu.abi
+>   ```
+>
+> 確認が難しい場合や判断に迷う場合は、両方のアーキテクチャを含む **Universal版**をご利用ください。
 
 ---
 
