@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.util.ChapterParser
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.ui.video.player.ChapterInfo
 import com.beeregg2001.komorebi.ui.video.smb.player.SmbContextBuilder
@@ -25,7 +26,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
-import java.io.BufferedReader
 import java.io.InputStreamReader
 import javax.inject.Inject
 
@@ -417,224 +417,19 @@ class SmbViewModel @Inject constructor(
 
                 if (targetFile == null) return@withContext emptyList()
 
-                val content = StringBuilder()
-                BufferedReader(InputStreamReader(targetFile.inputStream)).use { reader ->
-                    var line = reader.readLine()
-                    while (line != null) {
-                        content.append(line).append("\n")
-                        line = reader.readLine()
-                    }
-                }
-
-                val text = content.toString()
-
-                if (targetFile.name.endsWith(".txt", ignoreCase = true)) {
-                    parseIniFormat(text, durationSec)
-                } else {
-                    parseLuaFormat(text, durationSec)
-                }
+                // ★ 修正: 以前は InputStreamReader に文字コードを指定しておらず、Android 既定の
+                // UTF-8 固定で読んでいたため Shift_JIS のチャプターファイルが文字化けしていた。
+                // 文字コードは生成ツールによって Shift_JIS / UTF-8(BOM の有無も含む)のいずれも
+                // あり得るので、バイト列のまま読んで ChapterParser に判定させる。
+                // 形式(ini / Lua)の判定も拡張子ではなく内容で行うため、ここでは分岐しない。
+                val bytes = targetFile.inputStream.use { it.readBytes() }
+                ChapterParser.parse(ChapterParser.decode(bytes), durationSec)
 
             } catch (e: Exception) {
                 Log.e("SmbViewModel", "Failed to load chapters for SMB item", e)
                 emptyList()
             }
         }
-    }
-
-    private fun parseLuaFormat(text: String, durationSec: Double): List<ChapterInfo> {
-        val trimmed = text.trim()
-
-        // 1. 仕様: "c-"で始めて"c"で終わる
-        if (!trimmed.startsWith("c-") || !trimmed.endsWith("c")) return emptyList()
-
-        // 先頭の "c-" と末尾の "c" を取り除く ("c-c" の場合は coreContent が空になる)
-        val coreContent = trimmed.substring(2, trimmed.length - 1)
-        if (coreContent.isEmpty()) return emptyList()
-
-        // 2. 仕様を満たさないコマンドは全体を無視するための事前バリデーション
-        // パターン: {正整数}{c|d|e}{文字列}- の連続であること
-        if (!coreContent.matches(Regex("^(?:\\d+[cde][^-]*-)+$"))) {
-            return emptyList()
-        }
-
-        val segments = coreContent.split("-").filter { it.isNotEmpty() }
-        val regex = Regex("""^(\d+)([cde])(.*)$""")
-
-        val rawMarkers = mutableListOf<Pair<Long, String>>()
-        var lastTimeMs = 0L
-
-        for (segment in segments) {
-            val match = regex.find(segment) ?: return emptyList()
-            val posValue = match.groupValues[1]
-            val type = match.groupValues[2]
-            val name = match.groupValues[3]
-
-            val timeMs: Long = when (type) {
-                "c" -> posValue.toLongOrNull() ?: 0L
-                "d" -> (posValue.toLongOrNull() ?: 0L) * 100L
-                "e" -> if (durationSec > 0.0) (durationSec * 1000).toLong() else lastTimeMs + 30000L
-                else -> return emptyList() // "c" "d" "e" 以外は全体無視
-            }
-
-            rawMarkers.add(Pair(timeMs, name))
-            lastTimeMs = timeMs
-        }
-
-        if (rawMarkers.isEmpty()) return emptyList()
-
-        val safeDurationMs =
-            if (durationSec > 0.0) (durationSec * 1000).toLong() else lastTimeMs + 30000L
-        val chapters = mutableListOf<ChapterInfo>()
-
-        var currentCmStartMs: Long? = null
-        var lastChapterEndMs = 0L // 本編区間を補完するための変数
-
-        for (i in rawMarkers.indices) {
-            val (timeMs, name) = rawMarkers[i]
-            val nextTimeMs =
-                if (i + 1 < rawMarkers.size) rawMarkers[i + 1].first else safeDurationMs
-
-            val isCmStart = name.startsWith("ix", ignoreCase = true)
-            val isCmEnd = name.startsWith("ox", ignoreCase = true)
-
-            if (isCmStart && currentCmStartMs == null) {
-                // [補完] 直前の終了位置から今回のCM開始位置までにギャップがあれば「本編」として追加
-                if (lastChapterEndMs < timeMs) {
-                    chapters.add(
-                        ChapterInfo(
-                            startTimeMs = lastChapterEndMs,
-                            endTimeMs = timeMs,
-                            isCm = false,
-                            isMarkerOnly = false,
-                            label = "" // UI表示用に "本編" などに変更可能です
-                        )
-                    )
-                }
-                currentCmStartMs = timeMs
-            } else if (isCmEnd && currentCmStartMs != null) {
-                // CM区間の追加
-                chapters.add(
-                    ChapterInfo(
-                        startTimeMs = currentCmStartMs,
-                        endTimeMs = timeMs,
-                        isCm = true,
-                        isMarkerOnly = false,
-                        label = ""
-                    )
-                )
-                currentCmStartMs = null
-                lastChapterEndMs = timeMs // 次の本編の開始位置を更新
-            }
-
-            // ixでもoxでもない通常のマーカー（C5Sec など）
-            if (!isCmStart && !isCmEnd) {
-                chapters.add(
-                    ChapterInfo(
-                        startTimeMs = timeMs,
-                        endTimeMs = nextTimeMs,
-                        isCm = false,
-                        isMarkerOnly = true,
-                        label = name
-                    )
-                )
-            }
-        }
-
-        // 終端処理 (CMが閉じられずに終わった場合)
-        if (currentCmStartMs != null) {
-            chapters.add(
-                ChapterInfo(
-                    startTimeMs = currentCmStartMs,
-                    endTimeMs = safeDurationMs,
-                    isCm = true,
-                    isMarkerOnly = false,
-                    label = ""
-                )
-            )
-            lastChapterEndMs = safeDurationMs
-        }
-
-        // [補完] 最後のマーカーから終端までの本編区間を追加
-        if (lastChapterEndMs < safeDurationMs) {
-            chapters.add(
-                ChapterInfo(
-                    startTimeMs = lastChapterEndMs,
-                    endTimeMs = safeDurationMs,
-                    isCm = false,
-                    isMarkerOnly = false,
-                    label = ""
-                )
-            )
-        }
-
-        return chapters.sortedBy { it.startTimeMs }
-    }
-
-    private fun parseIniFormat(text: String, durationSec: Double): List<ChapterInfo> {
-        val rawMarkers = mutableListOf<Pair<Long, String>>()
-        val lines = text.split("\n")
-        var currentStartMs = -1L
-
-        val timeRegex = Regex("""CHAPTER\d+=(\d{2}):(\d{2}):(\d{2})\.(\d{3})""")
-        val nameRegex = Regex("""CHAPTER\d+NAME=(.*)""")
-
-        for (line in lines) {
-            val tMatch = timeRegex.find(line)
-            if (tMatch != null) {
-                val h = tMatch.groupValues[1].toLong()
-                val m = tMatch.groupValues[2].toLong()
-                val s = tMatch.groupValues[3].toLong()
-                val ms = tMatch.groupValues[4].toLong()
-                currentStartMs = (h * 3600000) + (m * 60000) + (s * 1000) + ms
-            }
-
-            val nMatch = nameRegex.find(line)
-            if (nMatch != null && currentStartMs >= 0L) {
-                val name = nMatch.groupValues[1].trim()
-                rawMarkers.add(Pair(currentStartMs, name))
-                currentStartMs = -1L
-            }
-        }
-
-        if (rawMarkers.isEmpty()) return emptyList()
-
-        val lastTimeMs = rawMarkers.last().first
-        val safeDurationMs =
-            if (durationSec > 0.0) (durationSec * 1000).toLong() else lastTimeMs + 30000L
-        val chapters = mutableListOf<ChapterInfo>()
-
-        for (i in 0 until rawMarkers.size) {
-            val (timeMs, name) = rawMarkers[i]
-            val nextTimeMs =
-                if (i + 1 < rawMarkers.size) rawMarkers[i + 1].first else safeDurationMs
-            val isCm = name.contains("CM", ignoreCase = true) || name.contains(
-                "Sponsor",
-                ignoreCase = true
-            )
-
-            if (isCm) {
-                chapters.add(
-                    ChapterInfo(
-                        timeMs,
-                        nextTimeMs,
-                        isCm = true,
-                        isMarkerOnly = false,
-                        label = ""
-                    )
-                )
-            }
-            chapters.add(
-                ChapterInfo(
-                    timeMs,
-                    nextTimeMs,
-                    isCm = false,
-                    isMarkerOnly = true,
-                    label = name
-                )
-            )
-        }
-
-        return chapters.sortedBy { it.startTimeMs }
     }
 
     fun navigateUp(): Boolean {

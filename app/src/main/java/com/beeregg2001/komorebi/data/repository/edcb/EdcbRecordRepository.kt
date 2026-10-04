@@ -27,6 +27,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.beeregg2001.komorebi.util.ChapterParser
 
 @Singleton
 class EdcbRecordRepository @Inject constructor(
@@ -454,6 +455,9 @@ class EdcbRecordRepository @Inject constructor(
             if (resolverUrls != null) "$baseUrl${resolverUrls.thumbnailUrl}" else fallbackUrl
 
         var cmSections: List<CmSection>? = null
+        // チャプターファイルの生テキスト。CM区間だけでは本編中の名前付きチャプターを
+        // 表現できないため、再生時に解釈できるようそのまま持ち回す。
+        var rawChapterText: String? = null
         if (resolverUrls != null) {
             try {
                 // ★ 修正: resolverが代替チャプターを見つけられなかった場合chapter_alt_urlは
@@ -497,12 +501,18 @@ class EdcbRecordRepository @Inject constructor(
                     }
                 }
                 if (chapterText != null) {
-                    // Mapperを使用して変換
-                    val parsed = EdcbDataMapper.parseChapterTextToCmSections(
+                    // ★ 修正: 以前は CM 区間だけを抜き出していたため、本編中の名前付きチャプターが
+                    // ここで失われ、録画リストからの再生では ix / ox の境界しかチャプターとして
+                    // 現れなかった(Issue #79)。全チャプターをパースし、CM 区間はそこから導出する。
+                    val parsedChapters = ChapterParser.parse(
                         chapterText,
                         info.durationSec.toDouble()
                     )
-                    if (parsed.isNotEmpty()) cmSections = parsed
+                    if (parsedChapters.isNotEmpty()) {
+                        rawChapterText = chapterText
+                        val sections = ChapterParser.toCmSections(parsedChapters)
+                        if (sections.isNotEmpty()) cmSections = sections
+                    }
                 }
             } catch (e: Exception) {
             }
@@ -583,7 +593,8 @@ class EdcbRecordRepository @Inject constructor(
                 "aac",
                 true,
                 thumbnailInfo,
-                cmSections
+                cmSections,
+                rawChapterText
             ),
             dummyGenre,
             isRecording,
