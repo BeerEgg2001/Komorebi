@@ -1,13 +1,13 @@
 {
-  "versionCode": 18,
-  "versionName": "1.1.0-Stable",
-  "releaseNotes": "・EDCB、EPGStation(Fork版)バックエンドへ対応\n・KonomiTVのOriginal画質へ対応\n・SMB経由での動画視聴に対応\n詳細はGithubのリリースノートをご覧ください\n",
+  "versionCode": 19,
+  "versionName": "1.1.1-Stable",
+  "releaseNotes": "・AIコンシェルジュのモデルを Gemini 3.5 Flash Liteへ変更\n詳細はGithubのリリースノートをご覧ください\n",
   "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0/Komorebi-universal-release.apk",
 
   "beta": {
-    "versionCode": 18,
-    "versionName": "1.1.0-Stable",
-    "releaseNotes": "・EDCB、EPGStation(Fork版)バックエンドへ対応\n・KonomiTVのOriginal画質へ対応\n・SMB経由での動画視聴に対応\n詳細はGithubのリリースノートをご覧ください\n",
+    "versionCode": 19,
+    "versionName": "1.1.1-Stable",
+    "releaseNotes": "・AIコンシェルジュのモデルを Gemini 3.5 Flash Liteへ変更\n詳細はGithubのリリースノートをご覧ください\n",
     "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0/Komorebi-universal-release.apk"
   }
 }
