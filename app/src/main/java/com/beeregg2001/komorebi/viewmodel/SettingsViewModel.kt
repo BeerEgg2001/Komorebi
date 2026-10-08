@@ -6,6 +6,7 @@ import androidx.annotation.Keep
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.imageLoader
+import com.beeregg2001.komorebi.data.GeminiModels
 import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.local.AppDatabase
@@ -409,7 +410,8 @@ class SettingsViewModel @Inject constructor(
             _isValidatingGeminiApiKey.value = true
             val status = withContext(Dispatchers.IO) {
                 try {
-                    GenerativeModel(modelName = "gemini-3-flash-preview", apiKey = key)
+                    // 検証用モデルはコンシェルジュの本命モデルと必ず揃える (GeminiModels参照)
+                    GenerativeModel(modelName = GeminiModels.VALIDATION, apiKey = key)
                         .countTokens("疎通確認")
                     "VALID"
                 } catch (e: InvalidAPIKeyException) {
