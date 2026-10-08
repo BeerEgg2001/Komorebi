@@ -6,7 +6,10 @@ package com.beeregg2001.komorebi.data.model
 data class StreamQuality(
     val label: String,
     val value: String,
-    val isRawTs: Boolean = false, // 生TS(TS-Live!)かどうかを判定するフラグ
+    // EDCB / EPGStation などの画質・配信プロファイルにおいて、ダイレクト再生を判定するためのフラグ。
+    // KonomiTV では画質とエンコード方式を分離しているため、無変換の判定には
+    // この値ではなく [StreamEncoding.isRawTs] を使う。
+    val isRawTs: Boolean = false,
     val konomiTvHevcValue: String? = null // KonomiTVのHEVCエンコード用API画質値
 ) {
     /** 選択されたエンコード方式に対応する KonomiTV API の画質パラメータ。 */

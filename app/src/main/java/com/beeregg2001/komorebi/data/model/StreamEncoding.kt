@@ -4,7 +4,10 @@ package com.beeregg2001.komorebi.data.model
 data class StreamEncoding(
     val label: String,
     val value: String,
-    val isRawTs: Boolean = false // 無変換のMPEG-TSを直接再生する。
+    // KonomiTV の「オリジナル (無変換)」を選択し、ダイレクト再生を判定するためのフラグ。
+    // KonomiTV では画質とエンコード方式を分離したため、無変換の判定にはこの値を使う。
+    // EDCB / EPGStation などの画質・配信プロファイル側の判定には [StreamQuality.isRawTs] を使う。
+    val isRawTs: Boolean = false
 ) {
     companion object {
         val DEFAULT_ENCODINGS = listOf(
