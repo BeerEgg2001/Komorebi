@@ -5,11 +5,15 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.data.GeminiModels
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.data.model.ReserveItem
 import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.Content
+import com.google.ai.client.generativeai.type.GenerateContentResponse
+import com.google.ai.client.generativeai.type.InvalidAPIKeyException
 import com.google.ai.client.generativeai.type.QuotaExceededException
 import com.google.ai.client.generativeai.type.content
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -92,9 +96,15 @@ class AiConciergeViewModel @Inject constructor(
 
     private var lastContextData: AiContextData? = null
 
-    private fun getGenerativeModel(apiKey: String): GenerativeModel {
+    /**
+     * 一度 generateContent が成功したモデル名。
+     * 本命モデルが廃止されている場合に、リクエストごとに 404 を踏み直すのを避けるためのキャッシュ。
+     */
+    private var resolvedModelName: String? = null
+
+    private fun getGenerativeModel(apiKey: String, modelName: String): GenerativeModel {
         return GenerativeModel(
-            modelName = "gemini-3.6-flash",
+            modelName = modelName,
             apiKey = apiKey,
             systemInstruction = content {
                 text(
@@ -131,6 +141,51 @@ class AiConciergeViewModel @Inject constructor(
         )
     }
 
+    /**
+     * [GeminiModels.CONCIERGE] の候補を先頭から順に試しながら generateContent を実行する。
+     *
+     * フォールバックするのは「モデルがサーバー側に存在しない」場合のみ。
+     * 認証エラー・レート制限・コンテンツブロックなどはモデルを変えても解決せず、
+     * 全候補へ投げ直すとレート制限を悪化させるだけなので、その場で呼び出し側へ投げ返す。
+     */
+    private suspend fun generateWithFallback(
+        apiKey: String,
+        requestContent: Content
+    ): GenerateContentResponse {
+        // 前回成功したモデルがあればそれを最優先で試す
+        val resolved = resolvedModelName
+        val candidates = if (resolved == null) {
+            GeminiModels.CONCIERGE
+        } else {
+            listOf(resolved) + GeminiModels.CONCIERGE.filterNot { it == resolved }
+        }
+
+        var lastException: Exception? = null
+        for (modelName in candidates) {
+            try {
+                val response = getGenerativeModel(apiKey, modelName).generateContent(requestContent)
+                if (resolvedModelName != modelName) {
+                    Log.i("AI_Concierge", "✅ 使用モデルを $modelName に確定しました")
+                    resolvedModelName = modelName
+                }
+                return response
+            } catch (e: Exception) {
+                // モデル名が原因でない失敗は、候補を変えても解決しないため即座に中断する
+                if (e is QuotaExceededException || e is InvalidAPIKeyException ||
+                    !GeminiModels.isModelUnavailable(e)
+                ) {
+                    throw e
+                }
+                Log.w("AI_Concierge", "モデル $modelName は利用できません。次の候補を試します", e)
+                lastException = e
+                // キャッシュしていたモデルが廃止された場合はキャッシュを捨て、次回また確定させる
+                if (resolvedModelName == modelName) resolvedModelName = null
+            }
+        }
+        throw lastException
+            ?: IllegalStateException("利用可能なGeminiモデルがありません。アプリの更新をご確認ください。")
+    }
+
     @RequiresApi(Build.VERSION_CODES.O)
     fun sendTextWithContext(
         userInput: String,
@@ -152,12 +207,13 @@ class AiConciergeViewModel @Inject constructor(
 
                 if (currentApiKey.isBlank()) throw IllegalStateException("APIキーが設定されていません")
 
-                val generativeModel = getGenerativeModel(currentApiKey)
                 val contextPrompt = withContext(Dispatchers.Default) {
                     buildMinimalContextPrompt(liveChannels, groupedSeries)
                 }
-                val response =
-                    generativeModel.generateContent(content { text("$contextPrompt\n$historyText\n\n現在のユーザーの指示: 「$userInput」") })
+                val response = generateWithFallback(
+                    currentApiKey,
+                    content { text("$contextPrompt\n$historyText\n\n現在のユーザーの指示: 「$userInput」") }
+                )
                 handleAiResponse(response.text, aiThinkingMsg.id, null)
             } catch (e: Exception) {
                 handleAiError(e, aiThinkingMsg.id)
@@ -187,14 +243,16 @@ class AiConciergeViewModel @Inject constructor(
 
                 if (currentApiKey.isBlank()) throw IllegalStateException("APIキーが設定されていません")
 
-                val generativeModel = getGenerativeModel(currentApiKey)
                 val contextPrompt = withContext(Dispatchers.Default) {
                     buildMinimalContextPrompt(liveChannels, groupedSeries)
                 }
-                val response = generativeModel.generateContent(content {
-                    blob("audio/wav", audioBytes)
-                    text("$contextPrompt\n$historyText\n\n必ずレスポンスの1行目に「認識結果: (言葉)」と出力してから回答してください。")
-                })
+                val response = generateWithFallback(
+                    currentApiKey,
+                    content {
+                        blob("audio/wav", audioBytes)
+                        text("$contextPrompt\n$historyText\n\n必ずレスポンスの1行目に「認識結果: (言葉)」と出力してから回答してください。")
+                    }
+                )
                 handleAiResponse(response.text, aiThinkingMsg.id, userMsgId)
             } catch (e: Exception) {
                 handleAiError(e, aiThinkingMsg.id)
@@ -254,7 +312,6 @@ class AiConciergeViewModel @Inject constructor(
 
             if (currentApiKey.isBlank()) throw IllegalStateException("APIキーが設定されていません")
 
-            val generativeModel = getGenerativeModel(currentApiKey)
             val historyText = buildHistoryText()
             val contextData = lastContextData
             val contextPrompt = if (contextData != null) {
@@ -263,9 +320,12 @@ class AiConciergeViewModel @Inject constructor(
                 }
             } else ""
 
-            val response = generativeModel.generateContent(content {
-                text("$contextPrompt\n$historyText\n\nシステムからの検索結果を元に、ユーザーへの回答を生成してください。")
-            })
+            val response = generateWithFallback(
+                currentApiKey,
+                content {
+                    text("$contextPrompt\n$historyText\n\nシステムからの検索結果を元に、ユーザーへの回答を生成してください。")
+                }
+            )
             handleAiResponse(response.text, aiThinkingMsg.id, null)
         } catch (e: Exception) {
             handleAiError(e, aiThinkingMsg.id)
