@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,13 +31,14 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 
 enum class LiveSubMenuCategory {
-    AUDIO, QUALITY, SOURCE
+    AUDIO, ENCODING, QUALITY, SOURCE
 }
 
 @Composable
@@ -49,6 +51,7 @@ fun LiveTopSubMenuUI(
     isSubtitleEnabled: Boolean,
     subtitleLanguages: List<NativeCaptionLanguage>,
     currentSubtitleLanguageId: Int,
+    currentEncoding: StreamEncoding,
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
@@ -64,10 +67,12 @@ fun LiveTopSubMenuUI(
     onAudioToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onSubtitleLanguageToggle: () -> Unit,
+    onEncodingSelect: (StreamEncoding) -> Unit,
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
     onCloseMenu: () -> Unit,
+    availableEncodings: List<StreamEncoding> = StreamEncoding.DEFAULT_ENCODINGS,
     availableQualities: List<StreamQuality> = StreamQuality.DEFAULT_QUALITIES,
     // ★ 追加: 設定画面ラボの「Mirakurun/EDCB等の重量パイプラインでの2画面表示を許可」リミッターと
     // 同じ設定値。originalもMIRAKURUN/EDCB同様の重量な生TSパイプラインを使うため、この設定でリミッター
@@ -76,8 +81,10 @@ fun LiveTopSubMenuUI(
     allowHeavyDual: Boolean = false
 ) {
     val colors = KomorebiTheme.colors
+    val isEncodingSupported = currentStreamSource == StreamSource.KONOMITV
     var selectedCategory by remember { mutableStateOf<LiveSubMenuCategory?>(null) }
     val listFocusRequester = remember { FocusRequester() }
+    val mainEncodingButtonRequester = remember { FocusRequester() }
     val mainQualityButtonRequester = remember { FocusRequester() }
     val mainSourceButtonRequester = remember { FocusRequester() }
 
@@ -88,8 +95,7 @@ fun LiveTopSubMenuUI(
     val effectiveQualities = remember(isDualDisplayMode, availableQualities, allowHeavyDual) {
         if (isDualDisplayMode) {
             availableQualities.filter {
-                !it.value.contains("1080") && !it.label.contains("1080") &&
-                    (allowHeavyDual || it.value != "original")
+                !it.value.contains("1080") && !it.label.contains("1080")
             }
         } else {
             availableQualities
@@ -97,10 +103,10 @@ fun LiveTopSubMenuUI(
     }
 
     // ★ 修正: name を value に変更して Unresolved reference エラーを解消
-    val effectiveQuality = remember(currentQuality, isDualDisplayMode, effectiveQualities, allowHeavyDual) {
+    val effectiveQuality = remember(currentQuality, currentEncoding, isEncodingSupported, isDualDisplayMode, effectiveQualities, allowHeavyDual) {
         if (isDualDisplayMode && (currentQuality.value.contains("1080") || currentQuality.label.contains(
                 "1080"
-            ) || (!allowHeavyDual && currentQuality.value == "original"))
+            ) || (!allowHeavyDual && (isEncodingSupported && currentEncoding.isRawTs)))
         ) {
             effectiveQualities.find { it.value.contains("720") || it.label.contains("720") }
                 ?: effectiveQualities.firstOrNull()
@@ -145,6 +151,7 @@ fun LiveTopSubMenuUI(
                 ) {
                     if (selectedCategory != null) {
                         val targetRequester = when (selectedCategory) {
+                            LiveSubMenuCategory.ENCODING -> mainEncodingButtonRequester
                             LiveSubMenuCategory.QUALITY -> mainQualityButtonRequester
                             LiveSubMenuCategory.SOURCE -> mainSourceButtonRequester
                             else -> focusRequester
@@ -230,22 +237,40 @@ fun LiveTopSubMenuUI(
                         contentColor = colors.textPrimary,
                         enabled = subtitleLanguages.size > 1
                     )
-
                     LiveMenuTileItem(
-                        title = "画質", icon = Icons.Default.Settings,
-                        subtitle = effectiveQuality.label,
+                        title = "エンコード", icon = Icons.Default.Settings,
+                        subtitle = currentEncoding.label.replace(" (", "\n("),
                         onClick = {
                             selectedCategory =
-                                if (selectedCategory == LiveSubMenuCategory.QUALITY) null else LiveSubMenuCategory.QUALITY
+                                if (selectedCategory == LiveSubMenuCategory.ENCODING) null else LiveSubMenuCategory.ENCODING
                         },
                         modifier = Modifier
-                            .focusRequester(mainQualityButtonRequester)
+                            .focusRequester(mainEncodingButtonRequester)
                             .focusProperties {
-                                if (selectedCategory != LiveSubMenuCategory.QUALITY) down =
+                                if (selectedCategory != LiveSubMenuCategory.ENCODING) down =
                                     FocusRequester.Cancel
                             },
-                        contentColor = colors.textPrimary
+                        contentColor = colors.textPrimary,
+                        enabled = isEncodingSupported
                     )
+
+                    if (!isEncodingSupported || !currentEncoding.isRawTs) {
+                        LiveMenuTileItem(
+                            title = "画質", icon = Icons.Default.Settings,
+                            subtitle = effectiveQuality.label,
+                            onClick = {
+                                selectedCategory =
+                                    if (selectedCategory == LiveSubMenuCategory.QUALITY) null else LiveSubMenuCategory.QUALITY
+                            },
+                            modifier = Modifier
+                                .focusRequester(mainQualityButtonRequester)
+                                .focusProperties {
+                                    if (selectedCategory != LiveSubMenuCategory.QUALITY) down =
+                                        FocusRequester.Cancel
+                                },
+                            contentColor = colors.textPrimary
+                        )
+                    }
                 } else {
                     LiveMenuTileItem(
                         title = if (isRecording) "録画停止" else "録画開始",
@@ -318,20 +343,39 @@ fun LiveTopSubMenuUI(
                     )
 
                     LiveMenuTileItem(
-                        title = "画質", icon = Icons.Default.HighQuality,
-                        subtitle = effectiveQuality.label,
+                        title = "エンコード", icon = Icons.Default.HighQuality,
+                        subtitle = currentEncoding.label.replace(" (", "\n("),
                         onClick = {
                             selectedCategory =
-                                if (selectedCategory == LiveSubMenuCategory.QUALITY) null else LiveSubMenuCategory.QUALITY
+                                if (selectedCategory == LiveSubMenuCategory.ENCODING) null else LiveSubMenuCategory.ENCODING
                         },
                         modifier = Modifier
-                            .focusRequester(mainQualityButtonRequester)
+                            .focusRequester(mainEncodingButtonRequester)
                             .focusProperties {
-                                if (selectedCategory != LiveSubMenuCategory.QUALITY) down =
+                                if (selectedCategory != LiveSubMenuCategory.ENCODING) down =
                                     FocusRequester.Cancel
                             },
-                        contentColor = colors.textPrimary
+                        contentColor = colors.textPrimary,
+                        enabled = isEncodingSupported
                     )
+
+                    if (!isEncodingSupported || !currentEncoding.isRawTs) {
+                        LiveMenuTileItem(
+                            title = "画質", icon = Icons.Default.HighQuality,
+                            subtitle = effectiveQuality.label,
+                            onClick = {
+                                selectedCategory =
+                                    if (selectedCategory == LiveSubMenuCategory.QUALITY) null else LiveSubMenuCategory.QUALITY
+                            },
+                            modifier = Modifier
+                                .focusRequester(mainQualityButtonRequester)
+                                .focusProperties {
+                                    if (selectedCategory != LiveSubMenuCategory.QUALITY) down =
+                                        FocusRequester.Cancel
+                                },
+                            contentColor = colors.textPrimary
+                        )
+                    }
 
                     LiveMenuTileItem(
                         title = "ソース", icon = Icons.Default.CastConnected,
@@ -351,9 +395,64 @@ fun LiveTopSubMenuUI(
                 }
             }
 
+            AnimatedVisibility(
+                visible = selectedCategory == LiveSubMenuCategory.ENCODING,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Spacer(Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(400.dp)
+                            .height(2.dp)
+                            .background(colors.textPrimary.copy(alpha = 0.2f))
+                    )
+                    Spacer(Modifier.height(16.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 32.dp, vertical = 8.dp)
+                    ) {
+                        availableEncodings.filter {
+                            it.value != "original" || (!isDualDisplayMode || allowHeavyDual)
+                        }.forEach { encoding ->
+                            val isSelected = currentEncoding == encoding
+                            LiveMenuTileItem(
+                                title = encoding.label.replace(" (", "\n("),
+                                icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                subtitle = if (isSelected) "選択中" else "",
+                                onClick = {
+                                    onEncodingSelect(encoding)
+                                    selectedCategory = null
+                                    try {
+                                        mainEncodingButtonRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
+                                },
+                                width = 160.dp,
+                                height = 100.dp,
+                                modifier = Modifier
+                                    .then(
+                                        if (isSelected) Modifier.focusRequester(listFocusRequester) else Modifier
+                                    )
+                                    .focusProperties {
+                                        up = mainEncodingButtonRequester
+                                        down = FocusRequester.Cancel
+                                    },
+                                contentColor = colors.textPrimary
+                            )
+                        }
+                    }
+                }
+            }
+
             // --- 展開メニュー: 画質 ---
             AnimatedVisibility(
-                visible = selectedCategory == LiveSubMenuCategory.QUALITY,
+                visible = selectedCategory == LiveSubMenuCategory.QUALITY && (!isEncodingSupported || !currentEncoding.isRawTs),
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
@@ -531,12 +630,18 @@ fun LiveMenuTileItem(
         ) {
             Icon(icon, null, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(8.dp))
-            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
             if (subtitle.isNotEmpty()) {
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                    color = LocalContentColor.current.copy(0.7f)
+                    color = LocalContentColor.current.copy(0.7f),
+                    textAlign = TextAlign.Center
                 )
             }
         }

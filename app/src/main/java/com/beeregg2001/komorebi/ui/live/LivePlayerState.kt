@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.type
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import kotlinx.coroutines.CoroutineScope
@@ -73,8 +74,10 @@ class LivePlayerState(
 
     var previousStreamSource by mutableStateOf<StreamSource?>(null)
 
+    var currentEncoding by mutableStateOf(StreamEncoding.fromValue("h264"))
     // ★ 追加: KonomiTVのoriginal画質選択中にデュアル表示/PiPへ入った際の自動ダウングレード用。
-    // originalはソース自体はKonomiTVのままなので、previousStreamSourceと違い画質のみを退避・復元する
+    // originalはソース自体はKonomiTVのままなので、previousStreamSourceと違い画質とエンコードを退避・復元する
+    var previousEncoding by mutableStateOf<StreamEncoding?>(null)
     var previousQuality by mutableStateOf<StreamQuality?>(null)
 
     var lCropEnabled by mutableStateOf(false)

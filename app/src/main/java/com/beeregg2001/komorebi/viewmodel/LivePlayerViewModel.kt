@@ -14,6 +14,7 @@ import androidx.media3.common.util.TimestampAdjuster
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -29,6 +30,7 @@ import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.model.BackendConfig
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.data.repository.LiveProvider
@@ -210,12 +212,14 @@ class LivePlayerViewModel @Inject constructor(
     private var mainIsEdcbDirect = false
     private var mainCurrentChannel: Channel? = null
     private var mainCurrentQuality: StreamQuality? = null
+    private var mainCurrentEncoding = StreamEncoding.fromValue("h264")
     private var mainAutoRetryCount = 0
 
     private var dualCurrentSource = StreamSource.KONOMITV
     private var dualIsEdcbDirect = false
     private var dualCurrentChannel: Channel? = null
     private var dualCurrentQuality: StreamQuality? = null
+    private var dualCurrentEncoding = StreamEncoding.fromValue("h264")
     private var dualAutoRetryCount = 0
 
     init {
@@ -408,6 +412,10 @@ class LivePlayerViewModel @Inject constructor(
         }
     }
 
+    suspend fun saveLiveEncoding(value: String) {
+        settingsRepository.saveString(SettingsRepository.LIVE_ENCODING, value)
+    }
+
     suspend fun getInitialStreamSource(): StreamSource {
         val backendStr = settingsRepository.backendType.first()
         val prefStr = settingsRepository.preferredStreamSource.first()
@@ -510,21 +518,22 @@ class LivePlayerViewModel @Inject constructor(
             // ★ 追加: KonomiTVのOriginal画質(ライブ)はmasterブランチでのみ対応しており、
             // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
             // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
+            // original が利用できない場合は、デフォルトのエンコード方式と保存済みの画質設定を読み込む。
             val isKonomiOriginalRejected = mainCurrentSource == StreamSource.KONOMITV &&
-                mainCurrentQuality?.value == "original" &&
+                mainCurrentEncoding.isRawTs &&
                 cause is HttpDataSource.InvalidResponseCodeException &&
                 cause.responseCode == 422
             if (isKonomiOriginalRejected && mainCurrentChannel != null) {
                 Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
                 KonomiOriginalQualityGate.markUnsupported()
-                val remaining = _availableQualities.value.filterNot { it.value == "original" }
-                _availableQualities.value = remaining
-                val fallback = remaining.firstOrNull {
-                    it.value.contains("720") || it.label.contains("720")
-                } ?: remaining.firstOrNull()
+                val remaining = _availableQualities.value
+                val savedQuality = settingsRepository.liveQuality.first()
+                val fallback = remaining.find { it.value == savedQuality }
+                    ?: remaining.firstOrNull()
                 if (fallback != null) {
-                    saveLiveQuality(fallback.value)
+                    saveLiveEncoding("h264")
                     mainCurrentQuality = fallback
+                    mainCurrentEncoding = StreamEncoding.fromValue("h264")
                     mainAutoRetryCount = 0
                     _mainSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
                     stopMainPlaybackSafely()
@@ -603,20 +612,20 @@ class LivePlayerViewModel @Inject constructor(
             // 正式リリース版では 422 Unprocessable Entity で拒否される。バージョン文字列だけでは
             // masterと正式リリースを区別できないため、実際に拒否されたことを検知して以後隠す
             val isKonomiOriginalRejected = dualCurrentSource == StreamSource.KONOMITV &&
-                dualCurrentQuality?.value == "original" &&
+                dualCurrentEncoding.isRawTs &&
                 cause is HttpDataSource.InvalidResponseCodeException &&
                 cause.responseCode == 422
             if (isKonomiOriginalRejected && dualCurrentChannel != null) {
                 Log.w(TAG, "KonomiTV rejected Original quality (422). Server does not support it. Falling back.")
                 KonomiOriginalQualityGate.markUnsupported()
-                val remaining = _availableQualities.value.filterNot { it.value == "original" }
-                _availableQualities.value = remaining
+                val remaining = _availableQualities.value
                 val fallback = remaining.firstOrNull {
                     it.value.contains("720") || it.label.contains("720")
                 } ?: remaining.firstOrNull()
                 if (fallback != null) {
-                    saveLiveQuality(fallback.value)
+                    saveLiveEncoding("h264")
                     dualCurrentQuality = fallback
+                    dualCurrentEncoding = StreamEncoding.fromValue("h264")
                     dualAutoRetryCount = 0
                     _dualSseDetail.value = "このKonomiTVサーバーはオリジナル画質に対応していません。${fallback.label} に切り替えます..."
                     stopDualPlaybackSafely()
@@ -656,7 +665,8 @@ class LivePlayerViewModel @Inject constructor(
 
     fun playMainChannel(
         uiContext: Context, channel: Channel, source: StreamSource,
-        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
+        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false,
+        encoding: StreamEncoding = mainCurrentEncoding
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
         if (mainCurrentChannel?.id != channel.id) setMainSubtitleLanguage(1)
@@ -666,6 +676,7 @@ class LivePlayerViewModel @Inject constructor(
         }
         mainCurrentChannel = channel; mainCurrentSource = source; mainIsEdcbDirect =
             isEdcbDirect; mainCurrentQuality = quality
+        mainCurrentEncoding = encoding
 
         viewModelScope.launch { _currentLogoUrl.value = liveProvider.getChannelLogoUrl(channel.id) }
 
@@ -695,6 +706,9 @@ class LivePlayerViewModel @Inject constructor(
                     _mainPlayer.value = newPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
+                    val konomiTvQuality = if (source == StreamSource.KONOMITV) {
+                        quality.getKonomiTvValue(encoding)
+                    } else quality.value
                     val streamUrl = if (
                         (source == StreamSource.EDCB && !isEdcbDirect) ||
                         (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
@@ -709,6 +723,7 @@ class LivePlayerViewModel @Inject constructor(
                         channel,
                         source,
                         quality,
+                        encoding,
                         config,
                         mainTsDataSourceFactory,
                         cfAccessHeaders
@@ -725,7 +740,7 @@ class LivePlayerViewModel @Inject constructor(
                             startMainSse(
                                 uiContext,
                                 channel.displayChannelId,
-                                quality.value,
+                                konomiTvQuality,
                                 config,
                                 cfAccessHeaders
                             )
@@ -736,7 +751,7 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            quality,
+                            encoding,
                             mainTsDataSourceFactory,
                             ::decodeAndEmitMainSubtitle,
                             cfAccessHeaders
@@ -777,7 +792,8 @@ class LivePlayerViewModel @Inject constructor(
 
     fun playDualChannel(
         uiContext: Context, channel: Channel, source: StreamSource,
-        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false
+        isEdcbDirect: Boolean, quality: StreamQuality, isAutoRetry: Boolean = false,
+        encoding: StreamEncoding = dualCurrentEncoding
     ) {
         if (channel.displayChannelId.isBlank() || channel.displayChannelId == "null") return
         if (dualCurrentChannel?.id != channel.id) setDualSubtitleLanguage(1)
@@ -785,6 +801,7 @@ class LivePlayerViewModel @Inject constructor(
         if (!isAutoRetry) dualAutoRetryCount = 0
         dualCurrentChannel = channel; dualCurrentSource = source; dualIsEdcbDirect =
             isEdcbDirect; dualCurrentQuality = quality
+        dualCurrentEncoding = encoding
 
         dualPlaybackJob?.cancel()
         dualPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
@@ -815,6 +832,9 @@ class LivePlayerViewModel @Inject constructor(
                     _dualPlayer.value = newDualPlayer
 
                     val config = settingsRepository.getBackendConfig(source)
+                    val konomiTvQuality = if (source == StreamSource.KONOMITV) {
+                        quality.getKonomiTvValue(encoding)
+                    } else quality.value
                     val streamUrl = if (
                         (source == StreamSource.EDCB && !isEdcbDirect) ||
                         (source == StreamSource.EPGSTATION && quality.value.startsWith("hls:"))
@@ -829,6 +849,7 @@ class LivePlayerViewModel @Inject constructor(
                         channel,
                         source,
                         quality,
+                        encoding,
                         config,
                         dualTsDataSourceFactory,
                         cfAccessHeaders
@@ -845,7 +866,7 @@ class LivePlayerViewModel @Inject constructor(
                             startDualSse(
                                 uiContext,
                                 channel.displayChannelId,
-                                quality.value,
+                                konomiTvQuality,
                                 config,
                                 cfAccessHeaders
                             )
@@ -856,7 +877,7 @@ class LivePlayerViewModel @Inject constructor(
                             streamUrl,
                             source,
                             isEdcbDirect,
-                            quality,
+                            encoding,
                             dualTsDataSourceFactory,
                             ::decodeAndEmitDualSubtitle,
                             cfAccessHeaders
@@ -969,6 +990,7 @@ class LivePlayerViewModel @Inject constructor(
         channel: Channel,
         source: StreamSource,
         quality: StreamQuality,
+        encoding: StreamEncoding = StreamEncoding.fromValue("h264"),
         config: BackendConfig,
         factory: TsReadExDataSourceFactory,
         cfAccessHeaders: Map<String, String> = emptyMap()
@@ -1040,7 +1062,7 @@ class LivePlayerViewModel @Inject constructor(
                 // channel.serviceIdでCServiceFilterに正しく対象サービスを絞らせ、音声デュアルモノ
                 // 分離とID3変換(id3convは独立してPMTからPIDを検出するためservice絞り込みの影響を
                 // 受けない)の両方を有効にする
-                if (quality.value == "original") {
+                if (encoding.isRawTs) {
                     factory.tsArgs = arrayOf(
                         "-x",
                         "18/38/39",
@@ -1063,7 +1085,7 @@ class LivePlayerViewModel @Inject constructor(
                     config.ip,
                     config.port,
                     channel.displayChannelId,
-                    quality.value
+                    quality.getKonomiTvValue(encoding)
                 )
             }
 
@@ -1110,7 +1132,7 @@ class LivePlayerViewModel @Inject constructor(
         streamUrl: String,
         source: StreamSource,
         isEdcbDirect: Boolean,
-        quality: StreamQuality,
+        encoding: StreamEncoding,
         factory: TsReadExDataSourceFactory,
         onSubtitleDataReceived: (Long, ByteArray) -> Unit,
         cfAccessHeaders: Map<String, String> = emptyMap()
@@ -1129,7 +1151,7 @@ class LivePlayerViewModel @Inject constructor(
                     (source == StreamSource.EDCB && isEdcbDirect) ||
                     // ★ 追加: KonomiTVのoriginal画質も生MPEG-TSなので同じ経路(TsReadExDataSource +
                     // 直接PESパース)で再生する
-                    (source == StreamSource.KONOMITV && quality.value == "original")
+                    (source == StreamSource.KONOMITV && encoding.isRawTs)
                 ) {
                     val extractorsFactory = ExtractorsFactory {
                         arrayOf(
@@ -1197,20 +1219,23 @@ class LivePlayerViewModel @Inject constructor(
                     response: Response?
                 ) {
                     if (t is java.io.IOException && t.message == "Canceled") return
+                    val httpError = response?.takeIf { !it.isSuccessful }?.let { createSseHttpCause(it) }
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         // ★ 修正: 以前はresponse.codeをそのままerrorCodeに入れていたため、
                         // analyzePlayerError()がERROR_CODE_UNSPECIFIED限定でerror.messageを
                         // 見るよう絞り込んだ後、404/422/503等の正当なHTTPステータスコードが
                         // errorCodeName()の「invalid error code」表記に埋もれてしまっていた。
-                        // 日本語メッセージをここで組み立て、errorCodeはERROR_CODE_UNSPECIFIEDに
-                        // 揃える。
+                        // 日本語メッセージはここで組み立て、errorCodeにはMedia3のHTTPエラー分類を使う。
+                        // 復旧判定でもHTTPステータスを参照できるよう、応答情報をcauseに保持する。
+                        // 切替前のSSEの失敗で、現在の再生に対する復旧処理が走るのを防ぐ。
+                        if (eventSource !== mainEventSource) return@launch
                         if (response != null && response.code !in 200..299) handleMainError(
                             uiContext,
                             PlaybackException(
                                 httpStatusErrorMessage(response.code),
-                                null,
-                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                                httpError,
+                                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
                             )
                         )
                     }
@@ -1282,15 +1307,18 @@ class LivePlayerViewModel @Inject constructor(
                     response: Response?
                 ) {
                     if (t is java.io.IOException && t.message == "Canceled") return
+                    val httpError = response?.takeIf { !it.isSuccessful }?.let { createSseHttpCause(it) }
                     response?.close()
                     viewModelScope.launch(Dispatchers.Main) {
                         // ★ 修正: メイン側と同じ理由(httpStatusErrorMessage定義部のコメント参照)。
+                        // 切替前のSSEの失敗で、現在の再生に対する復旧処理が走るのを防ぐ。
+                        if (eventSource !== dualEventSource) return@launch
                         if (response != null && response.code !in 200..299) handleDualError(
                             uiContext,
                             PlaybackException(
                                 httpStatusErrorMessage(response.code),
-                                null,
-                                PlaybackException.ERROR_CODE_UNSPECIFIED
+                                httpError,
+                                PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
                             )
                         )
                     }
@@ -1409,6 +1437,24 @@ class LivePlayerViewModel @Inject constructor(
                 (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L) / 1000f
             ),
             droppedFrames = vCounters?.droppedBufferCount?.toString() ?: "0"
+        )
+    }
+
+    // SSEでもストリーム本体と同じHTTP例外で応答情報を保持し、復旧判定と表示処理を共用する。
+    // 応答本文はメモリ使用量を抑えるため上限を設け、読み取りに失敗してもHTTPステータスを伝える。
+    private fun createSseHttpCause(response: Response): HttpDataSource.InvalidResponseCodeException {
+        val responseBody = try {
+            response.peekBody(64 * 1024L).bytes()
+        } catch (_: IOException) {
+            byteArrayOf()
+        }
+        return HttpDataSource.InvalidResponseCodeException(
+            response.code,
+            response.message,
+            null,
+            response.headers.toMultimap(),
+            DataSpec(Uri.parse(response.request.url.toString())),
+            responseBody
         )
     }
 
