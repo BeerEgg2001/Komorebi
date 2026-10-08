@@ -94,7 +94,7 @@ class AiConciergeViewModel @Inject constructor(
 
     private fun getGenerativeModel(apiKey: String): GenerativeModel {
         return GenerativeModel(
-            modelName = "gemini-3.6-flash",
+            modelName = "gemini-3.5-flash-lite",
             apiKey = apiKey,
             systemInstruction = content {
                 text(
