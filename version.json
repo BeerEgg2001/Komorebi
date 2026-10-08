@@ -2,12 +2,12 @@
   "versionCode": 19,
   "versionName": "1.1.1-Stable",
   "releaseNotes": "・AIコンシェルジュのモデルを Gemini 3.5 Flash Liteへ変更\n詳細はGithubのリリースノートをご覧ください\n",
-  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0/Komorebi-universal-release.apk",
+  "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.1/Komorebi-universal-release.apk",
 
   "beta": {
     "versionCode": 19,
     "versionName": "1.1.1-Stable",
     "releaseNotes": "・AIコンシェルジュのモデルを Gemini 3.5 Flash Liteへ変更\n詳細はGithubのリリースノートをご覧ください\n",
-    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.0/Komorebi-universal-release.apk"
+    "apkUrl": "https://github.com/BeerEgg2001/Komorebi/releases/download/1.1.1/Komorebi-universal-release.apk"
   }
 }
