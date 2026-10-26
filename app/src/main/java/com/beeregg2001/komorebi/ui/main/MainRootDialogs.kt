@@ -41,8 +41,10 @@ import com.beeregg2001.komorebi.util.AudioRecorderHelper
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.util.UpdateState
 import com.beeregg2001.komorebi.viewmodel.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.OffsetDateTime
 
 @UnstableApi
@@ -83,6 +85,11 @@ fun MainRootDialogs(
     val audioRecorderHelper = remember { AudioRecorderHelper(context) }
     var isRecordingVoice by remember { mutableStateOf(false) }
 
+    // 録音中に画面が破棄された場合でもマイクを確実に解放する
+    DisposableEffect(audioRecorderHelper) {
+        onDispose { audioRecorderHelper.release() }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -93,22 +100,25 @@ fun MainRootDialogs(
 
     val stopRecordingAndSend = {
         if (isRecordingVoice) {
-            val file = audioRecorderHelper.stopRecording()
             isRecordingVoice = false
+            // stopRecording() はWAVの書き出し完了を待つ suspend 関数。
+            // 待たずにファイルを読むと前回の録音データを送ってしまうため、必ずコルーチン内で呼ぶ。
+            scope.launch {
+                val file = audioRecorderHelper.stopRecording()
+                if (file != null) {
+                    Log.i("AI_Concierge", "🎙️ 録音完了、Geminiに送信します (${file.length()} bytes)")
+                    val audioBytes = withContext(Dispatchers.IO) { file.readBytes() }
 
-            if (file != null && file.exists() && file.length() > 0) {
-                Log.i("AI_Concierge", "🎙️ 録音完了、Geminiに送信します (${file.length()} bytes)")
-                val audioBytes = file.readBytes()
-
-                aiConciergeViewModel.sendAudioWithContext(
-                    audioBytes = audioBytes,
-                    liveChannels = channelViewModel.groupedChannels.value,
-                    recentRecordings = recordViewModel.recentRecordings.value,
-                    groupedSeries = recordViewModel.groupedSeries.value,
-                    activeReserves = reserveViewModel.reserves.value
-                )
-            } else {
-                state.toastMessage = "音声が短すぎるか、録音できませんでした"
+                    aiConciergeViewModel.sendAudioWithContext(
+                        audioBytes = audioBytes,
+                        liveChannels = channelViewModel.groupedChannels.value,
+                        recentRecordings = recordViewModel.recentRecordings.value,
+                        groupedSeries = recordViewModel.groupedSeries.value,
+                        activeReserves = reserveViewModel.reserves.value
+                    )
+                } else {
+                    state.toastMessage = "音声が短すぎるか、録音できませんでした"
+                }
             }
         }
     }
