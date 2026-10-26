@@ -3,7 +3,7 @@ package com.beeregg2001.komorebi.ui.video.player
 import androidx.compose.ui.graphics.vector.ImageVector
 
 // ★修正: COMMENT を追加
-enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, QUALITY, COMMENT }
+enum class SubMenuCategory { AUDIO, SPEED, SUBTITLE, ENCODING, QUALITY, COMMENT }
 
 // 画質定義 (表示名とAPIパラメータを一元管理)
 enum class StreamQuality(val label: String, val apiParams: String) {

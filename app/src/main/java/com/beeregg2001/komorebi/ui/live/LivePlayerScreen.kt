@@ -41,8 +41,10 @@ import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionOverlay
@@ -149,6 +151,8 @@ fun LivePlayerScreen(
         }
         if (ps.previousQuality != null) {
             ps.currentQuality = ps.previousQuality!!
+            ps.previousEncoding?.let { ps.currentEncoding = it }
+            ps.previousEncoding = null
             onShowToast("元の画質に復帰しました")
             ps.previousQuality = null
         }
@@ -232,9 +236,17 @@ fun LivePlayerScreen(
 
     val availableQualities by livePlayerViewModel.availableQualities.collectAsState(initial = StreamQuality.DEFAULT_QUALITIES)
     val isQualitiesLoaded by livePlayerViewModel.isQualitiesLoaded.collectAsState()
+    val availableEncodings = StreamEncoding.available(!KonomiOriginalQualityGate.isUnsupported())
     val loadedQualitiesKey by livePlayerViewModel.loadedQualitiesKey.collectAsState()
 
     val currentLiveQualityStr by settingsViewModel.liveQuality.collectAsState()
+    val savedLiveEncoding by settingsViewModel.liveEncoding.collectAsState()
+    LaunchedEffect(savedLiveEncoding) {
+        if (savedLiveEncoding.isNotBlank()) {
+            ps.currentEncoding = StreamEncoding.fromValue(savedLiveEncoding, availableEncodings)
+            if (KonomiOriginalQualityGate.isUnsupported()) ps.previousEncoding = null
+        }
+    }
 
     LaunchedEffect(mainError, mainStatus, mainDetail, mainSignal) {
         ps.playerError = mainError
@@ -290,7 +302,8 @@ fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(isPiPMode) {
+    LaunchedEffect(isPiPMode, savedLiveEncoding, isQualitiesLoaded) {
+        if (isPiPMode && !isQualitiesLoaded) return@LaunchedEffect
         if (isPiPMode) {
             // ★ 修正: EPGStationの直接(生TS)再生もMIRAKURUN/EDCBと同じ重量パイプライン(TsExtractor)を使うため、
             // HLS再生時を除きダウングレード対象に含める
@@ -303,7 +316,7 @@ fun LivePlayerScreen(
                     onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
                 }
             } else if (ps.currentStreamSource == StreamSource.KONOMITV &&
-                ps.currentQuality.value == "original" && allowMirakurunDual != "ON"
+                ps.currentEncoding.isRawTs && allowMirakurunDual != "ON"
             ) {
                 // ★ 追加: KonomiTVのoriginal画質もMIRAKURUN/EDCB同様の重量な生TSパイプラインを
                 // 使うため、ソース切替の代わりに画質を通常画質へダウングレードする
@@ -313,9 +326,11 @@ fun LivePlayerScreen(
                 // デュアル表示時フォールバックと同じ基準(720p)に揃える。
                 val fallback = availableQualities.firstOrNull {
                     it.value.contains("720") || it.label.contains("720")
-                } ?: availableQualities.firstOrNull { it.value != "original" }
+                } ?: availableQualities.firstOrNull()
                 if (fallback != null) {
                     ps.previousQuality = ps.currentQuality
+                    ps.previousEncoding = ps.currentEncoding
+                    ps.currentEncoding = StreamEncoding.fromValue("h264")
                     ps.currentQuality = fallback
                     onShowToast("負荷軽減のため画質を ${fallback.label} に変更しました")
                 }
@@ -330,6 +345,8 @@ fun LivePlayerScreen(
             }
             if (!ps.isDualDisplayMode && ps.previousQuality != null) {
                 ps.currentQuality = ps.previousQuality!!
+                ps.previousEncoding?.let { ps.currentEncoding = it }
+                ps.previousEncoding = null
                 onShowToast("元の画質に復帰しました")
                 ps.previousQuality = null
             }
@@ -415,6 +432,7 @@ fun LivePlayerScreen(
         ps.isEdcbDirect,
         ps.retryKey,
         ps.currentQuality,
+        ps.currentEncoding,
         isSourceInitialized,
         isQualitiesLoaded
     ) {
@@ -432,7 +450,8 @@ fun LivePlayerScreen(
             channel = currentChannelItem,
             source = ps.currentStreamSource,
             isEdcbDirect = ps.isEdcbDirect,
-            quality = ps.currentQuality
+            quality = ps.currentQuality,
+            encoding = ps.currentEncoding
         )
         delay(300); mainFocusRequester.safeRequestFocus(TAG)
     }
@@ -444,6 +463,7 @@ fun LivePlayerScreen(
         ps.isDualDisplayMode,
         ps.retryKey,
         ps.currentQuality,
+        ps.currentEncoding,
         isSourceInitialized,
         isQualitiesLoaded
     ) {
@@ -463,7 +483,8 @@ fun LivePlayerScreen(
                 channel = rightChannel,
                 source = ps.currentStreamSource,
                 isEdcbDirect = ps.isEdcbDirect,
-                quality = ps.currentQuality
+                quality = ps.currentQuality,
+                encoding = ps.currentEncoding
             )
         } else {
             livePlayerViewModel.stopDualPlayer()
@@ -889,6 +910,7 @@ fun LivePlayerScreen(
                 subtitleLanguages = activeSubtitleLanguages,
                 currentSubtitleLanguageId = currentSubtitleLanguageId,
                 currentQuality = ps.currentQuality,
+                currentEncoding = ps.currentEncoding,
                 isCommentEnabled = isCommentEnabled,
                 isLCropEnabled = ps.lCropEnabled,
                 isRecording = isRecording,
@@ -909,7 +931,7 @@ fun LivePlayerScreen(
                                 onShowToast("負荷軽減のためKonomiTVソースに切り替えました")
                             }
                         } else if (ps.currentStreamSource == StreamSource.KONOMITV &&
-                            ps.currentQuality.value == "original" && allowMirakurunDual != "ON"
+                            ps.currentEncoding.isRawTs && allowMirakurunDual != "ON"
                         ) {
                             // ★ 追加: KonomiTVのoriginal画質もMIRAKURUN/EDCB同様の重量な生TSパイプラインを
                             // 使うため、ソース切替の代わりに画質を通常画質へダウングレードする
@@ -919,9 +941,11 @@ fun LivePlayerScreen(
                 // デュアル表示時フォールバックと同じ基準(720p)に揃える。
                 val fallback = availableQualities.firstOrNull {
                     it.value.contains("720") || it.label.contains("720")
-                } ?: availableQualities.firstOrNull { it.value != "original" }
+                } ?: availableQualities.firstOrNull()
                             if (fallback != null) {
                                 ps.previousQuality = ps.currentQuality
+                                ps.previousEncoding = ps.currentEncoding
+                                ps.currentEncoding = StreamEncoding.fromValue("h264")
                                 ps.currentQuality = fallback
                                 onShowToast("負荷軽減のため画質を ${fallback.label} に変更しました")
                             }
@@ -963,6 +987,7 @@ fun LivePlayerScreen(
                     }
                 },
                 availableQualities = availableQualities,
+                availableEncodings = availableEncodings,
                 allowHeavyDual = allowMirakurunDual == "ON",
                 focusRequester = subMenuFocusRequester,
                 onSourceSelect = { source, isDirect ->
@@ -1012,6 +1037,14 @@ fun LivePlayerScreen(
                         "字幕言語: 第${nextLanguageId}言語" +
                             (selectedLanguage?.let { "・${it.displayName}" } ?: "")
                     )
+                },
+                onEncodingSelect = { encoding ->
+                    ps.currentEncoding = encoding
+                    scope.launch {
+                        livePlayerViewModel.saveLiveEncoding(encoding.value)
+                        onShowToast(String.format(AppStrings.TOAST_ENCODING_CHANGED, encoding.label))
+                    }
+                    onSubMenuToggle(false)
                 },
                 onQualitySelect = {
                     if (ps.currentQuality != it) {

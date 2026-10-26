@@ -35,6 +35,7 @@ import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.beeregg2001.komorebi.data.SettingsRepository
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.viewmodel.VideoPlayerViewModel
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
@@ -156,7 +157,13 @@ fun VideoPlayerScreen(
     // ★ 追加: 「この録画番組に限って使えない」画質の値(理由の区別は ViewModel 側のコメント参照)
     val perProgramExcludedQualities by
         videoPlayerViewModel.perProgramExcludedQualities.collectAsState()
+    val perProgramExcludedEncodings by
+        videoPlayerViewModel.perProgramExcludedEncodings.collectAsState()
+    val availableEncodings = StreamEncoding.DEFAULT_ENCODINGS.filterNot {
+        it.value in perProgramExcludedEncodings
+    }
     val currentVideoQualityStr by settingsViewModel.videoQuality.collectAsState()
+    val savedVideoEncoding by settingsViewModel.videoEncoding.collectAsState()
 
     val playerUiMode by settingsViewModel.playerUiMode.collectAsState()
     val isModern = playerUiMode == "MODERN"
@@ -176,6 +183,10 @@ fun VideoPlayerScreen(
     }
 
     val vs = rememberVideoPlayerState()
+
+    LaunchedEffect(savedVideoEncoding, availableEncodings) {
+        vs.currentEncoding = StreamEncoding.fromValue(savedVideoEncoding, availableEncodings)
+    }
 
     val autoCmSkipStr by settingsViewModel.autoCmSkip.collectAsState()
     LaunchedEffect(autoCmSkipStr) {
@@ -321,7 +332,12 @@ fun VideoPlayerScreen(
     val isEdcbDirect = (backendType == "EDCB" && edcbPlayMethod == "DIRECT")
     // ★ 追加: KonomiTVのoriginal画質(MPEG-2直接再生)も、EDCB直接再生と同じくExoPlayerの
     // SeekMapに頼らないバイト位置計算シーク方式で扱う必要がある
-    val isKonomiOriginal = (backendType == "KONOMITV" && vs.currentQuality.value == "original")
+    val isKonomiOriginal = (backendType == "KONOMITV" && vs.currentEncoding.isRawTs)
+    // KonomiTVでは画質とエンコードからAPI用の画質値を作り、他のバックエンドでは従来の画質値を使う。
+    // 後続のURL取得・ストリーム維持処理で共通して使えるよう、この変数にまとめる。
+    val apiQuality = if (smbItem == null && backendType == "KONOMITV") vs.currentQuality.getKonomiTvValue(vs.currentEncoding) else vs.currentQuality.value
+    // エンコード変更前の再生位置を保持し、切り替え後も同じ位置から再生する。
+    var encodingChangePositionMs by remember { mutableStateOf<Long?>(null) }
 
     // ★ 修正: 録画直接TS再生(isEdcbDirect)は、ExoPlayerのSeekMap機構(seekTo())に頼らず、
     // シーク要求のたびにアプリ側で目標バイト位置を計算してMediaItemを作り直す方式にした
@@ -408,7 +424,7 @@ fun VideoPlayerScreen(
                 val newOffsetSec = safeTarget / 1000.0
                 val newUrl = videoPlayerViewModel.resolveStreamUrl(
                     currentProgram.id,
-                    vs.currentQuality.value,
+                    apiQuality,
                     currentSessionId,
                     newOffsetSec
                 )
@@ -503,7 +519,7 @@ fun VideoPlayerScreen(
     //     effectは再発火せず、再生開始処理(setMediaItem/prepare/play)が永久に走らない
     // という不具合があった(実機ログで確認済み)。isQualitiesLoaded をキーに追加し、
     // trueに戻った時点で確実にeffectが再評価されるようにする。
-    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities, isQualitiesLoaded) {
+    LaunchedEffect(currentProgram.id, smbItem, vs.currentQuality, availableQualities, isQualitiesLoaded, vs.currentEncoding) {
         if (smbItem != null) {
             isBuffering = true
             vs.playbackOffsetMs = 0L
@@ -522,8 +538,9 @@ fun VideoPlayerScreen(
         if (availableQualities.isNotEmpty() && availableQualities.none { it.value == vs.currentQuality.value }) return@LaunchedEffect
 
         isBuffering = true
-        val offsetSec = if (isFirstLoad && initialPositionMs > 0) {
-            vs.playbackOffsetMs = initialPositionMs; initialPositionMs / 1000.0
+        val resumePositionMs = encodingChangePositionMs ?: initialPositionMs.takeIf { isFirstLoad && it > 0 }
+        val offsetSec = if (resumePositionMs != null) {
+            vs.playbackOffsetMs = resumePositionMs; resumePositionMs / 1000.0
         } else {
             val currentPos = getCurrentPositionMs()
             vs.playbackOffsetMs = currentPos; currentPos / 1000.0
@@ -531,24 +548,25 @@ fun VideoPlayerScreen(
 
         val url = videoPlayerViewModel.resolveStreamUrl(
             currentProgram.id,
-            vs.currentQuality.value,
+            apiQuality,
             currentSessionId,
             offsetSec
         )
 
         if (url.isNotEmpty()) {
+            encodingChangePositionMs = null
             val mediaItemBuilder = MediaItem.Builder().setUri(url)
             resolveMimeType(url)?.let { mediaItemBuilder.setMimeType(it) }
             val mediaItem = mediaItemBuilder.build()
             exoPlayer.setMediaItem(mediaItem)
-            if (isFirstLoad && initialPositionMs > 0 && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
-                exoPlayer.seekTo(initialPositionMs)
+            if (resumePositionMs != null && !isOffsetBasedStream && !isEdcbDirect && !isKonomiOriginal) {
+                exoPlayer.seekTo(resumePositionMs)
             }
-            // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、初回再生位置の
+            // ★ 追加: 直接TS再生はExoPlayerネイティブのseekTo()が使えないため、再生位置の
             // 復元はここではできない。ファイルサイズが判明してからバイト位置ベースで
             // シークし直す(下のscope.launch参照)。
             val shouldResumeViaByteSeek =
-                (isEdcbDirect || isKonomiOriginal) && isFirstLoad && initialPositionMs > 0
+                (isEdcbDirect || isKonomiOriginal) && resumePositionMs != null && resumePositionMs > 0
             isFirstLoad = false
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
@@ -560,7 +578,7 @@ fun VideoPlayerScreen(
                         waitedMs += 200L
                     }
                     if (fileSizeBytesRef.get() > 0L) {
-                        performSeek(initialPositionMs)
+                        performSeek(resumePositionMs!!)
                     }
                 }
             }
@@ -584,11 +602,11 @@ fun VideoPlayerScreen(
         }
     }
 
-    DisposableEffect(vs.currentQuality, currentSessionId, smbItem) {
+    DisposableEffect(vs.currentQuality, currentSessionId, smbItem, vs.currentEncoding) {
         if (smbItem == null) {
             videoPlayerViewModel.startStreamMaintenance(
                 program,
-                vs.currentQuality.value,
+                apiQuality,
                 currentSessionId
             ) { getCurrentPositionMs() / 1000.0 }
         }
@@ -838,6 +856,9 @@ fun VideoPlayerScreen(
                     subtitleLanguages = subtitleLanguages,
                     currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
+                    currentEncoding = vs.currentEncoding,
+                    availableEncodings = availableEncodings,
+                    isEncodingSupported = smbItem == null && backendType == "KONOMITV",
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
@@ -868,6 +889,18 @@ fun VideoPlayerScreen(
                                 (selectedLanguage?.let { "・${it.displayName}" } ?: "")
                         )
                     },
+                    onEncodingSelect = { encoding ->
+                        if (encoding.value != savedVideoEncoding) {
+                            if (encoding != vs.currentEncoding) {
+                                encodingChangePositionMs = getCurrentPositionMs()
+                            }
+                            scope.launch {
+                                videoPlayerViewModel.saveVideoEncoding(encoding.value)
+                                onShowToast("エンコード: ${encoding.label}")
+                            }
+                        }
+                        isModernSettingsOpen = false
+                    },
                     onQualitySelect = {
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
@@ -880,18 +913,14 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
-                            // 参照するため、ここでは切替先(it.value)から改めて判定する
-                            val isTargetKonomiOriginal =
-                                backendType == "KONOMITV" && it.value == "original"
-                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                            if (isEdcbDirect || isKonomiOriginal) {
                                 // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
                                 // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
                                     isBuffering = true
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
-                                        it.value,
+                                        if (smbItem == null && backendType == "KONOMITV") it.getKonomiTvValue(vs.currentEncoding) else it.value,
                                         currentSessionId,
                                         0.0
                                     )
@@ -909,7 +938,7 @@ fun VideoPlayerScreen(
                                     val offsetSec = currentPos / 1000.0;
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
-                                        it.value,
+                                        if (smbItem == null && backendType == "KONOMITV") it.getKonomiTvValue(vs.currentEncoding) else it.value,
                                         currentSessionId,
                                         offsetSec
                                     ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()
@@ -975,6 +1004,9 @@ fun VideoPlayerScreen(
                     subtitleLanguages = subtitleLanguages,
                     currentSubtitleLanguageId = currentSubtitleLanguageId,
                     currentQuality = vs.currentQuality,
+                    currentEncoding = vs.currentEncoding,
+                    availableEncodings = availableEncodings,
+                    isEncodingSupported = smbItem == null && backendType == "KONOMITV",
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
@@ -1004,6 +1036,18 @@ fun VideoPlayerScreen(
                                 (selectedLanguage?.let { "・${it.displayName}" } ?: "")
                         )
                     },
+                    onEncodingSelect = { encoding ->
+                        if (encoding.value != savedVideoEncoding) {
+                            if (encoding != vs.currentEncoding) {
+                                encodingChangePositionMs = getCurrentPositionMs()
+                            }
+                            scope.launch {
+                                videoPlayerViewModel.saveVideoEncoding(encoding.value)
+                                onShowToast("エンコード: ${encoding.label}")
+                            }
+                        }
+                        onSubMenuToggle(false)
+                    },
                     onQualitySelect = {
                         if (smbItem != null) {
                             onShowToast("SMB再生中は画質の変更はできません")
@@ -1016,18 +1060,15 @@ fun VideoPlayerScreen(
                             videoPlayerViewModel.saveVideoQuality(it.value)
                             val player = exoPlayer
                             val currentPos = getCurrentPositionMs()
-                            // ★ 追加: isKonomiOriginalは切替前(vs.currentQuality代入前)の値を
-                            // 参照するため、ここでは切替先(it.value)から改めて判定する
-                            val isTargetKonomiOriginal =
-                                backendType == "KONOMITV" && it.value == "original"
-                            if (isEdcbDirect || isTargetKonomiOriginal) {
+                            if (isEdcbDirect || isKonomiOriginal) {
                                 // ★ 修正: 直接TS再生の画質切替後の位置復元もExoPlayerネイティブの
                                 // seekTo()には頼らず、目標バイト位置を計算してから再生を始める
                                 scope.launch {
                                     isBuffering = true
+                                    // KonomiTV の場合は画質とエンコード方式を渡す。他のバックエンドでは画質のみを渡す。
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
-                                        it.value,
+                                        if (smbItem == null && backendType == "KONOMITV") it.getKonomiTvValue(vs.currentEncoding) else it.value,
                                         currentSessionId,
                                         0.0
                                     )
@@ -1043,9 +1084,10 @@ fun VideoPlayerScreen(
                                 scope.launch {
                                     isBuffering = true;
                                     val offsetSec = currentPos / 1000.0;
+                                    // KonomiTV の場合は画質とエンコード方式を渡す。他のバックエンドでは画質のみを渡す。
                                     val newUrl = videoPlayerViewModel.resolveStreamUrl(
                                         program.id,
-                                        it.value,
+                                        if (smbItem == null && backendType == "KONOMITV") it.getKonomiTvValue(vs.currentEncoding) else it.value,
                                         currentSessionId,
                                         offsetSec
                                     ); player.setMediaItem(MediaItem.fromUri(newUrl)); player.prepare(); player.play()

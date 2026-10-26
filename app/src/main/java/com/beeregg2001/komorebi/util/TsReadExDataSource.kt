@@ -6,6 +6,7 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import com.beeregg2001.komorebi.NativeLib
 import java.io.BufferedInputStream
 import java.io.FileNotFoundException
@@ -167,7 +168,21 @@ class TsReadExDataSource(
             if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
                 throw FileNotFoundException("Recording file not found (HTTP 404): ${dataSpec.uri}")
             }
-            throw IOException("Server returned code $responseCode")
+            // 呼び出し側がHTTPステータスに応じて復旧方法や表示メッセージを選べるよう、
+            // 文字列だけのIOExceptionではなく、応答情報を保持するMedia3のHTTP例外を使う。
+            val responseBody = try {
+                connection?.errorStream?.use { it.readBytes() } ?: byteArrayOf()
+            } catch (_: IOException) {
+                byteArrayOf()
+            }
+            throw HttpDataSource.InvalidResponseCodeException(
+                responseCode,
+                connection?.responseMessage,
+                null,
+                connection?.headerFields.orEmpty().filterKeys { !it.isNullOrEmpty() },
+                dataSpec,
+                responseBody
+            )
         }
 
         val contentLengthStr = connection?.getHeaderField("Content-Length")

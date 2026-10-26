@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,6 +40,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.AudioMode
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -85,22 +87,26 @@ fun VideoTopSubMenuUI(
     isSubtitleEnabled: Boolean,
     subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
     currentSubtitleLanguageId: Int = 1,
+    currentEncoding: StreamEncoding = StreamEncoding.fromValue("h264"),
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
     isAutoCmSkipEnabled: Boolean,
+    availableEncodings: List<StreamEncoding> = StreamEncoding.DEFAULT_ENCODINGS,
     availableQualities: List<StreamQuality>,
     focusRequester: FocusRequester,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onSubtitleLanguageToggle: () -> Unit = {},
+    onEncodingSelect: (StreamEncoding) -> Unit = {},
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
     onAutoCmSkipToggle: () -> Unit,
     // ★ 追加: 各機能のサポート状況を受け取るフラグ (既存に影響しないようデフォルトは true)
     isAudioSupported: Boolean = true,
+    isEncodingSupported: Boolean = false,
     isQualitySupported: Boolean = true,
     isCommentSupported: Boolean = true,
     isSubtitleSupported: Boolean = true,
@@ -108,6 +114,8 @@ fun VideoTopSubMenuUI(
 ) {
     val colors = KomorebiTheme.colors
     var selectedCategory by remember { mutableStateOf<SubMenuCategory?>(null) }
+    val encodingButtonRequester = remember { FocusRequester() }
+    val encodingListRequester = remember { FocusRequester() }
     val qualityButtonRequester = remember { FocusRequester() }
     val qualityListRequester = remember { FocusRequester() }
     val currentSubtitleLanguage = subtitleLanguages.firstOrNull {
@@ -123,10 +131,14 @@ fun VideoTopSubMenuUI(
     }
 
     LaunchedEffect(selectedCategory) {
-        if (selectedCategory == SubMenuCategory.QUALITY) {
+        if (selectedCategory == SubMenuCategory.ENCODING || selectedCategory == SubMenuCategory.QUALITY) {
             delay(100)
             try {
-                qualityListRequester.requestFocus()
+                if (selectedCategory == SubMenuCategory.ENCODING) {
+                    encodingListRequester.requestFocus()
+                } else {
+                    qualityListRequester.requestFocus()
+                }
             } catch (e: Exception) {
             }
         }
@@ -148,9 +160,14 @@ fun VideoTopSubMenuUI(
                             keyEvent.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ESCAPE)
                 ) {
                     if (selectedCategory != null) {
+                        val targetRequester = if (selectedCategory == SubMenuCategory.ENCODING) {
+                            encodingButtonRequester
+                        } else {
+                            qualityButtonRequester
+                        }
                         selectedCategory = null
                         try {
-                            qualityButtonRequester.requestFocus()
+                            targetRequester.requestFocus()
                         } catch (e: Exception) {
                         }
                         true
@@ -239,28 +256,104 @@ fun VideoTopSubMenuUI(
                     enabled = isCommentSupported // ★ 適用
                 )
                 VideoMenuTileItem(
-                    title = "画質",
+                    title = "エンコード",
                     icon = Icons.Default.HighQuality,
-                    subtitle = currentQuality.label,
+                    subtitle = currentEncoding.label.replace(" (", "\n("),
                     onClick = {
-                        if (isQualitySupported && availableQualities.isNotEmpty()) { // ★ 修正: 無効時は無視
+                        if (isEncodingSupported) {
                             selectedCategory =
-                                if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                                if (selectedCategory == SubMenuCategory.ENCODING) null else SubMenuCategory.ENCODING
                         }
                     },
                     modifier = Modifier
-                        .focusRequester(qualityButtonRequester)
+                        .focusRequester(encodingButtonRequester)
                         .focusProperties {
-                            if (selectedCategory != SubMenuCategory.QUALITY) down =
+                            if (selectedCategory != SubMenuCategory.ENCODING) down =
                                 FocusRequester.Cancel
                         },
                     contentColor = colors.textPrimary,
-                    enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
+                    enabled = isEncodingSupported
                 )
+                if (!isEncodingSupported || !currentEncoding.isRawTs) {
+                    VideoMenuTileItem(
+                        title = "画質",
+                        icon = Icons.Default.HighQuality,
+                        subtitle = currentQuality.label,
+                        onClick = {
+                            if (isQualitySupported && availableQualities.isNotEmpty()) { // ★ 修正: 無効時は無視
+                                selectedCategory =
+                                    if (selectedCategory == SubMenuCategory.QUALITY) null else SubMenuCategory.QUALITY
+                            }
+                        },
+                        modifier = Modifier
+                            .focusRequester(qualityButtonRequester)
+                            .focusProperties {
+                                if (selectedCategory != SubMenuCategory.QUALITY) down =
+                                    FocusRequester.Cancel
+                            },
+                        contentColor = colors.textPrimary,
+                        enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
+                    )
+                }
             }
 
             AnimatedVisibility(
-                visible = selectedCategory == SubMenuCategory.QUALITY,
+                visible = selectedCategory == SubMenuCategory.ENCODING,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Spacer(Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(400.dp)
+                            .height(2.dp)
+                            .background(colors.textPrimary.copy(alpha = 0.2f))
+                    )
+                    Spacer(Modifier.height(16.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 32.dp, vertical = 8.dp)
+                    ) {
+                        availableEncodings.forEach { encoding ->
+                            val isSelected = currentEncoding == encoding
+                            VideoMenuTileItem(
+                                title = encoding.label.replace(" (", "\n("),
+                                icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                subtitle = if (isSelected) "選択中" else "",
+                                onClick = {
+                                    onEncodingSelect(encoding)
+                                    selectedCategory = null
+                                    try {
+                                        encodingButtonRequester.requestFocus()
+                                    } catch (e: Exception) {
+                                    }
+                                },
+                                width = 160.dp,
+                                height = 100.dp,
+                                modifier = Modifier
+                                    .then(
+                                        if (isSelected) Modifier.focusRequester(
+                                            encodingListRequester
+                                        ) else Modifier
+                                    )
+                                    .focusProperties {
+                                        up = encodingButtonRequester
+                                        down = FocusRequester.Cancel
+                                    },
+                                contentColor = colors.textPrimary
+                            )
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = selectedCategory == SubMenuCategory.QUALITY && (!isEncodingSupported || !currentEncoding.isRawTs),
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
@@ -362,13 +455,15 @@ fun VideoMenuTileItem(
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
             )
             if (subtitle.isNotEmpty()) {
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                    color = LocalContentColor.current.copy(alpha = 0.7f)
+                    color = LocalContentColor.current.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center
                 )
             }
         }
@@ -387,21 +482,25 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     isSubtitleEnabled: Boolean,
     subtitleLanguages: List<NativeCaptionLanguage> = emptyList(),
     currentSubtitleLanguageId: Int = 1,
+    currentEncoding: StreamEncoding = StreamEncoding.fromValue("h264"),
     currentQuality: StreamQuality,
     isCommentEnabled: Boolean,
     isLCropEnabled: Boolean,
     isAutoCmSkipEnabled: Boolean,
+    availableEncodings: List<StreamEncoding> = StreamEncoding.DEFAULT_ENCODINGS,
     availableQualities: List<StreamQuality>,
     onAudioToggle: () -> Unit,
     onSpeedToggle: () -> Unit,
     onSubtitleToggle: () -> Unit,
     onSubtitleLanguageToggle: () -> Unit = {},
+    onEncodingSelect: (StreamEncoding) -> Unit = {},
     onQualitySelect: (StreamQuality) -> Unit,
     onCommentToggle: () -> Unit,
     onLCropToggle: () -> Unit,
     onAutoCmSkipToggle: () -> Unit,
     // ★ 追加: 各機能のサポート状況を受け取るフラグ
     isAudioSupported: Boolean = true,
+    isEncodingSupported: Boolean = false,
     isQualitySupported: Boolean = true,
     isCommentSupported: Boolean = true,
     isSubtitleSupported: Boolean = true,
@@ -415,6 +514,8 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
     val navigationState = rememberSubMenuNavigationState<SubMenuCategory>()
     val selectedCategory = navigationState.destination
     val initialFocusRequester = remember { FocusRequester() }
+    val encodingButtonRequester = remember { FocusRequester() }
+    val encodingListRequester = remember { FocusRequester() }
     val qualityButtonRequester = remember { FocusRequester() }
     val qualityListRequester = remember { FocusRequester() }
 
@@ -472,7 +573,11 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                 Icon(Icons.Default.Settings, contentDescription = null, tint = colors.textPrimary)
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = if (selectedCategory == SubMenuCategory.QUALITY) "画質の選択" else "プレイヤー設定",
+                    text = when (selectedCategory) {
+                        SubMenuCategory.ENCODING -> "エンコードの選択"
+                        SubMenuCategory.QUALITY -> "画質の選択"
+                        else -> "プレイヤー設定"
+                    },
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = colors.textPrimary
@@ -518,21 +623,39 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             enabled = isSubtitleSupported && subtitleLanguages.size > 1
                         )
                         ModernSettingRow(
-                            title = "画質",
-                            value = currentQuality.label,
+                            title = "エンコード",
+                            value = currentEncoding.label.replace(" (", "\n("),
                             icon = Icons.Default.HighQuality,
                             onClick = {
-                                if (isQualitySupported) {
+                                if (isEncodingSupported && availableEncodings.isNotEmpty()) {
                                     navigationState.navigateTo(
-                                        destination = SubMenuCategory.QUALITY,
-                                        returnFocusRequester = qualityButtonRequester,
-                                        destinationFocusRequester = qualityListRequester
+                                        destination = SubMenuCategory.ENCODING,
+                                        returnFocusRequester = encodingButtonRequester,
+                                        destinationFocusRequester = encodingListRequester
                                     )
                                 }
-                            }, // ★ 無効時は開かない
-                            modifier = Modifier.focusRequester(qualityButtonRequester),
-                            enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
+                            },
+                            modifier = Modifier.focusRequester(encodingButtonRequester),
+                            enabled = isEncodingSupported && availableEncodings.isNotEmpty()
                         )
+                        if (!isEncodingSupported || !currentEncoding.isRawTs) {
+                            ModernSettingRow(
+                                title = "画質",
+                                value = currentQuality.label,
+                                icon = Icons.Default.HighQuality,
+                                onClick = {
+                                    if (isQualitySupported) {
+                                        navigationState.navigateTo(
+                                            destination = SubMenuCategory.QUALITY,
+                                            returnFocusRequester = qualityButtonRequester,
+                                            destinationFocusRequester = qualityListRequester
+                                        )
+                                    }
+                                }, // ★ 無効時は開かない
+                                modifier = Modifier.focusRequester(qualityButtonRequester),
+                                enabled = isQualitySupported && availableQualities.isNotEmpty() // ★ 適用
+                            )
+                        }
                         ModernSettingRow(
                             title = "自動CMスキップ",
                             value = if (isAutoCmSkipEnabled) "有効" else "無効",
@@ -556,6 +679,28 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
                             highlight = isLCropEnabled,
                             enabled = true
                         )
+                    }
+                } else if (category == SubMenuCategory.ENCODING) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        availableEncodings.forEach { encoding ->
+                            val isSelected = currentEncoding == encoding
+                            ModernSettingRow(
+                                title = encoding.label.replace(" (", "\n("),
+                                value = if (isSelected) "✓" else "",
+                                icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Settings,
+                                onClick = {
+                                    onEncodingSelect(encoding)
+                                    navigationState.navigateBack()
+                                },
+                                highlight = isSelected,
+                                modifier = if (isSelected) Modifier.focusRequester(
+                                    encodingListRequester
+                                ) else Modifier
+                            )
+                        }
                     }
                 } else if (category == SubMenuCategory.QUALITY) {
                     Column(
@@ -642,7 +787,8 @@ fun ModernSettingRow(
             Text(
                 text = value,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (isFocused) Color.Unspecified else colors.textSecondary
+                color = if (isFocused) Color.Unspecified else colors.textSecondary,
+                textAlign = if ('\n' in value) TextAlign.End else TextAlign.Start
             )
         }
     }
