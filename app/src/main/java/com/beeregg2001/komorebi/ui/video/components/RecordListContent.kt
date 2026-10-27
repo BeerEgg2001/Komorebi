@@ -111,6 +111,12 @@ fun RecordListContent(
     val detailPanelFocusRequester = remember { FocusRequester() }
     val menuAnchorRequester = remember { FocusRequester() }
 
+    // サブメニューを閉じてから実フォーカスがリストへ戻るまでの数フレーム、
+    // 疑似ハイライト(isPersistentFocused)を消さずに保つためのフラグ。
+    // これが無いと「メニューが閉じた瞬間に無灯 → 実フォーカスが当たって再点灯」となり
+    // 項目が一瞬点滅して見える。
+    var isRestoringListFocus by remember { mutableStateOf(false) }
+
     val isAnyMenuOpen = isSideMenuOpen || isDetailVisible
     val menuTransitionState =
         remember { MutableTransitionState(false) }.apply { targetState = isAnyMenuOpen }
@@ -197,7 +203,7 @@ fun RecordListContent(
                         program = program, konomiIp = konomiIp, konomiPort = konomiPort,
                         backendType = backendType,
                         onClick = { onProgramClick(program, null) },
-                        isPersistentFocused = (isSideMenuOpen || isDetailVisible) &&
+                        isPersistentFocused = (isSideMenuOpen || isDetailVisible || isRestoringListFocus) &&
                                 (if (isDetailVisible) detailProgram?.id == program.id else focusedProgram?.id == program.id),
                         modifier = Modifier
                             .focusRequester(specificRequester)
@@ -288,7 +294,25 @@ fun RecordListContent(
                                 } else {
                                     onSideMenuStateChange(false)
                                     val id = focusedProgram?.id
-                                    if (id != null) {
+                                    val itemRequester = id?.let { itemFocusRequesters[it] }
+                                    if (itemRequester != null) {
+                                        // サブメニューを開いている間リストはスクロールしないため、
+                                        // 元の項目は画面内に残っている。TARGET_ID チケットで戻すと
+                                        // LaunchedEffect が scrollToItem(index - 1) を実行して
+                                        // リストが不要に動く(バウンドの原因)ので、ここでは配置済みの
+                                        // FocusRequester へ直接フォーカスを戻す。
+                                        isRestoringListFocus = true
+                                        scope.launch {
+                                            val restored =
+                                                itemRequester.requestFocusWhenReady("SideMenuClosed")
+                                            // 項目が破棄されていた場合だけ、従来のスクロール付き
+                                            // 復帰へ退避する
+                                            if (!restored) {
+                                                ticketManager.issue(FocusTicket.TARGET_ID, id)
+                                            }
+                                            isRestoringListFocus = false
+                                        }
+                                    } else if (id != null) {
                                         ticketManager.issue(FocusTicket.TARGET_ID, id)
                                     } else {
                                         ticketManager.issue(FocusTicket.LIST_TOP)

@@ -128,7 +128,13 @@ fun RecordListItem(
             .onFocusChanged { isFocused = it.isFocused }
             .alpha(if (isAnalyzed) 1f else 0.5f),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp)),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
+        // 疑似ハイライト(isPersistentFocused)中も拡大状態を保つ。素のままだと
+        // 実フォーカス時だけ 1.02 倍になるため、メニューを開閉するたびに
+        // 1.00 ⇔ 1.02 の拡大アニメーションが走って項目が揺れて見える。
+        scale = ClickableSurfaceDefaults.scale(
+            scale = if (isPersistentFocused) 1.02f else 1f,
+            focusedScale = 1.02f
+        ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = if (isVisualFocused) colors.textPrimary else Color.Transparent,
             focusedContainerColor = colors.textPrimary,
