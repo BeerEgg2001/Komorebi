@@ -378,11 +378,15 @@ fun RecordListContent(
                                         .focusRequester(detailButtonFocusRequester)
                                         .focusProperties { right = FocusRequester.Cancel },
                                     onClick = {
-                                        detailProgram = focusedProgram; focusedProgram?.id?.let {
-                                        onFetchDetail(it)
-                                    }; detailPanelFocusRequester.safeRequestFocus(); onDetailStateChange(
-                                        true
-                                    )
+                                        detailProgram = focusedProgram
+                                        focusedProgram?.id?.let { onFetchDetail(it) }
+                                        // ここでフォーカスを要求してはいけない。パネルを表示するのは
+                                        // この下の onDetailStateChange(true) であり、この時点では対象が
+                                        // まだ配置されていないため requestFocus は必ず false を返す
+                                        // (logcat に "Focus target is not ready" が出ていた原因)。
+                                        // 実際のフォーカスは LaunchedEffect(isDetailVisible) が
+                                        // requestFocusWhenReady で当てている。
+                                        onDetailStateChange(true)
                                     })
                                 Spacer(Modifier.height(12.dp))
                                 SideMenuItem(
