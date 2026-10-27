@@ -63,7 +63,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.components.*
@@ -284,25 +284,25 @@ fun RecordListScreen(
         when (currentTicket) {
             FocusTicket.LIST_TOP -> {
                 if (hasContent && isListFirstItemReady && !isLoadingAny) {
-                    delay(150)
-                    focuses.firstItem.safeRequestFocusWithRetry("Ticket_LIST_TOP")
+                    // isListFirstItemReady で既に描画完了を待っているため、ここでの固定待ちは不要。
+                    // 配置されていなければフレーム単位で再試行される。
+                    focuses.firstItem.requestFocusWhenReady("Ticket_LIST_TOP")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 } else if (!hasContent && !isLoadingAny) {
-                    delay(150)
-                    if (isListView) focuses.navPane.safeRequestFocusWithRetry("Ticket_EmptyNav")
-                    else focuses.searchOpenButton.safeRequestFocusWithRetry("Ticket_EmptySearch")
+                    if (isListView) focuses.navPane.requestFocusWhenReady("Ticket_EmptyNav")
+                    else focuses.searchOpenButton.requestFocusWhenReady("Ticket_EmptySearch")
                     ticketManager.consume(FocusTicket.LIST_TOP)
                 }
             }
 
             FocusTicket.NAV_PANE -> {
-                focuses.navPane.safeRequestFocusWithRetry("Ticket_NAV_PANE")
+                focuses.navPane.requestFocusWhenReady("Ticket_NAV_PANE")
                 ticketManager.consume(FocusTicket.NAV_PANE)
             }
 
             FocusTicket.PANE -> {
                 if (menuState.isPaneListReady) {
-                    focuses.paneFirstItem.safeRequestFocusWithRetry("Ticket_PANE")
+                    focuses.paneFirstItem.requestFocusWhenReady("Ticket_PANE")
                     ticketManager.consume(FocusTicket.PANE)
                 }
             }
@@ -466,10 +466,13 @@ fun RecordListScreen(
             menuState.isSearchBarVisible -> {
                 menuState.isSearchBarVisible = false
                 scope.launch {
-                    delay(50)
-                    if (activeSearchQuery.isNotEmpty()) focuses.contentContainer.safeRequestFocus("SearchHide")
-                    else if (isListView) ticketManager.issue(FocusTicket.NAV_PANE)
-                    else focuses.contentContainer.safeRequestFocus("SearchHideGrid")
+                    if (activeSearchQuery.isNotEmpty()) {
+                        focuses.contentContainer.requestFocusWhenReady("SearchHide")
+                    } else if (isListView) {
+                        ticketManager.issue(FocusTicket.NAV_PANE)
+                    } else {
+                        focuses.contentContainer.requestFocusWhenReady("SearchHideGrid")
+                    }
                 }
             }
 
@@ -925,8 +928,7 @@ fun BoxScope.RecordSeriesFilterMenuOverlay(
 
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150)
-            focusRequester.safeRequestFocus("SeriesFilterMenu")
+            focusRequester.requestFocusWhenReady("SeriesFilterMenu")
         }
     }
 
