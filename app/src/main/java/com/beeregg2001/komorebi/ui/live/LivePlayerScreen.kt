@@ -39,8 +39,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.viewmodel.*
-import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.data.KonomiOriginalQualityGate
 import com.beeregg2001.komorebi.data.model.AudioMode
 import com.beeregg2001.komorebi.data.model.Channel
@@ -453,7 +452,9 @@ fun LivePlayerScreen(
             quality = ps.currentQuality,
             encoding = ps.currentEncoding
         )
-        delay(300); mainFocusRequester.safeRequestFocus(TAG)
+        // 再生開始後にプレイヤー本体へフォーカスを当てる。固定で300ms待っていたが、
+        // 受け皿のノードは既に配置されているため待つ必要はない。
+        mainFocusRequester.requestFocusWhenReady(TAG)
     }
 
     LaunchedEffect(
@@ -589,29 +590,31 @@ fun LivePlayerScreen(
 
     LaunchedEffect(isMiniListOpen) {
         if (isMiniListOpen) {
-            channelViewModel.fetchChannels(); delay(200)
-            // ★ 修正: 単発のsafeRequestFocus()だと、ホーム画面がプレイヤー表示中も破棄されず
-            // 常駐するようになった影響で、レイアウト確定前にフォーカス要求が来て失敗すると
-            // そのまま復帰しない(=方向キー/決定キーが効かない)ことがあったため、リトライ版に変更する。
+            channelViewModel.fetchChannels()
+            // ★ 修正: 1回だけのフォーカス要求だと、ホーム画面がプレイヤー表示中も破棄されず
+            // 常駐するようになった影響で、レイアウト確定前に要求が来て失敗すると
+            // そのまま復帰しない(=方向キー/決定キーが効かない)ことがあった。
             // さらに、ホーム画面側の項目が持っていた古い論理フォーカスがcanFocus=false化後も
             // 内部的に残留し、新規のrequestFocus()を阻害することがあるため、まず明示的にクリアする。
             focusManager.clearFocus(force = true)
-            listFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 10, delayMillis = 50)
+            // 要求先は ChannelListOverlay の LazyRow の該当チャンネル項目であり、
+            // 一覧の取得とスクロールが終わるまでアタッチされない。通信を待つため
+            // フレーム数を多めに取る(既に一覧があれば即座に成功して待ち時間ゼロ)。
+            listFocusRequester.requestFocusWhenReady(TAG, maxFrames = 45)
         } else if (!currentIsManualOverlay && !currentIsSubMenuOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
-            delay(100)
             focusManager.clearFocus(force = true)
-            mainFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 10, delayMillis = 50)
+            mainFocusRequester.requestFocusWhenReady(TAG)
         }
     }
 
     LaunchedEffect(isSubMenuOpen) {
         if (isSubMenuOpen && !isPiPMode) {
-            delay(150); subMenuFocusRequester.safeRequestFocus(TAG)
+            subMenuFocusRequester.requestFocusWhenReady(TAG)
         } else if (!isSubMenuOpen && !isMiniListOpen && !isPiPMode && ps.lCropMode == LCropMode.HIDDEN) {
             // ★ 追加: サブメニューを閉じるとフォーカスを持っていた項目ごと破棄されるため、
             // 明示的にプレイヤー本体へフォーカスを戻す。
             // (戻さないとフォーカスが迷子になり、以降の十字キー/決定キーが効かなくなる)
-            delay(100); mainFocusRequester.safeRequestFocus(TAG)
+            mainFocusRequester.requestFocusWhenReady(TAG)
         }
     }
 
@@ -619,8 +622,8 @@ fun LivePlayerScreen(
     // 切り替え後にフォーカスをプレイヤー本体へ引き戻す。
     LaunchedEffect(ps.isDualDisplayMode) {
         if (!isPiPMode && !isMiniListOpen && !isSubMenuOpen && ps.lCropMode == LCropMode.HIDDEN) {
-            delay(200)
-            mainFocusRequester.safeRequestFocusWithRetry(TAG, maxRetries = 5, delayMillis = 60)
+            // 切り替えで受け皿ノードが作り直されるため、配置を待ってから当てる
+            mainFocusRequester.requestFocusWhenReady(TAG)
         }
     }
 
@@ -761,11 +764,8 @@ fun LivePlayerScreen(
             LCropOverlay(
                 state = ps,
                 onClose = {
-                    ps.lCropMode = LCropMode.HIDDEN; scope.launch {
-                    delay(200); mainFocusRequester.safeRequestFocus(
-                    TAG
-                )
-                }
+                    ps.lCropMode = LCropMode.HIDDEN
+                    scope.launch { mainFocusRequester.requestFocusWhenReady(TAG) }
                 })
         }
 
@@ -883,11 +883,9 @@ fun LivePlayerScreen(
                     if (!ps.isDualDisplayMode) onChannelSelect(selectedChannel) else {
                         if (ps.activeDualPlayerIndex == 0) onChannelSelect(selectedChannel) else ps.dualRightChannel =
                             selectedChannel
-                    }; onMiniListToggle(false); scope.launch {
-                    delay(200); mainFocusRequester.safeRequestFocus(
-                    TAG
-                )
-                }
+                    }
+                    onMiniListToggle(false)
+                    scope.launch { mainFocusRequester.requestFocusWhenReady(TAG) }
                 },
                 getLogoUrl = { channelId -> channelViewModel.getChannelLogoUrl(channelId) },
                 shouldCropLogo = shouldCropLogo,
