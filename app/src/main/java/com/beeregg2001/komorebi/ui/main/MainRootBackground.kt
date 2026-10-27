@@ -67,21 +67,17 @@ fun MainRootBackground(
         !state.isMiniPlayerMode &&
             (state.selectedChannel != null || state.selectedProgram != null || state.selectedSmbItem != null)
 
-    // ★ 追加: 設定画面(MainRootDialogs側で描画)は画面全体を覆うため、表示中は背面ツリーを操作できない。
-    // 特にミニプレイヤー表示中はisFullScreenPlayerVisibleがfalseになるので、
-    // 設定画面を開いても背面のホーム画面がフォーカス可能なまま残り、
-    // 設定画面のボタンにフォーカスできない・戻るキーがホーム画面側に吸われて
-    // アプリ終了確認ダイアログが出る、という操作不能状態になっていた。
-    // ★ 追加: AIコンシェルジュパネル(MainRootDialogs側で描画)も前面の全画面オーバーレイ。
-    // これが漏れていると、パネル表示中も背面のホーム画面がフォーカス可能なままになり、
-    // ホーム側の「フォーカス迷子検知」がパネルからフォーカスを奪い返してしまう
-    // (パネルは表示されたままキー操作だけ背面画面に効く操作不能状態になる)。
-    // ★ 追加: 同期エラーダイアログ(MainRootDialogs側で描画)も全画面オーバーレイ。
-    // これが漏れていると背面のホーム画面がフォーカス可能なまま残り、ホーム側の
-    // 「フォーカス迷子検知」がダイアログからフォーカスを奪い返してしまう。
+    // 前面オーバーレイ(設定画面・AIコンシェルジュ・同期エラーダイアログ。いずれも
+    // MainRootDialogs側で描画される)が出ている間は、背面ツリーを操作できてはいけない。
+    // 漏れると背面のホーム画面がフォーカス可能なまま残り、ホーム側の「フォーカス迷子検知」が
+    // オーバーレイからフォーカスを奪い返して、表示されたままキー操作だけ背面に効く
+    // 操作不能状態になる。特にミニプレイヤー表示中は isFullScreenPlayerVisible が false に
+    // なるため、オーバーレイ側の判定が無いと素通りしてしまう。
+    //
+    // 対象の列挙は MainRootState.isForegroundOverlayVisible に一元化している
+    // (こことホーム画面の2箇所へ別々に登録する形は登録漏れが再発するため廃止した)。
     val isBackgroundFocusBlocked =
-        isFullScreenPlayerVisible || state.isSettingsOpen || state.isAiConciergeOpen ||
-            state.isSyncErrorVisible
+        isFullScreenPlayerVisible || state.isForegroundOverlayVisible
 
     Box(
         modifier = Modifier
@@ -329,7 +325,7 @@ fun MainRootBackground(
                         onAiReturnConsumed = { state.aiFocusReturnTick = 0 },
                         // ★ 追加: AIコンシェルジュパネル表示中はフォーカス自動復帰・戻るキー処理を止める
                         isAiConciergeOpen = state.isAiConciergeOpen,
-                        isSyncErrorVisible = state.isSyncErrorVisible,
+                        isForegroundOverlayVisible = state.isForegroundOverlayVisible,
                         // プレイヤー表示中はホーム画面が見えないため、定期取得を止めさせる
                         isPlayerActiveFullScreen = isFullScreenPlayerVisible
                     )

@@ -177,7 +177,10 @@ fun HomeLauncherScreen(
     // パネルはMainRootDialogs側の別オーバーレイとして描画されホーム画面はツリーに残り続けるため、
     // フォーカス自動復帰処理と戻るキー処理をこの画面側でも明示的に止める必要がある。
     isAiConciergeOpen: Boolean = false,
-    isSyncErrorVisible: Boolean = false,
+    // 画面全体を覆う前面オーバーレイ(設定画面・AIコンシェルジュ・同期エラーダイアログ)が
+    // 表示中かどうか。対象の列挙は MainRootState.isForegroundOverlayVisible 側に一元化して
+    // あるため、この画面はオーバーレイの種類を知る必要がない。
+    isForegroundOverlayVisible: Boolean = false,
     // フルスクリーンのプレイヤーが手前に出ている間は true。
     // ホーム画面はプレイヤー表示中も(スクロール位置とフォーカスを保つため)
     // Compose ツリーに残り続けるので、見えていない間の定期通信を明示的に止める。
@@ -225,12 +228,12 @@ fun HomeLauncherScreen(
         hasActivePlayer = hasActivePlayer
     )
 
-    // ★ 追加: AIコンシェルジュパネル表示中はタブ列の表示可否(isFullScreenMode)自体は変えず
-    // (パネルは画面の一部を覆うオーバーレイのため、タブ列を消す見た目の変更は不要)、
-    // フォーカス自動復帰・戻るキー処理だけを止めるための専用フラグ。
-    // 同期エラーダイアログ表示中もフォーカス自動復帰を止める。動かしたままだと
-    // ダイアログからフォーカスを奪い返し、表示されたまま操作できない状態になる。
-    val isFocusSuspended = isFullScreenMode || isAiConciergeOpen || isSyncErrorVisible
+    // 前面オーバーレイ表示中はタブ列の表示可否(isFullScreenMode)自体は変えず
+    // (AIコンシェルジュパネル等は画面の一部を覆うオーバーレイのため、タブ列を消す
+    // 見た目の変更は不要)、フォーカス自動復帰・戻るキー処理だけを止めるためのフラグ。
+    // 動かしたままだとオーバーレイからフォーカスを奪い返し、表示されたまま操作できない
+    // 状態になる。対象の列挙は MainRootState.isForegroundOverlayVisible 側に一元化済み。
+    val isFocusSuspended = isFullScreenMode || isForegroundOverlayVisible
 
     // ★ 追加: PR #103でプレイヤー表示中もこのホーム画面自体が破棄されず常駐するようになった影響で、
     // プレイヤーを開く直前にフォーカスしていた項目の論理フォーカスが残留し、プレイヤーから戻った際の
