@@ -36,8 +36,8 @@ import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.epg.EpgNavigationContainer
 import com.beeregg2001.komorebi.ui.reserve.ReserveListScreen
 import com.beeregg2001.komorebi.viewmodel.*
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -306,11 +306,11 @@ fun HomeLauncherScreen(
     // タブの表示ツリーを再構築した直後は、切替前のフォーカスノードが破棄されて
     // フォーカスが消えることがある。新しいタブを必ず操作可能な状態に戻す。
     LaunchedEffect(activeRenderIndex) {
-        delay(160)
-        ui.tabFocusRequesters.getOrNull(activeRenderIndex)?.safeRequestFocusWithRetry(
+        // 固定で160ms待ってから要求していたが、タブ列は既に配置済みなので待つ必要はない。
+        // 配置前だった場合もフレーム単位で再試行する。
+        ui.tabFocusRequesters.getOrNull(activeRenderIndex)?.requestFocusWhenReady(
             tag = "HomeTab_Rendered",
-            maxRetries = 10,
-            delayMillis = 50,
+            maxFrames = 12,
             // 設定ボタン等へ意図的に移動した後は、タブへ引き戻さない
             shouldContinue = { activeRenderIndex == safeTabIndex && !isHeaderActionFocused() }
         )
@@ -334,13 +334,13 @@ fun HomeLauncherScreen(
 
                 "プロ野球" -> {
                     ui.contentFirstItemRequesters.getOrNull(safeTabIndex)
-                        ?.safeRequestFocusWithRetry("BaseballAiReturn")
+                        ?.requestFocusWhenReady("BaseballAiReturn", maxFrames = 15)
                     onAiReturnConsumed()
                 }
 
                 else -> {
                     ui.tabFocusRequesters.getOrNull(safeTabIndex)
-                        ?.safeRequestFocusWithRetry("FallbackAiReturn")
+                        ?.requestFocusWhenReady("FallbackAiReturn")
                     onAiReturnConsumed()
                 }
             }
@@ -350,7 +350,7 @@ fun HomeLauncherScreen(
     LaunchedEffect(isReturningFromPlayer) {
         if (isReturningFromPlayer && !isFullScreenMode) {
             focusManager.clearFocus(force = true)
-            ui.safeHouseRequester.safeRequestFocusWithRetry("SafeHouse_Return")
+            ui.safeHouseRequester.requestFocusWhenReady("SafeHouse_Return")
             delay(150)
 
             val currentTabName = tabs.getOrNull(safeTabIndex)
@@ -411,7 +411,7 @@ fun HomeLauncherScreen(
                 },
                 escapeToSafeHouse = {
                     scope.launch {
-                        ui.safeHouseRequester.safeRequestFocusWithRetry("Back_SafeHouse")
+                        ui.safeHouseRequester.requestFocusWhenReady("Back_SafeHouse")
                     }
                 }
             )
@@ -421,12 +421,10 @@ fun HomeLauncherScreen(
     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
         when (ticketManager.currentTicket) {
             HomeFocusTicket.TAB_BAR -> {
-                delay(200)
-                if (ticketManager.currentTicket != HomeFocusTicket.TAB_BAR) {
-                    return@LaunchedEffect
-                }
+                // 固定で200ms待ってからチケットの有効性を確認していたが、フレーム単位の
+                // 再試行では shouldContinue が毎フレーム同じ判定をするため事前確認は不要。
                 ui.tabFocusRequesters.getOrNull(safeTabIndex)
-                    ?.safeRequestFocusWithRetry(
+                    ?.requestFocusWhenReady(
                         "HomeTicket_TAB_BAR",
                         shouldContinue = {
                             ticketManager.currentTicket == HomeFocusTicket.TAB_BAR
@@ -441,9 +439,10 @@ fun HomeLauncherScreen(
             }
 
             HomeFocusTicket.CONTENT_TOP -> {
-                delay(150)
+                // コンテンツ先頭の項目は LazyRow/LazyColumn の実体化を待つため、
+                // タブ列より少し長めにフレームを見る。
                 ui.contentFirstItemRequesters.getOrNull(safeTabIndex)
-                    ?.safeRequestFocusWithRetry("HomeTicket_CONTENT_TOP")
+                    ?.requestFocusWhenReady("HomeTicket_CONTENT_TOP", maxFrames = 15)
                 ticketManager.consume(HomeFocusTicket.CONTENT_TOP)
             }
 
@@ -497,34 +496,38 @@ fun HomeLauncherScreen(
             "フォーカス迷子を検知（hasFocus=$launcherHasFocus stranded=$contentFocusStranded）。復帰を試みます"
         )
 
-        // 一度の要求で復帰できないと操作不能のまま固まるため、復帰するまで数回繰り返す。
-        var attempt = 0
-        while (attempt < 5 && isLost()) {
-            delay(if (attempt == 0) 120 else 220)
-            if (isFocusSuspended || isReturningFromPlayer || !isLost()) return@LaunchedEffect
+        // 迷子はユーザーから見れば「操作不能」なので、待たずに即座に復帰を試みる。
+        // 以前は 120ms 待ってから試し、失敗すると 220ms 待って再試行していたため
+        // 最悪1秒以上フォーカス枠が消えたままだった。
+        //
+        // 復帰条件が揺れている間だけ試す。isFocusSuspended / isReturningFromPlayer は
+        // この LaunchedEffect のキーにも含まれているので、変化すれば effect 自体が
+        // 中断・再起動される。ここでの判定はその取りこぼしに対する保険。
+        val shouldKeepTrying = { !isFocusSuspended && !isReturningFromPlayer && isLost() }
+
+        // 要求が通ってもフォーカス状態の反映は次フレームなので、1回あたりの試行を
+        // 終えたらフレームを1つ進めて isLost() を読み直す。
+        repeat(3) {
+            if (!shouldKeepTrying()) return@LaunchedEffect
 
             val tabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
             // 直前までコンテンツを操作していたなら、コンテンツ先頭へ戻す方が違和感が少ない。
-            val restoredToContent = if (!ui.topNavHasFocus) {
-                ui.contentFirstItemRequesters.getOrNull(tabIndex)
-                    ?.safeRequestFocusWithRetry(
-                        tag = "HomeFocusRecovery_Content",
-                        maxRetries = 4,
-                        delayMillis = 60,
-                        shouldContinue = { isLost() }
-                    ) == true
-            } else false
+            val restoredToContent = !ui.topNavHasFocus &&
+                    ui.contentFirstItemRequesters.getOrNull(tabIndex)
+                        ?.requestFocusWhenReady(
+                            tag = "HomeFocusRecovery_Content",
+                            maxFrames = 6,
+                            shouldContinue = shouldKeepTrying
+                        ) == true
 
             if (!restoredToContent) {
                 ui.tabFocusRequesters.getOrNull(tabIndex)
-                    ?.safeRequestFocusWithRetry(
+                    ?.requestFocusWhenReady(
                         tag = "HomeFocusRecovery_Tab",
-                        maxRetries = 6,
-                        delayMillis = 60,
-                        shouldContinue = { isLost() }
+                        shouldContinue = shouldKeepTrying
                     )
             }
-            attempt++
+            withFrameNanos { }
         }
     }
 
@@ -551,11 +554,8 @@ fun HomeLauncherScreen(
         )
 
         pendingTabFocusJob = scope.launch {
-            delay(80)
-            ui.tabFocusRequesters[targetIndex].safeRequestFocusWithRetry(
+            ui.tabFocusRequesters[targetIndex].requestFocusWhenReady(
                 tag = "HomeTab_Dpad",
-                maxRetries = 8,
-                delayMillis = 50,
                 shouldContinue = { ui.selectedTabIndex == targetIndex && !isHeaderActionFocused() }
             )
         }
@@ -614,10 +614,8 @@ fun HomeLauncherScreen(
 
                         Key.DirectionUp -> {
                             scope.launch {
-                                ui.tabFocusRequesters[ui.selectedTabIndex].safeRequestFocusWithRetry(
-                                    tag = "SafeHouse_Dpad_Tab",
-                                    maxRetries = 8,
-                                    delayMillis = 50
+                                ui.tabFocusRequesters[ui.selectedTabIndex].requestFocusWhenReady(
+                                    tag = "SafeHouse_Dpad_Tab"
                                 )
                             }
                             true
@@ -627,17 +625,14 @@ fun HomeLauncherScreen(
                             scope.launch {
                                 if (ui.isCurrentTabContentReady) {
                                     ui.contentFirstItemRequesters[ui.selectedTabIndex]
-                                        .safeRequestFocusWithRetry(
+                                        .requestFocusWhenReady(
                                             tag = "SafeHouse_Dpad_Content",
-                                            maxRetries = 8,
-                                            delayMillis = 50
+                                            maxFrames = 15
                                         )
                                 } else {
                                     ui.tabFocusRequesters[ui.selectedTabIndex]
-                                        .safeRequestFocusWithRetry(
-                                            tag = "SafeHouse_Dpad_Tab",
-                                            maxRetries = 8,
-                                            delayMillis = 50
+                                        .requestFocusWhenReady(
+                                            tag = "SafeHouse_Dpad_Tab"
                                         )
                                 }
                             }
@@ -690,7 +685,7 @@ fun HomeLauncherScreen(
                                     requestTopNavFocus = { ticketManager.issue(HomeFocusTicket.TAB_BAR) },
                                     escapeToSafeHouse = {
                                         scope.launch {
-                                            ui.safeHouseRequester.safeRequestFocusWithRetry(
+                                            ui.safeHouseRequester.requestFocusWhenReady(
                                                 "Back_SafeHouse"
                                             )
                                         }
@@ -759,10 +754,9 @@ fun HomeLauncherScreen(
                                             // フォーカスを逃がさない。
                                             scope.launch {
                                                 ui.contentFirstItemRequesters.getOrNull(index)
-                                                    ?.safeRequestFocusWithRetry(
+                                                    ?.requestFocusWhenReady(
                                                         tag = "HomeTab_Dpad_Content",
-                                                        maxRetries = 12,
-                                                        delayMillis = 40,
+                                                        maxFrames = 15,
                                                         shouldContinue = {
                                                             ui.selectedTabIndex == index &&
                                                                 activeRenderIndex == index
