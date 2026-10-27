@@ -40,15 +40,14 @@ import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
 import com.beeregg2001.komorebi.util.TitleNormalizer
 import com.beeregg2001.komorebi.viewmodel.SettingsViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -156,7 +155,7 @@ fun RecordListContent(
 
     LaunchedEffect(isDetailVisible) {
         if (isDetailVisible) {
-            delay(100); detailPanelFocusRequester.safeRequestFocus("DetailPanelOpened")
+            detailPanelFocusRequester.requestFocusWhenReady("DetailPanelOpened")
         }
     }
 
@@ -187,7 +186,9 @@ fun RecordListContent(
                     LaunchedEffect(ticketManager.currentTicket, ticketManager.issueTime) {
                         val ticket = ticketManager.currentTicket
                         if (ticket == FocusTicket.TARGET_ID && program.id == ticketManager.targetProgramId) {
-                            specificRequester.safeRequestFocusWithRetry("Ticket_TARGET_ID")
+                            // プレイヤーから戻った際の復帰。LazyColumn のスクロールと項目の描画を
+                            // 待つ必要があるが、固定間隔(100ms×5回)ではなくフレーム単位で試す。
+                            specificRequester.requestFocusWhenReady("Ticket_TARGET_ID")
                             ticketManager.consume(FocusTicket.TARGET_ID)
                         }
                     }
@@ -283,7 +284,7 @@ fun RecordListContent(
                                     menuAnchorRequester.safeRequestFocus()
                                     onDetailStateChange(false)
                                     onClearDetail()
-                                    scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
+                                    scope.launch { detailButtonFocusRequester.requestFocusWhenReady("DetailPanelClosed") }
                                 } else {
                                     onSideMenuStateChange(false)
                                     val id = focusedProgram?.id
@@ -328,7 +329,7 @@ fun RecordListContent(
                                     menuAnchorRequester.safeRequestFocus(); onDetailStateChange(
                                     false
                                 ); onClearDetail()
-                                    scope.launch { delay(50); detailButtonFocusRequester.safeRequestFocus() }
+                                    scope.launch { detailButtonFocusRequester.requestFocusWhenReady("DetailPanelClosed") }
                                 },
                                 modifier = Modifier.fillMaxSize(),
                                 timeFormat = timeFormat
