@@ -63,6 +63,22 @@ class MainRootState {
      * ダイアログからフォーカスを奪い返し、ダイアログが表示されたまま操作できなくなる。
      */
     var isSyncErrorVisible by mutableStateOf(false)
+
+    /**
+     * 画面全体を覆う前面オーバーレイが表示中か。
+     *
+     * **背面(ホーム画面など)のフォーカスを止める判定は、この1箇所に集約している。**
+     * 以前は `MainRootBackground` の `isBackgroundFocusBlocked` と `HomeLauncherScreen` の
+     * `isFocusSuspended` という2箇所へ個別に登録する必要があり、片方への登録漏れで
+     * 「オーバーレイが表示されているのにフォーカスを奪われて操作できない」という不具合が
+     * 繰り返し発生していた(同期エラーダイアログが両方から漏れていた。PR #123 で修正)。
+     *
+     * 新しい全画面オーバーレイを追加したときは、ここへ足すだけでよい。
+     * 詳細は `docs/design/focus_management.md` の設計方針 D を参照。
+     */
+    val isForegroundOverlayVisible: Boolean
+        get() = isSettingsOpen || isAiConciergeOpen || isSyncErrorVisible
+
     var showAiKeyboardInput by mutableStateOf(false)
     var toastMessage by mutableStateOf<String?>(null)
 
