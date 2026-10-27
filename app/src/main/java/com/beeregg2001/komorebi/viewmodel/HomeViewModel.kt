@@ -61,6 +61,20 @@ class HomeViewModel @Inject constructor(
     var lastClickedSection: String? = null
     var lastClickedItemId: String? = null
 
+    /**
+     * ビデオタブで全画面オーバーレイ(録画リスト / SMBライブラリ)を開いたボタンの識別子。
+     * オーバーレイを閉じたときの戻り先に使う(`docs/design/focus_management.md` の設計方針 E)。
+     *
+     * ホーム画面(`HomeLauncherScreen`)は、これらのオーバーレイ表示中は
+     * `MainRootBackground` の `when` による排他描画で Compose ツリーから外れるため、
+     * **画面側の `remember` に戻り先を覚えておくことはできない**(閉じると再生成されて失われる)。
+     * ViewModel 側に識別子として残しておき、再生成後にその識別子から対象を引き直す。
+     *
+     * 値は `"record_list"` / `"smb"` / `"series:<シリーズ名>"`。
+     * タブを移動したときは [clearFocusMemory] がクリアする。
+     */
+    var lastVideoOverlayCaller: String? = null
+
     private val _isFallbackTriggered = MutableStateFlow(false)
     val isFallbackTriggered: StateFlow<Boolean> = _isFallbackTriggered.asStateFlow()
 
@@ -87,6 +101,7 @@ class HomeViewModel @Inject constructor(
     fun clearFocusMemory() {
         lastClickedSection = null
         lastClickedItemId = null
+        lastVideoOverlayCaller = null
     }
 
     fun dismissFallbackWarning() {

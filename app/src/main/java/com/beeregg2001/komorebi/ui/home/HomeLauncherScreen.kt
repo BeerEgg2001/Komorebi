@@ -306,6 +306,10 @@ fun HomeLauncherScreen(
     // タブの表示ツリーを再構築した直後は、切替前のフォーカスノードが破棄されて
     // フォーカスが消えることがある。新しいタブを必ず操作可能な状態に戻す。
     LaunchedEffect(activeRenderIndex) {
+        // ビデオタブのオーバーレイから戻ってきた直後は、開いたボタンへの復帰を
+        // VideoTabContent 側が担当している。ここでタブ列へ引き戻してはいけない。
+        if (homeViewModel.lastVideoOverlayCaller != null) return@LaunchedEffect
+
         // 固定で160ms待ってから要求していたが、タブ列は既に配置済みなので待つ必要はない。
         // 配置前だった場合もフレーム単位で再試行する。
         ui.tabFocusRequesters.getOrNull(activeRenderIndex)?.requestFocusWhenReady(
@@ -375,6 +379,11 @@ fun HomeLauncherScreen(
         // LaunchedEffect(activeRenderIndex, isPlayerActiveFullScreen) が初回コンポーズ時に
         // 必ず実行している。ここで重ねて呼ぶと、起動直後の一番重いタイミングで
         // 同じ通信・同じ EPG 集計が二重に走ることになるため呼ばない。
+        // ビデオタブのオーバーレイから戻ってきた場合も、この画面は破棄・再生成されるため
+        // ここが初回コンポーズとして実行される。タブ列へのチケットを発行すると
+        // VideoTabContent 側の復帰と競合するので降りる。
+        if (homeViewModel.lastVideoOverlayCaller != null) return@LaunchedEffect
+
         if (!isReturningFromPlayer && !isFullScreenMode) {
             delay(300)
             ticketManager.issue(HomeFocusTicket.TAB_BAR)
@@ -383,7 +392,17 @@ fun HomeLauncherScreen(
 
     LaunchedEffect(isFullScreenMode) {
         if (!isFullScreenMode && !isReturningFromPlayer) {
+            // ビデオタブで全画面オーバーレイ(録画リスト / SMBライブラリ)を開いていた場合は、
+            // 開いたボタンへの復帰を VideoTabContent 側が担当する(設計方針 E)。
+            // ここでタブ列へのチケットを発行すると、そちらと競合して結局タブ列へ飛ばされる。
+            //
+            // 判定は delay の前に行う。VideoTabContent 側は300msより早く復帰を終えて
+            // 識別子を null に戻すため、delay の後に読むと「登録が無かった」ことになってしまう。
+            val isVideoOverlayReturn = homeViewModel.lastVideoOverlayCaller != null
+
             delay(300)
+            if (isVideoOverlayReturn) return@LaunchedEffect
+
             val currentTabName = tabs.getOrNull(safeTabIndex)
             if (currentTabName == "録画予約") {
             } else if (currentTabName == "ホーム") {
@@ -993,6 +1012,13 @@ fun HomeLauncherScreen(
                                 onShowAllRecordings = onShowAllRecordings,
                                 onShowSeriesList = onShowSeriesList,
                                 onShowSmbLibrary = onShowSmbLibrary,
+                                onRegisterOverlayCaller = {
+                                    homeViewModel.lastVideoOverlayCaller = it
+                                },
+                                overlayCaller = homeViewModel.lastVideoOverlayCaller,
+                                onOverlayCallerConsumed = {
+                                    homeViewModel.lastVideoOverlayCaller = null
+                                },
                                 openedSeriesTitle = ui.openedSeriesTitle,
                                 onOpenedSeriesTitleChange = { ui.openedSeriesTitle = it },
                                 tabFocusRequester = ui.tabFocusRequesters[activeRenderIndex],
