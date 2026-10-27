@@ -31,6 +31,9 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
+
+private const val TAG_LIVE_OVERLAY = "LivePlayerOverlays"
 
 /**
  * REGZA風の信号情報オーバーレイ
@@ -354,7 +357,9 @@ fun RecordingIndicator() {
 @Composable
 fun LiveErrorDialog(errorMessage: String, onRetry: () -> Unit, onBack: () -> Unit) {
     val retryButtonFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { retryButtonFocusRequester.requestFocus() }
+    // 例外を飲まない素の requestFocus() だと、未アタッチの状態で呼ばれたときに
+    // IllegalStateException で落ちる。配置を待ってから当てる。
+    LaunchedEffect(Unit) { retryButtonFocusRequester.requestFocusWhenReady(TAG_LIVE_OVERLAY) }
 
     Box(
         modifier = Modifier
@@ -442,17 +447,9 @@ fun LCropOverlay(
 
     LaunchedEffect(state.lCropMode) {
         if (state.lCropMode == LCropMode.MENU) {
-            delay(150)
-            try {
-                menuFocusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            menuFocusRequester.requestFocusWhenReady(TAG_LIVE_OVERLAY)
         } else if (state.lCropMode == LCropMode.DIRECT_ADJUST) {
-            delay(150)
-            try {
-                directAdjustFocusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            directAdjustFocusRequester.requestFocusWhenReady(TAG_LIVE_OVERLAY)
         }
     }
 

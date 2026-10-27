@@ -30,12 +30,15 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.model.AudioMode
-import kotlinx.coroutines.delay
 import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.data.model.StreamSource
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
+import com.beeregg2001.komorebi.common.safeRequestFocus
+
+private const val TAG_LIVE_SUBMENU = "LivePlayerSubMenu"
 
 enum class LiveSubMenuCategory {
     AUDIO, ENCODING, QUALITY, SOURCE
@@ -117,20 +120,12 @@ fun LiveTopSubMenuUI(
     }
 
     LaunchedEffect(Unit) {
-        delay(50)
-        try {
-            focusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        focusRequester.requestFocusWhenReady(TAG_LIVE_SUBMENU)
     }
 
     LaunchedEffect(selectedCategory) {
         if (selectedCategory != null) {
-            delay(100)
-            try {
-                listFocusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            listFocusRequester.requestFocusWhenReady(TAG_LIVE_SUBMENU)
         }
     }
 
@@ -157,10 +152,7 @@ fun LiveTopSubMenuUI(
                             else -> focusRequester
                         }
                         selectedCategory = null
-                        try {
-                            targetRequester.requestFocus()
-                        } catch (e: Exception) {
-                        }
+                        targetRequester.safeRequestFocus(TAG_LIVE_SUBMENU)
                         true
                     } else {
                         onCloseMenu()
@@ -428,10 +420,7 @@ fun LiveTopSubMenuUI(
                                 onClick = {
                                     onEncodingSelect(encoding)
                                     selectedCategory = null
-                                    try {
-                                        mainEncodingButtonRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    mainEncodingButtonRequester.safeRequestFocus(TAG_LIVE_SUBMENU)
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
@@ -483,10 +472,7 @@ fun LiveTopSubMenuUI(
                                 onClick = {
                                     onQualitySelect(quality)
                                     selectedCategory = null
-                                    try {
-                                        mainQualityButtonRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    mainQualityButtonRequester.safeRequestFocus(TAG_LIVE_SUBMENU)
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
@@ -567,10 +553,7 @@ fun LiveTopSubMenuUI(
                                 onClick = {
                                     action()
                                     selectedCategory = null
-                                    try {
-                                        mainSourceButtonRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    mainSourceButtonRequester.safeRequestFocus(TAG_LIVE_SUBMENU)
                                 },
                                 width = 160.dp,
                                 height = 100.dp,

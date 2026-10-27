@@ -39,6 +39,9 @@ import coil.request.ImageRequest
 import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.common.safeRequestFocus
+
+private const val TAG_CHANNEL_LIST = "ChannelListOverlay"
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -181,7 +184,7 @@ fun ChannelListOverlay(
                 .height(130.dp)
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
-                        tabFocusRequesters[selectedTab]?.requestFocus()
+                        tabFocusRequesters[selectedTab]?.safeRequestFocus(TAG_CHANNEL_LIST)
                         return@onKeyEvent true
                     }
                     false
