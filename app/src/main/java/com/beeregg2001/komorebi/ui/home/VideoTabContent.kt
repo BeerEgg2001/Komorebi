@@ -35,6 +35,7 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.home.components.*
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.FocusTicket
 import com.beeregg2001.komorebi.ui.video.FocusTicketManager
@@ -47,6 +48,12 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private const val TAG = "VideoTabContent"
+
+// 全画面オーバーレイを開いたボタンの識別子。閉じたときの戻り先に使う(設計方針 E)。
+// HomeViewModel.lastVideoOverlayCaller に保存され、この画面が再生成されたあとに引き直す。
+const val OVERLAY_CALLER_RECORD_LIST = "record_list"
+const val OVERLAY_CALLER_SMB = "smb"
+const val OVERLAY_CALLER_SERIES_PREFIX = "series:"
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -72,12 +79,30 @@ fun VideoTabContent(
     timeFormat: String = "24H",
     aiFocusReturnTick: Int = 0,
     onAiReturnConsumed: () -> Unit = {},
-    onShowSmbLibrary: () -> Unit = {} // ★ 追加: SMBライブラリ画面への遷移
+    onShowSmbLibrary: () -> Unit = {}, // ★ 追加: SMBライブラリ画面への遷移
+    /**
+     * 全画面オーバーレイを開く直前に、戻り先となるボタンの識別子を登録する。
+     * オーバーレイを閉じたときに呼び出し元のボタンへフォーカスが戻る
+     * (`docs/design/focus_management.md` の設計方針 E)。
+     *
+     * この画面はオーバーレイ表示中に破棄されるため、[FocusRequester] ではなく
+     * 文字列の識別子で受け渡す。詳細は `HomeViewModel.lastVideoOverlayCaller` を参照。
+     */
+    onRegisterOverlayCaller: (String) -> Unit = {},
+    /** 直前に登録された戻り先の識別子。復帰したら [onOverlayCallerConsumed] を呼ぶ。 */
+    overlayCaller: String? = null,
+    onOverlayCallerConsumed: () -> Unit = {}
 ) {
     val colors = KomorebiTheme.colors
 
     val ticketManager = rememberFocusTicketManager()
     val listState = rememberLazyListState()
+
+    // シリーズカードから録画リストを開いたとき、閉じたら同じカードへ戻すための Requester。
+    // LazyRow の key と同じシリーズ名で引く。
+    val seriesFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    // SMBライブラリを開いたボタンへ戻すための Requester。
+    val smbButtonRequester = remember { FocusRequester() }
     val recentRowState = rememberLazyListState()
     val historyRowState = rememberLazyListState()
 
@@ -139,6 +164,43 @@ fun VideoTabContent(
             else contentFirstItemRequester.safeRequestFocusWithRetry("VideoTabFallbackAiReturn")
             onAiReturnConsumed()
         }
+    }
+
+    // 全画面オーバーレイ(録画リスト / SMBライブラリ)を閉じて戻ってきたとき、
+    // 開いたボタンへフォーカスを戻す。この画面はオーバーレイ表示中に破棄されているため、
+    // 初回コンポーズでの復帰になる(設計方針 E)。
+    LaunchedEffect(overlayCaller, recentRecordings, groupedSeries) {
+        if (overlayCaller == null) return@LaunchedEffect
+
+        val restored = when {
+            overlayCaller == OVERLAY_CALLER_RECORD_LIST ->
+                contentFirstItemRequester.requestFocusWhenReady("OverlayReturn_RecordList")
+
+            overlayCaller == OVERLAY_CALLER_SMB ->
+                smbButtonRequester.requestFocusWhenReady("OverlayReturn_Smb")
+
+            overlayCaller.startsWith(OVERLAY_CALLER_SERIES_PREFIX) -> {
+                // シリーズ一覧のデータがまだ無い段階では、カードが実体化しておらず
+                // 戻る先を引けない。識別子を消さずに降り、データが揃ったら
+                // この LaunchedEffect が再起動して改めて試す(groupedSeries がキーにある)。
+                if (groupedSeries.isEmpty()) return@LaunchedEffect
+
+                // シリーズ行は LazyRow なので、画面外のカードは実体化しておらず
+                // Requester が存在しない。その場合は下のフォールバックへ落ちる。
+                val title = overlayCaller.removePrefix(OVERLAY_CALLER_SERIES_PREFIX)
+                seriesFocusRequesters[title]
+                    ?.requestFocusWhenReady("OverlayReturn_Series", maxFrames = 15) == true
+            }
+
+            else -> false
+        }
+
+        if (!restored) {
+            // 戻せなかったときはビデオタブの先頭(録画リストボタン)へ。
+            // タブ列まで飛ばされるより近い位置に着地する。
+            contentFirstItemRequester.requestFocusWhenReady("OverlayReturn_Fallback")
+        }
+        onOverlayCallerConsumed()
     }
 
     LaunchedEffect(isReturningFromPlayer) {
@@ -238,7 +300,11 @@ fun VideoTabContent(
                                 .focusProperties {
                                     left = FocusRequester.Cancel
                                 },
-                            onClick = { recordViewModel.clearSearch(); onShowAllRecordings() },
+                            onClick = {
+                                onRegisterOverlayCaller(OVERLAY_CALLER_RECORD_LIST)
+                                recordViewModel.clearSearch()
+                                onShowAllRecordings()
+                            },
                             onFocus = {
                                 focusedProgramId = null
                                 pendingHeroInfo = HomeHeroInfo(
@@ -254,11 +320,15 @@ fun VideoTabContent(
                         SmbLibraryBannerButton(
                             modifier = Modifier
                                 .weight(1f)
+                                .focusRequester(smbButtonRequester)
                                 .then(upToTabModifier)
                                 .focusProperties {
                                     right = FocusRequester.Cancel
                                 },
-                            onClick = { onShowSmbLibrary() },
+                            onClick = {
+                                onRegisterOverlayCaller(OVERLAY_CALLER_SMB)
+                                onShowSmbLibrary()
+                            },
                             onFocus = {
                                 focusedProgramId = null
                                 pendingHeroInfo = HomeHeroInfo(
@@ -521,11 +591,19 @@ fun VideoTabContent(
                                 itemsIndexed(
                                     filteredSeries,
                                     key = { _, it -> it.displayTitle }) { index, series ->
+                                    val seriesRequester = seriesFocusRequesters
+                                        .getOrPut(series.displayTitle) { FocusRequester() }
                                     VideoSeriesCard(
                                         series = series,
                                         konomiIp = konomiIp,
                                         konomiPort = konomiPort,
-                                        onClick = { recordViewModel.searchRecordings(series.displayTitle); onShowAllRecordings() },
+                                        onClick = {
+                                            onRegisterOverlayCaller(
+                                                OVERLAY_CALLER_SERIES_PREFIX + series.displayTitle
+                                            )
+                                            recordViewModel.searchRecordings(series.displayTitle)
+                                            onShowAllRecordings()
+                                        },
                                         onFocus = {
                                             focusedProgramId = null
                                             val fallbackUrl = series.apiThumbnailUrl
@@ -546,11 +624,13 @@ fun VideoTabContent(
                                                 tag = "シリーズ"
                                             )
                                         },
-                                        modifier = Modifier.focusProperties {
-                                            if (index == 0) left = FocusRequester.Cancel
-                                            if (index == filteredSeries.lastIndex) right =
-                                                FocusRequester.Cancel
-                                        },
+                                        modifier = Modifier
+                                            .focusRequester(seriesRequester)
+                                            .focusProperties {
+                                                if (index == 0) left = FocusRequester.Cancel
+                                                if (index == filteredSeries.lastIndex) right =
+                                                    FocusRequester.Cancel
+                                            },
                                         backendType = backendType
                                     )
                                 }
