@@ -30,6 +30,7 @@ import com.beeregg2001.komorebi.ui.video.player.VideoPlayerScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.ui.theme.AppTheme
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.util.UpdateState
 import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -359,6 +360,13 @@ fun MainRootScreen(
     // 初回起動時に「初期設定が必要です」の案内と重なってしまう。
     LaunchedEffect(hasSyncError, isSettingsInitialized) {
         state.isSyncErrorVisible = hasSyncError && isSettingsInitialized
+    }
+
+    // アップデート案内ダイアログも同様に、表示条件をここで一元化しておく。
+    // 実際の描画は MainRootDialogs 側だが、背面ツリーのフォーカスを止める判定
+    // (MainRootState.isForegroundOverlayVisible) がこの値を見る。
+    LaunchedEffect(updateState) {
+        state.isUpdateDialogVisible = updateState is UpdateState.UpdateAvailable
     }
     val isEpgReady by epgViewModel.isInitialLoadComplete.collectAsState()
 

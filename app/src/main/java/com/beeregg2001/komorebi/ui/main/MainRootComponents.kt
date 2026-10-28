@@ -37,11 +37,14 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.common.AppStrings
-import com.beeregg2001.komorebi.common.safeRequestFocus
+import com.beeregg2001.komorebi.common.requestFocusWhenReady
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.util.UpdateState
 import com.beeregg2001.komorebi.viewmodel.RecordViewModel
-import kotlinx.coroutines.delay
+
+private const val TAG_UPDATE_DIALOG = "UpdateDialog"
+private const val TAG_SYNC_ERROR_DIALOG = "SyncErrorDialog"
+private const val TAG_AI_INPUT_DIALOG = "AiTextInputDialog"
 
 @Composable
 fun AiTextInputDialog(
@@ -58,8 +61,9 @@ fun AiTextInputDialog(
     ) {
         ProvideUiScale {
             LaunchedEffect(Unit) {
-                delay(300)
-                runCatching { focusRequester.requestFocus() }
+                // Dialog は独自の ComposeView を作るため、配置までに数フレームかかる。
+                // 固定で300ms待つ代わりに、配置を検知してから当てる。
+                focusRequester.requestFocusWhenReady(TAG_AI_INPUT_DIALOG, maxFrames = 20)
             }
 
             Box(
@@ -138,24 +142,29 @@ fun RobustUpdateDialog(
     onDismiss: () -> Unit
 ) {
     val colors = KomorebiTheme.colors
+    val dismissRequester = remember { FocusRequester() }
     val confirmRequester = remember { FocusRequester() }
-    var isDialogFocused by remember { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) { delay(300); runCatching { confirmRequester.requestFocus() } }
-    LaunchedEffect(isDialogFocused) {
-        if (!isDialogFocused) {
-            delay(150); runCatching { confirmRequester.requestFocus() }
-        }
-    }
+    // 固定で300ms待ってから要求していたが、配置を待って当てれば待ち時間は不要。
+    LaunchedEffect(Unit) { confirmRequester.requestFocusWhenReady(TAG_UPDATE_DIALOG) }
 
+    // フォーカスが裏へ抜けてしまった場合でも閉じられるようにする最終防衛線。
+    // Compose のキーイベントはフォーカス要素とその祖先にしか届かないため、
+    // 各要素への onKeyEvent ではなく BackHandler で受ける。
+    BackHandler { onDismiss() }
+
+    // 以前は「フォーカスを失ったら150ms後に奪い返す」自前の復帰処理を持っていたが、
+    // ホーム画面側のフォーカス迷子検知と互いに奪い合う形になるため廃止した
+    // (docs/design/focus_management.md の設計方針 F)。
+    // 代わりに MainRootState.isUpdateDialogVisible へ登録し、表示中は背面ツリーを
+    // フォーカス不可にして「そもそも奪われない」ようにしている。
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.8f))
             .zIndex(1000f)
             .focusGroup()
-            .focusProperties { exit = { FocusRequester.Cancel } }
-            .onFocusChanged { isDialogFocused = it.hasFocus },
+            .focusProperties { exit = { FocusRequester.Cancel } },
         contentAlignment = Alignment.Center
     ) {
         Surface(
@@ -210,7 +219,15 @@ fun RobustUpdateDialog(
                 ) {
                     Button(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(dismissRequester)
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                right = confirmRequester
+                                up = FocusRequester.Cancel
+                                down = FocusRequester.Cancel
+                            },
                         scale = ButtonDefaults.scale(focusedScale = 1.05f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.textPrimary.copy(alpha = 0.1f),
@@ -223,7 +240,13 @@ fun RobustUpdateDialog(
                         onClick = onConfirm,
                         modifier = Modifier
                             .weight(1f)
-                            .focusRequester(confirmRequester),
+                            .focusRequester(confirmRequester)
+                            .focusProperties {
+                                left = dismissRequester
+                                right = FocusRequester.Cancel
+                                up = FocusRequester.Cancel
+                                down = FocusRequester.Cancel
+                            },
                         scale = ButtonDefaults.scale(focusedScale = 1.05f),
                         colors = ButtonDefaults.colors(
                             containerColor = colors.accent,
@@ -310,7 +333,7 @@ fun SyncErrorDialog(
     val closeRequester = remember { FocusRequester() }
     val settingsRequester = remember { FocusRequester() }
     val retryRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(300); retryRequester.safeRequestFocus("SyncError") }
+    LaunchedEffect(Unit) { retryRequester.requestFocusWhenReady(TAG_SYNC_ERROR_DIALOG) }
 
     // フォーカスが裏へ抜けてしまった場合でも閉じられるようにする最終防衛線。
     BackHandler { onDismiss() }
