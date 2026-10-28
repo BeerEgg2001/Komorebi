@@ -62,13 +62,13 @@ LaunchedEffect(...) {
 
 ### 問題4: 対策手法が5通りに分散している
 
-| 画面 | 採っている手法 |
-|---|---|
-| `DeviceCapabilitiesScreen` | 各要素の `focusProperties` |
-| `OpenSourceLicensesScreen` | `onKeyEvent` でキー消費 ＋ `BackHandler` |
-| `SyncErrorDialog` | `focusProperties` ＋ `BackHandler` ＋ 抑制条件への登録 |
-| `RobustUpdateDialog` | `focusGroup()` ＋ `exit = Cancel` ＋ **自前のフォーカス奪還** |
-| `SettingScreen` | `focusProperties { canFocus = !isDialogOpen }`（Compose 1.7 以降は機能していない） |
+| 画面 | 採っていた手法 | 段階4a 後 |
+|---|---|---|
+| `DeviceCapabilitiesScreen` | 各要素の `focusProperties` ＋ 親の `onPreviewKeyEvent` で戻るキー | 戻るキーを `BackHandler` へ |
+| `OpenSourceLicensesScreen` | `onKeyEvent` でキー消費 ＋ `BackHandler` | 変更なし（F に沿っている） |
+| `SyncErrorDialog` | `focusProperties` ＋ `BackHandler` ＋ 抑制条件への登録 | **模範形**。他をこれに揃えた |
+| `RobustUpdateDialog` | `focusGroup()` ＋ `exit = Cancel` ＋ **自前のフォーカス奪還** | 奪還を廃止し、登録 ＋ `BackHandler` ＋ ボタン自身の `focusProperties` へ |
+| `SettingScreen` | `focusProperties { canFocus = !isDialogOpen }`（機能していなかった） | `canFocus = false` ＋ `onEnter { cancelFocusChange() }` ＋ `focusTarget()` へ |
 
 `RobustUpdateDialog` の「奪われたら奪い返す」方式は、ホーム側の迷子検知と**互いに奪い合う**可能性がある。
 
@@ -154,6 +154,14 @@ PR #123 で `isSyncErrorVisible` を `MainRootState` へ持たせ、表示条件
 | プログラムからの奪取を防ぐ | D の一元化した登録を参照 |
 | 奪われたら奪い返す | **採用しない**（`RobustUpdateDialog` の方式は迷子検知と競合する） |
 
+全画面オーバーレイを追加するときにやることは、この3点だけ。
+
+1. `MainRootState.isForegroundOverlayVisible` へ登録する（表示中は背面ツリーをフォーカス不可にする）
+2. `BackHandler { 閉じる }` を置く（フォーカスが裏へ抜けても閉じられる最終防衛線）
+3. フォーカスを持つ要素自身に `focusProperties` で隣接と外周 `Cancel` を書く
+
+1 をやれば「プログラムからフォーカスを奪われる」ことがなくなるため、自前の奪還処理は不要になる。`SyncErrorDialog` がこの形の実装例。
+
 共通ラッパー（`OverlayScreen(onBack = …) { … }` のような Composable）にまとめられるか、設計の実装段階で検証する。**新旧が共存できるインターフェースにすること**が要件（214箇所を一括変更はできない）。
 
 ## 移行計画
@@ -165,8 +173,11 @@ PR #123 で `isSyncErrorVisible` を `MainRootState` へ持たせ、表示条件
 | 0 | 共通ヘルパー（A・B）を追加。既存呼び出しは変えない | 既存挙動が変わらないこと | **完了**（PR #130） |
 | 1 | `RecordListScreen` / `RecordListContent` を移行 | 一覧のスクロール位置と詳細パネルの開閉、復帰位置 | **完了**（PR #130、実機確認済み） |
 | 2 | `HomeLauncherScreen` を移行。あわせて C・D を実施 | タブ切替、プレイヤーからの復帰、オーバーレイ表示中の抑制 | **完了**（PR #131、実機確認済み）。復帰位置の E は PR #132 で追加 |
-| 3 | `LivePlayerScreen` を移行 | サブメニュー・チャンネルリスト・2画面の開閉 | **実装済み**（PR #134、実機確認待ち） |
-| 4 | 残りの画面・ダイアログを F の方針で揃える | オーバーレイごとの戻るキーと閉じ込め | 未着手 |
+| 3 | `LivePlayerScreen` を移行 | サブメニュー・チャンネルリスト・2画面の開閉 | **完了**（PR #134、実機確認済み） |
+| 4a | オーバーレイ・ダイアログを F の方針で揃える | オーバーレイごとの戻るキーと閉じ込め | **実装済み**（PR #135、実機確認待ち） |
+| 4b | 素の `requestFocus()` / `try-catch` を一掃する | 挙動は変わらない。クラッシュ耐性とログ | 未着手 |
+
+段階4を 4a・4b に分けたのは性質が違うため。4a は**挙動が変わる**ので実機確認が要る。4b は**挙動が変わらない**機械的な置換で、残り約25箇所（録画プレイヤー・SMB・AI コンシェルジュ・各ダイアログ・番組表）。
 
 ### 移行の原則（段階1で確立）
 
@@ -239,7 +250,16 @@ seriesRowState.scrollToItem(cardIndex)   // LazyRow: 該当カードまで（sta
 
 実装段階で判断する。
 
-- 共通ラッパー（`OverlayScreen`）にまとめるか、ヘルパー関数の組み合わせに留めるか
+- ~~共通ラッパー（`OverlayScreen`）にまとめるか、ヘルパー関数の組み合わせに留めるか~~ → **共通ラッパーは作らない。**
+  段階4a で実際に揃えてみた結果、オーバーレイに必要なのは次の3点だけだった。
+
+  | # | やること | 共通化できるか |
+  |---|---|---|
+  | 1 | `MainRootState.isForegroundOverlayVisible` へ登録する | **済**（D で一元化） |
+  | 2 | `BackHandler { 閉じる }` を置く | 1行。ラッパーにする利得が小さい |
+  | 3 | フォーカスを持つ要素自身に `focusProperties` で隣接と外周 `Cancel` を書く | **できない**。どの要素が隣接かはその画面しか知らない |
+
+  3 がラッパーに入れられないため、ラッパーを作っても各画面に `focusProperties` が残り、「ラッパーを使っているのに閉じ込められていない」という分かりにくい状態を生む。3点を**原則として文書化する**方が確実と判断した。
 - ~~`maxFrames` の既定値（10フレーム ≒ 160ms が妥当か、実機で詰める）~~ → **既定値 10 で確定。**
   段階1の実機確認（Fire TV Stick 4K Max 第1世代）では、`Nフレーム待ってもフォーカスを取得できませんでした`
   も `フォーカスを取得しました（Nフレーム目）` も logcat に出なかった。後者は2フレーム目以降に成功したときだけ

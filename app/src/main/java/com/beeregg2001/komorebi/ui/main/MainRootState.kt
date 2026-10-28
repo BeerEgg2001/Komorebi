@@ -65,6 +65,19 @@ class MainRootState {
     var isSyncErrorVisible by mutableStateOf(false)
 
     /**
+     * アップデート案内ダイアログを表示中か。
+     *
+     * このダイアログも画面全体を覆う前面オーバーレイ(zIndex 1000)なので、背面ツリーの
+     * フォーカスを止める必要がある。止めないと背面のホーム画面がフォーカス可能なまま残り、
+     * 「フォーカス迷子検知」がダイアログからフォーカスを奪い返してしまう。
+     *
+     * 従来はダイアログ側が「フォーカスを失ったら150ms後に奪い返す」という自前の復帰処理を
+     * 持っていたが、これは迷子検知と互いに奪い合う形であり廃止した
+     * (`docs/design/focus_management.md` の設計方針 F)。
+     */
+    var isUpdateDialogVisible by mutableStateOf(false)
+
+    /**
      * 画面全体を覆う前面オーバーレイが表示中か。
      *
      * **背面(ホーム画面など)のフォーカスを止める判定は、この1箇所に集約している。**
@@ -77,7 +90,8 @@ class MainRootState {
      * 詳細は `docs/design/focus_management.md` の設計方針 D を参照。
      */
     val isForegroundOverlayVisible: Boolean
-        get() = isSettingsOpen || isAiConciergeOpen || isSyncErrorVisible
+        get() = isSettingsOpen || isAiConciergeOpen || isSyncErrorVisible ||
+                isUpdateDialogVisible
 
     var showAiKeyboardInput by mutableStateOf(false)
     var toastMessage by mutableStateOf<String?>(null)

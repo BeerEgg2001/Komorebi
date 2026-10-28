@@ -2,6 +2,7 @@
 
 package com.beeregg2001.komorebi.ui.setting
 
+import androidx.activity.compose.BackHandler
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.BorderStroke
@@ -88,25 +89,17 @@ fun DeviceCapabilitiesScreen(onBack: () -> Unit) {
         closeRequester.safeRequestFocus(TAG)
     }
 
+    // 戻るキーは BackHandler で受ける。親の onPreviewKeyEvent で拾う形だと、
+    // フォーカスがこの画面の外(背面ツリー)へ抜けた場合に届かず閉じられなくなる
+    // (docs/design/focus_management.md の設計方針 F)。
+    BackHandler { onBack() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
             .background(backgroundBrush)
             .padding(horizontal = 56.dp, vertical = 38.dp)
-            // 戻るキーはこの画面のどこにフォーカスがあっても閉じられるよう、親でまとめて処理する。
-            // 上下キー(スクロール)は各カード側で扱うため、ここでは通過させる。
-            .onPreviewKeyEvent {
-                if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (it.key) {
-                    Key.Back, Key.Escape -> {
-                        onBack()
-                        true
-                    }
-
-                    else -> false
-                }
-            }
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Memory, null, tint = colors.accent, modifier = Modifier.size(40.dp))
