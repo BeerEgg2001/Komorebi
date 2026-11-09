@@ -60,6 +60,15 @@ import org.videolan.libvlc.interfaces.IMedia
 
 private const val TAG = "SmbVlcPlayerScreen"
 
+/**
+ * ゲスト接続時に libVLC へ渡すユーザー名。
+ *
+ * 一覧取得に使っている jcifs-ng の `withGuestCrendentials()` が既定で `"GUEST"` を使うため、
+ * 本来はそれと揃えるのが筋だが、libsmb2 側は NTLMv2 の計算でドメインのみ大文字化し
+ * ユーザー名はそのまま送る。Samba はユーザー名の大文字小文字を区別しないため小文字で問題ない。
+ */
+private const val SMB_GUEST_USER = "guest"
+
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun SmbVlcPlayerScreen(
@@ -154,7 +163,19 @@ fun SmbVlcPlayerScreen(
             val authPrefix = if (safePass.isNotBlank()) "$safeUser:$safePass@" else "$safeUser:@"
             encodedSmbPath.replace("smb://", "smb://$authPrefix")
         } else {
-            encodedSmbPath
+            // ユーザー名が未設定(ゲスト接続)のとき、URL に資格情報を付けないと
+            // libVLC は「完全な匿名セッション」で接続する。libsmb2 は password が NULL だと
+            // NTLMSSP_NEGOTIATE_ANONYMOUS を立て、ユーザー名フィールドごと送らないため、
+            // 匿名を拒否して guest ユーザーなら許可するサーバー(Synology DSM で実機確認)
+            // では接続できず、一覧は見えるのに再生だけ失敗する状態になっていた。
+            //
+            // 一覧側(SmbContextBuilder)は withGuestCrendentials() を使っており、これは
+            // 「ユーザー名 GUEST + 空パスワード」で認証する。つまり一覧と再生で送っている
+            // ものが別物だったのが原因なので、再生側を一覧側に合わせる。
+            //
+            // パスワードは「空文字列」でなければならない点に注意。URL を省略して NULL に
+            // すると匿名に戻るため、`guest:@` という形(ユーザー名あり・パスワード空)にする。
+            encodedSmbPath.replace("smb://", "smb://$SMB_GUEST_USER:@")
         }
     }
 
