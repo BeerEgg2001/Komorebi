@@ -5,6 +5,7 @@ package com.beeregg2001.komorebi.ui.video.smb.player
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import com.beeregg2001.komorebi.BuildConfig
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -59,6 +60,24 @@ import org.videolan.libvlc.util.VLCVideoLayout
 import org.videolan.libvlc.interfaces.IMedia
 
 private const val TAG = "SmbVlcPlayerScreen"
+
+/**
+ * MRL のユーザー情報部をマスクする。ログへ生のパスワードを残さないため。
+ *
+ * `smb://user:pass@host/path` → `smb://user:***@host/path`
+ * 資格情報が無い場合はそのまま返す(ゲスト接続であることを読み取れるようにする)。
+ */
+private fun maskMrlCredentials(mrl: String): String {
+    val schemeEnd = mrl.indexOf("://")
+    if (schemeEnd < 0) return mrl
+    val authorityStart = schemeEnd + 3
+    val authorityEnd = mrl.indexOf('/', authorityStart).let { if (it < 0) mrl.length else it }
+    val at = mrl.lastIndexOf('@', authorityEnd - 1)
+    if (at < authorityStart) return mrl
+    val colon = mrl.indexOf(':', authorityStart)
+    val userEnd = if (colon in authorityStart until at) colon else at
+    return mrl.substring(0, userEnd) + (if (userEnd == at) "" else ":***") + mrl.substring(at)
+}
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -229,6 +248,18 @@ fun SmbVlcPlayerScreen(
                 "--avcodec-threads=0",
                 "--avcodec-hurry-up"
             )
+
+            // SMB 接続の失敗理由は smb2 モジュールが msg_Warn で出しており、
+            // VLC の既定 verbosity(0) では ERROR しか logcat へ流れないため見えない。
+            // デバッグビルドでは WARN まで出して、サーバーが返した NT status
+            // (STATUS_ACCESS_DENIED / STATUS_LOGON_FAILURE 等)を追えるようにする。
+            //
+            // 本番ビルドで常時有効にするとログ量と負荷が無視できないため、
+            // 利用者から再現ログを取る必要が出た時点で設定トグルへ格上げする。
+            if (BuildConfig.DEBUG) {
+                options.add("-vv")
+            }
+
             val libVLC = LibVLC(context, options)
             val mediaPlayer = MediaPlayer(libVLC)
 
@@ -426,6 +457,17 @@ fun SmbVlcPlayerScreen(
                     }
 
                     MediaPlayer.Event.EncounteredError -> {
+                        // libVLC の EncounteredError は接続失敗・認証失敗・デマルチプレクサ不在・
+                        // デコーダ初期化失敗がすべて同じイベントに集約され、イベント自体は
+                        // 理由を持たない。切り分けに必要な材料をここで残す。
+                        // (サーバーが返した NT status はデバッグビルドの -vv で VLC タグに出る)
+                        Log.e(
+                            TAG,
+                            "再生エラー: mrl=${maskMrlCredentials(vlcTargetUri)}" +
+                                " server=${currentServer?.name ?: "(設定に該当サーバーなし)"}" +
+                                " auth=${if (smbUser.isBlank()) "ゲスト(資格情報なし)" else "ユーザー指定"}" +
+                                " size=${smbItem.size} name=${smbItem.name}"
+                        )
                         onShowToast("VLCエンジン: 再生エラーが発生しました")
                     }
                 }
