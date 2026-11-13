@@ -30,8 +30,26 @@ data class RecordedProgram(
     val episodeNumber: Double? = null,
     val episodeLabel: String? = null,
     val episodeTitle: String? = null,
-    val airType: String? = null
-)
+    val airType: String? = null,
+    // ★ 追加: 音声情報(KonomiTVの録画番組APIが返す)。主/副音声切替を有効にするかの判定に使う。
+    // KonomiTV以外のバックエンドや古いキャッシュでは null になるため、null は「不明」として扱う。
+    @SerializedName("primary_audio_type") val primaryAudioType: String? = null,
+    @SerializedName("primary_audio_language") val primaryAudioLanguage: String? = null,
+    @SerializedName("secondary_audio_type") val secondaryAudioType: String? = null,
+    @SerializedName("secondary_audio_language") val secondaryAudioLanguage: String? = null
+) {
+    /**
+     * 主/副音声を切り替える意味がある番組か。
+     * - 副音声(2本目の音声ES)がある、または主音声がデュアルモノ(1本のESに2言語)の場合は true。
+     * - 音声情報が無い(KonomiTV以外・古いデータ)場合は判定できないため true(従来どおり切替可能)。
+     * KonomiTVは副音声の無い番組でも無音のAACを副音声として公開するため、
+     * 情報がある場合はそれに従って切替を無効化し、無音に切り替わってしまうのを防ぐ。
+     */
+    val hasSwitchableAudio: Boolean
+        get() = primaryAudioType == null ||
+                secondaryAudioType != null ||
+                primaryAudioType.contains("デュアルモノ")
+}
 
 // CM区間（チャプター）のデータモデル
 data class CmSection(

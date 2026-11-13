@@ -83,6 +83,30 @@ data class ManagedPlayerHandles(
     val pendingSeekByteRef: AtomicLong
 )
 
+// 音声グループの並び順。主音声を先頭、副音声を2番目にするための順位を返す。
+//  1. KonomiTVのマスタープレイリスト(HLS): #EXT-X-MEDIA の NAME が Format.label に入る
+//     ("主音声"/"副音声")ため、ラベルで判定する。
+//  2. ラベルが無い場合は DEFAULT=YES(SELECTION_FLAG_DEFAULT)のグループを主音声とみなす。
+//  3. それも無い場合(TS直接再生など)は同順位とし、audioGroupPid の PID 順で並べる。
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun audioGroupRank(group: Tracks.Group): Int {
+    val format = group.mediaTrackGroup.getFormat(0)
+    return when {
+        format.label == "主音声" -> 0
+        format.label == "副音声" -> 2
+        (format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0 -> 1
+        else -> 3
+    }
+}
+
+// 音声グループの PID。TSの Format.id は "1/273" のような "プログラム番号/PID" 形式のため、
+// 末尾の数値を取り出す。取り出せない場合は末尾に並ぶよう Int.MAX_VALUE を返す。
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun audioGroupPid(group: Tracks.Group): Int =
+    group.mediaTrackGroup.getFormat(0).id
+        ?.substringAfterLast('/')?.substringAfterLast(':')?.toIntOrNull()
+        ?: Int.MAX_VALUE
+
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
 fun rememberManagedExoPlayer(
@@ -177,9 +201,12 @@ fun rememberManagedExoPlayer(
         val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
 
         if (audioGroups.isNotEmpty()) {
-            val sortedAudioGroups = audioGroups.sortedBy { group ->
-                group.mediaTrackGroup.getFormat(0).id?.toIntOrNull() ?: Int.MAX_VALUE
-            }
+            // ★ 修正: 主音声を先頭、副音声を2番目に並べる(判定順は audioGroupRank のコメント参照)。
+            // 以前の id.toIntOrNull() はTSの Format.id("1/273" 形式)では常に null になり、
+            // 並べ替えが効いていなかった。
+            val sortedAudioGroups = audioGroups.sortedWith(
+                compareBy<Tracks.Group>({ audioGroupRank(it) }, { audioGroupPid(it) })
+            )
 
             val isSub = mode == AudioMode.SUB
             val builder = player.trackSelectionParameters.buildUpon()

@@ -336,6 +336,15 @@ fun VideoPlayerScreen(
     // KonomiTVでは画質とエンコードからAPI用の画質値を作り、他のバックエンドでは従来の画質値を使う。
     // 後続のURL取得・ストリーム維持処理で共通して使えるよう、この変数にまとめる。
     val apiQuality = if (smbItem == null && backendType == "KONOMITV") vs.currentQuality.getKonomiTvValue(vs.currentEncoding) else vs.currentQuality.value
+    // ★ 追加: 主/副音声切替の可否。KonomiTVは副音声の無い番組でも無音のAACを副音声として
+    // 公開するため、番組情報で副音声もデュアルモノも無いと分かる場合だけ切替を無効にする。
+    // KonomiTV以外(EDCB/EPGStation)やSMBは従来どおり常に切替可能。
+    val isAudioSwitchable = smbItem != null || backendType != "KONOMITV" ||
+            currentProgram.hasSwitchableAudio
+    LaunchedEffect(isAudioSwitchable) {
+        // 切替不可の番組で副音声のまま残らないよう主音声へ戻す
+        if (!isAudioSwitchable) vs.currentAudioMode = AudioMode.MAIN
+    }
     // エンコード変更前の再生位置を保持し、切り替え後も同じ位置から再生する。
     var encodingChangePositionMs by remember { mutableStateOf<Long?>(null) }
 
@@ -859,6 +868,7 @@ fun VideoPlayerScreen(
                     currentEncoding = vs.currentEncoding,
                     availableEncodings = availableEncodings,
                     isEncodingSupported = smbItem == null && backendType == "KONOMITV",
+                    isAudioSupported = isAudioSwitchable,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,
@@ -1007,6 +1017,7 @@ fun VideoPlayerScreen(
                     currentEncoding = vs.currentEncoding,
                     availableEncodings = availableEncodings,
                     isEncodingSupported = smbItem == null && backendType == "KONOMITV",
+                    isAudioSupported = isAudioSwitchable,
                     isCommentEnabled = vs.isCommentEnabled,
                     isLCropEnabled = vs.lCropEnabled,
                     isAutoCmSkipEnabled = vs.isAutoCmSkipEnabled,

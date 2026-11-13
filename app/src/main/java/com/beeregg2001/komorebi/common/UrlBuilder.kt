@@ -144,7 +144,14 @@ object UrlBuilder {
         quality: String = "1080p-60fps"
     ): String {
         val baseUrl = formatBaseUrl(ip, port, "https")
-        return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId"
+        // ★ 追加: type=master でマスタープレイリストを取得する。主音声(映像に多重化)と
+        // 副音声(音声のみの別プレイリスト)が #EXT-X-MEDIA の音声グループとして公開されるため、
+        // Media3 のトラック選択だけで再読み込みなしに主/副音声を切り替えられる。
+        // type を省略すると主音声のみのメディアプレイリストが返り、副音声は選べない。
+        // 副音声のURIは相対パス(playlist?session_id=...&type=secondary-audio)なので、
+        // このURLを基準に解決され session_id と Cloudflare Access ヘッダーもそのまま引き継がれる。
+        // type を知らない古いKonomiTVでは未知のクエリとして無視され、従来どおり主音声のみで再生される。
+        return "$baseUrl/api/streams/video/$videoId/$quality/playlist?session_id=$sessionId&type=master"
     }
 
     /**
