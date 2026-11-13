@@ -200,6 +200,13 @@ fun rememberManagedExoPlayer(
     val applyAudioSelectionAndMatrix = { mode: AudioMode, player: ExoPlayer ->
         val audioGroups = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
 
+        // ★ 追加: 選択できる音声の本数を記録する(複数グループならグループ数、1グループならその中のトラック数)。
+        // 画質変更やバイト位置シークで MediaItem を作り直す間は一時的に0本になるが、
+        // その間に切替タイルが無効化→有効化とちらつかないよう、0本の時は前回の値を保持する。
+        val audioTrackCount = if (audioGroups.size > 1) audioGroups.size
+            else audioGroups.firstOrNull()?.length ?: 0
+        if (audioTrackCount > 0) vs.availableAudioTrackCount = audioTrackCount
+
         if (audioGroups.isNotEmpty()) {
             // ★ 修正: 主音声を先頭、副音声を2番目に並べる(判定順は audioGroupRank のコメント参照)。
             // 以前の id.toIntOrNull() はTSの Format.id("1/273" 形式)では常に null になり、

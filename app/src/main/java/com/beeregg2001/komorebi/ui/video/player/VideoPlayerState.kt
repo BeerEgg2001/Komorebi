@@ -48,6 +48,11 @@ class VideoPlayerState {
     var pendingSeekPositionMs by mutableStateOf<Long?>(null)
 
     var isPlayerPlaying by mutableStateOf(true)
+    // ★ 追加: プレイヤーが実際に受け取っている音声トラック数(0 = まだ不明)。
+    // KonomiTVの副音声対応(マスタープレイリスト)の有無をサーバーのバージョンではなく
+    // 実際のトラックで判定するために使う。対応サーバーは常に2本(副音声が無い番組は無音)、
+    // 未対応の古いサーバーは type=master を無視して主音声の1本だけを返す。
+    var availableAudioTrackCount by mutableIntStateOf(0)
 
     var indicatorState by mutableStateOf<IndicatorState?>(null)
 
