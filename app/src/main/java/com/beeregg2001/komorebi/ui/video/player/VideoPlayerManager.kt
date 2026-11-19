@@ -83,19 +83,20 @@ data class ManagedPlayerHandles(
     val pendingSeekByteRef: AtomicLong
 )
 
-// 音声グループの並び順。主音声を先頭、副音声を2番目にするための順位を返す。
+// 音声グループの並び順。主音声を先頭、副音声を最後にするための順位を返す。
 //  1. KonomiTVのマスタープレイリスト(HLS): #EXT-X-MEDIA の NAME が Format.label に入る
 //     ("主音声"/"副音声")ため、ラベルで判定する。
 //  2. ラベルが無い場合は DEFAULT=YES(SELECTION_FLAG_DEFAULT)のグループを主音声とみなす。
 //  3. それも無い場合(TS直接再生など)は同順位とし、audioGroupPid の PID 順で並べる。
+//  "副音声" のラベルは必ず最後にし、主音声側にだけラベルが無い場合も主/副が逆転しないようにする。
 @androidx.annotation.OptIn(UnstableApi::class)
 private fun audioGroupRank(group: Tracks.Group): Int {
     val format = group.mediaTrackGroup.getFormat(0)
     return when {
         format.label == "主音声" -> 0
-        format.label == "副音声" -> 2
         (format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0 -> 1
-        else -> 3
+        format.label == "副音声" -> 3
+        else -> 2
     }
 }
 
