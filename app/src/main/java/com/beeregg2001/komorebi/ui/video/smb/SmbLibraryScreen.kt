@@ -48,7 +48,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import com.beeregg2001.komorebi.common.safeRequestFocus
-import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.ui.components.GlobalToast
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.ui.video.*
@@ -454,10 +453,7 @@ fun BoxScope.SmbSortMenuOverlay(
 
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150); try {
-                focusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            delay(150); focusRequester.safeRequestFocus()
         }
     }
 
@@ -802,10 +798,7 @@ fun BoxScope.SmbFileDetailOverlay(isOpen: Boolean, item: SmbItem?, onClose: () -
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150); try {
-                focusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            delay(150); focusRequester.safeRequestFocus()
         }
     }
     androidx.compose.animation.AnimatedVisibility(
@@ -921,10 +914,7 @@ fun BoxScope.SmbRightMenuOverlay(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150); try {
-                focusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            delay(150); focusRequester.safeRequestFocus()
         }
     }
     androidx.compose.animation.AnimatedVisibility(
@@ -1017,10 +1007,7 @@ fun BoxScope.SmbLeftNavPaneOverlay(
 ) {
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150); try {
-                focuses.navPane.requestFocus()
-            } catch (e: Exception) {
-            }
+            delay(150); focuses.navPane.safeRequestFocus()
         }
     }
     androidx.compose.animation.AnimatedVisibility(

@@ -217,7 +217,7 @@ fun SettingsScreen(
             var success = false
             for (i in 0..5) {
                 try {
-                    targetRequester?.requestFocus()
+                    targetRequester?.safeRequestFocus()
                     success = true
                     break
                 } catch (e: Exception) {

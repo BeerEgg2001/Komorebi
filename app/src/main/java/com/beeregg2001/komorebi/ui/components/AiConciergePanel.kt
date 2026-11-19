@@ -49,6 +49,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import com.beeregg2001.komorebi.viewmodel.ChatMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @Composable
 fun AiConciergePanel(
@@ -245,7 +246,7 @@ fun AiConciergePanel(
                                                     }
                                                     return@onKeyEvent true
                                                 } else {
-                                                    runCatching { defaultRequester.requestFocus() }
+                                                    defaultRequester.safeRequestFocus()
                                                     return@onKeyEvent true
                                                 }
                                             }
@@ -419,12 +420,12 @@ fun AiConciergePanel(
                                         if (event.type == KeyEventType.KeyDown) {
                                             when (event.key) {
                                                 Key.DirectionUp -> {
-                                                    runCatching { contentFocusRequester.requestFocus() }
+                                                    contentFocusRequester.safeRequestFocus()
                                                     return@onPreviewKeyEvent true
                                                 }
 
                                                 Key.DirectionRight -> {
-                                                    runCatching { keyboardFocusRequester.requestFocus() }
+                                                    keyboardFocusRequester.safeRequestFocus()
                                                     return@onPreviewKeyEvent true
                                                 }
                                             }
@@ -478,13 +479,13 @@ fun AiConciergePanel(
                                         if (event.type == KeyEventType.KeyDown) {
                                             when (event.key) {
                                                 Key.DirectionUp -> {
-                                                    runCatching { contentFocusRequester.requestFocus() }
+                                                    contentFocusRequester.safeRequestFocus()
                                                     return@onPreviewKeyEvent true
                                                 }
 
                                                 Key.DirectionLeft -> {
                                                     if (isSpeechSupported) {
-                                                        runCatching { micFocusRequester.requestFocus() }
+                                                        micFocusRequester.safeRequestFocus()
                                                         return@onPreviewKeyEvent true
                                                     }
                                                 }

@@ -48,6 +48,7 @@ import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -91,13 +92,13 @@ fun AdvancedSettingsDialog(
 
     LaunchedEffect(Unit) {
         delay(150)
-        runCatching { firstItemRequester.requestFocus() }
+        firstItemRequester.safeRequestFocus()
     }
 
     LaunchedEffect(isEditingExclude) {
         if (!isEditingExclude && !isFirstEnter) {
             delay(150)
-            runCatching { firstItemRequester.requestFocus() }
+            firstItemRequester.safeRequestFocus()
         }
     }
 
@@ -212,7 +213,7 @@ fun AdvancedSettingsDialog(
                                 )
                             )
                         }
-                        LaunchedEffect(Unit) { delay(50); runCatching { excludeFieldRequester.requestFocus() }; keyboardController?.show() }
+                        LaunchedEffect(Unit) { delay(50); excludeFieldRequester.safeRequestFocus(); keyboardController?.show() }
                     } else {
                         AdvancedSettingRow(
                             label = "除外キーワード",

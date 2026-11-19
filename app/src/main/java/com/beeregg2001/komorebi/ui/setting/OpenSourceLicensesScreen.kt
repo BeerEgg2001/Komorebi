@@ -29,6 +29,7 @@ import com.beeregg2001.komorebi.ui.theme.getSeasonalBackgroundBrush
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 data class OssLibrary(
     val name: String,
@@ -1121,7 +1122,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
     // 初期フォーカス設定
     LaunchedEffect(Unit) {
         delay(100)
-        runCatching { listFocusRequester.requestFocus() }
+        listFocusRequester.safeRequestFocus()
     }
 
     // 戻るキーの最終防衛線。
@@ -1182,7 +1183,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                 itemsIndexed(ossLibraries) { index, lib ->
                     var isFocused by remember { mutableStateOf(false) }
                     Surface(
-                        onClick = { textFocusRequester.requestFocus() },
+                        onClick = { textFocusRequester.safeRequestFocus() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged {
@@ -1208,7 +1209,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                     // 候補に選ばれてしまう。元の実装は決定キー(onClick)でのみ本文へ
                                     // 移していたため、方向キーでも移動先を明示する。
                                     Key.DirectionRight -> {
-                                        runCatching { textFocusRequester.requestFocus() }
+                                        textFocusRequester.safeRequestFocus()
                                         true
                                     }
 
@@ -1284,7 +1285,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                                 }
 
                                 Key.DirectionLeft -> {
-                                    listFocusRequester.requestFocus()
+                                    listFocusRequester.safeRequestFocus()
                                     true
                                 }
 
@@ -1301,7 +1302,7 @@ fun OpenSourceLicensesScreen(onBack: () -> Unit) {
                         } else false
                     }
                     // focusRequester は focusable より前に置くこと。
-                    // 後ろに置くと focus target に結び付かず textFocusRequester.requestFocus() が
+                    // 後ろに置くと focus target に結び付かず textFocusRequester への要求が
                     // 何も起こさないため、決定キー・方向キーのどちらでも本文へフォーカスできず、
                     // 本文のスクロール(上の onKeyEvent)も使えない状態になっていた。
                     // 呼び出し側が runCatching で包んでいるため失敗が表に出ていなかった。

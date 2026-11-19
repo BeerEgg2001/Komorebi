@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.beeregg2001.komorebi.ui.theme.ProvideUiScale
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -115,7 +116,7 @@ fun InputDialog(
                         // 完了キーで保存ボタンへ移動
                         keyboardActions = KeyboardActions(
                             onDone = {
-                                saveButtonFocusRequester.requestFocus()
+                                saveButtonFocusRequester.safeRequestFocus()
                             }
                         )
                     )
@@ -175,7 +176,7 @@ fun InputDialog(
 
     // 初期フォーカス
     LaunchedEffect(Unit) {
-        textFieldFocusRequester.requestFocus()
+        textFieldFocusRequester.safeRequestFocus()
     }
 }
 

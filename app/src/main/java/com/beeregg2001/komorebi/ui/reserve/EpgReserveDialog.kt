@@ -33,6 +33,7 @@ import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -113,7 +114,7 @@ fun EpgReserveDialog(
 
     LaunchedEffect(Unit) {
         delay(50)
-        runCatching { firstItemFocusRequester.requestFocus() }
+        firstItemFocusRequester.safeRequestFocus()
     }
 
     fun restoreNumberSelectFocus(target: NumberSelectType) {
@@ -121,10 +122,10 @@ fun EpgReserveDialog(
             delay(50)
             runCatching {
                 when (target) {
-                    NumberSelectType.START_HOUR -> startHourBtnRequester.requestFocus()
-                    NumberSelectType.START_MINUTE -> startMinuteBtnRequester.requestFocus()
-                    NumberSelectType.END_HOUR -> endHourBtnRequester.requestFocus()
-                    NumberSelectType.END_MINUTE -> endMinuteBtnRequester.requestFocus()
+                    NumberSelectType.START_HOUR -> startHourBtnRequester.safeRequestFocus()
+                    NumberSelectType.START_MINUTE -> startMinuteBtnRequester.safeRequestFocus()
+                    NumberSelectType.END_HOUR -> endHourBtnRequester.safeRequestFocus()
+                    NumberSelectType.END_MINUTE -> endMinuteBtnRequester.safeRequestFocus()
                 }
             }
         }
@@ -149,14 +150,14 @@ fun EpgReserveDialog(
                         keyboardController?.hide()
                         scope.launch {
                             delay(50)
-                            runCatching { firstItemFocusRequester.requestFocus() }
+                            firstItemFocusRequester.safeRequestFocus()
                         }
                     } else if (showAdvancedSettings) {
                         showAdvancedSettings = false
-                        scope.launch { delay(50); runCatching { advancedBtnRequester.requestFocus() } }
+                        scope.launch { delay(50); advancedBtnRequester.safeRequestFocus() }
                     } else if (showDayOfWeekDialog) {
                         showDayOfWeekDialog = false
-                        scope.launch { delay(50); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                        scope.launch { delay(50); dayOfWeekBtnRequester.safeRequestFocus() }
                     } else if (numberSelectTarget != null) {
                         val target = numberSelectTarget!!
                         numberSelectTarget = null
@@ -231,7 +232,7 @@ fun EpgReserveDialog(
                                     keyboardController?.hide()
                                     scope.launch {
                                         delay(50)
-                                        runCatching { firstItemFocusRequester.requestFocus() }
+                                        firstItemFocusRequester.safeRequestFocus()
                                     }
                                 }
                             ),
@@ -243,7 +244,7 @@ fun EpgReserveDialog(
                         )
                         LaunchedEffect(Unit) {
                             delay(50)
-                            runCatching { textFieldFocusRequester.requestFocus() }
+                            textFieldFocusRequester.safeRequestFocus()
                             keyboardController?.show()
                         }
                     } else {
@@ -426,11 +427,11 @@ fun EpgReserveDialog(
                     advIsFuzzySearch = fuzzy; advDuplicateScope = dup; advPriority = pri
                     advIsEventRelay = relay; advIsExactRecord = exact
                     showAdvancedSettings = false
-                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); advancedBtnRequester.safeRequestFocus() }
                 },
                 onDismiss = {
                     showAdvancedSettings = false
-                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); advancedBtnRequester.safeRequestFocus() }
                 }
             )
         }
@@ -441,11 +442,11 @@ fun EpgReserveDialog(
                 onConfirm = {
                     if (it.isNotEmpty()) selectedDaysOfWeek = it
                     showDayOfWeekDialog = false
-                    scope.launch { delay(50); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                    scope.launch { delay(50); dayOfWeekBtnRequester.safeRequestFocus() }
                 },
                 onDismiss = {
                     showDayOfWeekDialog = false
-                    scope.launch { delay(50); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                    scope.launch { delay(50); dayOfWeekBtnRequester.safeRequestFocus() }
                 }
             )
         }

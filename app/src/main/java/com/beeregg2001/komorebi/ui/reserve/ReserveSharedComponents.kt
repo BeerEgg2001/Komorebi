@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.tv.material3.*
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 enum class NumberSelectType { START_HOUR, START_MINUTE, END_HOUR, END_MINUTE }
 
@@ -72,7 +73,7 @@ fun DayOfWeekSelectionDialog(
 
     LaunchedEffect(Unit) {
         delay(150)
-        runCatching { firstItemRequester.requestFocus() }
+        firstItemRequester.safeRequestFocus()
     }
 
     Box(
@@ -201,7 +202,7 @@ fun NumberSelectionDialog(
 
     LaunchedEffect(Unit) {
         delay(150)
-        runCatching { initialItemRequester.requestFocus() }
+        initialItemRequester.safeRequestFocus()
     }
 
     Box(

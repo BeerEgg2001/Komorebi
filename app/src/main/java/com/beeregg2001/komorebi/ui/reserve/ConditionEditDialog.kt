@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -143,13 +144,13 @@ fun ConditionEditDialog(
 
     LaunchedEffect(Unit) {
         delay(100)
-        runCatching { enableSwitchRequester.requestFocus() }
+        enableSwitchRequester.safeRequestFocus()
     }
 
     LaunchedEffect(isEditingKeyword) {
         if (!isEditingKeyword && !isFirstEnter) {
             delay(100)
-            runCatching { keywordBtnRequester.requestFocus() }
+            keywordBtnRequester.safeRequestFocus()
         }
     }
 
@@ -158,10 +159,10 @@ fun ConditionEditDialog(
             delay(100)
             runCatching {
                 when (target) {
-                    NumberSelectType.START_HOUR -> startHourBtnRequester.requestFocus()
-                    NumberSelectType.START_MINUTE -> startMinuteBtnRequester.requestFocus()
-                    NumberSelectType.END_HOUR -> endHourBtnRequester.requestFocus()
-                    NumberSelectType.END_MINUTE -> endMinuteBtnRequester.requestFocus()
+                    NumberSelectType.START_HOUR -> startHourBtnRequester.safeRequestFocus()
+                    NumberSelectType.START_MINUTE -> startMinuteBtnRequester.safeRequestFocus()
+                    NumberSelectType.END_HOUR -> endHourBtnRequester.safeRequestFocus()
+                    NumberSelectType.END_MINUTE -> endMinuteBtnRequester.safeRequestFocus()
                 }
             }
         }
@@ -205,17 +206,17 @@ fun ConditionEditDialog(
 
                         showAdvancedSettings -> {
                             showAdvancedSettings = false
-                            scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                            scope.launch { delay(100); advancedBtnRequester.safeRequestFocus() }
                         }
 
                         showDeleteConfirm -> {
                             showDeleteConfirm = false
-                            scope.launch { delay(100); runCatching { keywordBtnRequester.requestFocus() } }
+                            scope.launch { delay(100); keywordBtnRequester.safeRequestFocus() }
                         }
 
                         showDayOfWeekDialog -> {
                             showDayOfWeekDialog = false
-                            scope.launch { delay(100); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                            scope.launch { delay(100); dayOfWeekBtnRequester.safeRequestFocus() }
                         }
 
                         numberSelectTarget != null -> {
@@ -360,7 +361,7 @@ fun ConditionEditDialog(
                                 )
                                 LaunchedEffect(Unit) {
                                     delay(50)
-                                    runCatching { textFieldFocusRequester.requestFocus() }
+                                    textFieldFocusRequester.safeRequestFocus()
                                     keyboardController?.show()
                                 }
                             } else {
@@ -683,7 +684,7 @@ fun ConditionEditDialog(
         if (showDeleteConfirm) {
             LaunchedEffect(Unit) {
                 delay(100)
-                runCatching { deleteConfirmRequester.requestFocus() }
+                deleteConfirmRequester.safeRequestFocus()
             }
             Box(
                 modifier = Modifier
@@ -763,7 +764,7 @@ fun ConditionEditDialog(
                             Button(
                                 onClick = {
                                     showDeleteConfirm = false
-                                    scope.launch { delay(100); runCatching { keywordBtnRequester.requestFocus() } }
+                                    scope.launch { delay(100); keywordBtnRequester.safeRequestFocus() }
                                 },
                                 modifier = Modifier.weight(1f),
                                 scale = ButtonDefaults.scale(focusedScale = 1.05f),
@@ -808,11 +809,11 @@ fun ConditionEditDialog(
                     advIsFuzzySearch = fuzzy; advDuplicateScope = dup; advPriority = pri
                     advIsEventRelay = relay; advIsExactRecord = exact
                     showAdvancedSettings = false
-                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); advancedBtnRequester.safeRequestFocus() }
                 },
                 onDismiss = {
                     showAdvancedSettings = false
-                    scope.launch { delay(100); runCatching { advancedBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); advancedBtnRequester.safeRequestFocus() }
                 }
             )
         }
@@ -823,11 +824,11 @@ fun ConditionEditDialog(
                 onConfirm = {
                     if (it.isNotEmpty()) selectedDaysOfWeek = it
                     showDayOfWeekDialog = false
-                    scope.launch { delay(100); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); dayOfWeekBtnRequester.safeRequestFocus() }
                 },
                 onDismiss = {
                     showDayOfWeekDialog = false
-                    scope.launch { delay(100); runCatching { dayOfWeekBtnRequester.requestFocus() } }
+                    scope.launch { delay(100); dayOfWeekBtnRequester.safeRequestFocus() }
                 }
             )
         }
