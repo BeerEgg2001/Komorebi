@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
@@ -253,7 +254,24 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .background(colors.background)
                 .background(backgroundBrush)
-                .focusProperties { canFocus = !isDialogOpen }
+                // ダイアログ・サブ画面の表示中は、この設定画面の配下へフォーカスを入れない。
+                //
+                // canFocus = !isDialogOpen だけでは効かない。Compose はフォーカス対象ノードが
+                // 自身の親をさかのぼる際「最初に見つかったフォーカス対象ノード」で打ち切って
+                // focusProperties を収集するため、間に別のフォーカス対象が挟まる配下の要素には
+                // この指定が一切届かず、フォーカス可能なまま残る。
+                //
+                // onEnter { cancelFocusChange() } を持つフォーカスグループ
+                // (canFocus = false + focusTarget) にすることで、この Row 配下へのフォーカス侵入を
+                // フォーカス探索・明示的な requestFocus の両方で拒否する
+                // (MainRootBackground.isBackgroundFocusBlocked と同じ手法)。
+                .focusProperties {
+                    canFocus = false
+                    if (isDialogOpen) {
+                        onEnter = { cancelFocusChange() }
+                    }
+                }
+                .focusTarget()
                 .onKeyEvent {
                     if (it.type == KeyEventType.KeyDown && (it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_BACK || it.nativeKeyEvent.keyCode == NativeKeyEvent.KEYCODE_ESCAPE)) {
                         if (isDialogOpen) {
@@ -262,9 +280,9 @@ fun SettingsScreen(
                             // そのまま設定画面を閉じるとホーム画面まで抜けてしまうため、
                             // 「手前の画面を閉じる」動作に読み替える。
                             //
-                            // 上の focusProperties { canFocus = !isDialogOpen } は本来この脱出を
-                            // 防ぐためのものだが、Compose 1.7 以降は focus properties が子孫へ
-                            // 継承されないため、裏の各要素はフォーカス可能なまま残っている。
+                            // 上の focusProperties の onEnter で侵入を拒否しているが、
+                            // 既にフォーカスを持っていた要素がそのまま残るなど取りこぼしはありうる
+                            // ため、この読み替えは最終防衛線として残す。
                             closeDialog()
                         } else if (!uiState.isSidebarFocused) {
                             categoryFocusRequesters.getOrNull(uiState.selectedCategoryIndex)
