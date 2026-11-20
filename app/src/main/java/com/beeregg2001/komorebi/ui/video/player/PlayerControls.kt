@@ -57,6 +57,7 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.pow
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -124,7 +125,7 @@ fun PlayerControls(
             delay(100)
             try {
                 if (!isSeekBarFocused) {
-                    controlsFocusRequester.requestFocus()
+                    controlsFocusRequester.safeRequestFocus()
                 }
             } catch (e: Exception) {
             }

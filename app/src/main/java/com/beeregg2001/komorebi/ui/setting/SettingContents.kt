@@ -28,6 +28,7 @@ import com.beeregg2001.komorebi.viewmodel.SmbServer
 import java.time.LocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @Composable
 private fun ValidationErrorText(message: String) {
@@ -296,10 +297,7 @@ fun ConnectionSettingsContent(
         if (previousBackendType != backendType) {
             previousBackendType = backendType
             delay(350)
-            try {
-                backendTypeR.requestFocus()
-            } catch (e: Exception) {
-            }
+            backendTypeR.safeRequestFocus()
         }
     }
 
@@ -308,10 +306,7 @@ fun ConnectionSettingsContent(
         if (previousPrefSrc != prefSrc) {
             previousPrefSrc = prefSrc
             delay(350)
-            try {
-                prefSrcR.requestFocus()
-            } catch (e: Exception) {
-            }
+            prefSrcR.safeRequestFocus()
         }
     }
 

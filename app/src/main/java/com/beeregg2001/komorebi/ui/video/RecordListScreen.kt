@@ -805,10 +805,7 @@ fun BoxScope.RecordSortMenuOverlay(
 
     LaunchedEffect(isOpen) {
         if (isOpen) {
-            delay(150); try {
-                focusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            delay(150); focusRequester.safeRequestFocus()
         }
     }
 

@@ -30,6 +30,7 @@ import com.beeregg2001.komorebi.data.model.RecordedProgram
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 
 /* 画面中央に表示される再生・一時停止等のオーバーレイを表示するメソッド */
@@ -80,16 +81,10 @@ fun VideoLCropOverlay(
     LaunchedEffect(state.lCropMode) {
         if (state.lCropMode == LCropMode.MENU) {
             delay(150)
-            try {
-                menuFocusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            menuFocusRequester.safeRequestFocus()
         } else if (state.lCropMode == LCropMode.DIRECT_ADJUST) {
             delay(150)
-            try {
-                directAdjustFocusRequester.requestFocus()
-            } catch (e: Exception) {
-            }
+            directAdjustFocusRequester.safeRequestFocus()
         }
     }
 
@@ -340,10 +335,7 @@ fun AnimatedVisibilityScope.ProgramInfoOverlay( // ★ 修正: AnimatedVisibilit
 
     LaunchedEffect(Unit) {
         delay(150)
-        try {
-            focusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        focusRequester.safeRequestFocus()
     }
 
     // 全体の背景 (ここは親の fadeIn に連動してふわっと現れる)

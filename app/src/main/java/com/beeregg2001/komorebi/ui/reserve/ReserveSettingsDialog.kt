@@ -38,6 +38,7 @@ import com.beeregg2001.komorebi.viewmodel.PostRecordingBatch
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.delay
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -83,7 +84,7 @@ fun ReserveSettingsDialog(
     // 起動時の初期フォーカス設定
     LaunchedEffect(Unit) {
         delay(50)
-        firstItemFocusRequester.requestFocus()
+        firstItemFocusRequester.safeRequestFocus()
     }
 
     Box(
@@ -298,12 +299,12 @@ fun ReserveSettingsDialog(
                 options = options.map { it.first to (it.second ?: "") },
                 current = selectedBatPath ?: "",
                 onDismiss = {
-                    batSelectionFocusRequester.requestFocus()
+                    batSelectionFocusRequester.safeRequestFocus()
                     isBatSelectionOpen = false
                 },
                 onSelect = {
                     selectedBatPath = if (it.isEmpty()) null else it
-                    batSelectionFocusRequester.requestFocus()
+                    batSelectionFocusRequester.safeRequestFocus()
                     isBatSelectionOpen = false
                 }
             )

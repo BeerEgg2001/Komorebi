@@ -38,6 +38,7 @@ import com.beeregg2001.komorebi.common.safeRequestFocusWithRetry
 import com.beeregg2001.komorebi.viewmodel.ChannelViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 private const val TAG = "ReserveListScreen"
 
@@ -420,7 +421,7 @@ fun ReserveListScreen(
                                         "KomorebiFocus",
                                         "[ReserveList] 内部タブから上キー -> TopNavへ強制移動"
                                     )
-                                    topNavFocusRequester?.requestFocus()
+                                    topNavFocusRequester?.safeRequestFocus(TAG)
                                     viewModel.clearFocusMemory()
                                     return@onKeyEvent true
                                 }

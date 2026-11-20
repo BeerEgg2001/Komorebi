@@ -44,6 +44,7 @@ import com.beeregg2001.komorebi.data.model.StreamEncoding
 import com.beeregg2001.komorebi.data.model.StreamQuality
 import com.beeregg2001.komorebi.ui.subtitle.NativeCaptionLanguage
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 /** サブメニュー内の遷移先と、遷移前後のフォーカス位置を保持する。 */
 @Stable
@@ -124,10 +125,7 @@ fun VideoTopSubMenuUI(
 
     LaunchedEffect(Unit) {
         delay(50)
-        try {
-            focusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        focusRequester.safeRequestFocus()
     }
 
     LaunchedEffect(selectedCategory) {
@@ -135,9 +133,9 @@ fun VideoTopSubMenuUI(
             delay(100)
             try {
                 if (selectedCategory == SubMenuCategory.ENCODING) {
-                    encodingListRequester.requestFocus()
+                    encodingListRequester.safeRequestFocus()
                 } else {
-                    qualityListRequester.requestFocus()
+                    qualityListRequester.safeRequestFocus()
                 }
             } catch (e: Exception) {
             }
@@ -166,10 +164,7 @@ fun VideoTopSubMenuUI(
                             qualityButtonRequester
                         }
                         selectedCategory = null
-                        try {
-                            targetRequester.requestFocus()
-                        } catch (e: Exception) {
-                        }
+                        targetRequester.safeRequestFocus()
                         true
                     } else false
                 } else false
@@ -328,10 +323,7 @@ fun VideoTopSubMenuUI(
                                 onClick = {
                                     onEncodingSelect(encoding)
                                     selectedCategory = null
-                                    try {
-                                        encodingButtonRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    encodingButtonRequester.safeRequestFocus()
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
@@ -384,10 +376,7 @@ fun VideoTopSubMenuUI(
                                 onClick = {
                                     onQualitySelect(quality)
                                     selectedCategory = null
-                                    try {
-                                        qualityButtonRequester.requestFocus()
-                                    } catch (e: Exception) {
-                                    }
+                                    qualityButtonRequester.safeRequestFocus()
                                 },
                                 width = 160.dp,
                                 height = 100.dp,
@@ -521,10 +510,7 @@ fun AnimatedVisibilityScope.ModernVideoSettingsOverlay(
 
     LaunchedEffect(Unit) {
         delay(150)
-        try {
-            initialFocusRequester.requestFocus()
-        } catch (e: Exception) {
-        }
+        initialFocusRequester.safeRequestFocus()
     }
 
     LaunchedEffect(selectedCategory) {

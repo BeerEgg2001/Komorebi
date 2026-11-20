@@ -170,7 +170,7 @@ fun ModernEpgCanvasEngine_Smooth(
                 if (now - triggerTime < 1000L && targetCh != null && targetTime != null) {
                     epgState.restoreFocus(targetCh, targetTime)
                     delay(150)
-                    gridFocusRequester.requestFocus()
+                    gridFocusRequester.safeRequestFocus()
                 }
                 epgViewModel.clearEpgFocus()
             }

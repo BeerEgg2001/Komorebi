@@ -871,6 +871,7 @@ Compose のキーイベントは「フォーカスされた要素とその祖先
 | #133 | — | #132 の取り込み（スタック PR のベースが自動で切り替わらず `features/1.2.0-beta` に届いていなかった） |
 | #134 | 12 | フォーカス管理の段階3（ライブ視聴の固定 `delay` を1,650ms分削除、素の `requestFocus()` と `try-catch` 7箇所を共通ヘルパーへ統一） |
 | #135 | 12 | フォーカス管理の段階4a（オーバーレイの手法統一。`RobustUpdateDialog` の自前フォーカス奪還を廃止、`SettingScreen` の効いていない `canFocus` を修正、戻るキーを `BackHandler` へ） |
+| #139 | 12 | フォーカス管理の段階4b（素の `requestFocus()` と `try-catch`/`runCatching` を `safeRequestFocus` へ統一。19ファイル72箇所。デッドコードの `ModernEpgCanvasEngine_NoAnime.kt`(447行)も削除）。**当初の見積もり約25箇所に対し実際は81箇所**で、予約ダイアログ系が洗い出しから漏れていた |
 
 ### 計画外（実機検証・Issue 対応で見つかった不具合）
 

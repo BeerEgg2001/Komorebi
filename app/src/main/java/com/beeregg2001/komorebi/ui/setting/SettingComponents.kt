@@ -983,10 +983,7 @@ fun MultiSelectionDialog(
     val initialFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        delay(50); try {
-        initialFocusRequester.requestFocus()
-    } catch (e: Exception) {
-    }
+        delay(50); initialFocusRequester.safeRequestFocus()
     }
 
     Box(

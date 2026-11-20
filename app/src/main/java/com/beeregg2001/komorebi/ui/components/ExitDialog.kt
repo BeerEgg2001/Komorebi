@@ -14,11 +14,12 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Text
 import com.beeregg2001.komorebi.ui.theme.ProvideUiScale
+import com.beeregg2001.komorebi.common.safeRequestFocus
 
 @Composable
 fun ExitDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(Unit) { focusRequester.safeRequestFocus() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
