@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.*
+import com.beeregg2001.komorebi.ui.main.visibleHomeTabs
 import com.beeregg2001.komorebi.common.safeRequestFocus
 import com.beeregg2001.komorebi.common.AppStrings
 import com.beeregg2001.komorebi.data.SettingsRepository
@@ -819,20 +820,9 @@ fun SettingsScreen(
                             {
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                                    if (prefs.favoriteBaseballTeams.isNotEmpty()) listOf(
-                                        "ホーム" to "ホーム",
-                                        "ライブ" to "ライブ",
-                                        "ビデオ" to "ビデオ",
-                                        "番組表" to "番組表",
-                                        "録画予約" to "録画予約",
-                                        "プロ野球" to "プロ野球"
-                                    ) else listOf(
-                                        "ホーム" to "ホーム",
-                                        "ライブ" to "ライブ",
-                                        "ビデオ" to "ビデオ",
-                                        "番組表" to "番組表",
-                                        "録画予約" to "録画予約"
-                                    ),
+                                    visibleHomeTabs(
+                                        prefs.backendType, prefs.favoriteBaseballTeams.isNotEmpty()
+                                    ).map { it to it },
                                     prefs.startupTab
                                 ) {
                                     scope.launch {
@@ -904,20 +894,9 @@ fun SettingsScreen(
                             {
                                 uiState.activeDialog = SettingDialogState.Selection(
                                     AppStrings.SETTINGS_ITEM_STARTUP_TAB,
-                                    if (prefs.favoriteBaseballTeams.isNotEmpty()) listOf(
-                                        "ホーム" to "ホーム",
-                                        "ライブ" to "ライブ",
-                                        "ビデオ" to "ビデオ",
-                                        "番組表" to "番組表",
-                                        "録画予約" to "録画予約",
-                                        "プロ野球" to "プロ野球"
-                                    ) else listOf(
-                                        "ホーム" to "ホーム",
-                                        "ライブ" to "ライブ",
-                                        "ビデオ" to "ビデオ",
-                                        "番組表" to "番組表",
-                                        "録画予約" to "録画予約"
-                                    ),
+                                    visibleHomeTabs(
+                                        prefs.backendType, prefs.favoriteBaseballTeams.isNotEmpty()
+                                    ).map { it to it },
                                     prefs.startupTab
                                 ) {
                                     scope.launch {

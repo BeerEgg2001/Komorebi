@@ -704,7 +704,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun triggerFullSync() {
-        viewModelScope.launch { syncEngine.launchSyncAllRecords(forceFullSync = true) }
+        viewModelScope.launch {
+            syncEngine.launchSyncAllRecords(forceFullSync = true)
+        }
     }
 
     fun addPostRecordingBatch(name: String, path: String) {

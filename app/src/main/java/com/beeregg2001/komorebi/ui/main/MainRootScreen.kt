@@ -122,10 +122,9 @@ fun MainRootScreen(
     val backendType by homeViewModel.backendType.collectAsState()
     LaunchedEffect(backendType) { state.backendType = backendType }
 
-    val baseTabs = state.getVisibleTabs()
     val favoriteBaseballTeams by homeViewModel.favoriteBaseballTeams.collectAsState()
-    val tabs = remember(favoriteBaseballTeams, baseTabs) {
-        if (favoriteBaseballTeams.isNotEmpty() && !baseTabs.contains("プロ野球")) baseTabs + "プロ野球" else baseTabs
+    val tabs = remember(backendType, favoriteBaseballTeams) {
+        visibleHomeTabs(backendType, favoriteBaseballTeams.isNotEmpty())
     }
 
     val safeTabIndex = state.currentTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))

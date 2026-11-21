@@ -373,7 +373,6 @@ class HomeViewModel @Inject constructor(
         val currentBackend = settingsRepository.backendType.first()
 
         if (currentBackend == "KONOMITV") return
-
         try {
             liveProvider.getChannels()
             Log.i("Komorebi_Failsafe", "Health check passed for backend: $currentBackend")

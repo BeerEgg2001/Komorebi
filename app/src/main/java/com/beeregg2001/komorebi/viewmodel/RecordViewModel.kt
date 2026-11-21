@@ -621,7 +621,7 @@ class RecordViewModel @Inject constructor(
             }
     }
 
-    private suspend fun buildSeriesAndChannelMaps(
+    private fun buildSeriesAndChannelMaps(
         seriesList: List<SeriesProjection>,
         channelsList: List<ChannelProjection>
     ) {
