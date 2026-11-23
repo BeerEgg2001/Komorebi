@@ -48,6 +48,10 @@ class VideoPlayerState {
     var pendingSeekPositionMs by mutableStateOf<Long?>(null)
 
     var isPlayerPlaying by mutableStateOf(true)
+    // ★ 追加: プレイヤーが実際に受け取っている音声トラック数(0 = まだ不明)。
+    // 主/副音声の切替可否はこの値だけで判定する(1 のときだけ無効)。
+    // SMB(libVLC)再生ではこの値を更新しないため 0 のまま=従来どおり切替可能。
+    var availableAudioTrackCount by mutableIntStateOf(0)
 
     var indicatorState by mutableStateOf<IndicatorState?>(null)
 

@@ -30,7 +30,14 @@ data class RecordedProgram(
     val episodeNumber: Double? = null,
     val episodeLabel: String? = null,
     val episodeTitle: String? = null,
-    val airType: String? = null
+    val airType: String? = null,
+    // ★ 追加: 音声情報(KonomiTVの録画番組APIが返す)。トラック名や番組情報の表示に使う。
+    // 主/副音声の切替可否の判定には使わない(VideoPlayerScreen のコメント参照)。
+    // KonomiTV以外のバックエンドや古いキャッシュでは null になるため、null は「不明」として扱う。
+    @SerializedName("primary_audio_type") val primaryAudioType: String? = null,
+    @SerializedName("primary_audio_language") val primaryAudioLanguage: String? = null,
+    @SerializedName("secondary_audio_type") val secondaryAudioType: String? = null,
+    @SerializedName("secondary_audio_language") val secondaryAudioLanguage: String? = null
 )
 
 // CM区間（チャプター）のデータモデル
