@@ -34,6 +34,7 @@ import com.beeregg2001.komorebi.ColdStartDiag
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
 import com.beeregg2001.komorebi.ui.epg.EpgNavigationContainer
+import com.beeregg2001.komorebi.ui.main.visibleHomeTabs
 import com.beeregg2001.komorebi.ui.reserve.ReserveListScreen
 import com.beeregg2001.komorebi.viewmodel.*
 import com.beeregg2001.komorebi.common.safeRequestFocus
@@ -206,8 +207,7 @@ fun HomeLauncherScreen(
     val shouldCropLogo = remember(backendType) { backendType == "KONOMITV" }
 
     val tabs = remember(favoriteBaseballTeams, backendType) {
-        val base = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
-        if (favoriteBaseballTeams.isNotEmpty()) base + "プロ野球" else base
+        visibleHomeTabs(backendType, favoriteBaseballTeams.isNotEmpty())
     }
 
     val safeTabIndex = ui.selectedTabIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))

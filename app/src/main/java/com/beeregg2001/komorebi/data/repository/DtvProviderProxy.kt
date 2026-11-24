@@ -39,13 +39,15 @@ class DtvProviderProxy @Inject constructor(
 
     // --- ルーティングロジック（インターフェースごとに特化） ---
 
-    private suspend fun getLiveProvider(): LiveProvider {
-        return when (settingsRepository.backendType.first()) {
-            "EDCB" -> edcbLiveRepository
-            "EPGSTATION" -> epgStationLiveRepository
-            else -> konomiRepository
-        }
+    /** 1要求の開始時に確定したbackendを、取得・エラー処理・ロゴで共用する。 */
+    private fun liveProviderFor(backend: String): LiveProvider = when (backend) {
+        "EDCB" -> edcbLiveRepository
+        "EPGSTATION" -> epgStationLiveRepository
+        else -> konomiRepository
     }
+
+    private suspend fun getLiveProvider(): LiveProvider =
+        liveProviderFor(settingsRepository.backendType.first())
 
     private suspend fun getRecordProvider(): RecordProvider {
         return when (settingsRepository.backendType.first()) {
@@ -63,13 +65,14 @@ class DtvProviderProxy @Inject constructor(
         }
     }
 
-    private suspend fun getEpgProvider(): EpgProvider {
-        return when (settingsRepository.backendType.first()) {
-            "EDCB" -> edcbEpgRepository
-            "EPGSTATION" -> epgStationEpgRepository
-            else -> konomiRepository
-        }
+    private fun epgProviderFor(backend: String): EpgProvider = when (backend) {
+        "EDCB" -> edcbEpgRepository
+        "EPGSTATION" -> epgStationEpgRepository
+        else -> konomiRepository
     }
+
+    private suspend fun getEpgProvider(): EpgProvider =
+        epgProviderFor(settingsRepository.backendType.first())
 
     // ========================================================================
     // LiveProvider (ライブ視聴関連)
@@ -118,11 +121,7 @@ class DtvProviderProxy @Inject constructor(
             val backend = settingsRepository.backendType.first()
             ChannelLogoUrlCache.get(backend, channelId)?.let { return it }
 
-            val provider = when (backend) {
-                "EDCB" -> edcbLiveRepository
-                "EPGSTATION" -> epgStationLiveRepository
-                else -> konomiRepository
-            }
+            val provider = liveProviderFor(backend)
             provider.getChannelLogoUrl(channelId).also {
                 ChannelLogoUrlCache.put(backend, channelId, it)
             }

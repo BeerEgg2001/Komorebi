@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.beeregg2001.komorebi.common.LiveChannelCategories
 import com.beeregg2001.komorebi.data.ChannelLogoUrlCache
 import com.beeregg2001.komorebi.data.model.Channel
 import com.beeregg2001.komorebi.ui.theme.KomorebiTheme
@@ -53,7 +54,7 @@ fun ChannelListOverlay(
     val focusManager = LocalFocusManager.current
     val colors = KomorebiTheme.colors
 
-    val allTabs = listOf("GR", "BS", "CS", "BS4K", "SKY")
+    val allTabs = LiveChannelCategories.orderedTypes
     val availableTabKeys = remember(groupedChannels) {
         allTabs.filter { groupedChannels.containsKey(it) }
     }
@@ -133,14 +134,7 @@ fun ChannelListOverlay(
                 }
             ) {
                 availableTabKeys.forEachIndexed { index, tabKey ->
-                    val label = when (tabKey) {
-                        "GR" -> "地デジ"
-                        "BS" -> "BS"
-                        "CS" -> "CS"
-                        "BS4K" -> "BS4K"
-                        "SKY" -> "スカパー"
-                        else -> tabKey
-                    }
+                    val label = LiveChannelCategories.label(tabKey)
 
                     val isSelected = selectedTab == tabKey
                     val interactionSource = remember { MutableInteractionSource() }

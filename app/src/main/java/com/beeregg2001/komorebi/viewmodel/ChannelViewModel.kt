@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.beeregg2001.komorebi.common.LiveChannelCategories
 import com.beeregg2001.komorebi.data.SettingsRepository
 import com.beeregg2001.komorebi.data.mapper.KonomiDataMapper
 import com.beeregg2001.komorebi.data.model.*
@@ -158,7 +159,7 @@ class ChannelViewModel @Inject constructor(
     private suspend fun transformToUiState(grouped: Map<String, List<Channel>>): List<LiveRowState> =
         withContext(Dispatchers.Default) {
             val now = System.currentTimeMillis()
-            val orderedTypes = listOf("GR", "BS", "CS", "BS4K", "SKY")
+            val orderedTypes = LiveChannelCategories.orderedTypes
 
             val sortedKeys = grouped.keys.sortedBy { key ->
                 val index = orderedTypes.indexOf(key)
@@ -169,9 +170,7 @@ class ChannelViewModel @Inject constructor(
                 val channels = grouped[type] ?: return@mapNotNull null
                 LiveRowState(
                     genreId = type,
-                    genreLabel = when (type) {
-                        "GR" -> "地デジ"; "BS" -> "BS"; "CS" -> "CS"; "BS4K" -> "BS4K"; "SKY" -> "スカパー"; else -> type
-                    },
+                    genreLabel = LiveChannelCategories.label(type),
                     channels = channels.map { ch ->
                         val start = ch.programPresent?.startTime?.let {
                             runCatching {

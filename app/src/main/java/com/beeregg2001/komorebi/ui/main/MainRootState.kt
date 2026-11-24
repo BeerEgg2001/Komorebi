@@ -28,6 +28,12 @@ class AiFocusTicketManager {
 /**
  * MainRootScreenのすべてのUI状態(変数)を管理するState Holderクラス
  */
+/** 既存ネットワークバックエンドのホームタブを一か所で生成する。 */
+fun visibleHomeTabs(backendType: String, hasBaseballTeams: Boolean): List<String> {
+    val base = listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
+    return if (hasBaseballTeams) base + "プロ野球" else base
+}
+
 @Stable
 class MainRootState {
     // タブ・選択状態
@@ -144,9 +150,6 @@ class MainRootState {
                 selectedProgramForAutoReserve != null
     }
 
-    fun getVisibleTabs(): List<String> {
-        return listOf("ホーム", "ライブ", "ビデオ", "番組表", "録画予約")
-    }
 }
 
 @Composable
